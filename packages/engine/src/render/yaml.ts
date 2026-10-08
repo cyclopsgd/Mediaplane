@@ -1,4 +1,4 @@
-import { Document, isScalar, isSeq, Scalar, visit } from 'yaml';
+import { Document, isMap, isScalar, isSeq, Scalar, visit } from 'yaml';
 import type { ComposeFile } from './compose';
 
 /** Each line starts with a space so it renders as "# …". */
@@ -9,7 +9,9 @@ export const COMPOSE_HEADER = [
 
 export function composeToYaml(compose: ComposeFile): string {
   const doc = new Document(compose);
-  // Quote "a:b" values: YAML 1.1 parsers read unquoted "80:80" as a base-60 number.
+  // Compose's YAML parser resolves more plain scalars than YAML 1.2 does: "80:80" is read
+  // as a base-60 number, and "1_000", "0b101" and "2024-01-01" as a number or a timestamp.
+  // Values are strings, so quote every one that could be user-supplied.
   visit(doc, {
     Pair(_key, pair) {
       if (!isScalar(pair.key)) return;
@@ -20,6 +22,14 @@ export function composeToYaml(compose: ComposeFile): string {
       }
       if (pair.key.value === 'user' && isScalar(pair.value)) {
         pair.value.type = Scalar.QUOTE_DOUBLE;
+      }
+      if (
+        (pair.key.value === 'environment' || pair.key.value === 'labels') &&
+        isMap(pair.value)
+      ) {
+        for (const entry of pair.value.items) {
+          if (isScalar(entry.value)) entry.value.type = Scalar.QUOTE_DOUBLE;
+        }
       }
     },
   });

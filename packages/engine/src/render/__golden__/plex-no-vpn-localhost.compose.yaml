@@ -8,9 +8,9 @@ services:
     restart: unless-stopped
     user: "1000:1000"
     environment:
-      TZ: Etc/UTC
+      TZ: "Etc/UTC"
     labels:
-      io.mediaplane.app: byparr
+      io.mediaplane.app: "byparr"
       io.mediaplane.managed: "true"
   plex:
     image: registry.test/plex:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -18,13 +18,13 @@ services:
     environment:
       PGID: "1000"
       PUID: "1000"
-      TZ: Etc/UTC
+      TZ: "Etc/UTC"
     volumes:
       - /opt/mediaplane/appdata/plex:/config
     ports:
       - "127.0.0.1:32400:32400"
     labels:
-      io.mediaplane.app: plex
+      io.mediaplane.app: "plex"
       io.mediaplane.managed: "true"
   prowlarr:
     image: registry.test/prowlarr:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -32,13 +32,13 @@ services:
     environment:
       PGID: "1000"
       PUID: "1000"
-      TZ: Etc/UTC
+      TZ: "Etc/UTC"
     volumes:
       - /opt/mediaplane/appdata/prowlarr:/config
     ports:
       - "127.0.0.1:9696:9696"
     labels:
-      io.mediaplane.app: prowlarr
+      io.mediaplane.app: "prowlarr"
       io.mediaplane.managed: "true"
   qbittorrent:
     image: registry.test/qbittorrent:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -46,14 +46,14 @@ services:
     environment:
       PGID: "1000"
       PUID: "1000"
-      TZ: Etc/UTC
+      TZ: "Etc/UTC"
       WEBUI_PORT: "8200"
     volumes:
       - /opt/mediaplane/appdata/qbittorrent:/config
     ports:
       - "127.0.0.1:8200:8200"
     labels:
-      io.mediaplane.app: qbittorrent
+      io.mediaplane.app: "qbittorrent"
       io.mediaplane.managed: "true"
   sonarr:
     image: registry.test/sonarr:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -61,16 +61,16 @@ services:
     environment:
       PGID: "1000"
       PUID: "1000"
-      SONARR__AUTH__APIKEY: ${MP_SONARR_API_KEY}
-      STATIC: a$$b
-      TZ: Etc/UTC
+      SONARR__AUTH__APIKEY: "${MP_SONARR_API_KEY}"
+      STATIC: "a$$b"
+      TZ: "Etc/UTC"
     volumes:
       - /opt/mediaplane/appdata/sonarr:/config
       - /srv/data:/data
     ports:
       - "127.0.0.1:8989:8989"
     labels:
-      io.mediaplane.app: sonarr
+      io.mediaplane.app: "sonarr"
       io.mediaplane.managed: "true"
     healthcheck:
       test:

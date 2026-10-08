@@ -9,13 +9,13 @@ services:
     cap_add:
       - NET_ADMIN
     environment:
-      TZ: Europe/London
+      TZ: "Europe/London"
     volumes:
       - /opt/mediaplane/appdata/gluetun:/config
     ports:
       - "192.168.1.10:8080:8080"
     labels:
-      io.mediaplane.app: gluetun
+      io.mediaplane.app: "gluetun"
       io.mediaplane.managed: "true"
   jellyfin:
     image: registry.test/jellyfin:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -23,13 +23,13 @@ services:
     environment:
       PGID: "1000"
       PUID: "1000"
-      TZ: Europe/London
+      TZ: "Europe/London"
     volumes:
       - /opt/mediaplane/appdata/jellyfin:/config
     ports:
       - "192.168.1.10:8096:8096"
     labels:
-      io.mediaplane.app: jellyfin
+      io.mediaplane.app: "jellyfin"
       io.mediaplane.managed: "true"
   qbittorrent:
     image: registry.test/qbittorrent:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -42,30 +42,30 @@ services:
     environment:
       PGID: "1000"
       PUID: "1000"
-      TZ: Europe/London
+      TZ: "Europe/London"
       WEBUI_PORT: "8080"
     volumes:
       - /opt/mediaplane/appdata/qbittorrent:/config
     labels:
-      io.mediaplane.app: qbittorrent
+      io.mediaplane.app: "qbittorrent"
       io.mediaplane.managed: "true"
   sonarr:
     image: registry.test/sonarr:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
     restart: unless-stopped
     environment:
-      EXTRA: x
+      EXTRA: "x"
       PGID: "1000"
       PUID: "1000"
-      SONARR__AUTH__APIKEY: ${MP_SONARR_API_KEY}
-      STATIC: a$$b
-      TZ: Europe/London
+      SONARR__AUTH__APIKEY: "${MP_SONARR_API_KEY}"
+      STATIC: "a$$b"
+      TZ: "Europe/London"
     volumes:
       - /opt/mediaplane/appdata/sonarr:/config
       - /srv/data:/data
     ports:
       - "192.168.1.10:8989:8989"
     labels:
-      io.mediaplane.app: sonarr
+      io.mediaplane.app: "sonarr"
       io.mediaplane.managed: "true"
     healthcheck:
       test:

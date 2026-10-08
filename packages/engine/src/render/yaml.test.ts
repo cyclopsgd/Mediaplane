@@ -33,10 +33,51 @@ describe('composeToYaml', () => {
   });
 
   it('keeps escaped dollars for Compose', () => {
-    expect(yaml).toContain('PASS: a$$b');
+    expect(yaml).toContain('PASS: "a$$b"');
   });
 
   it('round-trips to the same data', () => {
     expect(parse(yaml)).toEqual(compose);
+  });
+
+  it('does not quote keys', () => {
+    expect(yaml).toContain('\n      COUNT: "1000"');
+    expect(yaml).toContain('\n      io.mediaplane.app: "web"');
+  });
+});
+
+describe('composeToYaml: values that Compose would reinterpret', () => {
+  const tricky: ComposeFile = {
+    name: 'mediaplane',
+    services: {
+      web: {
+        image: 'registry.test/web:1',
+        restart: 'unless-stopped',
+        environment: {
+          BINARY: '0b101',
+          DATE: '2024-01-01',
+          TIMESTAMP: '2024-01-01T10:00:00Z',
+          UNDERSCORE: '1_000',
+        },
+        labels: { 'io.mediaplane.build': '2024-01-01', 'io.mediaplane.flag': 'true' },
+      },
+    },
+  };
+  const trickyYaml = composeToYaml(tricky);
+
+  it('double-quotes every environment value', () => {
+    expect(trickyYaml).toContain('UNDERSCORE: "1_000"');
+    expect(trickyYaml).toContain('BINARY: "0b101"');
+    expect(trickyYaml).toContain('DATE: "2024-01-01"');
+    expect(trickyYaml).toContain('TIMESTAMP: "2024-01-01T10:00:00Z"');
+  });
+
+  it('double-quotes every label value', () => {
+    expect(trickyYaml).toContain('io.mediaplane.build: "2024-01-01"');
+    expect(trickyYaml).toContain('io.mediaplane.flag: "true"');
+  });
+
+  it('round-trips to the same data', () => {
+    expect(parse(trickyYaml)).toEqual(tricky);
   });
 });
