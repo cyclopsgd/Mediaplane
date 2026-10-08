@@ -10,7 +10,19 @@ COMMON="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
 if command -v gitleaks >/dev/null 2>&1; then
   exec gitleaks git "$ROOT" --pre-commit --staged --redact --verbose --config "$ROOT/.gitleaks.toml"
 elif command -v docker >/dev/null 2>&1; then
-  exec docker run --rm --user "$(id -u):$(id -g)" -v "$ROOT:$ROOT" -v "$COMMON:$COMMON" -w "$ROOT" "$IMAGE" \
+  # `git commit -a` and `git commit <path>` run this hook with GIT_INDEX_FILE pointing at a
+  # temporary index. Forward it (as an absolute path under the mounted git dir), or the
+  # container would scan the stale real index and miss what is actually being committed.
+  if [ -n "${GIT_INDEX_FILE:-}" ]; then
+    case "$GIT_INDEX_FILE" in
+      /*) INDEX="$GIT_INDEX_FILE" ;;
+      *) INDEX="$PWD/$GIT_INDEX_FILE" ;;
+    esac
+    set -- -e "GIT_INDEX_FILE=$INDEX"
+  else
+    set --
+  fi
+  exec docker run --rm --user "$(id -u):$(id -g)" "$@" -v "$ROOT:$ROOT" -v "$COMMON:$COMMON" -w "$ROOT" "$IMAGE" \
     git "$ROOT" --pre-commit --staged --redact --verbose --config "$ROOT/.gitleaks.toml"
 else
   echo "pre-commit: neither gitleaks nor docker found; secret scan SKIPPED" >&2
