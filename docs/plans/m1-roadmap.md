@@ -1,0 +1,78 @@
+# M1 roadmap: Engine + CLI in slices
+
+**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md)
+
+M1 is too large for one implementation plan, so it is delivered in eight
+vertical slices. Each slice:
+
+- ends with working, tested software and a green CI;
+- gets its **own detailed plan**, written when the previous slice has landed, so
+  the plan builds on the real code rather than guesses.
+
+Only Slice 1 has a detailed plan so far:
+[`m1-s1-pure-core.md`](m1-s1-pure-core.md).
+
+## Slices
+
+| # | Slice | Delivers | Spec sections | Proves |
+|---|---|---|---|---|
+| S1 | **Pure core** | Repo scaffold, CI, secret scanning, OSS basics, the `stack.yaml` schema and loader, secret references, the catalog format with all M1 app definitions (pinned), the resolver, the Compose renderer, a file-level `plan`, and the CLI `plan` command | §2.1, §3, §4.1–4.3, §5.2 (plan) | `mediaplane plan` shows exactly the Compose project it would write, and rejects bad input with actionable errors. No Docker is needed |
+| S2 | **Runtime and apply (containers)** | Key generation and persistence, `.env` rendering, the Compose driver, the lock, preflight checks (including the host-address helper container and the same-filesystem check), the container diff, the apply stages (write, pull, start, record), change history, the `apply`, `status`, `history` and `init` commands, the Mediaplane image with `deploy/mediaplane.compose.yaml` and the socket proxy (`mediaplane-system`), and an end-to-end harness | §4.4, §5, §5.1, §7.2 (2–4) | Success criteria 3 (containers) and 6. Containers come up healthy on amd64 and arm64. A second apply reports no changes |
+| S3 | **Wiring framework and the download path** | The integration contract, a typed HTTP client with retries, `resources.json`, pre-start config files (`config.xml`, `qBittorrent.conf` with PBKDF2), the shared admin credential and `credentials`, the Servarr admin bootstrap, Sonarr/Radarr wired to qBittorrent (download clients, root folders, categories), the verify stage, and `vpn-check`. Also a real VPN kill-switch test against a local WireGuard server | §6.1, §6.2 (download rows), §6.4, §8.1 (4) | Success criterion 5. Partly criterion 1 |
+| S4 | **Drift** | The three-way drift model, `drift`, `keep`, a comment-preserving override writer, `unmanaged`, externally managed mode, name-based re-adoption, key recovery from appdata, and shared-key propagation | §6.3, §6.1 (key recovery) | Success criterion 4 |
+| S5 | **Indexers** | Prowlarr application links (fullSync), the Byparr/FlareSolverr indexer proxy and the `cloudflare` tag | §6.2 (Prowlarr rows) | Indexers added in Prowlarr reach both arrs, and proxied requests work |
+| S6 | **Media servers** | Jellyfin bootstrap-before-publish, its API key and libraries, the arr → media-server connections, Plex `plex-login` (PIN flow), the Plex claim and libraries, and a nightly Plex CI job | §6.1 (Jellyfin, Plex), §6.4, §8.1 (Plex) | Both media servers are wired headlessly, except for the single Plex sign-in |
+| S7 | **Requests** | The Seerr first sign-in (through the Jellyfin admin or the Plex token), libraries, the Sonarr/Radarr servers, initialize, and the full-stack end-to-end test | §6.1 (Seerr), §6.2 (Seerr row) | Success criteria 1 and 2 |
+| S8 | **Release and public readiness** | Trivy, SBOM and provenance, release-please, Renovate (a custom manager for catalog pins plus SHA-pinned Actions), a multi-arch release workflow, generated reference docs and a freshness check, `migrate`, the full README, the add-an-app guide, the code of conduct, templates and CODEOWNERS | §8.2, §9 | Success criterion 7. Everything is green on both architectures |
+
+Every slice writes its own docs as it goes:
+
+- **ADRs**, when a slice implements the decision:
+  - 0001, 0002, 0005 and 0009 in S1;
+  - 0004 and 0008 in S2;
+  - 0003 in S4;
+  - 0006 in S7.
+  - 0007 (books) belongs to M4.
+- **Each app's `catalog/<app>/README.md`**, written when that app's integration
+  lands.
+- **Runbooks**, written with the feature they cover:
+  - "VPN down" and "wiring failed" in S3;
+  - "drift reported" in S4;
+  - "app won't start" in S6.
+
+## CI architecture coverage
+
+The dev box is aarch64. GitHub's free hosted arm64 runners are for public
+repositories, and the repo is private for now. So:
+
+- the end-to-end job runs on amd64 in CI;
+- each slice that adds end-to-end tests also runs them **locally on the aarch64
+  dev box** before merging;
+- S8 enables an arm64 CI job.
+
+## Things S1 encodes that later slices must verify against real containers
+
+S1 renders these values but cannot run them. The slice named here confirms
+each one, or corrects it in the catalog:
+
+| Value | Verified in |
+|---|---|
+| Health-check commands for each image (`curl` in linuxserver images, `wget` in Seerr) | S2 |
+| Gluetun's built-in health check with `depends_on: service_healthy` | S2 |
+| `FIREWALL_OUTBOUND_SUBNETS` accepting a comma-separated list | S3 |
+| qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace | S3 |
+| The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs) | S3 |
+| Seerr running as uid 1000 with `init: true` | S7 |
+
+## Spec refinements made while planning (2026-10-08)
+
+These were applied to the spec and keep its intent:
+
+- **Compose version.** The bundled Compose CLI is v5.x. Preflight requires at
+  least 2.24.
+- **LAN binding.** `network.bind: lan` uses private IPv4 (RFC 1918) addresses in
+  M1. IPv6 ULA comes later.
+- **Secrets and seeding steps.** Catalog `secrets` are declared separately from
+  `credentials` steps. "User-provided" is a secret source, not a step.
+- **VPN address.** `vpn.addresses` is optional, for providers such as Mullvad.
+  Other Gluetun settings go through `apps.gluetun.env`.

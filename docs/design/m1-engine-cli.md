@@ -238,7 +238,9 @@ clients are typed per app API.
 - **YAML:** the `yaml` package's Document API, so that writes to `stack.yaml`
   (Keep mine, `migrate`) **preserve the user's comments and formatting**.
 - **Tests:** Vitest.
-- **Container tooling:** the Docker Compose v2 CLI is bundled in the image.
+- **Container tooling:** the Docker Compose CLI is bundled in the image (v5 at
+  the time of writing). Preflight requires at least 2.24, for `up --wait` and
+  `depends_on.restart`.
 - **Rejected alternatives.** Go was rejected for language familiarity. Calling
   the Docker Engine API directly would have meant reimplementing Compose
   semantics and losing ejectability. Forking LavX/arrstack would have meant
@@ -302,6 +304,7 @@ plex: { token: { file: secrets/plex-token } }          # only when media_server:
 vpn:
   provider: mullvad                                    # any Gluetun provider
   private_key: { file: secrets/wg.key }
+  addresses: 10.64.0.2/32                              # WireGuard address, if the provider needs one
 apps:
   sonarr: {}
   radarr: { port: 7879 }        # escape hatches: port, version, env
@@ -329,6 +332,9 @@ Rules:
   `unknown app 'sonar' — did you mean 'sonarr'?`.
 - **Externally managed mode.** With `managed_by: external`, Mediaplane never
   writes `stack.yaml`. `migrate` and Keep mine print the snippet to add instead.
+- **`vpn.addresses`** is optional and sets the WireGuard address for providers
+  that need one, such as Mullvad. Any other Gluetun setting is passed through
+  `apps.gluetun.env`.
 - **Override keys** follow the form `<app>.<resource>.<field>`. The set of
   overridable fields is declared per integration and documented in each app's
   README.
@@ -337,7 +343,7 @@ Rules:
   `vpn: false` is allowed, but `plan` shows a prominent warning every time.
 - **`network.bind`:**
   - `lan` (the default) publishes ports only on the host's private addresses
-    (RFC 1918 / ULA). Preflight detects these with a short-lived helper
+    (RFC 1918 IPv4; IPv6 ULA is a later addition). Preflight detects these with a short-lived helper
     container on the host network, and `lan_subnet` defaults from the same
     detection. If the host has no private address, as on a typical VPS,
     preflight fails and suggests `localhost` plus Tailscale.
@@ -360,10 +366,11 @@ export default defineApp({
   runAs: 'puid-env',            // linuxserver PUID/PGID; others use 'user-directive' or 'fixed:1000'
   provides: [],
   requires: [{ capability: 'download-client', min: 1 }],
+  secrets: { apiKey: { generate: 'hex32' } },  // where each secret comes from
   credentials: [                // ordered seeding steps (see table below)
-    { step: 'env', var: 'SONARR__AUTH__APIKEY', secret: 'apiKey', format: 'hex32' },
-    { step: 'config-file', path: 'config.xml', template: 'config.xml.tmpl' },
-    { step: 'bootstrap-api', action: 'createAdmin' },
+    { step: 'env', var: 'SONARR__AUTH__APIKEY', secret: 'apiKey' },
+    { step: 'config-file', path: 'config.xml' },
+    { step: 'bootstrap-api', action: 'create-admin' },
   ],
   health: { http: '/ping' },
   experimental: false,
@@ -383,7 +390,11 @@ env var and `config.xml`, and its admin user from the API.
 | `env` | An environment variable set from first start | Sonarr, Radarr, Prowlarr, Seerr |
 | `config-file` | A config file written before first start, and only if absent | Sonarr, Radarr, Prowlarr (`config.xml`), qBittorrent (`qBittorrent.conf`) |
 | `bootstrap-api` | First-run setup through the app's API after it starts | Sonarr, Radarr, Prowlarr (admin user), Jellyfin (startup wizard, API key), Seerr (first sign-in). Audiobookshelf in M4 |
-| `user-provided` | Supplied by the user as a secret | Plex token, VPN key |
+
+Secrets are declared separately from the steps that use them. A secret is
+either generated (`hex32`, `qbt`), created by the app itself (Jellyfin's API
+key), or provided by the user (`vpn.private_key`, `plex.token`). For example,
+the VPN key is a user-provided secret that Gluetun's `env` step injects.
 
 §6.1 gives the exact per-app details.
 
