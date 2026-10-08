@@ -15,9 +15,9 @@ async function homeWith(files: Record<string, string>): Promise<string> {
   return home;
 }
 
-function configWith(extra: string): StackConfig {
+function configWith(extra: string, mediaServer = 'jellyfin'): StackConfig {
   const result = parseConfig(
-    `version: 1\npaths: { data: /srv/data }\nmedia_server: jellyfin\n${extra}`,
+    `version: 1\npaths: { data: /srv/data }\nmedia_server: ${mediaServer}\n${extra}`,
   );
   if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));
   return result.config;
@@ -46,6 +46,11 @@ describe('readSecret', () => {
     expect(await readSecret({ env: 'VPN_KEY' }, '/', env)).toBe('fake-env-key');
     expect(await readSecret({ env: 'VPN_KEY' }, '/', {})).toBeUndefined();
   });
+
+  it('treats env names that exist on Object.prototype as absent', async () => {
+    expect(await readSecret({ env: 'constructor' }, '/', {})).toBeUndefined();
+    expect(await readSecret({ env: 'toString' }, '/', {})).toBeUndefined();
+  });
 });
 
 describe('secretRefs and checkSecretRefs', () => {
@@ -59,6 +64,25 @@ describe('secretRefs and checkSecretRefs', () => {
       'admin.password',
       'vpn.private_key',
     ]);
+  });
+
+  it('includes plex.token when Plex is the media server', async () => {
+    const plexConfig = configWith(
+      'admin: { password: { env: ADMIN_PASSWORD } }\n' +
+        'plex: { token: { env: PLEX_TOKEN } }\n' +
+        'vpn: { provider: mullvad, private_key: { file: secrets/wg.key } }\n',
+      'plex',
+    );
+    expect(secretRefs(plexConfig).map((r) => r.path)).toEqual([
+      'admin.password',
+      'plex.token',
+      'vpn.private_key',
+    ]);
+    expect(await checkSecretRefs(plexConfig, await homeWith({}), {})).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'secret.missing', path: 'plex.token' }),
+      ]),
+    );
   });
 
   it('reports each missing secret with its stack.yaml path', async () => {

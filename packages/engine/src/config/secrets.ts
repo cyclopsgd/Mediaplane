@@ -21,7 +21,9 @@ export async function readSecret(
 ): Promise<string | undefined> {
   const raw =
     'env' in ref
-      ? env[ref.env]
+      ? Object.hasOwn(env, ref.env)
+        ? env[ref.env]
+        : undefined
       : await readQuietly(isAbsolute(ref.file) ? ref.file : join(home, ref.file));
   const value = raw?.trim();
   return value === undefined || value === '' ? undefined : value;
