@@ -2,7 +2,14 @@ import { z } from 'zod';
 
 export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const IPV4_CIDR = /^(?:\d{1,3}\.){3}\d{1,3}\/(?:\d|[12]\d|3[0-2])$/;
-const OVERRIDE_KEY = /^[a-z0-9-]+(?:\.[a-z0-9_]+)+$/;
+/** `<app>.<resource>` or `<app>.<resource>.<field>`; field names are camelCase. */
+const OVERRIDE_KEY = /^[a-z0-9-]+(?:\.[A-Za-z0-9_]+){1,2}$/;
+
+const OVERRIDE_KEY_MESSAGE =
+  'override keys look like <app>.<resource>.<field>, e.g. sonarr.download_client.category';
+const OVERRIDE_VALUE_MESSAGE = 'override values must be a string, number or boolean';
+const ENV_NAME_MESSAGE =
+  'environment variable names use letters, digits and _, and cannot start with a digit';
 
 const INLINE_SECRET =
   'inline secrets are not allowed in stack.yaml; use { file: secrets/<name> } or { env: VAR_NAME }';
@@ -27,7 +34,7 @@ export const appSettingsSchema = z.looseObject({
   enabled: z.boolean().default(true),
   port: z.int().min(1).max(65535).optional(),
   version: z.string().min(1).optional(),
-  env: z.record(z.string().regex(ENV_NAME), z.string()).default({}),
+  env: z.record(z.string().regex(ENV_NAME, ENV_NAME_MESSAGE), z.string()).default({}),
 });
 export type AppSettings = z.infer<typeof appSettingsSchema>;
 
@@ -70,8 +77,8 @@ const stackShape = {
   apps: z.record(z.string(), appSettingsSchema).default({}),
   overrides: z
     .record(
-      z.string().regex(OVERRIDE_KEY),
-      z.union([z.string(), z.number(), z.boolean()]),
+      z.string().regex(OVERRIDE_KEY, OVERRIDE_KEY_MESSAGE),
+      z.union([z.string(), z.number(), z.boolean()], { error: OVERRIDE_VALUE_MESSAGE }),
     )
     .default({}),
   managed_by: z.enum(['mediaplane', 'external']).default('mediaplane'),

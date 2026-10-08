@@ -121,6 +121,61 @@ describe('parseConfig', () => {
     expect(paths).toEqual(['paths.data', 'network.lan_subnet']);
   });
 
+  it('explains a malformed override key', () => {
+    const [diagnostic] = diagnosticsOf(
+      `${MINIMAL}overrides:\n  Sonarr.download_client.category: television\n`,
+    );
+    expect(diagnostic).toMatchObject({
+      severity: 'error',
+      code: 'config.invalid',
+      path: 'overrides.Sonarr.download_client.category',
+    });
+    expect(diagnostic?.message).toContain('override keys look like');
+    expect(diagnostic?.message).not.toContain('Invalid key in record');
+  });
+
+  it('rejects override keys with more than three segments', () => {
+    const [diagnostic] = diagnosticsOf(`${MINIMAL}overrides:\n  sonarr.a.b.c: x\n`);
+    expect(diagnostic).toMatchObject({
+      code: 'config.invalid',
+      path: 'overrides.sonarr.a.b.c',
+    });
+    expect(diagnostic?.message).toContain('override keys look like');
+  });
+
+  it('accepts camelCase field names and two-segment override keys', () => {
+    const result = parseConfig(
+      `${MINIMAL}overrides:\n  prowlarr.app_link.syncLevel: addOnly\n  sonarr.download_client: unmanaged\n`,
+    );
+    if (!result.ok) throw new Error('expected success');
+    expect(result.config.overrides).toEqual({
+      'prowlarr.app_link.syncLevel': 'addOnly',
+      'sonarr.download_client': 'unmanaged',
+    });
+  });
+
+  it('explains a non-scalar override value', () => {
+    const [diagnostic] = diagnosticsOf(
+      `${MINIMAL}overrides:\n  sonarr.download_client: { x: 1 }\n`,
+    );
+    expect(diagnostic).toMatchObject({
+      code: 'config.invalid',
+      path: 'overrides.sonarr.download_client',
+    });
+    expect(diagnostic?.message).toContain('override values must be');
+  });
+
+  it('explains a malformed environment variable name', () => {
+    const [diagnostic] = diagnosticsOf(
+      `${MINIMAL}apps:\n  sonarr:\n    env:\n      1BAD: x\n`,
+    );
+    expect(diagnostic).toMatchObject({
+      code: 'config.invalid',
+      path: 'apps.sonarr.env.1BAD',
+    });
+    expect(diagnostic?.message).toContain('environment variable names');
+  });
+
   it('reports YAML syntax errors with their position', () => {
     const [diagnostic] = diagnosticsOf('version: 1\npaths: { data: /srv/data\n');
     expect(diagnostic?.code).toBe('config.yaml-syntax');

@@ -52,6 +52,13 @@ function toDiagnostics(issue: Issue): Diagnostic[] {
       });
     });
   }
+  if (issue.code === 'invalid_key') {
+    // A record key failed its schema. Zod's own message ("Invalid key in record") says
+    // nothing, so report the inner key issue(s) at the path of the offending key.
+    return issue.issues.map((inner) =>
+      error('config.invalid', `${path}: ${inner.message}`, { path }),
+    );
+  }
   if (path === '') return [error('config.invalid', issue.message)];
   return [error('config.invalid', `${path}: ${issue.message}`, { path })];
 }
