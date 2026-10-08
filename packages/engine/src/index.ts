@@ -5,3 +5,5 @@ export * from './config/secrets';
 export * from './catalog/types';
 export * from './host/facts';
 export * from './resolver/resolve';
+export * from './render/compose';
+export * from './render/yaml';
