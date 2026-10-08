@@ -156,7 +156,12 @@ describe('the real catalog', () => {
 
   it('fails without a vpn: block while the VPN is on', () => {
     const source = SPEC_EXAMPLE.replace(/vpn:\n(?: {2}.*\n)+/, '');
-    expect(codes(resolve(source).diagnostics)).toContain('vpn.missing');
+    const result = resolve(source);
+    expect(codes(result.diagnostics)).toContain('vpn.missing');
+    expect(result.stack).toBeUndefined();
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'vpn.missing', severity: 'error' }),
+    );
   });
 
   it('uses FlareSolverr instead of Byparr when it is listed', () => {
