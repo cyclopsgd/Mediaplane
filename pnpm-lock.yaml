@@ -38,6 +38,8 @@ importers:
 
   packages/cli: {}
 
+  packages/engine: {}
+
 packages:
 
   '@babel/helper-string-parser@7.29.7':
