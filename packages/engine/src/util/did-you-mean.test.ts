@@ -17,10 +17,13 @@ describe('didYouMean', () => {
     expect(didYouMean('sonar', ['sonarr', 'radarr'])).toBe('sonarr');
   });
   it('ignores case', () => {
-    expect(didYouMean('Radar', ['sonarr', 'radarr'])).toBe('radarr');
+    expect(didYouMean('SONARR', ['radarr', 'sonarr'])).toBe('sonarr');
   });
   it('prefers the closest candidate', () => {
-    expect(didYouMean('plez', ['please', 'plex'])).toBe('plex');
+    expect(didYouMean('plex', ['plexes', 'plexx'])).toBe('plexx');
+  });
+  it('breaks ties in favour of the first candidate', () => {
+    expect(didYouMean('plex', ['plea', 'plez'])).toBe('plea');
   });
   it('returns undefined when nothing is close', () => {
     expect(didYouMean('kodi', ['sonarr', 'radarr'])).toBeUndefined();
