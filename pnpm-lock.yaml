@@ -45,7 +45,17 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
-  packages/cli: {}
+  packages/cli:
+    dependencies:
+      '@mediaplane/catalog':
+        specifier: workspace:*
+        version: link:../../catalog
+      '@mediaplane/engine':
+        specifier: workspace:*
+        version: link:../engine
+      commander:
+        specifier: ^15.0.0
+        version: 15.0.0
 
   packages/engine:
     dependencies:
@@ -570,6 +580,10 @@ packages:
   chai@6.3.0:
     resolution: {integrity: sha512-XWAtwJ6OHO+tj0EKCs0Y2UamnyOxseZWltU4x2U2wh8g4AigdjwvtUjvLP2tqkA/avxHEtzxNaqGq/YGNwckKg==}
     engines: {node: '>=18'}
+
+  commander@15.0.0:
+    resolution: {integrity: sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==}
+    engines: {node: '>=22.12.0'}
 
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
@@ -1538,6 +1552,8 @@ snapshots:
       qified: 0.10.1
 
   chai@6.3.0: {}
+
+  commander@15.0.0: {}
 
   convert-source-map@2.0.0: {}
 

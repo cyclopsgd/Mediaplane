@@ -2,5 +2,10 @@
   "name": "@mediaplane/cli",
   "version": "0.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@mediaplane/catalog": "workspace:*",
+    "@mediaplane/engine": "workspace:*",
+    "commander": "^15.0.0"
+  }
 }

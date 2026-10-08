@@ -12,7 +12,8 @@
     "format": "prettier --write .",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "mediaplane": "tsx packages/cli/src/main.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
