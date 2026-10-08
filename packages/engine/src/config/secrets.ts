@@ -8,7 +8,9 @@ export function secretRefs(config: StackConfig): { path: string; ref: SecretRef 
   const refs: { path: string; ref: SecretRef }[] = [];
   if (config.admin.password)
     refs.push({ path: 'admin.password', ref: config.admin.password });
-  if (config.plex) refs.push({ path: 'plex.token', ref: config.plex.token });
+  // A plex block is dormant unless Plex is the media server.
+  if (config.media_server === 'plex' && config.plex)
+    refs.push({ path: 'plex.token', ref: config.plex.token });
   if (config.vpn) refs.push({ path: 'vpn.private_key', ref: config.vpn.private_key });
   return refs;
 }

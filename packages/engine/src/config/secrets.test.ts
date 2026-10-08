@@ -85,6 +85,17 @@ describe('secretRefs and checkSecretRefs', () => {
     );
   });
 
+  it('ignores a dormant plex block when Jellyfin is the media server', async () => {
+    const jellyfinConfig = configWith(
+      'plex: { token: { env: PLEX_TOKEN } }\n' +
+        'vpn: { provider: mullvad, private_key: { file: secrets/wg.key } }\n',
+    );
+    expect(secretRefs(jellyfinConfig).map((r) => r.path)).toEqual(['vpn.private_key']);
+    // PLEX_TOKEN is unset, yet only the VPN key is reported.
+    const diagnostics = await checkSecretRefs(jellyfinConfig, await homeWith({}), {});
+    expect(diagnostics.map((d) => d.path)).toEqual(['vpn.private_key']);
+  });
+
   it('reports each missing secret with its stack.yaml path', async () => {
     expect(await checkSecretRefs(config, await homeWith({}), {})).toEqual([
       expect.objectContaining({ code: 'secret.missing', path: 'admin.password' }),
