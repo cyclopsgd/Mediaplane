@@ -64,6 +64,70 @@ each one, or corrects it in the catalog:
 | The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs) | S3 |
 | Seerr running as uid 1000 with `init: true` | S7 |
 
+## Inputs for later slices from the Slice 1 reviews (2026-10-08)
+
+The Slice 1 final review approved the merge. It also raised the design gaps
+below, which only matter once Mediaplane writes files or deploys. Each slice
+plan must address the items for that slice.
+
+**S2 (must land with `apply`):**
+
+- **Cloud hosts and `bind: lan`.** On AWS, GCP, Azure and OCI the main
+  network card has a private 10.x address that is NATed to a public IP, so it
+  counts as "the LAN". The dev box is OCI, for example. Preflight must detect
+  cloud platforms (DMI vendor or asset tag, metadata endpoint) and refuse or
+  warn on `lan` unless `network.lan_subnet` is set explicitly. Bind addresses
+  must also be restricted to an explicit `lan_subnet`.
+- **Secrets in `apps.<id>.env`.** These values are plaintext today and end up
+  in `compose.yaml`. Accept `{ file }` and `{ env }` references for env
+  values, rendered as `${MP_<APP>_ENV_<NAME>}`, so values such as
+  `WIREGUARD_PRESHARED_KEY` or `OPENVPN_PASSWORD` never land in the file.
+- **Ejecting with the override file.** Compose only auto-merges a
+  `compose.override.yaml` that sits next to the compose file. The runtime must
+  pass both files with `-f`, and the generated file's header and the docs must
+  give the exact `docker compose -f … -f …` command for ejecting.
+- **Interface and namespace checks:**
+  - Extend the virtual-interface deny-list (vmnet, vboxnet, zt, tap, ppp,
+    nordlynx, cali, kube-, weave, cilium, utun), or check for a physical device
+    under `/sys/class/net/<if>/device`.
+  - Declare Gluetun's control port 8000 (unpublished), and check for container
+    port clashes inside shared network namespaces.
+- **Validation:**
+  - Check that `version:` is a valid Docker tag, and pass the image reference
+    through `literal()`.
+  - Reject paths containing `:`.
+  - `IPV4_CIDR` must reject octets above 255.
+  - An empty `MEDIAPLANE_HOME` must fall back to the default.
+- **Errors:**
+  - Unexpected I/O errors must name the file and a next step. EACCES is
+    likely, because the container runs as non-root.
+  - `--json` must print a JSON error envelope when an exception is thrown.
+  - An alias-bomb YAML file must produce a diagnostic, not an exception.
+  - YAML syntax errors must not echo the offending source line once logs or
+    history exist.
+- **Tests:** a test that `plan()` writes nothing, alongside the new write code.
+
+**S3:**
+
+- Gluetun's `FIREWALL_OUTBOUND_SUBNETS` and Servarr's `TRUSTEDNETWORKS` should
+  only be filled when ports are actually published on the LAN. Today they are
+  also filled with `bind: localhost`.
+- Warn when `lanSubnets` is empty but a feature needs it.
+- Servarr `TRUSTEDNETWORKS` should add Mediaplane's Docker network once
+  requests are proxied (ruling R12; spec §6.1).
+
+**S4:** override field names are case-sensitive, so the managed-field
+comparison must match them exactly.
+
+**S8 (before going public):**
+
+- **Repo setup (owner):** enable GitHub private vulnerability reporting, which
+  `SECURITY.md` relies on. Choose GPL-3.0-only or GPL-3.0-or-later and add the
+  SPDX `license` field.
+- **Docs:** make the `--json` contract explicit (pin its fields and document
+  `mediaplane.plan/v1`). Drop the internal "Slice 1" wording from the README.
+- **Tests:** tighten the catalog tag test, and add Renovate.
+
 ## Spec refinements made while planning (2026-10-08)
 
 These were applied to the spec and keep its intent:
