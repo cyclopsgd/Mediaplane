@@ -137,6 +137,18 @@ describe('resolveStack: options and checks', () => {
     expect(codes(result)).toContain('app.env-reserved');
   });
 
+  it('protects env vars that keep the host and container ports equal', () => {
+    const result = resolve('  qbittorrent: { env: { WEBUI_PORT: "9999" } }\n');
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'app.env-reserved',
+        path: 'apps.qbittorrent.env.WEBUI_PORT',
+        hint: 'set apps.qbittorrent.port instead',
+      }),
+    );
+    expect(result.stack).toBeUndefined();
+  });
+
   it('reports a listed and implied app with invalid options once, without cascading errors', () => {
     const result = resolve('  qbittorrent: {}\n  gluetun: { fo: 1 }\n');
     expect(codes(result)).toEqual(['app.unknown-option']);

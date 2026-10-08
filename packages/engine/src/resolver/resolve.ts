@@ -258,16 +258,27 @@ function checkApp(
       }),
     );
   }
-  const reserved = new Set(
-    def.credentials.flatMap((step) => (step.step === 'env' ? [step.var] : [])),
+  // Env vars Mediaplane owns: secrets it injects, and port variables that keep the host
+  // and container ports equal (the user's `env` is applied last, so it must not win).
+  const secretVars = def.credentials.flatMap((step) =>
+    step.step === 'env' ? [step.var] : [],
   );
+  const portVars = def.ports.flatMap((port) =>
+    port.hostEqualsContainer ? [port.hostEqualsContainer.env] : [],
+  );
+  const reserved = new Set([...secretVars, ...portVars]);
   for (const key of Object.keys(settings.env)) {
     if (reserved.has(key)) {
       diagnostics.push(
         error(
           'app.env-reserved',
-          `apps.${def.id}.env.${key} carries a Mediaplane-managed secret and cannot be overridden`,
-          { path: `apps.${def.id}.env.${key}` },
+          `apps.${def.id}.env.${key} is managed by Mediaplane and cannot be overridden`,
+          {
+            path: `apps.${def.id}.env.${key}`,
+            ...withHint(
+              portVars.includes(key) ? `set apps.${def.id}.port instead` : undefined,
+            ),
+          },
         ),
       );
     }
