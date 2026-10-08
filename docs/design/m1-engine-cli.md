@@ -1,7 +1,7 @@
 # Mediaplane — M1 Engine + CLI: Design Spec
 
 - **Date:** 2026-10-08
-- **Status:** Draft, pending review
+- **Status:** Approved (2026-10-08)
 - **Milestone:** M1 of 4 (Engine + CLI)
 - **Licence:** GPL-3.0
 
