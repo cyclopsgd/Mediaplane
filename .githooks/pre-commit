@@ -11,13 +11,29 @@ if command -v gitleaks >/dev/null 2>&1; then
   exec gitleaks git "$ROOT" --pre-commit --staged --redact --verbose --config "$ROOT/.gitleaks.toml"
 elif command -v docker >/dev/null 2>&1; then
   # `git commit -a` and `git commit <path>` run this hook with GIT_INDEX_FILE pointing at a
-  # temporary index. Forward it (as an absolute path under the mounted git dir), or the
-  # container would scan the stale real index and miss what is actually being committed.
+  # temporary index. Forward it into the container, or the container would scan the stale
+  # real index and miss what is actually being committed. ROOT and COMMON are physical
+  # paths and are what get mounted, so the index path must be canonicalized the same way
+  # (a symlinked checkout path would otherwise not exist inside the container). If it
+  # cannot be located under a mounted path, fail closed rather than skip the scan.
   if [ -n "${GIT_INDEX_FILE:-}" ]; then
     case "$GIT_INDEX_FILE" in
       /*) INDEX="$GIT_INDEX_FILE" ;;
       *) INDEX="$PWD/$GIT_INDEX_FILE" ;;
     esac
+    INDEX_DIR="$(cd "$(dirname "$INDEX")" 2>/dev/null && pwd -P)" || INDEX_DIR=''
+    INDEX="$INDEX_DIR/$(basename "$INDEX")"
+    case "$INDEX" in
+      "$ROOT"/* | "$COMMON"/*) ;;
+      *)
+        echo "pre-commit: GIT_INDEX_FILE ($GIT_INDEX_FILE) is not under the repo or its git dir; refusing to commit unscanned" >&2
+        exit 1
+        ;;
+    esac
+    if [ ! -f "$INDEX" ]; then
+      echo "pre-commit: index file $INDEX does not exist; refusing to commit unscanned" >&2
+      exit 1
+    fi
     set -- -e "GIT_INDEX_FILE=$INDEX"
   else
     set --
