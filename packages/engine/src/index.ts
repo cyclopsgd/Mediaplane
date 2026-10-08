@@ -7,3 +7,5 @@ export * from './host/facts';
 export * from './resolver/resolve';
 export * from './render/compose';
 export * from './render/yaml';
+export * from './plan/files';
+export * from './plan/plan';
