@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+# Scan staged changes for secrets before every commit.
+# Uses a local gitleaks if installed, otherwise the pinned gitleaks container.
+set -e
+IMAGE='ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f'
+ROOT="$(git rev-parse --show-toplevel)"
+# The git dir can live outside ROOT (linked worktrees), so mount both at identical paths.
+COMMON="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+
+if command -v gitleaks >/dev/null 2>&1; then
+  exec gitleaks git "$ROOT" --pre-commit --staged --redact --verbose --config "$ROOT/.gitleaks.toml"
+elif command -v docker >/dev/null 2>&1; then
+  exec docker run --rm --user "$(id -u):$(id -g)" -v "$ROOT:$ROOT" -v "$COMMON:$COMMON" -w "$ROOT" "$IMAGE" \
+    git "$ROOT" --pre-commit --staged --redact --verbose --config "$ROOT/.gitleaks.toml"
+else
+  echo "pre-commit: neither gitleaks nor docker found; secret scan SKIPPED" >&2
+fi

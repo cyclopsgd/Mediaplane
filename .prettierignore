@@ -1,0 +1,6 @@
+pnpm-lock.yaml
+coverage/
+**/__golden__/
+docs/design/
+docs/plans/
+LICENSE

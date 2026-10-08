@@ -1,0 +1,14 @@
+node_modules/
+coverage/
+dist/
+*.log
+.DS_Store
+
+# Local Mediaplane homes used while developing. Never commit real stacks or secrets.
+/.mediaplane-dev/
+/stack.yaml
+/secrets/
+
+# Local tooling scratch (Claude Code worktrees, superpowers SDD workspaces)
+/.claude/worktrees/
+/.superpowers/

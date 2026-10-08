@@ -1,0 +1,8 @@
+title = "Mediaplane gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Obviously fake values used in tests, fixtures and docs"
+regexes = ['''0{32}''', '''qbt_0{28}''', '''fake-[a-z0-9-]+''']
