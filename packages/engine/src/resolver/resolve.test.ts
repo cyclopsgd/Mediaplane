@@ -136,6 +136,19 @@ describe('resolveStack: options and checks', () => {
     );
     expect(codes(result)).toContain('app.env-reserved');
   });
+
+  it('reports a listed and implied app with invalid options once, without cascading errors', () => {
+    const result = resolve('  qbittorrent: {}\n  gluetun: { fo: 1 }\n');
+    expect(codes(result)).toEqual(['app.unknown-option']);
+    expect(result.diagnostics[0]?.path).toBe('apps.gluetun.fo');
+    expect(result.stack).toBeUndefined();
+  });
+
+  it('still counts an app with invalid options as a provider of its capabilities', () => {
+    const result = resolve('  sonarr: {}\n  qbittorrent: { vpn: "yes" }\n');
+    expect(codes(result)).toEqual(['app.invalid-option']);
+    expect(result.stack).toBeUndefined();
+  });
 });
 
 describe('resolveStack: ports and images', () => {

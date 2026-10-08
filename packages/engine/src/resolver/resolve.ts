@@ -70,7 +70,12 @@ export function resolveStack(
       ? unique(host.privateAddresses.map((a) => networkOf(a.cidr)))
       : [config.network.lan_subnet];
 
-  const enabled = enableApps(requestedApps(config, byId), config, byId, diagnostics);
+  const { enabled, unparsed } = enableApps(
+    requestedApps(config, byId),
+    config,
+    byId,
+    diagnostics,
+  );
   const apps = enabled.map(({ def, options }): ResolvedApp => {
     const settings = config.apps[def.id] ?? DEFAULT_SETTINGS;
     const context: AppContext = { config, settings, options, lanSubnets };
@@ -88,9 +93,10 @@ export function resolveStack(
   diagnostics.push(
     ...checkCapabilities(
       apps.map((a) => a.def),
+      unparsed,
       catalog,
     ),
-    ...checkNetworkVia(apps),
+    ...checkNetworkVia(apps, unparsed),
     ...checkPortConflicts(apps),
   );
   const bind = bindAddresses(config, host);
@@ -165,20 +171,30 @@ function requestedApps(
   return [...requested].sort(compare);
 }
 
-/** Requested apps plus everything they imply, with options parsed. */
+/**
+ * Requested apps plus everything they imply, with options parsed. Each app is attempted
+ * once. Apps whose options are invalid are returned as `unparsed`: their option errors are
+ * reported once, and later checks still know they are enabled.
+ */
 function enableApps(
   requested: readonly string[],
   config: StackConfig,
   byId: ReadonlyMap<string, AppDefinition>,
   diagnostics: Diagnostic[],
-): EnabledApp[] {
+): { enabled: EnabledApp[]; unparsed: AppDefinition[] } {
   const enabled = new Map<string, EnabledApp>();
+  const unparsed = new Map<string, AppDefinition>();
+  const visited = new Set<string>();
   const pending = [...requested];
   for (let id = pending.shift(); id !== undefined; id = pending.shift()) {
     const def = byId.get(id);
-    if (def === undefined || enabled.has(id)) continue;
+    if (def === undefined || visited.has(id)) continue;
+    visited.add(id);
     const options = parseOptions(def, config.apps[id] ?? DEFAULT_SETTINGS, diagnostics);
-    if (options === undefined) continue;
+    if (options === undefined) {
+      unparsed.set(id, def);
+      continue;
+    }
     enabled.set(id, { def, options });
     for (const implied of def.implies?.(options) ?? []) {
       const impliedDef = byId.get(implied);
@@ -193,7 +209,10 @@ function enableApps(
       if (!taken) pending.push(implied);
     }
   }
-  return [...enabled.values()].sort((a, b) => compare(a.def.id, b.def.id));
+  return {
+    enabled: [...enabled.values()].sort((a, b) => compare(a.def.id, b.def.id)),
+    unparsed: [...unparsed.values()],
+  };
 }
 
 function parseOptions(
@@ -312,14 +331,20 @@ function resolvePorts(
   return { ports, containerPorts };
 }
 
+/**
+ * Requirements are checked for `enabled` apps only, but `unparsed` apps (listed with
+ * invalid options) still count as providers, so their option error is the only report.
+ */
 function checkCapabilities(
   enabled: readonly AppDefinition[],
+  unparsed: readonly AppDefinition[],
   catalog: Catalog,
 ): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
+  const available = [...enabled, ...unparsed];
   for (const def of enabled) {
     for (const requirement of def.requires) {
-      const count = enabled.filter((other) =>
+      const count = available.filter((other) =>
         provides(other, requirement.capability),
       ).length;
       if (count >= requirement.min) continue;
@@ -357,8 +382,15 @@ function checkCapabilities(
   return diagnostics;
 }
 
-function checkNetworkVia(apps: readonly ResolvedApp[]): Diagnostic[] {
-  const ids = new Set(apps.map((app) => app.def.id));
+/** `unparsed` apps are enabled (their option errors are reported separately). */
+function checkNetworkVia(
+  apps: readonly ResolvedApp[],
+  unparsed: readonly AppDefinition[],
+): Diagnostic[] {
+  const ids = new Set([
+    ...apps.map((app) => app.def.id),
+    ...unparsed.map((def) => def.id),
+  ]);
   return apps.flatMap((app) =>
     app.networkVia === undefined || ids.has(app.networkVia)
       ? []
