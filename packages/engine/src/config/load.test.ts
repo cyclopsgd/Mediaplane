@@ -78,6 +78,12 @@ describe('parseConfig', () => {
     });
   });
 
+  it('treats an app listed without settings as enabled', () => {
+    const result = parseConfig(`${MINIMAL}apps:\n  sonarr:\n`);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.config.apps.sonarr).toEqual({ enabled: true, env: {} });
+  });
+
   it('rejects inline secrets with an explanation', () => {
     const [diagnostic] = diagnosticsOf(
       `${MINIMAL}vpn: { provider: mullvad, private_key: "fake-inline-key" }\n`,

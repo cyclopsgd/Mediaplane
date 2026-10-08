@@ -74,7 +74,13 @@ const stackShape = {
       addresses: z.string().min(1).optional(),
     })
     .optional(),
-  apps: z.record(z.string(), appSettingsSchema).default({}),
+  // `sonarr:` with no value is YAML null; an app is enabled if it is listed.
+  apps: z
+    .record(
+      z.string(),
+      z.preprocess((value) => value ?? {}, appSettingsSchema),
+    )
+    .default({}),
   overrides: z
     .record(
       z.string().regex(OVERRIDE_KEY, OVERRIDE_KEY_MESSAGE),
