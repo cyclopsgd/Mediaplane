@@ -35,7 +35,8 @@ This repository is public, or will be. Anything in git history is permanent.
 - Test fixtures use obviously fake values: zeros (`000…`), `qbt_000…`, or strings
   starting with `fake-`. `.gitleaks.toml` allows exactly these.
 - The pre-commit hook runs gitleaks on staged changes. It uses a local `gitleaks` if you
-  have one, and Docker otherwise. CI scans the full history on every push.
+  have one, and Docker otherwise. CI scans the full history on every push to `main` and
+  on every pull request.
 
 ## Design decisions
 
