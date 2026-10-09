@@ -14,7 +14,8 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "mediaplane": "tsx packages/cli/src/main.ts"
+    "mediaplane": "tsx packages/cli/src/main.ts",
+    "bundle": "tsx scripts/bundle.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -22,6 +23,7 @@
     "@mediaplane/engine": "workspace:*",
     "@types/node": "^24.19.1",
     "@vitest/coverage-v8": "^4.1.11",
+    "esbuild": "0.28.2",
     "eslint": "^10.12.0",
     "prettier": "^3.9.9",
     "tsx": "^4.23.15",
