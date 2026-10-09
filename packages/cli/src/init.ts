@@ -1,6 +1,7 @@
 import { chmod, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
+  invokingUser,
   parseConfig,
   STACK_PATH,
   starterStack,
@@ -68,7 +69,7 @@ export async function init(
     ...(answers.mediaServer === 'plex'
       ? [`Save your Plex token in ${join(secrets, 'plex-token')}.`]
       : []),
-    `Create ${answers.dataPath} and make sure uid 1000 can write to it.`,
+    `Create ${answers.dataPath} and make sure uid ${String(answers.user.uid)} (gid ${String(answers.user.gid)}) can write to it.`,
     'Run "mediaplane plan" to check everything, then "mediaplane apply".',
   ];
   if (asJson) {
@@ -127,6 +128,7 @@ async function gatherAnswers(
     vpnProvider,
     loginOnLan,
     timezone: options.timezone,
+    user: invokingUser(),
     bind: host.cloud === undefined ? 'lan' : 'localhost',
   };
 }

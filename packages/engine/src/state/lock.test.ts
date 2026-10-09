@@ -175,11 +175,21 @@ describe('acquireLock, when things go wrong', () => {
     expect(events).toEqual(['sync', 'close', 'link']);
   });
 
-  it('reports a filesystem without hard links, leaving nothing behind', async () => {
+  it('explains a filesystem without hard links, leaving nothing behind', async () => {
     const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
     vi.mocked(link).mockRejectedValueOnce(failure('EPERM'));
-    await expect(acquireLock(home, NOW)).rejects.toThrow('fake: EPERM');
+    await expect(acquireLock(home, NOW)).rejects.toThrow(
+      `cannot create ${join(home, LOCK_PATH)} (EPERM): the Mediaplane home must be on a filesystem that supports hard links`,
+    );
     expect(await readdir(join(home, 'state'))).toEqual([]);
+  });
+
+  it('names the lock file for any other failure to create it', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+    vi.mocked(link).mockRejectedValueOnce(failure('EIO'));
+    await expect(acquireLock(home, NOW)).rejects.toThrow(
+      `cannot create ${join(home, LOCK_PATH)} (EIO)`,
+    );
   });
 
   it('gives up when the lock keeps vanishing between its tries', async () => {

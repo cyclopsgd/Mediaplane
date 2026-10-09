@@ -6,6 +6,8 @@ export interface StarterAnswers {
   vpnProvider: string | undefined;
   loginOnLan: boolean;
   timezone: string;
+  /** The user and group the apps run as. */
+  user: { uid: number; gid: number };
   bind: 'lan' | 'localhost';
 }
 
@@ -21,7 +23,7 @@ export function starterStack(answers: StarterAnswers): string {
     'version: 1',
     `timezone: ${scalar(answers.timezone)}`,
     '# The apps run as this user and group. Make sure they can write to the data folder.',
-    'user: { uid: 1000, gid: 1000 }',
+    `user: { uid: ${String(answers.user.uid)}, gid: ${String(answers.user.gid)} }`,
     'paths:',
     `  data: ${scalar(answers.dataPath)}`,
     'network:',
@@ -51,4 +53,21 @@ export function starterStack(answers: StarterAnswers): string {
     '  seerr: {}',
     '',
   ].join('\n');
+}
+
+/**
+ * The user `init` writes into the starter: whoever runs it. Inside the Mediaplane
+ * container that is the user that owns the home. Root, or a platform without POSIX ids,
+ * gets 1000 instead, because the apps should never run as root.
+ */
+export function invokingUser(
+  ids: { uid: number | undefined; gid: number | undefined } = {
+    uid: process.getuid?.(),
+    gid: process.getgid?.(),
+  },
+): { uid: number; gid: number } {
+  if (ids.uid === undefined || ids.gid === undefined || ids.uid === 0) {
+    return { uid: 1000, gid: 1000 };
+  }
+  return { uid: ids.uid, gid: ids.gid };
 }

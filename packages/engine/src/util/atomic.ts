@@ -36,6 +36,9 @@ export async function writeFileAtomic(
   }
 }
 
+/** What link() reports on a filesystem without hard links (FAT, exFAT, some network shares). */
+const NO_HARD_LINKS = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS']);
+
 /**
  * Create `path` with `content` already in it, or return false if it exists. The content
  * goes to a private temporary file first, is flushed to disk, and is then hard-linked
@@ -61,9 +64,15 @@ export async function writeFileExclusive(
       await link(temp, path);
       return true;
     } catch (cause) {
-      const exists = cause instanceof Error && 'code' in cause && cause.code === 'EEXIST';
-      if (exists) return false;
-      throw cause;
+      const code =
+        cause instanceof Error && 'code' in cause ? String(cause.code) : undefined;
+      if (code === 'EEXIST') return false;
+      throw new Error(
+        code !== undefined && NO_HARD_LINKS.has(code)
+          ? `cannot create ${path} (${code}): the Mediaplane home must be on a filesystem that supports hard links, such as ext4, XFS or Btrfs`
+          : `cannot create ${path}${code === undefined ? '' : ` (${code})`}`,
+        { cause },
+      );
     }
   } finally {
     // Best effort: a cleanup failure must not hide the error that matters.

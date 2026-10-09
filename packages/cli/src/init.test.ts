@@ -2,7 +2,7 @@ import { mkdtemp, open, readdir, readFile, stat, writeFile } from 'node:fs/promi
 import type * as FsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseConfig } from '@mediaplane/engine';
+import { invokingUser, parseConfig } from '@mediaplane/engine';
 import { FIXTURE_HOST, fakeProbe, fakeRuntime } from '@mediaplane/engine/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { run, type CliDeps, type Io } from './run';
@@ -103,6 +103,11 @@ describe('mediaplane init', () => {
     expect(term.stdout()).toContain(`Wrote ${join(home, 'stack.yaml')}.`);
     expect(term.stdout()).toContain(
       `Put your VPN's WireGuard private key in ${join(home, 'secrets', 'wg.key')}.`,
+    );
+    const { uid, gid } = invokingUser();
+    expect((await stackIn(home)).user).toEqual({ uid, gid });
+    expect(term.stdout()).toContain(
+      `Create /srv/data and make sure uid ${String(uid)} (gid ${String(gid)}) can write to it.`,
     );
   });
 
