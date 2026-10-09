@@ -1,10 +1,25 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { nodeExec, type ExecResult } from '@mediaplane/engine';
 
 export const BUSYBOX =
   'busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e';
+
+/** The repository root: the image's build context. */
+export const REPO = fileURLToPath(new URL('../..', import.meta.url));
+
+/** Build the Mediaplane image from this checkout as `tag`. The first build takes minutes. */
+export async function buildImage(tag: string): Promise<void> {
+  const result = await nodeExec('docker', ['build', '--tag', tag, REPO], {
+    cwd: '/',
+    timeoutMs: 900_000,
+  });
+  if (result.code !== 0) {
+    throw new Error(`docker build failed:\n${result.stderr.slice(-3000)}`);
+  }
+}
 
 /**
  * The M1 video stack without the VPN (the VPN gets its own end-to-end test in Slice 3).

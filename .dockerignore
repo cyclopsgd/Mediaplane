@@ -1,0 +1,13 @@
+**/node_modules
+**/*.log
+.git
+.github
+.claude
+.superpowers
+.mediaplane-dev
+coverage
+dist
+docs
+test
+/stack.yaml
+/secrets
