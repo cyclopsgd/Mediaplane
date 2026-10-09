@@ -26,6 +26,8 @@ function recorder(respond: (args: readonly string[]) => ExecResult) {
 }
 
 const ok = (stdout: string): ExecResult => ({ code: 0, stdout, stderr: '' });
+const failure = (code: string, message: string) =>
+  Object.assign(new Error(message), { code });
 const HASH = 'a'.repeat(64);
 /** `ps --no-trunc` reports full 64-character container IDs. */
 const SONARR_ID = 'd5a2f5c9b82d'.padEnd(64, '0');
@@ -35,7 +37,7 @@ const PS_SONARR = JSON.stringify({
   ID: SONARR_ID,
   State: 'running',
   Health: 'healthy',
-  Labels: `com.docker.compose.project.config_files=/opt/mediaplane/generated/compose.yaml,/opt/mediaplane/compose.override.yaml,com.docker.compose.config-hash=${HASH},com.docker.compose.service=sonarr`,
+  Labels: `com.docker.compose.project.config_files=/opt/mediaplane/generated/compose.yaml,/opt/mediaplane/compose.override.yaml,com.docker.compose.config-hash=${HASH},com.docker.compose.oneoff=False,com.docker.compose.service=sonarr`,
   Publishers: [
     { URL: '127.0.0.1', TargetPort: 8989, PublishedPort: 8989, Protocol: 'tcp' },
     { URL: '', TargetPort: 6881, PublishedPort: 0, Protocol: 'tcp' },
@@ -75,6 +77,39 @@ describe('createDockerRuntime', () => {
     await expect(failure).rejects.toBeInstanceOf(RuntimeError);
     await expect(failure).rejects.toThrow(
       'cannot talk to Docker: Cannot connect to the Docker daemon',
+    );
+  });
+
+  it('explains a Docker without the Compose plugin', async () => {
+    const { exec } = recorder((args) =>
+      args[0] === 'version'
+        ? ok('29.8.0\n')
+        : { code: 1, stdout: '', stderr: "docker: 'compose' is not a docker command.\n" },
+    );
+    await expect(
+      createDockerRuntime({ home, project: 'mediaplane', exec }).versions(),
+    ).rejects.toThrow(
+      "Docker Compose is not available: docker: 'compose' is not a docker command.",
+    );
+  });
+
+  it('explains a docker command it cannot start', async () => {
+    const exec: Exec = () => Promise.reject(failure('EACCES', 'spawn docker EACCES'));
+    await expect(
+      createDockerRuntime({ home, project: 'mediaplane', exec }).versions(),
+    ).rejects.toThrow('could not run docker: spawn docker EACCES');
+  });
+
+  it('explains a failed container listing', async () => {
+    const { exec } = recorder(() => ({
+      code: 1,
+      stdout: '',
+      stderr: 'permission denied while trying to connect to the Docker daemon socket\n',
+    }));
+    await expect(
+      createDockerRuntime({ home, project: 'mediaplane', exec }).containers(),
+    ).rejects.toThrow(
+      'docker compose ps failed: permission denied while trying to connect to the Docker daemon socket',
     );
   });
 
@@ -124,6 +159,9 @@ describe('createDockerRuntime', () => {
       dir,
       '-f',
       '-',
+      // Never <home>/.env: up reads only generated/.env, so the hash must not either.
+      '--env-file',
+      '/dev/null',
       'config',
       '--hash',
       '*',
@@ -154,6 +192,8 @@ describe('createDockerRuntime', () => {
       '-',
       '-f',
       join(dir, 'compose.override.yaml'),
+      '--env-file',
+      '/dev/null',
       'config',
       '--hash',
       '*',
@@ -362,6 +402,35 @@ describe('parseContainers', () => {
     ]);
   });
 
+  it('reads UDP ports, and fields Compose leaves out as empty', () => {
+    const line = JSON.stringify({
+      Service: 'gluetun',
+      ID: 'f0e1d2c3b4a5'.padEnd(64, '0'),
+      State: 'running',
+      Health: null,
+      Publishers: [{ URL: '0.0.0.0', PublishedPort: 51820, Protocol: 'udp' }],
+    });
+    const bare = JSON.stringify({ Service: 'byparr', State: 'created' });
+    expect(parseContainers(`${line}\n${bare}\n`)).toEqual([
+      {
+        service: 'gluetun',
+        id: 'f0e1d2c3b4a5'.padEnd(64, '0'),
+        state: 'running',
+        health: '',
+        configHash: undefined,
+        published: [{ address: '0.0.0.0', port: 51820, protocol: 'udp' }],
+      },
+      {
+        service: 'byparr',
+        id: '',
+        state: 'created',
+        health: '',
+        configHash: undefined,
+        published: [],
+      },
+    ]);
+  });
+
   it('has no config hash when the label is absent', () => {
     expect(parseContainers(PS_BYPARR)[0]?.configHash).toBeUndefined();
   });
@@ -372,6 +441,22 @@ describe('parseContainers', () => {
 
   it('reports output that is not JSON as a RuntimeError', () => {
     expect(() => parseContainers('Error: something unexpected\n')).toThrow(RuntimeError);
+  });
+
+  it('skips the one-off containers that `compose run` leaves behind', () => {
+    const oneoff = (id: string, state: string) =>
+      JSON.stringify({
+        Service: 'sonarr',
+        ID: id.padEnd(64, '0'),
+        State: state,
+        Health: '',
+        Labels: `com.docker.compose.config-hash=${'c'.repeat(64)},com.docker.compose.oneoff=True,com.docker.compose.service=sonarr`,
+        Publishers: [],
+      });
+    const ps = [oneoff('e1f2', 'exited'), PS_SONARR, oneoff('a3b4', 'running')].join(
+      '\n',
+    );
+    expect(parseContainers(ps).map((c) => c.id)).toEqual([SONARR_ID]);
   });
 
   it('skips JSON lines that are not objects', () => {

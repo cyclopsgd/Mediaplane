@@ -257,6 +257,15 @@ describe('plan', () => {
     );
   });
 
+  it('lets an unexpected error through rather than blaming Docker', async () => {
+    const home = await makeHome();
+    const bug = new TypeError('fake: a bug, not Docker');
+    const early: Runtime = { ...fakeRuntime(), versions: () => Promise.reject(bug) };
+    await expect(planFor(home, { runtime: early })).rejects.toBe(bug);
+    const late: Runtime = { ...fakeRuntime(), configHashes: () => Promise.reject(bug) };
+    await expect(planFor(home, { runtime: late })).rejects.toBe(bug);
+  });
+
   it('stops on a preflight error', async () => {
     const probe = fakeProbe({ busyPorts: [portKey('tcp', '127.0.0.1', 8989)] });
     const result = await planFor(await makeHome(), { probe });

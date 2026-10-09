@@ -12,8 +12,10 @@ Compose and wires the apps together for you.**
 >   would do. `mediaplane apply` then starts the stack and confirms that every app
 >   is healthy.
 > - **Next:** wiring the apps together. Until that lands, each app still needs
->   setting up by hand, and Jellyfin's first-run page is open to anyone who can
->   reach it.
+>   setting up by hand, and the apps' first-run setup pages are open to anyone who
+>   can reach them: Jellyfin's wizard, Seerr's setup, and Sonarr, Radarr and
+>   Prowlarr until their login is configured. Keep `network.bind: localhost` when
+>   you try it.
 >
 > Watch the repo to follow along.
 
@@ -137,26 +139,29 @@ apps:
   qbittorrent: {}
   seerr: {}
 EOF
-pnpm --silent mediaplane plan --home .mediaplane-dev
+MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane plan --home .mediaplane-dev
 ```
 
 The `user:` line makes the apps run as you, so they can write to the data folder you
-just created. `plan` exits with `0` when nothing would change, `2` when it would change
-something, and `1` on errors. Add `--json` for machine-readable output.
+just created. `MEDIAPLANE_COMPOSE_PROJECT` gives this trial its own Compose project,
+`mediaplane-dev`, so a real `mediaplane` stack on the same host is never touched.
+`plan` exits with `0` when nothing would change, `2` when it would change something,
+and `1` on errors. Add `--json` for machine-readable output.
 
 To actually start the stack, use a stack without the VPN. A fake WireGuard key can't
 connect, so Gluetun would never become healthy. Change the qBittorrent line to
 `qbittorrent: { vpn: false }`, delete the `vpn:` line, then run:
 
 ```bash
-pnpm --silent mediaplane apply --home .mediaplane-dev --yes
-pnpm --silent mediaplane status --home .mediaplane-dev
+MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane apply --home .mediaplane-dev --yes
+MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane status --home .mediaplane-dev
 ```
 
-This starts real containers on this machine, with the web UIs on `localhost`. To
-remove them, run `docker compose -p mediaplane down`, then
-`sudo rm -rf .mediaplane-dev`. Seerr's folder belongs to uid 1000, which is why
-`sudo` is needed.
+This starts real containers on this machine, with the web UIs on `localhost`. The first
+`apply` downloads several GB of images, so it can take a while. To remove the
+containers, run `docker compose -p mediaplane-dev down`, then
+`sudo rm -rf .mediaplane-dev`. Seerr's folder belongs to uid 1000, which is why `sudo`
+is needed.
 
 ## Roadmap
 

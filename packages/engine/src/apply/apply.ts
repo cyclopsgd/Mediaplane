@@ -25,6 +25,9 @@ import { ensureAppdataDirs, ownershipFixes } from './ownership';
 
 export const DEFAULT_WAIT_SECONDS = 600;
 
+/** The detail of a step that ran but found nothing to change. */
+export const NONE_NEEDED = 'none needed';
+
 export type StepEvent =
   | { step: ApplyStep; phase: 'start' }
   | { step: ApplyStep; phase: 'end'; action: ActionResult };
@@ -107,14 +110,18 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     if (result.generated.length > 0) await writeSecretStore(home, result.store);
     store = result.store;
     return result.generated.length === 0
-      ? 'none needed'
+      ? NONE_NEEDED
       : `generated ${result.generated.join(', ')}`;
   });
   await steps.run('files', async () => {
     values = await secretValues(stack, store, options.env);
-    await writeGenerated(home, composeToYaml(compose, home), renderEnvFile(values));
+    const written = await writeGenerated(
+      home,
+      composeToYaml(compose, home),
+      renderEnvFile(values),
+    );
     await ensureAppdataDirs(stack);
-    return `wrote ${COMPOSE_PATH} and ${ENV_PATH}`;
+    return `wrote ${written.join(' and ')}`;
   });
   await steps.run('pull', async () => {
     succeeded(await runtime.pull(values));
@@ -129,7 +136,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       );
     }
     return fixes.length === 0
-      ? 'none needed'
+      ? NONE_NEEDED
       : fixes.map((f) => `${f.service} → ${String(f.uid)}:${String(f.gid)}`).join(', ');
   });
   await steps.run('start', async () => {
@@ -251,8 +258,16 @@ async function startFailure(runtime: Runtime, composeError: string): Promise<str
     : `these apps did not start healthy: ${unhealthy.join(', ')}. Compose said: ${composeError}`;
 }
 
-/** compose.yaml, keeping the previous one as compose.prev.yaml (spec §5 step 6), and .env. */
-async function writeGenerated(home: string, compose: string, env: string): Promise<void> {
+/**
+ * compose.yaml when it changed, keeping the previous one as compose.prev.yaml (spec §5
+ * step 6), and .env. Returns the paths it wrote, relative to the home.
+ */
+async function writeGenerated(
+  home: string,
+  compose: string,
+  env: string,
+): Promise<string[]> {
+  const written: string[] = [];
   const composePath = join(home, COMPOSE_PATH);
   const previous = await readIfExists(composePath);
   if (previous !== compose) {
@@ -260,8 +275,11 @@ async function writeGenerated(home: string, compose: string, env: string): Promi
       await writeFileAtomic(join(home, COMPOSE_PREV_PATH), previous);
     }
     await writeFileAtomic(composePath, compose);
+    written.push(COMPOSE_PATH);
   }
   await writeFileAtomic(join(home, ENV_PATH), env, 0o600);
+  written.push(ENV_PATH);
+  return written;
 }
 
 function succeeded(result: CommandResult, prefix = ''): void {

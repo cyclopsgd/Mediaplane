@@ -1,8 +1,9 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CHANGE_SCHEMA, writeRecord, type ChangeRecord } from './history/records';
+import { HISTORY_DIR } from './paths';
 import { status } from './status';
 import { fakeRuntime, running } from './testing/fakes';
 
@@ -26,6 +27,18 @@ describe('status', () => {
     const result = await status(home, runtime);
     expect(result.containers.map((c) => c.service)).toEqual(['jellyfin', 'sonarr']);
     expect(result.lastApply?.id).toBe('20261010T094312Z-00000002');
+  });
+
+  it('still lists the containers when the change history cannot be read', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mediaplane-status-'));
+    // A file where the history folder should be: listing it fails (ENOTDIR).
+    await mkdir(join(home, 'state'));
+    await writeFile(join(home, HISTORY_DIR), 'not a folder');
+    const runtime = fakeRuntime({ containers: running({ sonarr: 'a' }) });
+    const result = await status(home, runtime);
+    expect(result.containers.map((c) => c.service)).toEqual(['sonarr']);
+    expect(result.lastApply).toBeUndefined();
+    expect(result.historyError).toMatch(/^ENOTDIR: not a directory/);
   });
 
   it('has no last apply before the first one', async () => {

@@ -34,7 +34,7 @@ export interface Runtime {
    * appear in a returned `error` are replaced with `***`.
    */
   configHashes(compose: string, values: Record<string, string>): Promise<HashesResult>;
-  /** Every container in the project, running or not. */
+  /** Every container in the project, running or not, except `compose run` one-offs. */
   containers(): Promise<ContainerState[]>;
   /**
    * Pull images that aren't present yet for the written project (compose.yaml, the

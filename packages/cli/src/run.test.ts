@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
@@ -75,6 +75,22 @@ async function currentHome(runtime: Runtime): Promise<string> {
     }),
   );
   return home;
+}
+
+/** The fake WireGuard key and every key apply stored in the home: none may be printed. */
+async function secretsIn(home: string): Promise<string[]> {
+  const store = JSON.parse(
+    await readFile(join(home, 'state', 'secrets.json'), 'utf8'),
+  ) as {
+    apps: Record<string, Record<string, string>>;
+  };
+  const generated = Object.values(store.apps).flatMap((keys) => Object.values(keys));
+  expect(generated).toHaveLength(2);
+  return ['fake-wireguard-key-for-tests', ...generated];
+}
+
+function expectNoSecrets(output: string, secrets: readonly string[]): void {
+  for (const secret of secrets) expect(output).not.toContain(secret);
 }
 
 function deps(runtime: Runtime = fakeRuntime()): Partial<CliDeps> {
@@ -277,6 +293,7 @@ describe('mediaplane apply', () => {
     expect(first.stdout()).toMatch(
       /Apply complete\. Change record: \d{8}T\d{6}Z-[0-9a-f]{8}\n$/,
     );
+    expectNoSecrets(first.stdout() + first.stderr(), await secretsIn(home));
     const second = capture();
     expect(await run(['apply', '--home', home, '--yes'], second.io, deps(docker))).toBe(
       0,
@@ -341,6 +358,31 @@ describe('mediaplane apply', () => {
       'done',
       'done',
     ]);
+    expectNoSecrets(term.stdout() + term.stderr(), await secretsIn(home));
+  });
+
+  it('counts only the steps that changed something as "changed" in JSON', async () => {
+    // Every key is stored already, so the keys step has nothing to do.
+    const home = await currentHome(fakeRuntime());
+    // A file where the appdata folder should be: the files step fails.
+    await writeFile(join(home, 'appdata'), 'not a folder');
+    const term = capture();
+    expect(
+      await run(
+        ['apply', '--home', home, '--yes', '--json'],
+        term.io,
+        deps(fakeDocker(home)),
+      ),
+    ).toBe(1);
+    const json = JSON.parse(term.stdout()) as {
+      changed: boolean;
+      actions: { step: string; result: string; detail?: string }[];
+    };
+    expect(json.actions.slice(0, 2)).toMatchObject([
+      { step: 'keys', result: 'done', detail: 'none needed' },
+      { step: 'files', result: 'failed' },
+    ]);
+    expect(json.changed).toBe(false);
   });
 
   it('answers --json without --yes with a JSON error', async () => {
@@ -525,8 +567,31 @@ describe('mediaplane status', () => {
       lastApply: { outcome: string } | null;
     };
     expect(json).toMatchObject({ schema: 'mediaplane.status/v1', healthy: true });
+    expect(json).not.toHaveProperty('historyError');
     expect(json.containers).toHaveLength(4);
     expect(json.lastApply?.outcome).toBe('success');
+  });
+
+  it('still shows the apps, with a warning, when the change history cannot be read', async () => {
+    const home = await makeHome();
+    await mkdir(join(home, 'state'));
+    await writeFile(join(home, 'state', 'history'), 'not a folder');
+    const runtime = fakeRuntime({ containers: running({ sonarr: 'a' }) });
+    const term = capture();
+    expect(await run(['status', '--home', home], term.io, deps(runtime))).toBe(0);
+    expect(term.stdout()).toBe('APP     STATE    HEALTH\nsonarr  running  healthy\n');
+    expect(term.stderr()).toMatch(
+      /^warning: could not read the change history: ENOTDIR: not a directory.*\n$/,
+    );
+    const json = capture();
+    expect(await run(['status', '--home', home, '--json'], json.io, deps(runtime))).toBe(
+      0,
+    );
+    expect(JSON.parse(json.stdout())).toMatchObject({
+      healthy: true,
+      lastApply: null,
+      historyError: expect.stringMatching(/^ENOTDIR/) as unknown,
+    });
   });
 
   it('says when nothing is running yet', async () => {

@@ -43,7 +43,11 @@ export interface PlanResult {
   diagnostics: Diagnostic[];
 }
 
-/** What apply builds on after a successful plan, so it never works it out differently. */
+/**
+ * What apply builds on after a successful plan, so it never works it out differently.
+ * `store` holds the generated secrets in plain text: never log, print or serialise a
+ * PlanContext.
+ */
 export interface PlanContext {
   stack: ResolvedStack;
   compose: ComposeFile;

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { chmod, mkdir, open, rename, rm } from 'node:fs/promises';
+import { chmod, link, mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 /**
@@ -33,6 +33,41 @@ export async function writeFileAtomic(
     throw new Error(`cannot write ${path}${code === undefined ? '' : ` (${code})`}`, {
       cause,
     });
+  }
+}
+
+/**
+ * Create `path` with `content` already in it, or return false if it exists. The content
+ * goes to a private temporary file first, is flushed to disk, and is then hard-linked
+ * into place: link() fails if `path` exists, which makes the creation exclusive, and
+ * `path` never exists empty or half written, even if the write fails, the process dies
+ * or the power goes. Needs a filesystem with hard links. `mode` is filtered by the umask.
+ */
+export async function writeFileExclusive(
+  path: string,
+  content: string,
+  mode: number,
+): Promise<boolean> {
+  const temp = `${path}.tmp-${String(process.pid)}-${randomBytes(4).toString('hex')}`;
+  try {
+    const file = await open(temp, 'wx', mode);
+    try {
+      await file.writeFile(content, 'utf8');
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    try {
+      await link(temp, path);
+      return true;
+    } catch (cause) {
+      const exists = cause instanceof Error && 'code' in cause && cause.code === 'EEXIST';
+      if (exists) return false;
+      throw cause;
+    }
+  } finally {
+    // Best effort: a cleanup failure must not hide the error that matters.
+    await rm(temp, { force: true }).catch(() => undefined);
   }
 }
 

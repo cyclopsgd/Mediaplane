@@ -1,9 +1,10 @@
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
   parseConfig,
   STACK_PATH,
   starterStack,
+  writeFileExclusive,
   type HostFacts,
   type StarterAnswers,
 } from '@mediaplane/engine';
@@ -47,18 +48,14 @@ export async function init(
     return 1;
   }
   await mkdir(home, { recursive: true });
-  try {
-    await writeFile(stackPath, text, { flag: 'wx' });
-  } catch (cause) {
-    if (cause instanceof Error && 'code' in cause && cause.code === 'EEXIST') {
-      printError(
-        `${stackPath} already exists; init never overwrites it`,
-        { json: asJson },
-        io,
-      );
-      return 1;
-    }
-    throw cause;
+  // All at once and only if absent, so a failed write never leaves half a stack.yaml.
+  if (!(await writeFileExclusive(stackPath, text, 0o644))) {
+    printError(
+      `${stackPath} already exists; init never overwrites it`,
+      { json: asJson },
+      io,
+    );
+    return 1;
   }
   const secrets = join(home, 'secrets');
   await mkdir(secrets, { recursive: true });
@@ -83,7 +80,7 @@ export async function init(
   io.stdout(`Wrote ${stackPath}.\n`);
   if (host.cloud !== undefined) {
     io.stdout(
-      `This looks like an ${host.cloud} VM, so the web UIs stay on localhost (network.bind).\n`,
+      `This looks like a VM on ${host.cloud}, so the web UIs stay on localhost (network.bind).\n`,
     );
   }
   io.stdout(`\nNext steps:\n${next.map((step) => `  - ${step}\n`).join('')}`);

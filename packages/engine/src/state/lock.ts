@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { link, open, readFile, rename, rm } from 'node:fs/promises';
+import { link, readFile, rename, rm } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { LOCK_PATH, STATE_DIR } from '../paths';
-import { ensureDir } from '../util/atomic';
+import { ensureDir, writeFileExclusive } from '../util/atomic';
 
 export interface LockInfo {
   pid: number;
@@ -49,7 +49,8 @@ export async function acquireLock(
     startedAt: now().toISOString(),
   };
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    if (await createLock(path, info)) {
+    // Exclusive, and never empty or half written: a reader always finds who holds it.
+    if (await writeFileExclusive(path, `${JSON.stringify(info)}\n`, 0o600)) {
       return { release: () => rm(path, { force: true }) };
     }
     const holder = await readHolder(path);
@@ -59,33 +60,6 @@ export async function acquireLock(
   }
   const holder = await readHolder(path);
   throw new LockedError(holder === 'gone' ? undefined : holder);
-}
-
-/**
- * Create the lock file with its content already in it, or report that one exists (false).
- * The content goes to a private temporary file first and is then hard-linked into place:
- * link() fails if the lock exists, which makes the creation exclusive, and the lock never
- * exists empty or half written, even if the write fails or the process dies.
- */
-async function createLock(path: string, info: LockInfo): Promise<boolean> {
-  const temp = `${path}.tmp-${String(process.pid)}-${randomBytes(4).toString('hex')}`;
-  try {
-    const file = await open(temp, 'wx', 0o600);
-    try {
-      await file.writeFile(`${JSON.stringify(info)}\n`, 'utf8');
-    } finally {
-      await file.close();
-    }
-    try {
-      await link(temp, path);
-      return true;
-    } catch (cause) {
-      if (hasCode(cause, 'EEXIST')) return false;
-      throw cause;
-    }
-  } finally {
-    await rm(temp, { force: true }).catch(() => undefined);
-  }
 }
 
 /**

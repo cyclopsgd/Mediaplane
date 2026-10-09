@@ -114,6 +114,10 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
           '-f',
           '-',
           ...overrideArgs,
+          // Not <home>/.env, which Compose would load by default: up loads only
+          // generated/.env, and these values come in through the environment.
+          '--env-file',
+          '/dev/null',
           'config',
           '--hash',
           '*',
@@ -254,6 +258,8 @@ export function parseContainers(stdout: string): ContainerState[] {
       const raw = parsed as PsLine;
       // Labels is one "k=v,k=v" string whose values may contain commas: match, don't split.
       const labels = text(raw.Labels);
+      // A `compose run` leftover is not one of the service's containers: never plan it.
+      if (/(?:^|,)com\.docker\.compose\.oneoff=True(?:,|$)/.test(labels)) return [];
       const publishers = Array.isArray(raw.Publishers)
         ? (raw.Publishers as PsPublisher[])
         : [];

@@ -99,6 +99,22 @@ describe('history records', () => {
     expect(unreadable).toEqual(['20261009T094312Z-00000003.json']);
   });
 
+  it('lists a JSON file that is not a change record as unreadable', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mediaplane-history-'));
+    await writeRecord(home, record('20261009T094312Z-00000001'));
+    await writeFile(join(home, HISTORY_DIR, '20261009T094312Z-00000002.json'), '{}\n');
+    const { records, unreadable } = await listRecords(home);
+    expect(records.map((r) => r.id)).toEqual(['20261009T094312Z-00000001']);
+    expect(unreadable).toEqual(['20261009T094312Z-00000002.json']);
+  });
+
+  it('fails when the history folder itself cannot be read', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mediaplane-history-'));
+    await mkdir(join(home, 'state'));
+    await writeFile(join(home, HISTORY_DIR), 'not a folder');
+    await expect(listRecords(home)).rejects.toMatchObject({ code: 'ENOTDIR' });
+  });
+
   it('finds nothing for an unknown id', async () => {
     const home = await mkdtemp(join(tmpdir(), 'mediaplane-history-'));
     expect(await readRecord(home, '20261009T094312Z-ffffffff')).toBeUndefined();

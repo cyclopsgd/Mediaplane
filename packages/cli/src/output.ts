@@ -1,4 +1,5 @@
 import {
+  NONE_NEEDED,
   unhealthyServices,
   type ActionResult,
   type ApplyResult,
@@ -115,6 +116,13 @@ export function printStep(event: StepEvent, io: Io): void {
   io.stdout(`  ${action.result.padEnd(7)} ${STEP_LABELS[action.step]}${detail}\n`);
 }
 
+/** A step that ran and changed the stack: verify only checks, and NONE_NEEDED did nothing. */
+function changedSomething(action: ActionResult): boolean {
+  return (
+    action.result === 'done' && action.step !== 'verify' && action.detail !== NONE_NEEDED
+  );
+}
+
 export function printApply(
   result: ApplyResult,
   options: { json: boolean },
@@ -127,7 +135,7 @@ export function printApply(
         {
           schema: APPLY_JSON_SCHEMA,
           ok: result.outcome === 'success' || result.outcome === 'no-changes',
-          changed: result.actions.some((a) => a.result === 'done' && a.step !== 'verify'),
+          changed: result.actions.some(changedSomething),
           outcome: result.outcome,
           plan: {
             files: files.map(({ content, ...file }) => file),
@@ -224,12 +232,17 @@ export function printStatus(
             published,
           })),
           lastApply: result.lastApply === undefined ? null : summary(result.lastApply),
+          // Only present when state/history could not be read.
+          historyError: result.historyError,
         },
         null,
         2,
       )}\n`,
     );
     return;
+  }
+  if (result.historyError !== undefined) {
+    io.stderr(`warning: could not read the change history: ${result.historyError}\n`);
   }
   if (result.containers.length === 0) {
     io.stdout(
@@ -246,6 +259,8 @@ export function printStatus(
       );
     }
   }
+  // Without the history, "No apply has run yet" might not be true: the warning says why.
+  if (result.historyError !== undefined) return;
   const last = result.lastApply;
   io.stdout(
     last === undefined

@@ -1,10 +1,47 @@
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import type * as FsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseConfig } from '@mediaplane/engine';
 import { FIXTURE_HOST, fakeProbe, fakeRuntime } from '@mediaplane/engine/testing';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { run, type CliDeps, type Io } from './run';
+
+// writeFile() and open() pass straight through, except where a test fills the disk
+// halfway through writing stack.yaml (which can't be provoked reliably otherwise).
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof FsPromises>();
+  return { ...actual, writeFile: vi.fn(actual.writeFile), open: vi.fn(actual.open) };
+});
+const real = await vi.importActual<typeof FsPromises>('node:fs/promises');
+
+beforeEach(() => {
+  vi.mocked(writeFile).mockReset();
+  vi.mocked(open).mockReset();
+});
+
+/**
+ * The next file write stops halfway on a full disk, whether it goes through writeFile()
+ * or through a handle from open().
+ */
+function fillDiskOnNextWrite(): void {
+  const full = () =>
+    Object.assign(new Error('fake: no space left on device'), { code: 'ENOSPC' });
+  // init writes text; the first 20 characters make it to the disk.
+  const half = (data: unknown) => (typeof data === 'string' ? data.slice(0, 20) : '');
+  vi.mocked(writeFile).mockImplementationOnce(async (path, data, options) => {
+    await real.writeFile(path, half(data), options);
+    throw full();
+  });
+  vi.mocked(open).mockImplementationOnce(async (...args) => {
+    const handle = await real.open(...args);
+    vi.spyOn(handle, 'writeFile').mockImplementationOnce(async (data) => {
+      await handle.write(half(data));
+      throw full();
+    });
+    return handle;
+  });
+}
 
 function capture(answers?: string[]) {
   const out: string[] = [];
@@ -85,6 +122,28 @@ describe('mediaplane init', () => {
     expect(await run(args, term.io, deps())).toBe(1);
     expect(term.stderr()).toContain('already exists; init never overwrites it');
     expect(await readFile(join(home, 'stack.yaml'), 'utf8')).toBe('version: 1\n');
+    expect(await readdir(home)).toEqual(['stack.yaml']);
+  });
+
+  it('never leaves a half-written stack.yaml behind', async () => {
+    const home = await newHome();
+    fillDiskOnNextWrite();
+    const term = capture();
+    const args = [
+      'init',
+      '--home',
+      home,
+      '--media-server',
+      'jellyfin',
+      '--data',
+      '/srv/data',
+    ];
+    expect(await run(args, term.io, deps())).toBe(1);
+    expect(term.stderr()).toBe('error: fake: no space left on device\n');
+    expect(await readdir(home)).toEqual([]);
+    // With room on the disk, a second try writes it.
+    expect(await run(args, capture().io, deps())).toBe(0);
+    expect((await readdir(home)).sort()).toEqual(['secrets', 'stack.yaml']);
   });
 
   it('needs flags when it cannot ask', async () => {
@@ -123,7 +182,9 @@ describe('mediaplane init', () => {
     ];
     expect(await run(args, term.io, deps('Oracle Cloud'))).toBe(0);
     expect((await stackIn(home)).network.bind).toBe('localhost');
-    expect(term.stdout()).toContain('This looks like an Oracle Cloud VM');
+    expect(term.stdout()).toContain(
+      'This looks like a VM on Oracle Cloud, so the web UIs stay on localhost (network.bind).\n',
+    );
   });
 
   it('reports an invalid answer and writes nothing', async () => {

@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import {
+  link,
   mkdir,
   mkdtemp,
   open,
@@ -17,18 +18,27 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCK_PATH } from '../paths';
 import { acquireLock, LockedError } from './lock';
 
-// open() and rename() pass straight through, except where a test makes one call misbehave
-// at an exact moment (the failures and races below can't be provoked reliably otherwise).
+// open(), link() and rename() pass straight through, except where a test makes one call
+// misbehave at an exact moment (the failures and races below can't be provoked reliably
+// otherwise).
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof FsPromises>();
-  return { ...actual, open: vi.fn(actual.open), rename: vi.fn(actual.rename) };
+  return {
+    ...actual,
+    open: vi.fn(actual.open),
+    link: vi.fn(actual.link),
+    rename: vi.fn(actual.rename),
+  };
 });
 const real = await vi.importActual<typeof FsPromises>('node:fs/promises');
 
 beforeEach(() => {
   vi.mocked(open).mockReset();
+  vi.mocked(link).mockReset();
   vi.mocked(rename).mockReset();
 });
+
+const failure = (code: string) => Object.assign(new Error(`fake: ${code}`), { code });
 
 const NOW = () => new Date('2026-10-09T09:43:12.000Z');
 
@@ -105,6 +115,14 @@ describe('acquireLock', () => {
       'state/lock exists but cannot be read',
     );
   });
+
+  it('refuses when the lock is not a file', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+    await mkdir(join(home, LOCK_PATH), { recursive: true });
+    await expect(acquireLock(home, NOW)).rejects.toThrow(
+      'state/lock exists but cannot be read',
+    );
+  });
 });
 
 describe('acquireLock, when things go wrong', () => {
@@ -130,6 +148,60 @@ describe('acquireLock, when things go wrong', () => {
     await expect(acquireLock(home, NOW)).rejects.toThrow('no space left on device');
     expect(await readdir(join(home, 'state'))).toEqual([]);
     await (await acquireLock(home, NOW)).release();
+  });
+
+  it('flushes the lock to disk before linking it into place', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+    const events: string[] = [];
+    vi.mocked(open).mockImplementationOnce(async (...args) => {
+      const handle = await real.open(...args);
+      const sync = handle.sync.bind(handle);
+      const close = handle.close.bind(handle);
+      vi.spyOn(handle, 'sync').mockImplementation(async () => {
+        events.push('sync');
+        await sync();
+      });
+      vi.spyOn(handle, 'close').mockImplementation(async () => {
+        events.push('close');
+        await close();
+      });
+      return handle;
+    });
+    vi.mocked(link).mockImplementationOnce(async (from, to) => {
+      events.push('link');
+      await real.link(from, to);
+    });
+    await (await acquireLock(home, NOW)).release();
+    expect(events).toEqual(['sync', 'close', 'link']);
+  });
+
+  it('reports a filesystem without hard links, leaving nothing behind', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+    vi.mocked(link).mockRejectedValueOnce(failure('EPERM'));
+    await expect(acquireLock(home, NOW)).rejects.toThrow('fake: EPERM');
+    expect(await readdir(join(home, 'state'))).toEqual([]);
+  });
+
+  it('gives up when the lock keeps vanishing between its tries', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+    // Each time, another run holds the lock when we try, and has let go when we look.
+    vi.mocked(link).mockRejectedValue(failure('EEXIST'));
+    const attempt = acquireLock(home, NOW);
+    await expect(attempt).rejects.toBeInstanceOf(LockedError);
+    await expect(attempt).rejects.toMatchObject({ holder: undefined });
+    expect(vi.mocked(link)).toHaveBeenCalledTimes(3);
+  });
+
+  it('reports a stale lock it is not allowed to claim', async () => {
+    const stale = {
+      pid: deadPid(),
+      host: hostname(),
+      startedAt: '2026-10-09T09:00:00.000Z',
+    };
+    const home = await homeWithLock(JSON.stringify(stale));
+    vi.mocked(rename).mockRejectedValueOnce(failure('EACCES'));
+    await expect(acquireLock(home, NOW)).rejects.toThrow('fake: EACCES');
+    expect(JSON.parse(await readFile(join(home, LOCK_PATH), 'utf8'))).toEqual(stale);
   });
 
   it('does not delete a live lock that replaced the stale one before it was claimed', async () => {

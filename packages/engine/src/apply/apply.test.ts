@@ -1,10 +1,16 @@
-import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Catalog } from '../catalog/types';
 import { listRecords } from '../history/records';
-import { ENV_PATH, LOCK_PATH, SECRETS_PATH } from '../paths';
+import {
+  COMPOSE_PATH,
+  COMPOSE_PREV_PATH,
+  ENV_PATH,
+  LOCK_PATH,
+  SECRETS_PATH,
+} from '../paths';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { fakeDocker, fakeProbe } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureApp, fixtureCatalog } from '../testing/fixtures';
@@ -173,6 +179,8 @@ describe('apply', () => {
     const result = await apply(options(home, starting));
     expect(result.outcome).toBe('success');
     expect(result.plan.unhealthy).toEqual(['sonarr (starting)']);
+    // compose.yaml was already current, so only .env was written.
+    expect(result.actions[1]?.detail).toBe('wrote generated/.env');
     expect(result.actions.map((a) => [a.step, a.result])).toEqual([
       ['keys', 'done'],
       ['files', 'done'],
@@ -396,6 +404,170 @@ describe('apply', () => {
     expect(
       result.diagnostics.find((d) => d.code === 'apply.verify-failed')?.message,
     ).toContain('changes remain after apply');
+  });
+
+  it('says so when the start fails with every app healthy', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    let started = false;
+    const portTaken: Runtime = {
+      ...docker,
+      // Docker stops answering after up, so only Compose's own message is left.
+      containers: () =>
+        started
+          ? Promise.reject(new RuntimeError('fake: docker stopped answering'))
+          : docker.containers(),
+      up: () => {
+        started = true;
+        return Promise.resolve({ ok: false, error: 'fake: port is already allocated' });
+      },
+    };
+    const result = await apply(options(home, portTaken));
+    expect(result.diagnostics.find((d) => d.code === 'apply.start-failed')).toMatchObject(
+      {
+        message: 'docker compose up failed: fake: port is already allocated',
+        hint: 'run "mediaplane status" to see each app, fix the cause, then run apply again',
+      },
+    );
+  });
+
+  it('fails verification when it cannot plan again after starting', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    let started = false;
+    const gone: Runtime = {
+      ...docker,
+      versions: () =>
+        started
+          ? Promise.reject(new RuntimeError('fake: cannot talk to Docker'))
+          : docker.versions(),
+      up: (seconds, values) => {
+        started = true;
+        return docker.up(seconds, values);
+      },
+    };
+    const result = await apply(options(home, gone));
+    expect(result.outcome).toBe('failed');
+    expect(result.actions.at(-1)).toEqual({
+      step: 'verify',
+      result: 'failed',
+      error: 'could not plan again: fake: cannot talk to Docker',
+    });
+  });
+
+  it('stops at a failed key generation, and still records it', async () => {
+    const home = await makeHome();
+    let draws = 0;
+    // The first draw (the sonarr key) fails; later ones (the record id) work.
+    const flaky = (size: number) => {
+      if (draws++ === 0) throw new Error('fake: no entropy available');
+      return random(size);
+    };
+    const result = await apply(options(home, fakeDocker(home), { random: flaky }));
+    expect(result.actions.map((a) => [a.step, a.result])).toEqual([
+      ['keys', 'failed'],
+      ['files', 'skipped'],
+      ['pull', 'skipped'],
+      ['ownership', 'skipped'],
+      ['start', 'skipped'],
+      ['verify', 'skipped'],
+    ]);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'apply.keys-failed',
+        message: 'fake: no entropy available',
+      }),
+    );
+    await expect(stat(join(home, SECRETS_PATH))).rejects.toThrow();
+    expect((await listRecords(home)).records[0]?.outcome).toBe('failed');
+  });
+
+  it('stops at files it cannot write', async () => {
+    const home = await makeHome();
+    // A file where the appdata folder should be: the apps' folders cannot be created.
+    await writeFile(join(home, 'appdata'), 'not a folder');
+    const docker = fakeDocker(home);
+    const result = await apply(options(home, docker));
+    expect(result.actions.map((a) => [a.step, a.result])).toEqual([
+      ['keys', 'done'],
+      ['files', 'failed'],
+      ['pull', 'skipped'],
+      ['ownership', 'skipped'],
+      ['start', 'skipped'],
+      ['verify', 'skipped'],
+    ]);
+    expect(result.diagnostics.find((d) => d.code === 'apply.files-failed')?.hint).toBe(
+      'check that this user can write to the Mediaplane home, then run apply again',
+    );
+    expect(docker.calls).not.toContain('pull');
+  });
+
+  it('stops at an appdata folder whose owner it cannot fix, naming the app', async () => {
+    const catalog: Catalog = [
+      ...fixtureCatalog,
+      fixtureApp({
+        id: 'requests',
+        category: 'requests',
+        runAs: 'fixed:2000',
+        volumes: { appdata: '/app/config' },
+      }),
+    ];
+    const home = await makeHome(`${STACK}  requests: {}\n`);
+    const docker = fakeDocker(home, {
+      chown: { ok: false, error: 'fake: chown: /app/config: Operation not permitted' },
+    });
+    const result = await apply(options(home, docker, { catalog }));
+    expect(result.actions.find((a) => a.step === 'ownership')).toEqual({
+      step: 'ownership',
+      result: 'failed',
+      error: 'requests: fake: chown: /app/config: Operation not permitted',
+    });
+    expect(result.actions.find((a) => a.step === 'start')?.result).toBe('skipped');
+    expect(docker.calls).not.toContain('up');
+  });
+
+  it('stops when the plan is invalid, changing nothing and releasing the lock', async () => {
+    const home = await makeHome();
+    await rm(join(home, 'secrets', 'wg.key'));
+    const confirm = vi.fn(() => Promise.resolve(true));
+    const result = await apply(options(home, fakeDocker(home), { confirm }));
+    expect(result).toMatchObject({
+      outcome: 'invalid',
+      actions: [],
+      recordId: undefined,
+    });
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'secret.missing' }),
+    );
+    expect(confirm).not.toHaveBeenCalled();
+    expect(await readdir(join(home, 'state'))).toEqual([]);
+    await expect(stat(join(home, 'generated'))).rejects.toThrow();
+  });
+
+  it('lets an unexpected error taking the lock through', async () => {
+    const home = await makeHome();
+    // A file where the state folder should be: this is not "another apply is running".
+    await writeFile(join(home, 'state'), 'not a folder');
+    await expect(apply(options(home, fakeDocker(home)))).rejects.toThrow();
+  });
+
+  it('keeps the previous compose.yaml as compose.prev.yaml when it changes', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    expect((await apply(options(home, docker))).outcome).toBe('success');
+    await expect(stat(join(home, COMPOSE_PREV_PATH))).rejects.toThrow();
+    const first = await readFile(join(home, COMPOSE_PATH), 'utf8');
+
+    // Prowlarr brings Byparr, which has no appdata folder.
+    await writeFile(join(home, 'stack.yaml'), `${STACK}  prowlarr: {}\n`);
+    const second = await apply(options(home, docker));
+    expect(second.outcome).toBe('success');
+    expect(second.actions[1]?.detail).toBe(
+      'wrote generated/compose.yaml and generated/.env',
+    );
+    expect(await readFile(join(home, COMPOSE_PREV_PATH), 'utf8')).toBe(first);
+    expect(await readFile(join(home, COMPOSE_PATH), 'utf8')).not.toBe(first);
+    expect(await modeOf(join(home, COMPOSE_PREV_PATH))).toBe(0o644);
   });
 
   it('never generates a secret twice', async () => {
