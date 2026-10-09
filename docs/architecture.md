@@ -1,0 +1,222 @@
+# Architecture
+
+This page is a condensed version of the [M1 design](design/m1-engine-cli.md), §3 to §6,
+covering what is built so far (Slices 1 to 2c). The design describes the whole of M1;
+this page describes what exists.
+
+## The idea
+
+You describe the stack you want in one file, `stack.yaml`. Mediaplane then works like
+`terraform plan` and `apply`:
+
+- `plan` works out what would change, and changes nothing;
+- `apply` makes those changes, then plans again to check that nothing is left.
+
+What it writes is an ordinary Docker Compose project, which runs without Mediaplane.
+
+## What runs where
+
+```text
+host (Docker)
+│
+├─ mediaplane-system
+│  ├─ mediaplane
+│  │    the CLI, idle until
+│  │    you run a command
+│  └─ socket-proxy
+│       the only container
+│       with Docker's socket
+│
+├─ mediaplane
+│    your stack: Sonarr,
+│    Radarr, Jellyfin, …
+│
+└─ host helper
+     a throwaway container,
+     during init, plan
+     and apply
+```
+
+- **`mediaplane-system`** is Mediaplane's own Compose project. Apply never manages it,
+  and the runtime refuses to. [`deploy/README.md`](../deploy/README.md) shows how to start
+  it.
+- **The Mediaplane container** has a read-only root, no capabilities and
+  `no-new-privileges`. It runs as the user who owns the home.
+  - Its only mount is the home, at the same path as on the host, because the host's
+    Docker resolves every path in `compose.yaml`. `plan` checks that the home's
+    `stack.yaml` is the host's own file at that path (`preflight.home-path`).
+  - Its network is internal: it reaches the socket proxy and nothing else. Image pulls
+    happen in the Docker daemon, which has the host's network.
+- **The socket proxy** is the only container with Docker's socket. It forwards only the
+  kinds of Docker API call the engine makes, by method and path
+  ([ADR 0008](adr/0008-docker-socket-proxy-on-by-default.md)). It is defence in depth,
+  not a boundary: the [threat model](security/threat-model.md) says what it leaves open.
+- **The host helper.** From inside its container, Mediaplane can't see the host's
+  network, free ports, devices, or folders outside the home. So during `init`, `plan`
+  and `apply`, it runs a throwaway container of its own image on the host network, which
+  reports what it sees as JSON. That container:
+  - gets read-only mounts of the data folder, the home's `stack.yaml`, and `/dev` when
+    the VPN needs `/dev/net/tun`;
+  - runs as Mediaplane's user, with no capabilities and a read-only root;
+  - never pulls an image, and is removed when it exits.
+- **Running from source** (`pnpm mediaplane`, for development), `MEDIAPLANE_IMAGE` is
+  unset. There is no container and no host helper: the CLI runs under Node on the host,
+  and looks at the host itself.
+
+## The engine
+
+Each part, and where its code is:
+
+- **config** (`packages/engine/src/config`): loads `stack.yaml` and validates it with
+  Zod. Secrets are references to files or environment variables, never values
+  ([ADR 0009](adr/0009-no-secrets-in-stack-yaml.md)).
+- **catalog** (`catalog/<app>/app.ts`): one typed definition per app, with its image
+  pinned by tag and digest. The types are in `packages/engine/src/catalog`.
+- **resolver** (`packages/engine/src/resolver`): turns the config and the catalog into
+  the apps to run. It checks their dependencies and the host's architecture, and works
+  out ports and bind addresses.
+- **renderer** (`packages/engine/src/render`): renders `compose.yaml` and `.env`, the
+  same bytes for the same input.
+- **secrets** (`packages/engine/src/secrets`): generates each key once, and keeps it in
+  `state/secrets.json`.
+- **runtime** (`packages/engine/src/runtime`): the only code that runs `docker`.
+- **host and preflight** (`packages/engine/src/host`, `packages/engine/src/preflight`):
+  read the host's facts, and check the host before anything changes. In the container,
+  they ask the host helper.
+- **planner** (`packages/engine/src/plan`): diffs the files, the containers and the keys,
+  and lists the apps that are not healthy yet.
+- **apply** (`packages/engine/src/apply`, and the lock in `packages/engine/src/state`):
+  runs the steps below, converging forward
+  ([ADR 0004](adr/0004-converge-forward-apply.md)).
+- **history** (`packages/engine/src/history`): writes a change record for every apply
+  that runs its steps, failed ones included.
+- **status** (`packages/engine/src/status.ts`): each app's container state and health,
+  and the last apply.
+- **CLI** (`packages/cli`): the commands, human and `--json` output, and exit codes
+  ([reference](reference/cli.md)).
+
+Not built yet:
+
+- the integrations, which wire the apps together through their APIs (Slices 3 to 7);
+- drift detection, with Keep mine (Slice 4).
+
+## `plan`
+
+```text
+stack.yaml + secrets/
+  │ load, validate
+  ▼
+resolve
+  │ catalog, host facts,
+  │ ports, addresses
+  ▼
+ask Docker
+  │ versions, what runs
+  ▼
+preflight
+  │ disk, data folder,
+  │ devices, ports, home
+  ▼
+render
+  │ compose.yaml, .env
+  ▼
+diff
+  files, containers,
+  keys to generate,
+  apps not healthy yet
+```
+
+`plan` writes nothing. Its exit code is 0 when nothing would change, 2 when something
+would (or an app is still waiting for its health check), and 1 on an error.
+
+**Which containers change** comes from Compose itself
+([ADR 0010](adr/0010-predict-container-changes-with-compose-hashes.md)):
+
+- `plan` pipes the unwritten `compose.yaml`, with your `compose.override.yaml`, into
+  `docker compose config --hash`;
+- it compares each service's hash with the label on its existing container.
+
+Compose versions can hash the same file differently. So the first time a different
+Compose version manages the stack, it recreates most containers once, keeping their
+data. That happens when you eject with a host Compose of another version, or when an
+update to Mediaplane's image brings a new one.
+
+## `apply`
+
+```text
+lock
+ → plan, then ask
+ → generate keys
+ → write files
+ → pull images
+ → set appdata owners
+ → up --wait
+ → plan again
+ → write change record
+ → unlock
+```
+
+- **Converge forward** ([ADR 0004](adr/0004-converge-forward-apply.md)). When a step
+  fails, the later ones are skipped and nothing is rolled back. Running `apply` again
+  plans afresh, and does only what is left.
+- **Pulls come first.** Images are pulled before anything stops, so a network failure
+  leaves the running stack alone.
+- **Keys are saved before any container starts.**
+- **`up --wait`** waits until every app is healthy. It fails as soon as an app is marked
+  unhealthy, and gives up after 10 minutes.
+- **The lock** records the process and the host name. That is why the Mediaplane
+  container's host name is fixed: a recreated container can still clear a lock its
+  predecessor left.
+
+## The home
+
+```text
+/opt/mediaplane/
+├─ stack.yaml        yours
+├─ compose.override.yaml
+│                    yours
+├─ secrets/          yours
+├─ generated/        rewritten
+│  ├─ compose.yaml
+│  ├─ compose.prev.yaml
+│  └─ .env           0600
+├─ state/            0700
+│  ├─ secrets.json   0600
+│  ├─ history/
+│  └─ lock
+└─ appdata/<app>/    the apps'
+```
+
+- **`stack.yaml`** is the only file you normally edit
+  ([reference](reference/stack-yaml.md)). `init` writes a starter one. It sets `user:`
+  to the user it runs as: in the container that is `MEDIAPLANE_UID`, or 1000 when run as
+  root. In the container it sets `timezone` to `UTC` unless you pass `--timezone`.
+- **`secrets/`** holds your secret files, such as the VPN key, which `stack.yaml` points
+  to. In the container Mediaplane sees nothing outside the home, so keep them here.
+- **`compose.override.yaml`** is yours. Mediaplane never writes it. Compose merges it
+  over the generated file, and `plan` includes it.
+- **`generated/`** is Mediaplane's: apply rewrites it, so never edit it. The header of
+  `compose.yaml` gives the exact `docker compose` command that runs the stack without
+  Mediaplane.
+- **The home's filesystem must support hard links,** because the lock and `init`'s
+  `stack.yaml` are created with one.
+
+The data folder (`paths.data`) is yours. The apps that handle media files (Sonarr,
+Radarr, qBittorrent, and Jellyfin or Plex) mount it as `/data`. Keep downloads and media
+inside it, on one filesystem, so moving a finished download into the library is an
+instant hardlink. `plan` checks that `torrents/`, `usenet/` and `media/`, where they
+exist, are on the same filesystem as the folder itself.
+
+## Security
+
+Controlling Docker is root on the host, so Mediaplane's security is the host's. The
+[threat model](security/threat-model.md) lists what is protected, how, and what isn't.
+
+## What comes next
+
+The [roadmap](plans/m1-roadmap.md) has the order:
+
+- the wiring, app by app (Slices 3 to 7);
+- drift detection (Slice 4);
+- releases (Slice 8);
+- the web panel (M2).
