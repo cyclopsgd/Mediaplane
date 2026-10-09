@@ -30,12 +30,27 @@ export function parseConfig(source: string): LoadResult {
   if (doc.errors.length > 0) {
     return {
       ok: false,
-      diagnostics: doc.errors.map((e) => error('config.yaml-syntax', e.message)),
+      diagnostics: doc.errors.map((e) =>
+        error('config.yaml-syntax', withoutSource(e.message)),
+      ),
     };
   }
-  const result = stackConfigSchema.safeParse(doc.toJS() as unknown);
+  let data: unknown;
+  try {
+    data = doc.toJS() as unknown;
+  } catch (cause) {
+    // e.g. "Excessive alias count indicates a resource exhaustion attack"
+    const message = cause instanceof Error ? cause.message : String(cause);
+    return { ok: false, diagnostics: [error('config.yaml-syntax', message)] };
+  }
+  const result = stackConfigSchema.safeParse(data);
   if (result.success) return { ok: true, config: result.data };
   return { ok: false, diagnostics: result.error.issues.flatMap(toDiagnostics) };
+}
+
+/** yaml's pretty errors append the offending source line, which may hold a secret. */
+function withoutSource(message: string): string {
+  return (message.split('\n')[0] ?? message).replace(/:$/, '');
 }
 
 function toDiagnostics(issue: Issue): Diagnostic[] {

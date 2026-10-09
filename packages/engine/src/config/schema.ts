@@ -1,7 +1,14 @@
 import { z } from 'zod';
 
 export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const IPV4_CIDR = /^(?:\d{1,3}\.){3}\d{1,3}\/(?:\d|[12]\d|3[0-2])$/;
+const IPV4_CIDR = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(?:\d|[12]\d|3[0-2])$/;
+/** A Docker image tag: letters, digits, "_", "." and "-", not starting with "." or "-". */
+const DOCKER_TAG = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+
+function isIpv4Cidr(value: string): boolean {
+  const match = IPV4_CIDR.exec(value);
+  return match !== null && match.slice(1, 5).every((octet) => Number(octet) <= 255);
+}
 /** `<app>.<resource>` or `<app>.<resource>.<field>`; field names are camelCase. */
 const OVERRIDE_KEY = /^[a-z0-9-]+(?:\.[A-Za-z0-9_]+){1,2}$/;
 
@@ -33,7 +40,10 @@ export type SecretRef = z.infer<typeof secretRefSchema>;
 export const appSettingsSchema = z.looseObject({
   enabled: z.boolean().default(true),
   port: z.int().min(1).max(65535).optional(),
-  version: z.string().min(1).optional(),
+  version: z
+    .string()
+    .regex(DOCKER_TAG, 'must be a Docker image tag such as 4.0.20')
+    .optional(),
   env: z.record(z.string().regex(ENV_NAME, ENV_NAME_MESSAGE), z.string()).default({}),
 });
 export type AppSettings = z.infer<typeof appSettingsSchema>;
@@ -45,14 +55,20 @@ const stackShape = {
     .strictObject({ uid: z.int().min(0), gid: z.int().min(0) })
     .default({ uid: 1000, gid: 1000 }),
   paths: z.strictObject({
-    data: z.string().regex(/^\//, 'must be an absolute path (start with /)'),
+    data: z
+      .string()
+      .regex(/^\//, 'must be an absolute path (start with /)')
+      .refine(
+        (path) => !path.includes(':'),
+        'must not contain ":", which Docker uses to separate volume paths',
+      ),
   }),
   network: z
     .strictObject({
       bind: z.enum(['lan', 'localhost', 'all']).default('lan'),
       lan_subnet: z
         .string()
-        .regex(IPV4_CIDR, 'must be an IPv4 CIDR such as 192.168.1.0/24')
+        .refine(isIpv4Cidr, 'must be an IPv4 CIDR such as 192.168.1.0/24')
         .optional(),
     })
     .default({ bind: 'lan' }),

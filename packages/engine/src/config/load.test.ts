@@ -192,6 +192,56 @@ describe('parseConfig', () => {
     const [diagnostic] = diagnosticsOf(`${MINIMAL}apps:\n  sonarr: {}\n  sonarr: {}\n`);
     expect(diagnostic?.code).toBe('config.yaml-syntax');
   });
+
+  it('rejects subnets with out-of-range octets', () => {
+    const [diagnostic] = diagnosticsOf(
+      `${MINIMAL}network: { lan_subnet: 999.168.1.0/24 }\n`,
+    );
+    expect(diagnostic).toMatchObject({
+      code: 'config.invalid',
+      path: 'network.lan_subnet',
+    });
+  });
+
+  it('rejects data paths containing ":"', () => {
+    const [diagnostic] = diagnosticsOf(MINIMAL.replace('/srv/data', '/srv/data:/x'));
+    expect(diagnostic).toMatchObject({ code: 'config.invalid', path: 'paths.data' });
+    expect(diagnostic?.message).toContain('must not contain ":"');
+  });
+
+  it('rejects app versions that are not Docker tags', () => {
+    const [diagnostic] = diagnosticsOf(
+      `${MINIMAL}apps:\n  sonarr: { version: "4.0 latest" }\n`,
+    );
+    expect(diagnostic).toMatchObject({
+      code: 'config.invalid',
+      path: 'apps.sonarr.version',
+    });
+    expect(diagnostic?.message).toContain('must be a Docker image tag');
+  });
+
+  it('does not echo the offending source line in YAML syntax errors', () => {
+    const diagnostics = diagnosticsOf(
+      'version: 1\nvpn: { private_key: "fake-leaked-value }\n',
+    );
+    expect(diagnostics[0]?.code).toBe('config.yaml-syntax');
+    expect(diagnostics[0]?.message).toMatch(/line \d+, column \d+$/);
+    expect(JSON.stringify(diagnostics)).not.toContain('fake-leaked-value');
+  });
+
+  it('turns an alias bomb into a diagnostic instead of throwing', () => {
+    const bomb = [
+      'a: &a [x,x,x,x,x,x,x,x,x]',
+      'b: &b [*a,*a,*a,*a,*a,*a,*a,*a,*a]',
+      'c: &c [*b,*b,*b,*b,*b,*b,*b,*b,*b]',
+      'd: &d [*c,*c,*c,*c,*c,*c,*c,*c,*c]',
+      'e: [*d,*d,*d,*d,*d,*d,*d,*d,*d]',
+      '',
+    ].join('\n');
+    const [diagnostic] = diagnosticsOf(bomb);
+    expect(diagnostic?.code).toBe('config.yaml-syntax');
+    expect(diagnostic?.message).toContain('alias');
+  });
 });
 
 describe('loadConfigFile', () => {
