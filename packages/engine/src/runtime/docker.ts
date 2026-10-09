@@ -51,7 +51,13 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
   async function docker(
     label: string,
     args: readonly string[],
-    extra: { input?: string; env?: Record<string, string>; timeoutMs?: number } = {},
+    extra: {
+      input?: string;
+      env?: Record<string, string>;
+      timeoutMs?: number;
+      /** What to say when the call times out, instead of the generic daemon advice. */
+      timeoutMessage?: string;
+    } = {},
   ): Promise<ExecResult> {
     const timeoutMs = extra.timeoutMs ?? DOCKER_TIMEOUTS.query;
     try {
@@ -62,7 +68,10 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
         timeoutMs,
       });
     } catch (cause) {
-      throw new RuntimeError(spawnFailure(label, timeoutMs, cause), { cause });
+      throw new RuntimeError(
+        spawnFailure(label, timeoutMs, cause, extra.timeoutMessage),
+        { cause },
+      );
     }
   }
 
@@ -204,33 +213,42 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
     },
 
     async hostHelper(image, request, mounts, user): Promise<HelperResult> {
-      const result = await docker('run (host helper)', [
-        'run',
-        '--rm',
-        '--pull',
-        'never',
-        '--network',
-        'host',
-        '--user',
-        `${String(user.uid)}:${String(user.gid)}`,
-        '--cap-drop',
-        'ALL',
-        '--security-opt',
-        'no-new-privileges',
-        '--read-only',
-        '--label',
-        `${HELPER_LABEL}=host-report`,
-        ...mounts.flatMap((mount) => ['--mount', bindMount(mount)]),
-        '--entrypoint',
-        'mediaplane',
-        image,
-        'host-report',
-        request,
-      ]);
+      const timeoutMs = DOCKER_TIMEOUTS.query;
+      const result = await docker(
+        'run (host helper)',
+        [
+          'run',
+          '--rm',
+          // docker-init as PID 1: Node ignores SIGTERM as PID 1, so without it a helper
+          // that times out would outlive the `docker run` client that was stopped.
+          '--init',
+          '--pull',
+          'never',
+          '--network',
+          'host',
+          '--user',
+          `${String(user.uid)}:${String(user.gid)}`,
+          '--cap-drop',
+          'ALL',
+          '--security-opt',
+          'no-new-privileges',
+          '--read-only',
+          '--label',
+          `${HELPER_LABEL}=host-report`,
+          ...mounts.flatMap((mount) => ['--mount', bindMount(mount)]),
+          '--entrypoint',
+          'mediaplane',
+          image,
+          'host-report',
+          request,
+        ],
+        {
+          timeoutMs,
+          timeoutMessage: `the host helper did not finish within ${String(timeoutMs / 1000)} s; a data folder on a network share that is not responding is a common cause`,
+        },
+      );
       if (result.code === 0) return { ok: true, stdout: result.stdout };
-      const missing = /bind source path does not exist: (.+)$/m
-        .exec(result.stderr)?.[1]
-        ?.trim();
+      const missing = missingMountSource(result.stderr, mounts);
       return {
         ok: false,
         error: lastLines(result.stderr),
@@ -260,10 +278,35 @@ function lastLines(stderr: string): string {
 }
 
 /**
+ * The mount source that Docker's "bind source path does not exist" error names, or
+ * undefined when it names none of the `mounts` sent. Docker CLI 27 and older end the
+ * sentence with a full stop, so a source followed by one counts too.
+ */
+function missingMountSource(
+  stderr: string,
+  mounts: readonly HelperMount[],
+): string | undefined {
+  const reported = /bind source path does not exist: (.+)$/m.exec(stderr)?.[1];
+  if (reported === undefined) return undefined;
+  const sources = mounts.map((mount) => mount.source);
+  return (
+    sources.find((source) => source === reported) ??
+    sources.find((source) => `${source}.` === reported)
+  );
+}
+
+/**
  * The --mount value for a read-only bind. Docker reads it as CSV, so the source is quoted
- * (a path may contain a comma), with any quote in it doubled.
+ * (a path may contain a comma), with any quote in it doubled. The target is not quoted, so
+ * it must be a `/mediaplane-host/<number>` path: a comma or newline in it could add or
+ * override options, such as `readonly`.
  */
 export function bindMount(mount: HelperMount): string {
+  if (!/^\/mediaplane-host\/\d+$/.test(mount.target)) {
+    throw new Error(
+      `bindMount: the target ${JSON.stringify(mount.target)} is not /mediaplane-host/<number>`,
+    );
+  }
   return `type=bind,"source=${mount.source.replaceAll('"', '""')}",target=${mount.target},readonly`;
 }
 
@@ -370,10 +413,18 @@ function firstLine(value: string): string {
   return value.trim().split('\n')[0] ?? '';
 }
 
-function spawnFailure(label: string, timeoutMs: number, cause: unknown): string {
+function spawnFailure(
+  label: string,
+  timeoutMs: number,
+  cause: unknown,
+  timeoutMessage: string | undefined,
+): string {
   if (hasCode(cause, 'ENOENT')) return 'docker was not found on PATH';
   if (hasCode(cause, 'ETIMEDOUT')) {
-    return `docker ${label} did not finish within ${String(timeoutMs / 1000)}s; check that the Docker daemon is responding`;
+    return (
+      timeoutMessage ??
+      `docker ${label} did not finish within ${String(timeoutMs / 1000)}s; check that the Docker daemon is responding`
+    );
   }
   return `could not run docker: ${cause instanceof Error ? cause.message : String(cause)}`;
 }

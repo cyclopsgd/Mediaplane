@@ -70,4 +70,20 @@ describe('fakeRuntime().hostHelper', () => {
       'host-helper /mediaplane-host/0',
     ]);
   });
+
+  it('rejects, rather than throws, for a request that is not JSON or a callback that throws', async () => {
+    const user = { uid: 1000, gid: 1000 };
+    const answering = fakeRuntime({ hostHelper: () => ({ ok: true, stdout: '' }) });
+    await expect(
+      answering.hostHelper('mediaplane:test', 'not json', [], user),
+    ).rejects.toThrow(SyntaxError);
+    const throwing = fakeRuntime({
+      hostHelper: () => {
+        throw new Error('fake callback failure');
+      },
+    });
+    await expect(throwing.hostHelper('mediaplane:test', '{}', [], user)).rejects.toThrow(
+      'fake callback failure',
+    );
+  });
 });

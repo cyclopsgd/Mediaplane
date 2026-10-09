@@ -72,7 +72,9 @@ export interface Runtime {
   /**
    * Run the host helper (spec §4.2): a throwaway container of Mediaplane's own `image` on
    * the host network, as `user`, with no capabilities, a read-only root and `mounts`
-   * bound read-only, running `mediaplane host-report <request>`. It never pulls.
+   * bound read-only, running `mediaplane host-report <request>`. It never pulls. A helper
+   * that ran and failed is a `HelperResult`; this throws `RuntimeError` when docker can't
+   * be started or the helper doesn't finish in time.
    */
   hostHelper(
     image: string,

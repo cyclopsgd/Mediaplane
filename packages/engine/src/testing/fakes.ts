@@ -123,17 +123,13 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
       record(`chown ${service} ${String(owner.uid)}:${String(owner.gid)} ${path}`);
       return Promise.resolve(options.chown ?? { ok: true });
     },
-    hostHelper: (_image, request, mounts) => {
+    // async: bad request JSON, or a throwing callback, rejects like a failed docker call.
+    hostHelper: async (_image, request, mounts) => {
       record(`host-helper ${mounts.map((m) => m.target).join(' ')}`.trimEnd());
       if (options.hostHelper === undefined) {
-        return Promise.resolve({
-          ok: false,
-          error: 'this fake Docker has no host helper',
-        });
+        return { ok: false, error: 'this fake Docker has no host helper' };
       }
-      return Promise.resolve(
-        options.hostHelper(JSON.parse(request) as HostRequest, mounts),
-      );
+      return await options.hostHelper(JSON.parse(request) as HostRequest, mounts);
     },
   };
 }

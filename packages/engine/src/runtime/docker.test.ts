@@ -377,6 +377,7 @@ describe('createDockerRuntime', () => {
     expect(calls[0]?.args).toEqual([
       'run',
       '--rm',
+      '--init',
       '--pull',
       'never',
       '--network',
@@ -439,6 +440,75 @@ describe('createDockerRuntime', () => {
       ok: false,
       error: 'docker: Error response from daemon: No such image: mediaplane:gone',
     });
+  });
+
+  it('names the sent source when older Docker ends the sentence with a full stop', async () => {
+    const { exec } = recorder(() => ({
+      code: 125,
+      stdout: '',
+      stderr:
+        'docker: Error response from daemon: invalid mount config for type "bind": bind source path does not exist: /srv/data.\n',
+    }));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    const result = await runtime.hostHelper(
+      'mediaplane:local',
+      '{}',
+      [
+        { source: '/dev', target: '/mediaplane-host/0' },
+        { source: '/srv/data', target: '/mediaplane-host/1' },
+      ],
+      { uid: 1000, gid: 1000 },
+    );
+    expect(result).toMatchObject({ ok: false, missingSource: '/srv/data' });
+  });
+
+  it('names no source unless the one Docker reports is one that was sent', async () => {
+    const { exec } = recorder(() => ({
+      code: 125,
+      stdout: '',
+      stderr:
+        'docker: Error response from daemon: invalid mount config for type "bind": bind source path does not exist: /srv/other\n',
+    }));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    const result = await runtime.hostHelper(
+      'mediaplane:local',
+      '{}',
+      [{ source: '/srv/data', target: '/mediaplane-host/0' }],
+      { uid: 1000, gid: 1000 },
+    );
+    expect(result.ok).toBe(false);
+    expect(result).not.toHaveProperty('missingSource');
+  });
+
+  it('explains a helper that does not finish, not as a Docker daemon problem', async () => {
+    const seen: (ExecOptions | undefined)[] = [];
+    const exec: Exec = (_command, _args, options) => {
+      seen.push(options);
+      return Promise.reject(Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }));
+    };
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    const error = await runtime
+      .hostHelper('mediaplane:local', '{}', [], { uid: 1000, gid: 1000 })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RuntimeError);
+    expect((error as RuntimeError).message).toBe(
+      'the host helper did not finish within 60 s; a data folder on a network share that is not responding is a common cause',
+    );
+    expect(seen[0]?.timeoutMs).toBe(60_000);
+  });
+
+  it('refuses a mount target that could change the mount options, without running docker', async () => {
+    const { exec, calls } = recorder(() => ok(''));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    await expect(
+      runtime.hostHelper(
+        'mediaplane:local',
+        '{}',
+        [{ source: '/srv/data', target: '/mediaplane-host/0,readonly=false' }],
+        { uid: 1000, gid: 1000 },
+      ),
+    ).rejects.toThrow('/mediaplane-host/0,readonly=false');
+    expect(calls).toEqual([]);
   });
 });
 
@@ -581,6 +651,18 @@ describe('bindMount', () => {
   it('quotes the source, doubling any quote, because Docker reads --mount as CSV', () => {
     expect(bindMount({ source: '/srv/a "b"', target: '/mediaplane-host/0' })).toBe(
       'type=bind,"source=/srv/a ""b""",target=/mediaplane-host/0,readonly',
+    );
+  });
+
+  it.each([
+    ['a comma', '/mediaplane-host/0,readonly=false'],
+    ['a newline', '/mediaplane-host/0\nreadonly=false'],
+    ['a trailing newline', '/mediaplane-host/0\n'],
+    ['no number', '/mediaplane-host/'],
+    ['another folder', '/etc'],
+  ])('refuses a target with %s, which could drop readonly', (_name, target) => {
+    expect(() => bindMount({ source: '/srv/data', target })).toThrow(
+      `bindMount: the target ${JSON.stringify(target)} is not /mediaplane-host/<number>`,
     );
   });
 });

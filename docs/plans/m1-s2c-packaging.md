@@ -126,7 +126,7 @@ These are added:
   for example `--no-TTY` in v2 and `--no-tty` in v5. The restriction applies to Compose
   long flags. This slice adds only:
   - `docker run` and `docker build` flags, which are the Docker CLI's and the same in
-    every supported version: `--rm`, `--pull never`, `--network host`, `--user`,
+    every supported version: `--rm`, `--init`, `--pull never`, `--network host`, `--user`,
     `--cap-drop ALL`, `--security-opt no-new-privileges`, `--read-only`, `--label`,
     `--mount`, `--entrypoint`, `--tag`;
   - the Compose long flag `compose version --short`, which the runtime already uses;
