@@ -45,6 +45,19 @@ the 12-character short form.
 - Verified on Docker 29.8 / Compose 5.5.1: a hash from stdin plus environment equals the
   label on a container created from the same files. An end-to-end test keeps this honest
   across Compose upgrades.
+- A change of Compose version recreates containers once. Compose versions can hash the
+  same `compose.yaml` differently: Compose 2.38 fills in each short-syntax bind volume
+  with `create_host_path: true`, and Compose 5.5.1 leaves it out, so the hashes of every
+  service with a bind mount differ. Every app except Byparr and FlareSolverr has one.
+  - A `plan` from the version that didn't create the containers shows them as
+    `recreate`.
+  - The first `up` or `apply` with that version recreates them once, keeping the data in
+    their bind mounts.
+  - Two things change the version: ejecting with a host Compose that isn't the one in
+    Mediaplane's image, and an image update that changes the Compose it bundles.
+  - The deploy end-to-end test allows for the first. When the host's Compose differs
+    from the image's, it checks that the same services end up running after the eject,
+    not that nothing was recreated.
 - Guest services depend on a Compose implementation detail (the `container:<ID>`
   rewrite). Verified on the same versions: with the host's full ID filled in, the hash
   equals the guest's label exactly; a second `up -d` changes nothing; and changing only

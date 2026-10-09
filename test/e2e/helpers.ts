@@ -61,7 +61,7 @@ export function composeDown(project: string): Promise<ExecResult> {
  * uid 1000). Those are removed as root, from a throwaway container.
  */
 export async function removeHome(home: string): Promise<void> {
-  await nodeExec(
+  const result = await nodeExec(
     'docker',
     [
       'run',
@@ -76,6 +76,9 @@ export async function removeHome(home: string): Promise<void> {
     ],
     { cwd: '/' },
   );
+  if (result.code !== 0) {
+    throw new Error(`could not remove ${home} as root:\n${result.stderr}`);
+  }
   await rm(home, { recursive: true, force: true });
 }
 
@@ -109,7 +112,7 @@ export function ejectArguments(compose: string, project: string): string[] {
  * container running as root, and then the folder itself.
  */
 export async function removeAsRoot(dir: string): Promise<void> {
-  await nodeExec(
+  const result = await nodeExec(
     'docker',
     [
       'run',
@@ -125,5 +128,8 @@ export async function removeAsRoot(dir: string): Promise<void> {
     ],
     { cwd: '/' },
   );
+  if (result.code !== 0) {
+    throw new Error(`could not empty ${dir} as root:\n${result.stderr}`);
+  }
   await rm(dir, { recursive: true, force: true });
 }

@@ -88,6 +88,17 @@ function dockerInside(...args: string[]): Promise<ExecResult> {
   return nodeExec('docker', ['exec', CONTAINER, 'docker', ...args], { cwd: '/' });
 }
 
+/** `docker compose version --short` on the host, or in the image, through its container. */
+async function composeVersion(where: 'host' | 'image'): Promise<string> {
+  const args = ['compose', 'version', '--short'];
+  const result =
+    where === 'host'
+      ? await nodeExec('docker', args, { cwd: '/' })
+      : await dockerInside(...args);
+  expect(result.code, result.stderr).toBe(0);
+  return result.stdout.trim().replace(/^v/, '');
+}
+
 function codesIn(stdout: string): string[] {
   const parsed = JSON.parse(stdout) as { diagnostics: { code: string }[] };
   return parsed.diagnostics.map((d) => d.code);
@@ -138,13 +149,21 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     const stackDown = await composeDown(STACK);
     const systemDown =
       override === '' ? undefined : await system('down', '--remove-orphans');
-    if (override !== '') await rm(dirname(override), { recursive: true, force: true });
-    if (home !== '') await removeHome(home);
-    if (data !== '') await removeAsRoot(data);
-    const image = await nodeExec('docker', ['image', 'rm', TAG], { cwd: '/' });
-    expect(stackDown.code, stackDown.stderr).toBe(0);
-    if (systemDown !== undefined) expect(systemDown.code, systemDown.stderr).toBe(0);
-    expect(image.code, image.stderr).toBe(0);
+    // Each removal runs even if one before it throws, and so do the image removal (last,
+    // once no container uses the image) and the checks.
+    try {
+      if (override !== '') await rm(dirname(override), { recursive: true, force: true });
+      if (home !== '') await removeHome(home);
+    } finally {
+      try {
+        if (data !== '') await removeAsRoot(data);
+      } finally {
+        const image = await nodeExec('docker', ['image', 'rm', TAG], { cwd: '/' });
+        expect(stackDown.code, stackDown.stderr).toBe(0);
+        if (systemDown !== undefined) expect(systemDown.code, systemDown.stderr).toBe(0);
+        expect(image.code, image.stderr).toBe(0);
+      }
+    }
   }, 300_000);
 
   it('runs hardened, as the home owner, without the Docker socket', async () => {
@@ -237,6 +256,7 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     expect((await stat(join(home, 'appdata', 'seerr'))).uid).toBe(1000);
 
     const second = await mediaplane('apply', '--yes', '--json');
+    expect(second.code, second.stdout + second.stderr).toBe(0);
     expect(JSON.parse(second.stdout)).toMatchObject({ outcome: 'no-changes' });
     const again = await mediaplane('plan', '--json');
     expect(again.code, again.stderr).toBe(0);
@@ -244,14 +264,27 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     expect(codesIn(again.stdout)).not.toContain('docker.no-proxy');
     expect(codesIn(again.stdout)).not.toContain('preflight.home-path');
 
-    // Ejectable (success criterion 6): the header's command, run on the host, recreates
-    // nothing. An empty override makes its second -f real.
+    // Ejectable (success criterion 6): the header's command, run on the host, runs the
+    // stack without Mediaplane. An empty override makes its second -f real.
     await writeFile(join(home, 'compose.override.yaml'), 'services: {}\n');
-    const ids = containers.map((c) => c.id).sort();
+    const sameCompose =
+      (await composeVersion('host')) === (await composeVersion('image'));
     const header = await readFile(join(home, COMPOSE_PATH), 'utf8');
     const eject = await nodeExec('docker', ejectArguments(header, STACK), { cwd: '/' });
     expect(eject.code, eject.stderr).toBe(0);
-    expect((await runtime.containers()).map((c) => c.id).sort()).toEqual(ids);
+    const ejected = await runtime.containers();
+    if (sameCompose) {
+      // The image's own Compose made the containers, so the hashes match: nothing is
+      // recreated.
+      expect(ejected.map((c) => c.id).sort()).toEqual(containers.map((c) => c.id).sort());
+    } else {
+      // Another Compose version can hash the same bind volumes differently, and then
+      // recreates each container that has one, once (ADR 0010: Compose 2.38 adds
+      // create_host_path). The same services must still end up running.
+      const services = (list: typeof containers) =>
+        list.map((c) => `${c.service} ${c.state}`).sort();
+      expect(services(ejected)).toEqual(services(containers));
+    }
   }, 1_200_000);
 
   it('refuses the Docker calls the engine never makes', async () => {
