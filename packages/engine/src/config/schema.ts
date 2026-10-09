@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { compare } from '../util/sort';
 
 export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const IPV4_CIDR = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(?:\d|[12]\d|3[0-2])$/;
@@ -52,6 +53,25 @@ export const appSettingsSchema = z.looseObject({
       z.string().regex(ENV_NAME, ENV_NAME_MESSAGE),
       z.union([z.string(), secretRefSchema], { error: ENV_VALUE_MESSAGE }),
     )
+    .superRefine((env, ctx) => {
+      // Only references become MP_<APP>_ENV_<NAME> variables, and those are upper-cased,
+      // so two references differing only by case would share one variable.
+      const firstByVariable = new Map<string, string>();
+      for (const name of Object.keys(env).sort(compare)) {
+        if (typeof env[name] === 'string') continue;
+        const variable = name.toUpperCase();
+        const first = firstByVariable.get(variable);
+        if (first === undefined) {
+          firstByVariable.set(variable, name);
+        } else {
+          ctx.addIssue({
+            code: 'custom',
+            path: [name],
+            message: `secret references need names that differ by more than case: ${first} and ${name} would share one variable`,
+          });
+        }
+      }
+    })
     .default({}),
 });
 export type AppSettings = z.infer<typeof appSettingsSchema>;

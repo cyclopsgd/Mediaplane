@@ -117,6 +117,35 @@ describe('parseConfig', () => {
     expect(diagnostic?.message).toContain('env values are strings');
   });
 
+  it('rejects secret references whose names differ only by case', () => {
+    const diagnostics = diagnosticsOf(
+      `${MINIMAL}apps:\n  sonarr: { env: { token: { env: FAKE_A }, TOKEN: { env: FAKE_B } } }\n`,
+    );
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      code: 'config.invalid',
+      path: 'apps.sonarr.env.token',
+    });
+    expect(diagnostics[0]?.message).toContain(
+      'secret references need names that differ by more than case: TOKEN and token would share one variable',
+    );
+  });
+
+  it('allows plain env values whose names differ only by case', () => {
+    const result = parseConfig(
+      `${MINIMAL}apps:\n  sonarr: { env: { token: x, TOKEN: y } }\n`,
+    );
+    if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));
+    expect(result.config.apps.sonarr?.env).toEqual({ token: 'x', TOKEN: 'y' });
+  });
+
+  it('allows a plain value beside a secret reference whose name differs only by case', () => {
+    const result = parseConfig(
+      `${MINIMAL}apps:\n  sonarr: { env: { token: x, TOKEN: { env: FAKE_B } } }\n`,
+    );
+    expect(result.ok).toBe(true);
+  });
+
   it('suggests the closest key for an unknown top-level key', () => {
     const [diagnostic] = diagnosticsOf(`${MINIMAL}tmezone: Europe/London\n`);
     expect(diagnostic).toMatchObject({
