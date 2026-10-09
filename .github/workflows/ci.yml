@@ -30,9 +30,9 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test:coverage
 
-  # Decides whether the end-to-end job is needed. Skipping it inside the workflow, rather
-  # than with an `on:` path filter, means a required check reports "skipped" instead of
-  # never appearing.
+  # Decides whether the end-to-end and image jobs, which pull images, are needed. Skipping
+  # them inside the workflow, rather than with an `on:` path filter, means a required check
+  # reports "skipped" instead of never appearing.
   changes:
     name: Detect code changes
     runs-on: ubuntu-24.04
@@ -64,16 +64,31 @@ jobs:
           fi
 
   e2e:
-    name: End-to-end (real Docker)
+    name: End-to-end (real Docker, ${{ matrix.arch }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
-      # The apply test pulls about 7 GB of app images; make room for them.
+      # The apply test pulls about 7 GB of app images; make room for them. The arm64 image
+      # has no Android SDK, GHC or CodeQL, so only what exists is deleted.
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          for path in /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL; do
+            if [ -e "$path" ]; then
+              sudo rm -rf "$path"
+            else
+              echo "not on this runner: $path"
+            fi
+          done
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,6 +101,35 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: docker version && docker compose version
       - run: pnpm test:e2e
+
+  image:
+    name: Image (${{ matrix.arch }}, Trivy)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Native on each runner: no emulation. A multi-arch manifest comes with publishing (S8).
+      - name: Build the image
+        run: docker build --tag mediaplane:ci .
+      - name: Scan it with Trivy (fails on critical vulnerabilities that have a fix)
+        run: |
+          docker save mediaplane:ci --output "$RUNNER_TEMP/mediaplane.tar"
+          docker run --rm --volume "$RUNNER_TEMP:/scan" \
+            aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --input /scan/mediaplane.tar --scanners vuln --severity CRITICAL \
+            --ignore-unfixed --exit-code 1 --no-progress
 
   secrets:
     name: Secret scan (gitleaks, full history)
