@@ -128,6 +128,14 @@ describe('the real catalog', () => {
     });
   });
 
+  it("refuses a qBittorrent port that clashes with Gluetun's control server", () => {
+    const source = SPEC_EXAMPLE.replace(
+      '  qbittorrent: {}',
+      '  qbittorrent: { port: 8000 }',
+    );
+    expect(codes(resolve(source).diagnostics)).toContain('port.namespace-conflict');
+  });
+
   it('lets the LAN reach apps inside the VPN namespace', () => {
     expect(render(SPEC_EXAMPLE).compose.services.gluetun?.environment).toMatchObject({
       VPN_SERVICE_PROVIDER: 'mullvad',

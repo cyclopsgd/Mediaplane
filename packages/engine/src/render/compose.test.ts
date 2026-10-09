@@ -61,6 +61,14 @@ describe('golden files', () => {
 describe('renderCompose', () => {
   const compose = renderCompose(stackOf(JELLYFIN_VPN_LAN));
 
+  it('escapes dollars in the image reference', () => {
+    const stack = stackOf(JELLYFIN_VPN_LAN);
+    const sonarr = stack.apps.find((a) => a.def.id === 'sonarr');
+    if (sonarr === undefined) throw new Error('sonarr missing');
+    sonarr.image = 'registry.test/sonarr:1$x';
+    expect(renderCompose(stack).services.sonarr?.image).toBe('registry.test/sonarr:1$$x');
+  });
+
   it('runs qBittorrent inside Gluetun and publishes its UI on Gluetun', () => {
     expect(compose.services.qbittorrent).toMatchObject({
       network_mode: 'service:gluetun',

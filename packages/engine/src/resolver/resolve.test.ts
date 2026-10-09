@@ -197,6 +197,16 @@ describe('resolveStack: ports and images', () => {
     );
   });
 
+  it('rejects two apps listening on one port inside a shared network namespace', () => {
+    expect(resolve('  qbittorrent: { port: 8000 }\n').diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'port.namespace-conflict',
+        path: 'apps.qbittorrent.port',
+        hint: 'set apps.qbittorrent.port to another port',
+      }),
+    );
+  });
+
   it('pins images by digest unless the version is overridden', () => {
     const result = resolve('  qbittorrent: {}\n  sonarr: { version: 2.0.0 }\n');
     expect(app(result, 'jellyfin')?.image).toBe(
@@ -244,11 +254,65 @@ describe('resolveStack: binding', () => {
     );
   });
 
+  it('only binds to addresses inside an explicit lan_subnet', () => {
+    const host: HostFacts = {
+      arch: 'amd64',
+      privateAddresses: [
+        { address: '10.0.0.5', cidr: '10.0.0.5/24' },
+        { address: '192.168.1.10', cidr: '192.168.1.10/24' },
+      ],
+    };
+    const base = lan.replace('bind: lan', 'bind: lan, lan_subnet: 192.168.1.0/24');
+    expect(resolve('  qbittorrent: {}\n', { base, host }).stack?.bindAddresses).toEqual([
+      '192.168.1.10',
+    ]);
+  });
+
+  it('explains an explicit lan_subnet that matches no address', () => {
+    const base = lan.replace('bind: lan', 'bind: lan, lan_subnet: 172.16.0.0/12');
+    expect(resolve('  qbittorrent: {}\n', { base }).diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'network.no-lan-address',
+        path: 'network.lan_subnet',
+      }),
+    );
+  });
+
   it('warns when binding to every interface', () => {
     const result = resolve('  qbittorrent: {}\n', {
       base: BASE.replace('bind: localhost', 'bind: all'),
     });
     expect(result.stack?.bindAddresses).toEqual(['0.0.0.0']);
     expect(codes(result)).toEqual(['network.bind-all']);
+  });
+});
+
+describe('resolveStack: cloud hosts', () => {
+  const lan = BASE.replace('bind: localhost', 'bind: lan');
+  const cloudHost: HostFacts = {
+    arch: 'amd64',
+    privateAddresses: [{ address: '10.0.0.208', cidr: '10.0.0.208/24' }],
+    cloud: 'Oracle Cloud',
+  };
+
+  it('refuses "lan" on a cloud VM without an explicit subnet', () => {
+    const result = resolve('  qbittorrent: {}\n', { base: lan, host: cloudHost });
+    expect(result.stack).toBeUndefined();
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'network.cloud-lan', path: 'network.bind' }),
+    );
+  });
+
+  it('allows "lan" on a cloud VM when the subnet is explicit', () => {
+    const base = lan.replace('bind: lan', 'bind: lan, lan_subnet: 10.0.0.0/24');
+    expect(
+      resolve('  qbittorrent: {}\n', { base, host: cloudHost }).stack?.bindAddresses,
+    ).toEqual(['10.0.0.208']);
+  });
+
+  it('still allows "localhost" on a cloud VM', () => {
+    expect(
+      resolve('  qbittorrent: {}\n', { host: cloudHost }).stack?.bindAddresses,
+    ).toEqual(['127.0.0.1']);
   });
 });

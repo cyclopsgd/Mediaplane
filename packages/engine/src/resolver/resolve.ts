@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppContext, AppDefinition, Catalog } from '../catalog/types';
 import type { AppSettings, StackConfig } from '../config/schema';
 import { error, hasErrors, warning, withHint, type Diagnostic } from '../diagnostics';
-import { networkOf, type HostFacts } from '../host/facts';
+import { inSubnet, networkOf, type HostFacts } from '../host/facts';
 import { didYouMean } from '../util/did-you-mean';
 import { compare, unique } from '../util/sort';
 
@@ -98,6 +98,7 @@ export function resolveStack(
     ),
     ...checkNetworkVia(apps, unparsed),
     ...checkPortConflicts(apps),
+    ...checkNamespacePorts(apps),
   );
   const bind = bindAddresses(config, host);
   diagnostics.push(...bind.diagnostics);
@@ -441,6 +442,42 @@ function checkPortConflicts(apps: readonly ResolvedApp[]): Diagnostic[] {
   return diagnostics;
 }
 
+/**
+ * Apps sharing a network namespace (qBittorrent inside Gluetun) listen on the same
+ * interfaces, so their container ports must differ, published or not.
+ */
+function checkNamespacePorts(apps: readonly ResolvedApp[]): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  const listeners = new Map<string, ResolvedApp>();
+  for (const app of apps) {
+    const namespace = app.networkVia ?? app.def.id;
+    for (const spec of app.def.ports) {
+      const port = app.containerPorts[spec.name] ?? spec.container;
+      const protocol = spec.protocol ?? 'tcp';
+      const key = `${namespace}/${protocol}/${port}`;
+      const other = listeners.get(key);
+      if (other === undefined) {
+        listeners.set(key, app);
+        continue;
+      }
+      const movable = app.def.ports.some((p) => p.hostEqualsContainer !== undefined);
+      diagnostics.push(
+        error(
+          'port.namespace-conflict',
+          `${other.def.name} and ${app.def.name} both listen on port ${port}/${protocol} inside ${namespace}'s network`,
+          {
+            path: `apps.${app.def.id}.port`,
+            ...withHint(
+              movable ? `set apps.${app.def.id}.port to another port` : undefined,
+            ),
+          },
+        ),
+      );
+    }
+  }
+  return diagnostics;
+}
+
 function bindAddresses(
   config: StackConfig,
   host: HostFacts,
@@ -463,16 +500,37 @@ function bindAddresses(
         ],
       };
     case 'lan': {
-      const addresses = host.privateAddresses.map((a) => a.address).sort(compare);
+      const subnet = config.network.lan_subnet;
+      if (host.cloud !== undefined && subnet === undefined) {
+        return {
+          addresses: [],
+          diagnostics: [
+            error(
+              'network.cloud-lan',
+              `network.bind is "lan", but this host looks like a ${host.cloud} VM, where private addresses are often reachable from the internet`,
+              {
+                path: 'network.bind',
+                hint: 'use bind: localhost and reach the stack through Tailscale or an SSH tunnel; if you are sure, set network.lan_subnet to the private network to publish on',
+              },
+            ),
+          ],
+        };
+      }
+      const addresses = host.privateAddresses
+        .filter((a) => subnet === undefined || inSubnet(a.address, subnet))
+        .map((a) => a.address)
+        .sort(compare);
       if (addresses.length > 0) return { addresses, diagnostics: [] };
       return {
         addresses: [],
         diagnostics: [
           error(
             'network.no-lan-address',
-            'network.bind is "lan", but this host has no private (RFC 1918) IPv4 address',
+            subnet === undefined
+              ? 'network.bind is "lan", but this host has no private (RFC 1918) IPv4 address'
+              : `network.bind is "lan", but none of this host's private addresses is inside network.lan_subnet ${subnet}`,
             {
-              path: 'network.bind',
+              path: subnet === undefined ? 'network.bind' : 'network.lan_subnet',
               hint: 'use bind: localhost and reach the stack through Tailscale or an SSH tunnel',
             },
           ),

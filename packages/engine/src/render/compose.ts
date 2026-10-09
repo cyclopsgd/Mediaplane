@@ -82,7 +82,7 @@ function renderService(
   const volumes = renderVolumes(app, stack);
   const { uid, gid } = stack.config.user;
   return {
-    image: app.image,
+    image: literal(app.image),
     restart: 'unless-stopped',
     ...(def.runAs === 'user-directive' ? { user: `${uid}:${gid}` } : {}),
     ...(extras.init === undefined ? {} : { init: extras.init }),

@@ -60,6 +60,7 @@ export const fixtureCatalog: Catalog = [
     id: 'gluetun',
     category: 'network',
     provides: ['vpn'],
+    ports: [{ name: 'control', container: 8000, publish: false }],
     runAs: 'image-default',
     health: 'image',
     extras: () => ({ cap_add: ['NET_ADMIN'] }),

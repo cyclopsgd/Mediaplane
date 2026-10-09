@@ -10,7 +10,8 @@ export default defineApp({
     digest: 'sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027',
   },
   arch: ['amd64', 'arm64'],
-  ports: [],
+  // Gluetun's HTTP control server; apps in its network namespace must not use this port.
+  ports: [{ name: 'control', container: 8000, publish: false }],
   volumes: { appdata: '/gluetun' },
   runAs: 'image-default',
   provides: ['vpn'],
