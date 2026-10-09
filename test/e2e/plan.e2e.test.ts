@@ -160,8 +160,8 @@ describe('plan against real Docker', () => {
   it("predicts a guest in another service's network namespace", async () => {
     const home = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-'));
     const project = `${PROJECT}-ns`;
-    // Only ever created, never started, so busybox's default command is fine. The name
-    // matches -p, so nothing here can reach another project.
+    // ComposeService has no command: these containers are only created, never started,
+    // so busybox's default command doesn't matter. The name matches -p as well.
     const compose = (aEnvironment?: Record<string, string>): ComposeFile => ({
       name: project,
       services: {
@@ -207,6 +207,7 @@ describe('plan against real Docker', () => {
         ],
       });
       const before = await runtime.containers();
+      expect(before).toHaveLength(2);
       await writeFile(join(home, 'compose.yaml'), composeToYaml(changed));
       const recreated = await composeCreate(project, home);
       expect(recreated.code, recreated.stderr).toBe(0);
