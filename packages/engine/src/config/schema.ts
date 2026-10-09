@@ -27,28 +27,57 @@ const INLINE_SECRET =
   'inline secrets are not allowed in stack.yaml; use { file: secrets/<name> } or { env: VAR_NAME }';
 
 /** A pointer to a secret, never the secret itself (ADR 0009). */
-export const secretRefSchema = z.union(
-  [
-    z.strictObject({ file: z.string().min(1) }),
-    z.strictObject({ env: z.string().regex(ENV_NAME) }),
-  ],
-  {
-    error: (issue) =>
-      typeof issue.input === 'string'
-        ? INLINE_SECRET
-        : 'expected { file: … } or { env: … }',
-  },
-);
+export const secretRefSchema = z
+  .union(
+    [
+      z.strictObject({
+        file: z
+          .string()
+          .min(1)
+          .describe(
+            'A file that holds the secret, relative to the Mediaplane home, such as secrets/wg.key.',
+          ),
+      }),
+      z.strictObject({
+        env: z
+          .string()
+          .regex(ENV_NAME)
+          .describe('An environment variable that holds the secret.'),
+      }),
+    ],
+    {
+      error: (issue) =>
+        typeof issue.input === 'string'
+          ? INLINE_SECRET
+          : 'expected { file: … } or { env: … }',
+    },
+  )
+  .describe('A secret reference: { file: … } or { env: … }, never the secret itself.');
 export type SecretRef = z.infer<typeof secretRefSchema>;
 
 /** Settings every app accepts. App-specific options pass through for the resolver. */
 export const appSettingsSchema = z.looseObject({
-  enabled: z.boolean().default(true),
-  port: z.int().min(1).max(65535).optional(),
+  enabled: z
+    .boolean()
+    .default(true)
+    .describe(
+      'Turn the app off but keep its settings with false. Listing an app turns it on.',
+    ),
+  port: z
+    .int()
+    .min(1)
+    .max(65535)
+    .optional()
+    .describe(
+      "The host port the app's web UI is published on. The port inside the container stays the same, except for qBittorrent, where both move together.",
+    ),
   version: z
     .string()
     .regex(DOCKER_TAG, 'must be a Docker image tag such as 4.0.20')
-    .optional(),
+    .optional()
+    .describe(
+      'Run this image tag instead of the tested one. plan warns that it is an untested combination.',
+    ),
   env: z
     .record(
       z.string().regex(ENV_NAME, ENV_NAME_MESSAGE),
@@ -73,66 +102,148 @@ export const appSettingsSchema = z.looseObject({
         }
       }
     })
-    .default({}),
+    .default({})
+    .describe(
+      'Extra environment variables for the app: strings, or secret references, which never appear in compose.yaml.',
+    ),
 });
 export type AppSettings = z.infer<typeof appSettingsSchema>;
 
 const stackShape = {
-  version: z.literal(1),
-  timezone: z.string().min(1).default('Etc/UTC'),
+  version: z.literal(1).describe("The version of this file's format. Always 1."),
+  timezone: z
+    .string()
+    .min(1)
+    .default('Etc/UTC')
+    .describe(
+      'The timezone the apps run in, as a tz database name such as Europe/London.',
+    ),
   user: z
-    .strictObject({ uid: z.int().min(0), gid: z.int().min(0) })
-    .default({ uid: 1000, gid: 1000 }),
-  paths: z.strictObject({
-    data: z
-      .string()
-      .regex(/^\//, 'must be an absolute path (start with /)')
-      .refine(
-        (path) => !path.includes(':'),
-        'must not contain ":", which Docker uses to separate volume paths',
-      ),
-  }),
+    .strictObject({
+      uid: z.int().min(0).describe('The user id.'),
+      gid: z.int().min(0).describe('The group id.'),
+    })
+    .default({ uid: 1000, gid: 1000 })
+    .describe(
+      'The user and group the apps run as. They must be able to write to paths.data.',
+    ),
+  paths: z
+    .strictObject({
+      data: z
+        .string()
+        .regex(/^\//, 'must be an absolute path (start with /)')
+        .refine(
+          (path) => !path.includes(':'),
+          'must not contain ":", which Docker uses to separate volume paths',
+        )
+        .describe(
+          'The data folder for downloads and media, mounted in the apps as /data. Keep both on one filesystem inside it, so moves are instant hardlinks. An absolute path, without ":".',
+        ),
+    })
+    .describe('Where your media lives.'),
   network: z
     .strictObject({
-      bind: z.enum(['lan', 'localhost', 'all']).default('lan'),
+      bind: z
+        .enum(['lan', 'localhost', 'all'])
+        .default('lan')
+        .describe(
+          "lan: on this host's private (RFC 1918) addresses. localhost: on 127.0.0.1 only. all: on every interface, and plan warns every time. On a cloud VM, lan needs lan_subnet.",
+        ),
       lan_subnet: z
         .string()
         .refine(isIpv4Cidr, 'must be an IPv4 CIDR such as 192.168.1.0/24')
-        .optional(),
+        .optional()
+        .describe(
+          "Your LAN as an IPv4 CIDR, such as 192.168.1.0/24. Detected from this host's private addresses when left out; on a cloud VM, bind: lan needs it set.",
+        ),
     })
-    .default({ bind: 'lan' }),
+    .default({ bind: 'lan' })
+    .describe('Where the web UIs are published.'),
   security: z
-    .strictObject({ login_on_lan: z.boolean().default(true) })
-    .default({ login_on_lan: true }),
+    .strictObject({
+      login_on_lan: z
+        .boolean()
+        .default(true)
+        .describe(
+          'Ask for a login from your own network too. false lets Sonarr, Radarr and Prowlarr skip it for addresses in the LAN subnet.',
+        ),
+    })
+    .default({ login_on_lan: true })
+    .describe('Login settings.'),
   admin: z
     .strictObject({
-      username: z.string().min(1).default('admin'),
-      password: secretRefSchema.optional(),
+      username: z
+        .string()
+        .min(1)
+        .default('admin')
+        .describe('The admin user name. Not used yet (Slice 3).'),
+      password: secretRefSchema
+        .optional()
+        .describe(
+          'The admin password, as a secret reference. Checked to exist, but not used yet: from Slice 3, a password is generated when this is left out.',
+        ),
     })
-    .default({ username: 'admin' }),
-  media_server: z.enum(['jellyfin', 'plex']),
-  plex: z.strictObject({ token: secretRefSchema }).optional(),
+    .default({ username: 'admin' })
+    .describe(
+      "The shared admin login for the apps that have one. Not used yet: the apps' logins are set up from Slice 3.",
+    ),
+  media_server: z
+    .enum(['jellyfin', 'plex'])
+    .describe(
+      'The media server, jellyfin or plex. It runs whether or not it is listed under apps.',
+    ),
+  plex: z
+    .strictObject({
+      token: secretRefSchema.describe(
+        'Your Plex token, as a secret reference. Checked to exist, but not used yet: claiming the server arrives in Slice 6.',
+      ),
+    })
+    .optional()
+    .describe('Plex settings, needed when media_server is plex.'),
   vpn: z
     .strictObject({
-      provider: z.string().min(1),
-      private_key: secretRefSchema,
-      addresses: z.string().min(1).optional(),
+      provider: z
+        .string()
+        .min(1)
+        .describe('The VPN provider, by its Gluetun name, such as mullvad.'),
+      private_key: secretRefSchema.describe(
+        'Your WireGuard private key, as a secret reference.',
+      ),
+      addresses: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'The WireGuard address, for providers that need one, such as Mullvad. Other Gluetun settings go in apps.gluetun.env.',
+        ),
     })
-    .optional(),
+    .optional()
+    .describe(
+      "The VPN that qBittorrent's traffic goes through, by way of Gluetun. Needed while apps.qbittorrent.vpn is true.",
+    ),
   // `sonarr:` with no value is YAML null; an app is enabled if it is listed.
   apps: z
     .record(
       z.string(),
       z.preprocess((value) => value ?? {}, appSettingsSchema),
     )
-    .default({}),
+    .default({})
+    .describe('The apps to run, by id. Listing an app runs it, even with no settings.'),
   overrides: z
     .record(
       z.string().regex(OVERRIDE_KEY, OVERRIDE_KEY_MESSAGE),
       z.union([z.string(), z.number(), z.boolean()], { error: OVERRIDE_VALUE_MESSAGE }),
     )
-    .default({}),
-  managed_by: z.enum(['mediaplane', 'external']).default('mediaplane'),
+    .default({})
+    .describe(
+      'Keep mine values, by <app>.<resource>.<field>. Not used yet: drift detection arrives in Slice 4.',
+    ),
+  managed_by: z
+    .enum(['mediaplane', 'external'])
+    .default('mediaplane')
+    .describe(
+      'external: Mediaplane never writes this file, for when automation such as Ansible owns it. Today only init writes it, and init never overwrites. Matters from Slice 4.',
+    ),
 };
 
 /** Top-level keys of stack.yaml, for "did you mean" hints. */

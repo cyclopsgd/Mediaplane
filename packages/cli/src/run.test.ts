@@ -824,3 +824,20 @@ describe('mediaplane host-report', () => {
     }
   });
 });
+
+describe('--help', () => {
+  it("lists each command's exit codes", async () => {
+    const term = capture();
+    expect(await run(['plan', '--help'], term.io)).toBe(0);
+    expect(term.stdout()).toContain('Exit codes:\n  0: nothing would change\n');
+  });
+
+  it("names the machine's timezone as init's default, not the zone itself", async () => {
+    const term = capture();
+    await run(['init', '--help'], term.io);
+    // --help wraps long descriptions at 80 columns, so compare without the line breaks.
+    expect(term.stdout().replaceAll(/\s+/g, ' ')).toContain(
+      "(default: this machine's timezone)",
+    );
+  });
+});

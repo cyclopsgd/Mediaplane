@@ -300,7 +300,7 @@ M4 adds `books` and `audiobooks` subfolders.
 ### 4.2 `stack.yaml` (schema v1)
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/cyclopsgd/Mediaplane/main/schema/stack.schema.v1.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/cyclopsgd/Mediaplane/main/docs/reference/stack.schema.json
 version: 1
 timezone: Europe/London
 user: { uid: 1000, gid: 1000 }
@@ -927,3 +927,7 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   which are free because the repo is public. The image is built, scanned and
   tested end to end natively on each architecture. A multi-arch manifest comes
   with publishing, in S8.
+- **Generated references from S2c.** The `stack.yaml` reference, its JSON Schema at
+  `docs/reference/stack.schema.json` (§4.2, §9) and the CLI reference are generated
+  from code, and CI fails when they are stale. They move here from S8, by the owner's
+  decision. The `--json` shapes stay in S8.

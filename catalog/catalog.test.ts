@@ -1,4 +1,6 @@
 import { readdir } from 'node:fs/promises';
+import { stackJsonSchema } from '@mediaplane/engine';
+import { undocumented, type DescribedSchema } from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { catalog } from './index';
@@ -13,6 +15,10 @@ const NO_OPTIONS = z.strictObject({});
 describe('catalog', () => {
   it('registers every app folder exactly once, sorted by id', () => {
     expect(catalog.map((app) => app.id)).toEqual(appFolders);
+  });
+
+  it("describes every app's own options, for the reference and the JSON Schema", () => {
+    expect(undocumented(stackJsonSchema(catalog) as DescribedSchema)).toEqual([]);
   });
 
   describe.each(catalog.map((app) => [app.id, app] as const))('%s', (_id, app) => {

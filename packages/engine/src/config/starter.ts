@@ -1,3 +1,5 @@
+import { STACK_SCHEMA_URL } from './json-schema';
+
 export interface StarterAnswers {
   mediaServer: 'jellyfin' | 'plex';
   /** The data folder for downloads and media (absolute). */
@@ -18,6 +20,7 @@ const scalar = (value: string) => JSON.stringify(value);
 export function starterStack(answers: StarterAnswers): string {
   const vpn = answers.vpnProvider;
   return [
+    `# yaml-language-server: $schema=${STACK_SCHEMA_URL}`,
     '# Mediaplane stack: the one file that describes your media stack.',
     '# Reference: https://github.com/cyclopsgd/Mediaplane',
     'version: 1',

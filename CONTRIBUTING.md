@@ -12,14 +12,19 @@ pnpm install        # also points git at the repo's hooks in .githooks/
 
 ## Everyday commands
 
-| Command              | What it does                         |
-| -------------------- | ------------------------------------ |
-| `pnpm test`          | Unit tests (Vitest)                  |
-| `pnpm test:coverage` | Unit tests with coverage thresholds  |
-| `pnpm test:e2e`      | End-to-end tests against real Docker |
-| `pnpm lint`          | ESLint and the Prettier check        |
-| `pnpm format`        | Rewrite files with Prettier          |
-| `pnpm typecheck`     | Type-check the whole repo            |
+| Command              | What it does                                                                |
+| -------------------- | --------------------------------------------------------------------------- |
+| `pnpm test`          | Unit tests (Vitest)                                                         |
+| `pnpm test:coverage` | Unit tests with coverage thresholds                                         |
+| `pnpm test:e2e`      | End-to-end tests against real Docker                                        |
+| `pnpm lint`          | ESLint and the Prettier check                                               |
+| `pnpm format`        | Rewrite files with Prettier                                                 |
+| `pnpm typecheck`     | Type-check the whole repo                                                   |
+| `pnpm docs:generate` | Rewrite the generated docs in `docs/reference/` (CI runs `pnpm docs:check`) |
+
+After changing `packages/engine/src/config/schema.ts`, a command or option in
+`packages/cli/src/run.ts`, or an app in `catalog/`, run `pnpm docs:generate` and commit
+what it writes. CI fails while the generated docs are stale.
 
 The unit tests use in-memory fakes for Docker and the host. The spawned-CLI tests in
 `packages/cli/src/main.test.ts` and `pnpm test:e2e` use the real Docker, under their own
@@ -33,7 +38,8 @@ The apply end-to-end test pulls the full app stack the first time, about 7 GB, a
 starts it, so allow several minutes. The test files run one at a time because they
 share host ports.
 
-Before committing, run `pnpm format && pnpm lint && pnpm typecheck && pnpm test`.
+Before committing, run
+`pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check`.
 
 ### The image
 

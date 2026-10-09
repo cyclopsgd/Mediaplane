@@ -15,7 +15,9 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "mediaplane": "tsx packages/cli/src/main.ts",
-    "bundle": "tsx scripts/bundle.ts"
+    "bundle": "tsx scripts/bundle.ts",
+    "docs:generate": "tsx scripts/docs.ts",
+    "docs:check": "tsx scripts/docs.ts --check"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

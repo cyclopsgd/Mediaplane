@@ -31,6 +31,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      - run: pnpm docs:check
       - run: pnpm test:coverage
       # The CLI's npm dependencies are bundled into one file in the image, where Trivy
       # can't see them, so they are audited here. This needs the npm registry.

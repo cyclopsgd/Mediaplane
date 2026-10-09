@@ -19,7 +19,7 @@ import {
   type HostProbe,
   type Runtime,
 } from '@mediaplane/engine';
-import { Command, CommanderError } from 'commander';
+import { Command, CommanderError, Option } from 'commander';
 import { init, type InitOptions } from './init';
 import {
   printApply,
@@ -50,6 +50,53 @@ export interface CliDeps {
 }
 
 export const DEFAULT_HOME = '/opt/mediaplane';
+
+/** What each command's exit code means (spec §5.2): in --help, and in the CLI reference. */
+export const EXIT_CODES: Readonly<Record<string, readonly string[]>> = {
+  plan: [
+    '0: nothing would change',
+    '2: apply would change something, including apps still waiting for their health check',
+    '1: an error; nothing was changed',
+  ],
+  apply: [
+    '0: applied, or nothing needed changing',
+    '1: a step failed, the apply was cancelled, or stack.yaml or the host has errors',
+  ],
+  status: ['0: the containers were listed', '1: an error, or no container for that app'],
+  history: ['0: the records were listed or shown', '1: an error, or no such record'],
+  init: [
+    '0: stack.yaml and secrets/ were written',
+    '1: an error; an existing stack.yaml is never overwritten',
+  ],
+};
+
+/** The environment variables the CLI reads. */
+export const ENVIRONMENT: readonly { name: string; description: string }[] = [
+  {
+    name: 'MEDIAPLANE_HOME',
+    description: 'The Mediaplane home when --home is not given. Default /opt/mediaplane.',
+  },
+  {
+    name: 'MEDIAPLANE_IMAGE',
+    description:
+      'Set by mediaplane.compose.yaml in the Mediaplane container: the image the host helper runs. Leave it unset when running from source.',
+  },
+  {
+    name: 'MEDIAPLANE_COMPOSE_PROJECT',
+    description:
+      'For tests and development only: manage the Compose project mediaplane-<name> instead of mediaplane.',
+  },
+  {
+    name: 'DOCKER_HOST',
+    description:
+      "Docker's own setting, passed to every docker command. In the Mediaplane container it points at the socket proxy.",
+  },
+];
+
+function exitCodesHelp(command: string): string {
+  const lines = (EXIT_CODES[command] ?? []).map((line) => `  ${line}`);
+  return `\nExit codes:\n${lines.join('\n')}\n`;
+}
 
 /** An environment variable's value, treating "" as unset. */
 function setting(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -109,6 +156,7 @@ export function createProgram(
     .description('Show what apply would change, without changing anything')
     .option('--home <dir>', 'Mediaplane home directory', defaultHome)
     .option('--json', 'print machine-readable JSON')
+    .addHelpText('after', exitCodesHelp('plan'))
     .action(async (options: { home: string; json?: boolean }) => {
       const home = resolve(options.home);
       const runtime = deps.runtime(home, project);
@@ -131,6 +179,7 @@ export function createProgram(
     .option('--home <dir>', 'Mediaplane home directory', defaultHome)
     .option('--yes', 'apply without asking for confirmation')
     .option('--json', 'print machine-readable JSON (needs --yes)')
+    .addHelpText('after', exitCodesHelp('apply'))
     .action(async (options: { home: string; yes?: boolean; json?: boolean }) => {
       const asJson = options.json === true;
       const yes = options.yes === true;
@@ -177,6 +226,7 @@ export function createProgram(
     .argument('[app]', 'show only this app')
     .option('--home <dir>', 'Mediaplane home directory', defaultHome)
     .option('--json', 'print machine-readable JSON')
+    .addHelpText('after', exitCodesHelp('status'))
     .action(
       async (app: string | undefined, options: { home: string; json?: boolean }) => {
         const asJson = options.json === true;
@@ -201,6 +251,7 @@ export function createProgram(
     .argument('[id]', 'the change record to show')
     .option('--home <dir>', 'Mediaplane home directory', defaultHome)
     .option('--json', 'print machine-readable JSON')
+    .addHelpText('after', exitCodesHelp('history'))
     .action(async (id: string | undefined, options: { home: string; json?: boolean }) => {
       const asJson = options.json === true;
       const home = resolve(options.home);
@@ -232,12 +283,14 @@ export function createProgram(
       'Gluetun VPN provider, e.g. mullvad; leave out for no VPN',
     )
     .option('--no-login-on-lan', "don't ask for a login from your own network")
-    .option(
-      '--timezone <zone>',
-      'timezone, e.g. Europe/London',
-      Intl.DateTimeFormat().resolvedOptions().timeZone,
+    .addOption(
+      new Option('--timezone <zone>', 'timezone, e.g. Europe/London').default(
+        Intl.DateTimeFormat().resolvedOptions().timeZone,
+        "this machine's timezone",
+      ),
     )
     .option('--json', 'print machine-readable JSON')
+    .addHelpText('after', exitCodesHelp('init'))
     .action(async (options: InitOptions) => {
       const runtime = deps.runtime(resolve(options.home), project);
       setExitCode(await init(options, io, await deps.host(runtime)));

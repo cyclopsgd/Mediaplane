@@ -31,8 +31,20 @@ export default defineApp({
     ],
   },
   options: z.strictObject({
-    sonarr_profile: z.string().min(1).optional(),
-    radarr_profile: z.string().min(1).optional(),
+    sonarr_profile: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'The Sonarr quality profile Seerr requests with. Not used yet (Slice 7).',
+      ),
+    radarr_profile: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'The Radarr quality profile Seerr requests with. Not used yet (Slice 7).',
+      ),
   }),
   env: () => ({ LOG_LEVEL: 'info' }),
   extras: () => ({ init: true }),

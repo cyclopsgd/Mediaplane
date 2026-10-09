@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { STACK_SCHEMA_URL } from './json-schema';
 import { parseConfig } from './load';
 import { invokingUser, starterStack, type StarterAnswers } from './starter';
 
@@ -37,6 +38,12 @@ describe('starterStack', () => {
       'seerr',
     ]);
     expect(starterStack(ANSWERS)).toContain('# Mediaplane stack');
+  });
+
+  it('points editors at the published JSON Schema on its first line', () => {
+    expect(starterStack(ANSWERS).split('\n')[0]).toBe(
+      `# yaml-language-server: $schema=${STACK_SCHEMA_URL}`,
+    );
   });
 
   it('turns the VPN off for qBittorrent when there is no provider', () => {

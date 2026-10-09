@@ -21,7 +21,14 @@ export default defineApp({
   health: {
     test: ['CMD-SHELL', 'curl -fsS "http://localhost:$${WEBUI_PORT}/" > /dev/null'],
   },
-  options: z.strictObject({ vpn: z.boolean().default(true) }),
+  options: z.strictObject({
+    vpn: z
+      .boolean()
+      .default(true)
+      .describe(
+        "Route qBittorrent through Gluetun's VPN, so it has no network when the VPN is down. true needs a vpn: block; false makes plan warn every time.",
+      ),
+  }),
   implies: (options) => (options.vpn ? ['gluetun'] : []),
   networkVia: (options) => (options.vpn ? 'gluetun' : undefined),
   validate: (ctx) =>
