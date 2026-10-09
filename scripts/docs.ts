@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import { stackJsonSchema } from '@mediaplane/engine';
 import { format, resolveConfig } from 'prettier';
-import { withFacts } from './docs/catalog-facts';
+import { FACTS_END, FACTS_START, withFacts } from './docs/catalog-facts';
 import { renderCliReference } from './docs/cli-reference';
 import { renderStackReference } from './docs/stack-reference';
 import { ranAsScript, ROOT } from './root';
@@ -16,6 +16,25 @@ export async function prettify(path: string, content: string): Promise<string> {
   const filepath = join(ROOT, path);
   const config = await resolveConfig(filepath, { editorconfig: true });
   return format(content, { ...config, filepath });
+}
+
+const isNotFound = (cause: unknown) =>
+  cause instanceof Error && 'code' in cause && cause.code === 'ENOENT';
+
+/**
+ * A catalog README, by path from `root`. The generator fills in its facts but does not
+ * create it, so a missing one gets a message that says what to write.
+ */
+export async function readReadme(root: string, path: string): Promise<string> {
+  try {
+    return await readFile(join(root, path), 'utf8');
+  } catch (cause) {
+    if (!isNotFound(cause)) throw cause;
+    throw new Error(
+      `${path} does not exist: create it with the lines ${FACTS_START} and ${FACTS_END}, where the generated facts go`,
+      { cause },
+    );
+  }
 }
 
 /** Every generated file, by path from the repository root, with its current content. */
@@ -41,7 +60,7 @@ export async function generatedFiles(): Promise<{ path: string; content: string 
     const path = `catalog/${def.id}/README.md`;
     files.push({
       path,
-      content: withFacts(await readFile(join(ROOT, path), 'utf8'), def, path),
+      content: withFacts(await readReadme(ROOT, path), def, path),
     });
   }
   return Promise.all(
@@ -57,8 +76,7 @@ async function main(check: boolean): Promise<number> {
   for (const { path, content } of await generatedFiles()) {
     const target = join(ROOT, path);
     const current = await readFile(target, 'utf8').catch((cause: unknown) => {
-      if (cause instanceof Error && 'code' in cause && cause.code === 'ENOENT')
-        return undefined;
+      if (isNotFound(cause)) return undefined;
       throw cause;
     });
     if (current === content) continue;

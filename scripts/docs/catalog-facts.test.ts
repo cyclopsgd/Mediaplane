@@ -53,6 +53,115 @@ describe('renderFacts', () => {
     expect(renderFacts(app('gluetun'))).toContain("- **Health check:** the image's own");
     expect(renderFacts(app('flaresolverr'))).toContain('- **Health check:** none: ');
   });
+
+  it('shows a longer start period when the app sets one', () => {
+    expect(renderFacts(app('jellyfin'))).toContain(
+      '(timeout 10s, 5 retries, 120s to start)',
+    );
+    expect(renderFacts(app('sonarr'))).toContain(
+      '(timeout 10s, 5 retries, 60s to start)',
+    );
+  });
+
+  describe('ports', () => {
+    it('says a port that is never published is inside the stack only', () => {
+      expect(renderFacts(app('byparr'))).toContain(
+        '- **Ports:** 8191/tcp (api), inside the stack only',
+      );
+    });
+
+    it('says what apps.<id>.port moves, for a published port', () => {
+      expect(renderFacts(app('sonarr'))).toContain(
+        '`apps.sonarr.port` moves the host port\n',
+      );
+    });
+
+    it('says when the host and container port move together, and by which variable', () => {
+      expect(renderFacts(app('qbittorrent'))).toContain(
+        '`apps.qbittorrent.port` moves the host and container port together (`WEBUI_PORT`)',
+      );
+    });
+  });
+
+  describe('secrets', () => {
+    it('describes a generated hex key', () => {
+      expect(renderFacts(app('sonarr'))).toContain(
+        '`apiKey`: 32 random hex characters, generated once and kept in `state/secrets.json`',
+      );
+    });
+
+    it("describes qBittorrent's generated key", () => {
+      expect(renderFacts(app('qbittorrent'))).toContain(
+        '`apiKey`: `qbt_` and 28 random letters and digits, generated once and kept in `state/secrets.json`',
+      );
+    });
+
+    it('describes a secret the app creates itself', () => {
+      expect(renderFacts(app('jellyfin'))).toContain(
+        '`apiKey`: created by the app during its first-run setup',
+      );
+    });
+
+    it('describes a secret the user provides, by its place in stack.yaml', () => {
+      expect(renderFacts(app('plex'))).toContain(
+        '`token`: yours, from `plex.token` in `stack.yaml`',
+      );
+      expect(renderFacts(app('gluetun'))).toContain(
+        '`wireguardKey`: yours, from `vpn.private_key` in `stack.yaml`',
+      );
+    });
+
+    it('says none when an app has no secrets', () => {
+      expect(renderFacts(app('byparr'))).toContain('- **Secrets:** none');
+    });
+  });
+
+  describe('an app no catalog entry resembles', () => {
+    const bare: AppDefinition = {
+      id: 'bare',
+      name: 'Bare',
+      category: 'download',
+      image: {
+        repo: 'example.invalid/bare',
+        tag: '1.0.0',
+        digest: `sha256:${'0'.repeat(64)}`,
+      },
+      arch: ['amd64'],
+      ports: [],
+      volumes: {},
+      runAs: 'user-directive',
+      provides: [],
+      requires: [],
+      secrets: {},
+      credentials: [],
+      health: { test: ['CMD', 'true'] },
+      experimental: false,
+    };
+
+    it('says none or nothing where it has nothing to list', () => {
+      const text = renderFacts(bare);
+      expect(text).toContain('- **Ports:** none');
+      expect(text).toContain('- **Volumes:** none');
+      expect(text).toContain('- **Secrets:** none');
+      expect(text).toContain('- **Needs:** nothing');
+      expect(text).toContain('- **Provides:** nothing');
+      expect(text).toContain('- **Also turns on:** nothing');
+    });
+
+    it("shows a user that Compose's user: sets", () => {
+      expect(renderFacts(bare)).toContain(
+        "- **Runs as:** the stack's `user:`, through Compose's `user:`",
+      );
+    });
+
+    it('shows the protocol of a port that is not TCP', () => {
+      const text = renderFacts({
+        ...bare,
+        ports: [{ name: 'discovery', container: 1900, protocol: 'udp' }],
+      });
+      expect(text).toContain('1900/udp (discovery)');
+    });
+  });
 });
 
 describe('withFacts', () => {
@@ -68,6 +177,24 @@ describe('withFacts', () => {
   it('refuses a README without the markers', () => {
     expect(() =>
       withFacts('# Sonarr\n', app('sonarr'), 'catalog/sonarr/README.md'),
+    ).toThrow('catalog/sonarr/README.md needs the lines');
+  });
+
+  it('refuses a README with only one of the markers', () => {
+    for (const only of [FACTS_START, FACTS_END]) {
+      expect(() =>
+        withFacts(`# Sonarr\n\n${only}\n`, app('sonarr'), 'catalog/sonarr/README.md'),
+      ).toThrow('catalog/sonarr/README.md needs the lines');
+    }
+  });
+
+  it('refuses a README whose end marker comes before its start marker', () => {
+    expect(() =>
+      withFacts(
+        `# Sonarr\n\n${FACTS_END}\nold\n${FACTS_START}\n`,
+        app('sonarr'),
+        'catalog/sonarr/README.md',
+      ),
     ).toThrow('catalog/sonarr/README.md needs the lines');
   });
 });

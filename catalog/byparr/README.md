@@ -25,8 +25,9 @@ image, unmodified. Listing Prowlarr turns it on.
 
 - **It runs Byparr** inside the stack only. Its port is never published.
 - **Its own health check.** Mediaplane checks it every 30 seconds. The image's built-in
-  check runs only every 15 minutes, so a first check that ran before the server was
-  listening would leave `apply` waiting up to a quarter of an hour for the next one.
+  check runs only every 15 minutes. If its first check ran before the server was
+  listening, the container would stay "starting" until the next check, 15 minutes later,
+  so `apply` would reach its ten-minute limit and fail.
 
 ## Not built yet
 

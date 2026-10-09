@@ -55,15 +55,24 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 - **In `stack.yaml`,** under `apps.prowlarr`, you can set `port`, `version`, `env` and
   `enabled: false`. A different `version` is an untested combination, and `plan` warns
-  about it. See the [`stack.yaml` reference](../../docs/reference/stack-yaml.md).
-- **Anything else** goes in `compose.override.yaml` in the Mediaplane home. For example,
-  less logging:
+  about it. See the [`stack.yaml` reference](../../docs/reference/stack-yaml.md). For
+  example, less logging:
+
+  ```yaml
+  apps:
+    prowlarr:
+      env:
+        PROWLARR__LOG__LEVEL: warn
+  ```
+
+- **Anything else** goes in `compose.override.yaml` in the Mediaplane home. Compose merges
+  it over the generated file, and `plan` shows which containers it recreates. For
+  example, a memory limit:
 
   ```yaml
   services:
     prowlarr:
-      environment:
-        PROWLARR__LOG__LEVEL: warn
+      mem_limit: 512m
   ```
 
   Don't override the variables listed above: Mediaplane relies on them.

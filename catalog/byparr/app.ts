@@ -18,8 +18,9 @@ export default defineApp({
   exclusive: ['cloudflare-solver'],
   secrets: {},
   credentials: [],
-  // The image's own HEALTHCHECK runs every 15 minutes and first fires before the server
-  // listens, so `up --wait` would wait a quarter of an hour. Check every 30 s instead.
+  // The image's own HEALTHCHECK runs every 15 minutes. If its first check fires before
+  // the server listens, the container stays "starting" until the next one, so `up --wait`
+  // runs into apply's ten-minute limit and fails. Check every 30 s instead.
   health: {
     test: ['CMD', 'curl', '-fsS', '-o', '/dev/null', 'http://127.0.0.1:8191/health'],
   },

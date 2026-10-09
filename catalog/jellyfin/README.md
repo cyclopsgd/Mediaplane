@@ -26,8 +26,9 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
 - **It runs Jellyfin** whenever `media_server` is `jellyfin`, listed under `apps` or not,
   with your data folder at `/data`. It publishes its web UI as `network.bind` says.
 - **Listing Plex as well** is an error, unless Plex says `enabled: false`.
-- **A longer start-up allowance.** Its health check gets 120 seconds for the first start,
-  and failed checks in that time don't count against it.
+- **A longer start-up allowance.** Its health check has a start period of 120 seconds.
+  During it, failed checks don't count towards the retries, and the first check that
+  passes marks Jellyfin healthy.
 
 ## Not built yet
 

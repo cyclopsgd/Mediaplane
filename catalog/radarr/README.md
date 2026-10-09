@@ -51,16 +51,25 @@ The wiring arrives in Slices 3 to 7 (see the [roadmap](../../docs/plans/m1-roadm
 
 - **In `stack.yaml`,** under `apps.radarr`, you can set `port`, `version`, `env` and
   `enabled: false`. A different `version` is an untested combination, and `plan` warns
-  about it. See the [`stack.yaml` reference](../../docs/reference/stack-yaml.md).
+  about it. See the [`stack.yaml` reference](../../docs/reference/stack-yaml.md). For
+  example, less logging:
+
+  ```yaml
+  apps:
+    radarr:
+      env:
+        RADARR__LOG__LEVEL: warn
+  ```
+
 - **Anything else** goes in `compose.override.yaml` in the Mediaplane home. Compose merges
   it over the generated file, and `plan` shows which containers it recreates. For
-  example, less logging:
+  example, a second folder for an archive:
 
   ```yaml
   services:
     radarr:
-      environment:
-        RADARR__LOG__LEVEL: warn
+      volumes:
+        - /srv/archive/movies:/archive/movies
   ```
 
   Don't override the variables listed above: Mediaplane relies on them.
