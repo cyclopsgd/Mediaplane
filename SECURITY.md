@@ -19,7 +19,7 @@ scope:
 - anything that lets someone read its secrets;
 - anything that makes it act outside its own Compose project;
 - anything that gets a Docker call past the socket proxy's allow-list, or makes the
-  host helper write to the host.
+  host helper write to the host beyond the limits the threat model lists.
 
 [`docs/security/threat-model.md`](docs/security/threat-model.md) describes what
 Mediaplane protects, how, and what it does not protect against.

@@ -20,7 +20,7 @@ never touch Mediaplane itself.
 - **Linux** on amd64 or arm64.
 - **Docker Engine 24 or newer**, rootful, with its socket at `/var/run/docker.sock`, and
   the Compose plugin 2.24 or newer. Rootless Docker is not supported. Mediaplane checks
-  for Engine 24, and CI tests with 28.
+  for Engine 24, and CI tests with the version GitHub's runners ship.
 - **A folder for the Mediaplane home,** on a local filesystem that supports hard links,
   such as ext4, XFS or Btrfs. Mediaplane creates its lock and `stack.yaml` with a hard
   link, so FAT, exFAT and some network shares won't work.
@@ -55,6 +55,10 @@ DOCKER_GID=$(stat -c %g /var/run/docker.sock)
 EOF
 docker compose -f deploy/mediaplane.compose.yaml up -d
 ```
+
+These commands use your own ids. If `id -u` prints 0, as on a VPS or LXC container where
+you only have root, use a normal user's ids in both places instead, and create that user
+if there is none. Mediaplane's container must not run as root.
 
 For a home somewhere else, add `MEDIAPLANE_HOME=/srv/mediaplane` to `deploy/.env`. The
 home is mounted at the same path inside the container, because the host's Docker resolves
@@ -118,7 +122,9 @@ host
   - never pulls an image, and is removed when it exits, a second or two later.
 
   Before Docker 25, or on a kernel older than 5.12, read-only mounts are not recursive: a
-  mount inside one of those folders, such as `/dev/shm`, stays writable.
+  mount inside one of those folders, such as `/dev/shm`, stays writable. On any version,
+  device files under `/dev` stay writable where Docker's device rules and their file
+  modes allow.
 
 - **Mediaplane's network** is internal: the container reaches the proxy and nothing else.
   Image pulls happen in the Docker daemon, which has the host's network.

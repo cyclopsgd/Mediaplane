@@ -919,8 +919,10 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   containers' are allowed, and with them their anonymous volumes. The list
   allows `kill`, which `docker run` sends when a timed-out host helper is
   stopped (ADR 0008).
-- **Trivy for Mediaplane's own image runs from S2c** (§7.2(7)). Scanning the
-  catalog images, the SBOM and provenance stay in S8.
+- **Trivy for Mediaplane's own image runs from S2c** (§7.2(7)), and so does
+  `pnpm audit` of the CLI's production dependencies, which the image scan can't
+  see because they are bundled. Neither sees Node itself. Scanning the catalog
+  images, the SBOM and provenance stay in S8.
 - **CI runs on arm64 from S2c** (§8.2), on GitHub's `ubuntu-24.04-arm` runners,
   which are free because the repo is public. The image is built, scanned and
   tested end to end natively on each architecture. A multi-arch manifest comes

@@ -13,7 +13,8 @@ Mounting `/var/run/docker.sock` into the Mediaplane container would also give it
 other part of the Docker API:
 
 - `exec` into any container on the host;
-- reading any container's logs and files;
+- reading any container's logs and files (through the proxy, both stay readable another
+  way: see Consequences);
 - building and pushing images;
 - swarm, secrets, configs, plugins and system-wide settings.
 
@@ -49,12 +50,14 @@ bug in Mediaplane itself, or in something it runs, such as Compose.
   - `/info`, `/system`, `/events` and `/auth`;
   - swarm, services, secrets, configs, plugins and distribution.
 
-  `deploy/deploy.test.ts` pins both lists against the captured calls. Refusing logs does
-  not hide them, because `attach` can read them too (see Consequences).
+  `deploy/deploy.test.ts` pins the captured calls as allowed, and a list of others as
+  refused. Refusing logs does not hide them, because `attach` can read them too (see
+  Consequences).
 
-- **Only Mediaplane can use it.** The proxy listens on an internal network that it shares
-  with the Mediaplane container alone, and publishes no port. It answers only the address
-  that the name `mediaplane` resolves to on that network (`-allowfrom=mediaplane`).
+- **Only the name `mediaplane` is let in.** The proxy listens on an internal network that
+  it shares with the Mediaplane container alone, and publishes no port. It answers only
+  the address that the name `mediaplane` resolves to on that network
+  (`-allowfrom=mediaplane`).
 - **The proxy is locked down too.** It runs:
   - from a one-layer image that holds only its binary and its health check, as `nobody`
     in the socket's group;

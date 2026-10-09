@@ -50,10 +50,12 @@ small stack from inside the container.
 
 CI runs these jobs:
 
-- lint, type-check and unit tests;
+- lint, type-check and unit tests, then `pnpm audit` of the CLI's production
+  dependencies, which fails on a critical advisory (they are bundled into one file, where
+  the image scan can't see them);
 - the end-to-end tests, natively on amd64 and on arm64 runners;
-- an image build on each of the two, scanned with Trivy, which fails on any critical
-  vulnerability that has a fix;
+- an image build on each of the two, scanned with Trivy (its Alpine packages and its Go
+  binaries), which fails on a critical vulnerability that has a fix;
 - gitleaks, over the full history.
 
 A change to docs only skips the end-to-end and image jobs. Branch protection should
