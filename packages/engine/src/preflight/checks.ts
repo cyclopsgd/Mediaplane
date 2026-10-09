@@ -16,12 +16,20 @@ const DATA_SUBDIRS = ['torrents', 'usenet', 'media'] as const;
 export interface PreflightInput {
   stack: ResolvedStack;
   versions: { engine: string; compose: string };
-  /** portKey()s this project's own containers already publish (re-applies must not trip). */
+  /** ownPortKey()s this project's containers already publish (re-applies must not trip on them). */
   ownPorts: ReadonlySet<string>;
 }
 
 export function portKey(protocol: 'tcp' | 'udp', address: string, port: number): string {
   return `${protocol}/${address}:${port}`;
+}
+
+/**
+ * A port the stack's own containers publish, whatever the address, so a re-apply that
+ * changes network.bind is not blocked by the stack's own containers.
+ */
+export function ownPortKey(protocol: 'tcp' | 'udp', port: number): string {
+  return `${protocol}/${String(port)}`;
 }
 
 /** Host checks that fail fast, before anything is touched (spec §5, stage 3). */
@@ -205,7 +213,7 @@ async function checkPorts(
   for (const app of input.stack.apps) {
     for (const port of app.ports) {
       for (const address of input.stack.bindAddresses) {
-        if (input.ownPorts.has(portKey(port.protocol, address, port.host))) continue;
+        if (input.ownPorts.has(ownPortKey(port.protocol, port.host))) continue;
         if ((await probe.portFree(address, port.host, port.protocol)) !== false) continue;
         diagnostics.push(
           error(

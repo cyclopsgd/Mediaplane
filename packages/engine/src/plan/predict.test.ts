@@ -195,6 +195,44 @@ describe('predictContainers', () => {
     expect(composes).toHaveLength(1);
   });
 
+  it("uses a host's running container when it has several", async () => {
+    const runningId = idOf('gluetun-b');
+    const current = [
+      container('gluetun', hashesOf(COMPOSE).gluetun, {
+        id: idOf('gluetun-a'),
+        state: 'exited',
+      }),
+      container('gluetun', hashesOf(COMPOSE).gluetun, { id: runningId }),
+      container('qbittorrent', hashesOf(withHostId(runningId)).qbittorrent),
+      container('sonarr', hashesOf(COMPOSE).sonarr),
+    ];
+    const result = await predictContainers(COMPOSE, VALUES, fakeRuntime(), current);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.changes.find((c) => c.service === 'qbittorrent')?.action).toBe(
+      'unchanged',
+    );
+  });
+
+  it("uses a host's running container whatever order Docker lists them in", async () => {
+    const runningId = idOf('gluetun-b');
+    const current = [
+      container('gluetun', hashesOf(COMPOSE).gluetun, { id: runningId }),
+      container('gluetun', hashesOf(COMPOSE).gluetun, {
+        id: idOf('gluetun-a'),
+        state: 'exited',
+      }),
+      container('qbittorrent', hashesOf(withHostId(runningId)).qbittorrent),
+      container('sonarr', hashesOf(COMPOSE).sonarr),
+    ];
+    const result = await predictContainers(COMPOSE, VALUES, fakeRuntime(), current);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.changes.find((c) => c.service === 'qbittorrent')?.action).toBe(
+      'unchanged',
+    );
+  });
+
   it('passes on a configuration Compose rejects', async () => {
     const runtime = fakeRuntime({
       hashes: { ok: false, error: 'services.sonarr.ports must be a list' },

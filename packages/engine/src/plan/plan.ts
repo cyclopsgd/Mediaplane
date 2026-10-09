@@ -14,7 +14,7 @@ import { readSecretStore } from '../secrets/store';
 import { secretsToGenerate, secretValues } from '../secrets/values';
 import { ownPorts, type ContainerChange } from './containers';
 import { diffFiles, type FileChange } from './files';
-import { predictContainers } from './predict';
+import { predictContainers, type PredictResult } from './predict';
 
 export const COMPOSE_PATH = 'generated/compose.yaml';
 
@@ -64,12 +64,7 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
     current = await options.runtime.containers();
   } catch (cause) {
     if (!(cause instanceof RuntimeError)) throw cause;
-    return failed([
-      ...diagnostics,
-      error('docker.unavailable', cause.message, {
-        hint: 'start Docker, and make sure your user can run "docker ps" (for example, add it to the docker group)',
-      }),
-    ]);
+    return failed([...diagnostics, dockerUnavailable(cause)]);
   }
 
   diagnostics.push(
@@ -86,12 +81,18 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
   ]);
   const store = await readSecretStore(home);
   const generate = secretsToGenerate(stack, store);
-  const predicted = await predictContainers(
-    compose,
-    await secretValues(stack, store, options.env),
-    options.runtime,
-    current,
-  );
+  let predicted: PredictResult;
+  try {
+    predicted = await predictContainers(
+      compose,
+      await secretValues(stack, store, options.env),
+      options.runtime,
+      current,
+    );
+  } catch (cause) {
+    if (!(cause instanceof RuntimeError)) throw cause;
+    return failed([...diagnostics, dockerUnavailable(cause)]);
+  }
   if (!predicted.ok) {
     return failed([
       ...diagnostics,
@@ -127,4 +128,10 @@ function failed(diagnostics: Diagnostic[]): PlanResult {
     secrets: { generate: [] },
     diagnostics,
   };
+}
+
+function dockerUnavailable(cause: RuntimeError): Diagnostic {
+  return error('docker.unavailable', cause.message, {
+    hint: 'start Docker, and make sure your user can run "docker ps" (for example, add it to the docker group)',
+  });
 }

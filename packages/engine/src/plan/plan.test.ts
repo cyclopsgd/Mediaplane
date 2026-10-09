@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { portKey } from '../preflight/checks';
 import type { HostProbe } from '../preflight/probe';
-import type { Runtime } from '../runtime/types';
+import { RuntimeError, type Runtime } from '../runtime/types';
 import { SECRETS_PATH } from '../secrets/store';
 import { fakeHash, fakeProbe, fakeRuntime, running } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureCatalog } from '../testing/fixtures';
@@ -142,6 +142,24 @@ describe('plan', () => {
       expect.objectContaining({
         code: 'docker.unavailable',
         message: 'cannot talk to Docker: connection refused',
+      }),
+    );
+  });
+
+  it('explains a Docker that stops answering while predicting containers', async () => {
+    const runtime: Runtime = {
+      ...fakeRuntime(),
+      configHashes: () =>
+        Promise.reject(
+          new RuntimeError('docker compose config did not finish within 60s'),
+        ),
+    };
+    const result = await planFor(await makeHome(), { runtime });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'docker.unavailable',
+        message: 'docker compose config did not finish within 60s',
       }),
     );
   });

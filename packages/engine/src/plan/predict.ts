@@ -1,7 +1,12 @@
 import type { ComposeFile, ComposeService } from '../render/compose';
 import { composeToYaml } from '../render/yaml';
 import type { ContainerState, Runtime } from '../runtime/types';
-import { planContainers, type ContainerAction, type ContainerChange } from './containers';
+import {
+  groupByService,
+  planContainers,
+  type ContainerAction,
+  type ContainerChange,
+} from './containers';
 
 export type PredictResult =
   { ok: true; changes: ContainerChange[] } | { ok: false; error: string };
@@ -33,18 +38,20 @@ export async function predictContainers(
   const changes = planContainers(first.hashes, current);
 
   const planned = new Map(changes.map((change) => [change.service, change.action]));
-  const byService = new Map(current.map((container) => [container.service, container]));
+  const groups = groupByService(current);
+  // A host with several containers: Compose joins the guest to a running one.
+  const hostOf = (service: string) => {
+    const containers = groups.get(service) ?? [];
+    return containers.find((c) => c.state === 'running') ?? containers[0];
+  };
   const guestActions = new Map<string, ContainerAction>();
   const rehash: Record<string, ComposeService> = {};
   for (const guest of guestsOf(compose)) {
-    const host = byService.get(guest.host);
+    const host = hostOf(guest.host);
     if (host === undefined || planned.get(guest.host) === 'recreate') {
       // A new host container means a new network namespace: Compose recreates the guest.
-      guestActions.set(
-        guest.service,
-        byService.has(guest.service) ? 'recreate' : 'create',
-      );
-    } else if (byService.has(guest.service)) {
+      guestActions.set(guest.service, groups.has(guest.service) ? 'recreate' : 'create');
+    } else if (groups.has(guest.service)) {
       rehash[guest.service] = { ...guest.config, network_mode: `container:${host.id}` };
     }
   }

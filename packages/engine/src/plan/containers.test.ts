@@ -44,18 +44,63 @@ describe('planContainers', () => {
       ]),
     ).toEqual([{ service: 'sonarr', action: 'recreate' }]);
   });
+
+  it('recreates a service if any of its several containers is stale', () => {
+    expect(
+      planContainers({ sonarr: HASH_A }, [
+        container('sonarr'),
+        container('sonarr', { id: 'id-sonarr-2', configHash: HASH_B }),
+      ]),
+    ).toEqual([{ service: 'sonarr', action: 'recreate' }]);
+  });
+
+  it('starts a service if any of its current containers is stopped', () => {
+    expect(
+      planContainers({ sonarr: HASH_A }, [
+        container('sonarr'),
+        container('sonarr', { id: 'id-sonarr-2', state: 'exited' }),
+      ]),
+    ).toEqual([{ service: 'sonarr', action: 'start' }]);
+  });
+
+  it('judges several containers whatever order Docker lists them in', () => {
+    expect(
+      planContainers({ sonarr: HASH_A }, [
+        container('sonarr', { id: 'id-sonarr-2', configHash: HASH_B }),
+        container('sonarr'),
+      ]),
+    ).toEqual([{ service: 'sonarr', action: 'recreate' }]);
+    expect(
+      planContainers({ sonarr: HASH_A }, [
+        container('sonarr', { id: 'id-sonarr-2', state: 'exited' }),
+        container('sonarr'),
+      ]),
+    ).toEqual([{ service: 'sonarr', action: 'start' }]);
+  });
+
+  it('keeps a service whose containers are all current and running', () => {
+    expect(
+      planContainers({ sonarr: HASH_A }, [
+        container('sonarr'),
+        container('sonarr', { id: 'id-sonarr-2' }),
+      ]),
+    ).toEqual([{ service: 'sonarr', action: 'unchanged' }]);
+  });
 });
 
 describe('ownPorts', () => {
-  it('collects every published address as a port key', () => {
+  it('collects every published port, whatever the address', () => {
     const ports = ownPorts([
       container('sonarr', {
         published: [{ address: '127.0.0.1', port: 8989, protocol: 'tcp' }],
       }),
       container('plex', {
-        published: [{ address: '0.0.0.0', port: 32400, protocol: 'tcp' }],
+        published: [
+          { address: '0.0.0.0', port: 32400, protocol: 'tcp' },
+          { address: '192.168.1.10', port: 32400, protocol: 'tcp' },
+        ],
       }),
     ]);
-    expect([...ports].sort()).toEqual(['tcp/0.0.0.0:32400', 'tcp/127.0.0.1:8989']);
+    expect([...ports].sort()).toEqual(['tcp/32400', 'tcp/8989']);
   });
 });

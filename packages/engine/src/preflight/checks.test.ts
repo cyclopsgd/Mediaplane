@@ -9,6 +9,7 @@ import {
   fixtureConfig,
 } from '../testing/fixtures';
 import {
+  ownPortKey,
   portKey,
   runPreflight,
   versionAtLeast,
@@ -152,10 +153,23 @@ describe('runPreflight', () => {
     ]);
   });
 
-  it("ignores ports this project's own containers publish", async () => {
-    const key = portKey('tcp', '127.0.0.1', 8989);
-    const probe = fakeProbe({ busyPorts: [key] });
-    expect(await runPreflight(input({ ownPorts: new Set([key]) }), probe)).toEqual([]);
+  it("ignores ports this project's own containers publish, at any address", async () => {
+    const probe = fakeProbe({ busyPorts: [portKey('tcp', '127.0.0.1', 8989)] });
+    expect(
+      await runPreflight(input({ ownPorts: new Set([ownPortKey('tcp', 8989)]) }), probe),
+    ).toEqual([]);
+  });
+
+  it("still checks ports the project's containers don't publish", async () => {
+    const probe = fakeProbe({ busyPorts: [portKey('tcp', '127.0.0.1', 8989)] });
+    expect(
+      codes(
+        await runPreflight(
+          input({ ownPorts: new Set([ownPortKey('tcp', 7878)]) }),
+          probe,
+        ),
+      ),
+    ).toEqual(['preflight.port-in-use']);
   });
 });
 
