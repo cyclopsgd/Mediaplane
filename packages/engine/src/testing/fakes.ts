@@ -86,6 +86,25 @@ export function fakeRuntime(
   };
 }
 
+const UNESCAPE: Record<string, string> = { n: '\n', r: '\r', t: '\t' };
+
+/** The inverse of renderEnvFile, for tests and fakes. */
+export function parseEnvFile(text: string): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const line of text.split('\n')) {
+    if (line === '' || line.startsWith('#')) continue;
+    const equals = line.indexOf('=');
+    const name = line.slice(0, equals);
+    const raw = line.slice(equals + 1);
+    values[name] = raw.startsWith('"')
+      ? raw
+          .slice(1, -1)
+          .replace(/\\(.)/g, (_match, char: string) => UNESCAPE[char] ?? char)
+      : raw.slice(1, -1);
+  }
+  return values;
+}
+
 /** Running, healthy containers whose config hashes are `hashes`. */
 export function running(hashes: Record<string, string>): ContainerState[] {
   return Object.entries(hashes).map(([service, configHash]) => ({
