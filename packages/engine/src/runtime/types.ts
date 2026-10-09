@@ -30,6 +30,16 @@ export type HashesResult =
 /** A Compose command that ran: failed ones carry Compose's last stderr lines. */
 export type CommandResult = { ok: true } | { ok: false; error: string };
 
+/** A read-only bind mount for the host helper: the host's `source`, at `target` inside. */
+export interface HelperMount {
+  source: string;
+  target: string;
+}
+
+/** The host helper's output, or why it failed; `missingSource` is a source the host lacks. */
+export type HelperResult =
+  { ok: true; stdout: string } | { ok: false; error: string; missingSource?: string };
+
 /** Everything Mediaplane asks of Docker. One implementation drives the docker CLI. */
 export interface Runtime {
   /** Docker Engine and Compose versions; throws RuntimeError when Docker can't be reached. */
@@ -59,6 +69,17 @@ export interface Runtime {
     owner: { uid: number; gid: number },
     values: Record<string, string>,
   ): Promise<CommandResult>;
+  /**
+   * Run the host helper (spec §4.2): a throwaway container of Mediaplane's own `image` on
+   * the host network, as `user`, with no capabilities, a read-only root and `mounts`
+   * bound read-only, running `mediaplane host-report <request>`. It never pulls.
+   */
+  hostHelper(
+    image: string,
+    request: string,
+    mounts: readonly HelperMount[],
+    user: { uid: number; gid: number },
+  ): Promise<HelperResult>;
 }
 
 /** Docker is missing or unreachable; the message says which, in words for the user. */

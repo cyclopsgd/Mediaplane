@@ -3,12 +3,15 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { COMPOSE_PATH, ENV_PATH } from '../paths';
+import type { HostRequest } from '../host/report';
 import type { HostProbe, PathStat } from '../preflight/probe';
 import {
   RuntimeError,
   type CommandResult,
   type ContainerState,
   type HashesResult,
+  type HelperMount,
+  type HelperResult,
   type Runtime,
 } from '../runtime/types';
 
@@ -79,6 +82,11 @@ export interface FakeRuntimeOptions {
   pull?: CommandResult;
   up?: CommandResult;
   chown?: CommandResult;
+  /** Answers the host helper, given the parsed request; without it, the helper fails. */
+  hostHelper?: (
+    request: HostRequest,
+    mounts: readonly HelperMount[],
+  ) => HelperResult | Promise<HelperResult>;
   /** Each call is appended here, e.g. "pull" or "chown seerr 1000:1000 /app/config". */
   calls?: string[];
 }
@@ -114,6 +122,18 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
     chown: (service, path, owner) => {
       record(`chown ${service} ${String(owner.uid)}:${String(owner.gid)} ${path}`);
       return Promise.resolve(options.chown ?? { ok: true });
+    },
+    hostHelper: (_image, request, mounts) => {
+      record(`host-helper ${mounts.map((m) => m.target).join(' ')}`.trimEnd());
+      if (options.hostHelper === undefined) {
+        return Promise.resolve({
+          ok: false,
+          error: 'this fake Docker has no host helper',
+        });
+      }
+      return Promise.resolve(
+        options.hostHelper(JSON.parse(request) as HostRequest, mounts),
+      );
     },
   };
 }

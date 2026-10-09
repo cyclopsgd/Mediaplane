@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  bindMount,
   createDockerRuntime,
   isManagedProject,
   parseContainers,
@@ -354,6 +355,91 @@ describe('createDockerRuntime', () => {
       error: 'Container x Error\n*** rejected\napplication not healthy after 10m0s',
     });
   });
+
+  it('runs the host helper on the host network, locked down, without pulling', async () => {
+    const { exec, calls } = recorder(() =>
+      ok('{"schema":"mediaplane.host-report/v1"}\n'),
+    );
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    const result = await runtime.hostHelper(
+      'mediaplane:local',
+      '{"facts":true}',
+      [
+        { source: '/dev', target: '/mediaplane-host/0' },
+        { source: '/srv/my,data', target: '/mediaplane-host/1' },
+      ],
+      { uid: 1001, gid: 1002 },
+    );
+    expect(result).toEqual({
+      ok: true,
+      stdout: '{"schema":"mediaplane.host-report/v1"}\n',
+    });
+    expect(calls[0]?.args).toEqual([
+      'run',
+      '--rm',
+      '--pull',
+      'never',
+      '--network',
+      'host',
+      '--user',
+      '1001:1002',
+      '--cap-drop',
+      'ALL',
+      '--security-opt',
+      'no-new-privileges',
+      '--read-only',
+      '--label',
+      'io.mediaplane.helper=host-report',
+      '--mount',
+      'type=bind,"source=/dev",target=/mediaplane-host/0,readonly',
+      '--mount',
+      'type=bind,"source=/srv/my,data",target=/mediaplane-host/1,readonly',
+      '--entrypoint',
+      'mediaplane',
+      'mediaplane:local',
+      'host-report',
+      '{"facts":true}',
+    ]);
+    expect(calls[0]?.options?.timeoutMs).toBe(60_000);
+  });
+
+  it('names a mount source the host does not have', async () => {
+    const { exec } = recorder(() => ({
+      code: 125,
+      stdout: '',
+      stderr:
+        'docker: Error response from daemon: invalid mount config for type "bind": bind source path does not exist: /srv/data\n\nRun \'docker run --help\' for more information\n',
+    }));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    expect(
+      await runtime.hostHelper(
+        'mediaplane:local',
+        '{}',
+        [{ source: '/srv/data', target: '/mediaplane-host/0' }],
+        { uid: 1000, gid: 1000 },
+      ),
+    ).toEqual({
+      ok: false,
+      error:
+        'docker: Error response from daemon: invalid mount config for type "bind": bind source path does not exist: /srv/data\nRun \'docker run --help\' for more information',
+      missingSource: '/srv/data',
+    });
+  });
+
+  it('reports any other helper failure with its last lines', async () => {
+    const { exec } = recorder(() => ({
+      code: 125,
+      stdout: '',
+      stderr: 'docker: Error response from daemon: No such image: mediaplane:gone\n',
+    }));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    expect(
+      await runtime.hostHelper('mediaplane:gone', '{}', [], { uid: 1000, gid: 1000 }),
+    ).toEqual({
+      ok: false,
+      error: 'docker: Error response from daemon: No such image: mediaplane:gone',
+    });
+  });
 });
 
 describe('isManagedProject', () => {
@@ -488,5 +574,13 @@ describe('parseContainers', () => {
     expect(
       parseContainers(`[]\nnull\n"text"\n${PS_SONARR}\n`).map((c) => c.service),
     ).toEqual(['sonarr']);
+  });
+});
+
+describe('bindMount', () => {
+  it('quotes the source, doubling any quote, because Docker reads --mount as CSV', () => {
+    expect(bindMount({ source: '/srv/a "b"', target: '/mediaplane-host/0' })).toBe(
+      'type=bind,"source=/srv/a ""b""",target=/mediaplane-host/0,readonly',
+    );
   });
 });

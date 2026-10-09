@@ -7,6 +7,8 @@ import {
   type CommandResult,
   type ContainerState,
   type HashesResult,
+  type HelperMount,
+  type HelperResult,
   type Runtime,
 } from './types';
 
@@ -15,6 +17,9 @@ export const SYSTEM_PROJECT = 'mediaplane-system';
 
 /** How long a docker call may take before Mediaplane gives up on it, in ms. */
 export const DOCKER_TIMEOUTS = { query: 60_000, pull: 1_800_000, run: 300_000 } as const;
+
+/** The label on every host-helper container, so a leftover one is easy to find. */
+export const HELPER_LABEL = 'io.mediaplane.helper';
 
 /**
  * Whether Mediaplane may act on a Compose project: "mediaplane" or "mediaplane-<name>",
@@ -197,6 +202,41 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
       );
       return commandResult(result, values);
     },
+
+    async hostHelper(image, request, mounts, user): Promise<HelperResult> {
+      const result = await docker('run (host helper)', [
+        'run',
+        '--rm',
+        '--pull',
+        'never',
+        '--network',
+        'host',
+        '--user',
+        `${String(user.uid)}:${String(user.gid)}`,
+        '--cap-drop',
+        'ALL',
+        '--security-opt',
+        'no-new-privileges',
+        '--read-only',
+        '--label',
+        `${HELPER_LABEL}=host-report`,
+        ...mounts.flatMap((mount) => ['--mount', bindMount(mount)]),
+        '--entrypoint',
+        'mediaplane',
+        image,
+        'host-report',
+        request,
+      ]);
+      if (result.code === 0) return { ok: true, stdout: result.stdout };
+      const missing = /bind source path does not exist: (.+)$/m
+        .exec(result.stderr)?.[1]
+        ?.trim();
+      return {
+        ok: false,
+        error: lastLines(result.stderr),
+        ...(missing === undefined ? {} : { missingSource: missing }),
+      };
+    },
   };
 }
 
@@ -206,11 +246,25 @@ function commandResult(
   values: Record<string, string>,
 ): CommandResult {
   if (result.code === 0) return { ok: true };
-  const lines = result.stderr
+  return { ok: false, error: redact(lastLines(result.stderr), values) };
+}
+
+/** The last three non-empty lines of a command's stderr. */
+function lastLines(stderr: string): string {
+  return stderr
     .split('\n')
     .map((line) => line.trimEnd())
-    .filter((line) => line !== '');
-  return { ok: false, error: redact(lines.slice(-3).join('\n'), values) };
+    .filter((line) => line !== '')
+    .slice(-3)
+    .join('\n');
+}
+
+/**
+ * The --mount value for a read-only bind. Docker reads it as CSV, so the source is quoted
+ * (a path may contain a comma), with any quote in it doubled.
+ */
+export function bindMount(mount: HelperMount): string {
+  return `type=bind,"source=${mount.source.replaceAll('"', '""')}",target=${mount.target},readonly`;
 }
 
 /** `docker compose config --hash` output: one "service hash" pair per line. */

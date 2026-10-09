@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { COMPOSE_PATH, ENV_PATH } from '../paths';
-import { fakeDocker, fakeHash } from './fakes';
+import { fakeDocker, fakeHash, fakeRuntime } from './fakes';
 
 const COMPOSE = `services:
   gluetun:
@@ -43,5 +43,31 @@ describe('fakeDocker', () => {
     const inert = fakeDocker(home, { upChangesNothing: true });
     expect(await inert.up(600, {})).toEqual({ ok: true });
     expect(await inert.containers()).toEqual([]);
+  });
+});
+
+describe('fakeRuntime().hostHelper', () => {
+  it('fails unless the test gives it an answer, and records the mounts', async () => {
+    const calls: string[] = [];
+    const mounts = [{ source: '/srv/data', target: '/mediaplane-host/0' }];
+    const user = { uid: 1000, gid: 1000 };
+    const none = fakeRuntime({ calls });
+    expect(await none.hostHelper('mediaplane:test', '{}', mounts, user)).toEqual({
+      ok: false,
+      error: 'this fake Docker has no host helper',
+    });
+    const answering = fakeRuntime({
+      calls,
+      hostHelper: (request) => ({ ok: true, stdout: JSON.stringify(request) }),
+    });
+    const request = JSON.stringify({ facts: true, stat: [], free: [], ports: [] });
+    expect(await answering.hostHelper('mediaplane:test', request, mounts, user)).toEqual({
+      ok: true,
+      stdout: request,
+    });
+    expect(calls).toEqual([
+      'host-helper /mediaplane-host/0',
+      'host-helper /mediaplane-host/0',
+    ]);
   });
 });
