@@ -1,6 +1,7 @@
+import { warning, type Diagnostic } from '../diagnostics';
 import { ownPortKey } from '../preflight/checks';
 import type { ContainerState } from '../runtime/types';
-import { compare } from '../util/sort';
+import { compare, unique } from '../util/sort';
 
 export type ContainerAction = 'create' | 'recreate' | 'start' | 'remove' | 'unchanged';
 
@@ -78,4 +79,30 @@ export function ownPorts(containers: readonly ContainerState[]): Set<string> {
       container.published.map((p) => ownPortKey(p.protocol, p.port)),
     ),
   );
+}
+
+/**
+ * A warning when the project's containers were created from a folder other than this home
+ * (roadmap S2c). Usually another Mediaplane home manages a Compose project with the same
+ * name, and apply would take its containers over.
+ */
+export function otherHomes(
+  current: readonly ContainerState[],
+  home: string,
+): Diagnostic[] {
+  const others = unique(
+    current.flatMap((c) =>
+      c.workingDir === undefined || c.workingDir === home ? [] : [c.workingDir],
+    ),
+  ).sort(compare);
+  if (others.length === 0) return [];
+  return [
+    warning(
+      'project.other-home',
+      `this stack's containers were created from ${others.join(', ')}, not from this Mediaplane home (${home})`,
+      {
+        hint: 'if another Mediaplane home still manages them, apply would take them over: check which home is in use before applying',
+      },
+    ),
+  ];
 }

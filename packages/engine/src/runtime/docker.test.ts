@@ -435,6 +435,31 @@ describe('parseContainers', () => {
     expect(parseContainers(PS_BYPARR)[0]?.configHash).toBeUndefined();
   });
 
+  it('reads the folder Compose ran from, next to label values that contain commas', () => {
+    const line = JSON.stringify({
+      Service: 'sonarr',
+      ID: SONARR_ID,
+      State: 'running',
+      Health: 'healthy',
+      Labels:
+        'com.docker.compose.project.config_files=/srv/a/generated/compose.yaml,/srv/a/compose.override.yaml,com.docker.compose.project.working_dir=/srv/a,com.docker.compose.service=sonarr',
+      Publishers: [],
+    });
+    expect(parseContainers(line)[0]?.workingDir).toBe('/srv/a');
+  });
+
+  it('reads the folder when it is the last label', () => {
+    const line = JSON.stringify({
+      Service: 'sonarr',
+      Labels: 'com.docker.compose.project.working_dir=/opt/mediaplane',
+    });
+    expect(parseContainers(line)[0]?.workingDir).toBe('/opt/mediaplane');
+  });
+
+  it('has no working folder when the label is absent', () => {
+    expect(parseContainers(PS_SONARR)[0]).not.toHaveProperty('workingDir');
+  });
+
   it('is empty for no output', () => {
     expect(parseContainers('')).toEqual([]);
   });

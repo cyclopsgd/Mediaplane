@@ -264,6 +264,7 @@ export function parseContainers(stdout: string): ContainerState[] {
       const publishers = Array.isArray(raw.Publishers)
         ? (raw.Publishers as PsPublisher[])
         : [];
+      const workingDir = labelValue(labels, 'com.docker.compose.project.working_dir');
       const state: ContainerState = {
         service: text(raw.Service),
         id: text(raw.ID),
@@ -281,6 +282,7 @@ export function parseContainers(stdout: string): ContainerState[] {
               ]
             : [],
         ),
+        ...(workingDir === undefined ? {} : { workingDir }),
       };
       return [state];
     });
@@ -288,6 +290,15 @@ export function parseContainers(stdout: string): ContainerState[] {
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+/**
+ * One label's value from ps's "k=v,k=v" Labels string. Values can contain commas (the
+ * config_files label lists several files), so a value runs up to the next ",<key>=".
+ */
+function labelValue(labels: string, key: string): string | undefined {
+  const name = key.replaceAll('.', '\\.');
+  return new RegExp(`(?:^|,)${name}=(.*?)(?=,[A-Za-z0-9_.-]+=|$)`).exec(labels)?.[1];
 }
 
 /**

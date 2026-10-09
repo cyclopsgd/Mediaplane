@@ -14,7 +14,7 @@ import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { readSecretStore, type SecretStore } from '../secrets/store';
 import { secretsToGenerate, secretValues } from '../secrets/values';
-import { notYetHealthy, ownPorts, type ContainerChange } from './containers';
+import { notYetHealthy, otherHomes, ownPorts, type ContainerChange } from './containers';
 import { diffFiles, type FileChange } from './files';
 import { predictContainers, type PredictResult } from './predict';
 
@@ -91,6 +91,7 @@ export async function planStack(
     return failed([...diagnostics, dockerUnavailable(cause)]);
   }
 
+  diagnostics.push(...otherHomes(current, home));
   diagnostics.push(
     ...(await runPreflight(
       { stack, versions, ownPorts: ownPorts(current) },

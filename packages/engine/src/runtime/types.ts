@@ -15,6 +15,12 @@ export interface ContainerState {
   health: string;
   /** Compose's com.docker.compose.config-hash label: equal hashes mean no recreate. */
   configHash: string | undefined;
+  /**
+   * Compose's com.docker.compose.project.working_dir label: the project directory the
+   * container was created from. Mediaplane always passes the home, so another folder
+   * means another home, or a hand-run `docker compose`, created it.
+   */
+  workingDir?: string;
   published: PublishedAddress[];
 }
 

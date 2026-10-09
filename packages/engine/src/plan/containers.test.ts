@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ContainerState } from '../runtime/types';
-import { ownPorts, planContainers } from './containers';
+import { otherHomes, ownPorts, planContainers } from './containers';
 
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
@@ -102,5 +102,37 @@ describe('ownPorts', () => {
       }),
     ]);
     expect([...ports].sort()).toEqual(['tcp/32400', 'tcp/8989']);
+  });
+});
+
+describe('otherHomes', () => {
+  it('is quiet when every container came from this home, or has no label', () => {
+    expect(
+      otherHomes(
+        [container('sonarr', { workingDir: '/opt/mediaplane' }), container('radarr')],
+        '/opt/mediaplane',
+      ),
+    ).toEqual([]);
+  });
+
+  it('names each other folder once, sorted', () => {
+    expect(
+      otherHomes(
+        [
+          container('sonarr', { workingDir: '/srv/b' }),
+          container('radarr', { workingDir: '/srv/a' }),
+          container('prowlarr', { workingDir: '/srv/b' }),
+        ],
+        '/opt/mediaplane',
+      ),
+    ).toEqual([
+      {
+        severity: 'warning',
+        code: 'project.other-home',
+        message:
+          "this stack's containers were created from /srv/a, /srv/b, not from this Mediaplane home (/opt/mediaplane)",
+        hint: 'if another Mediaplane home still manages them, apply would take them over: check which home is in use before applying',
+      },
+    ]);
   });
 });

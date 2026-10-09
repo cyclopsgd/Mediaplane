@@ -213,6 +213,26 @@ describe('plan', () => {
     );
   });
 
+  it("warns when the project's containers were created from another home", async () => {
+    const home = await makeHome();
+    const elsewhere: ContainerState = {
+      service: 'sonarr',
+      id: 'fake-sonarr',
+      state: 'running',
+      health: 'healthy',
+      configHash: undefined,
+      published: [],
+      workingDir: '/srv/other-home',
+    };
+    const result = await planFor(home, {
+      runtime: fakeRuntime({ containers: [elsewhere] }),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'project.other-home', severity: 'warning' }),
+    );
+  });
+
   it('never writes to the home directory', async () => {
     const home = await makeHome();
     const before = (await readdir(home, { recursive: true })).sort();
