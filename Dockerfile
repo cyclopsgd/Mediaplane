@@ -23,7 +23,8 @@ RUN pnpm bundle
 FROM docker:29.8.1-cli@sha256:018edbc908e08fcc9dbf029c812c34251e9b4719e6f71ca0e5eae2a987d014ca AS docker-cli
 
 FROM node:24.21.0-alpine3.24@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1
-# Only Node is needed at run time: drop the package managers the base image ships.
+# Only Node is needed at run time: drop the Node package managers the base image ships.
+# apk stays: the Alpine package database it keeps (/lib/apk/db) is what Trivy scans.
 RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
       /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-*
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker

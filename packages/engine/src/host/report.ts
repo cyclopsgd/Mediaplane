@@ -1,16 +1,11 @@
 import { z } from 'zod';
 import { portKey } from '../preflight/checks';
 import { nodeProbe, type HostProbe, type PathStat } from '../preflight/probe';
-import { RuntimeError } from '../runtime/types';
+import { HelperError } from '../runtime/types';
 import { detectHostFacts, type HostFacts } from './facts';
 
 /** The version of the host helper's report: the helper and the engine share one image. */
 export const HOST_REPORT_SCHEMA = 'mediaplane.host-report/v1';
-
-/** The host helper could not run, or printed something the engine cannot read. */
-export class HelperError extends RuntimeError {
-  override readonly name: string = 'HelperError';
-}
 
 /** A host path the engine asks about (`key`), and where the helper sees it (`at`). */
 const lookupSchema = z.strictObject({

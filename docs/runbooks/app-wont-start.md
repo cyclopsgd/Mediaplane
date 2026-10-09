@@ -40,8 +40,9 @@
 
 - **Gluetun never becomes healthy.** Its health check needs a working tunnel. With a
   wrong or fake key, Gluetun is marked unhealthy within about half a minute, and `apply`
-  fails then, naming `gluetun`. qBittorrent does not start. Check `secrets/wg.key`,
-  `vpn.provider` and `vpn.addresses`, and read Gluetun's log for the VPN's own error (see
+  fails then, naming `gluetun`. qBittorrent does not start. Check the file
+  `vpn.private_key` points to (`secrets/wg.key` in the starter), `vpn.provider` and
+  `vpn.addresses`, and read Gluetun's log for the VPN's own error (see
   [Gluetun's README](../../catalog/gluetun/README.md)).
 - **The port is taken.** `plan` says the port "is already in use on this host"
   (`preflight.port-in-use`). Stop whatever holds it, or set `apps.<app>.port`.

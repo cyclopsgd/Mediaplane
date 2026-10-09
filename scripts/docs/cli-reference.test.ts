@@ -12,7 +12,16 @@ describe('renderCliReference', () => {
       '| `--home <dir>` | Mediaplane home directory (default: "/opt/mediaplane") |',
     );
     expect(text).toContain('- 2: apply would change something');
-    expect(text).toContain('| `MEDIAPLANE_IMAGE` |');
+  });
+
+  // A table would scroll sideways on a phone: the descriptions are long.
+  it('lists the environment variables, one item each', () => {
+    const section = text.slice(text.indexOf('## Environment variables'));
+    expect(section).toContain(
+      '- `MEDIAPLANE_IMAGE`: Set by mediaplane.compose.yaml in the Mediaplane container',
+    );
+    expect(section).toContain('It must be mediaplane-\\<name>, such as mediaplane-dev.');
+    expect(section).not.toContain('|');
   });
 
   it("leaves out the host helper's command, and nothing in it depends on this machine", () => {

@@ -112,9 +112,7 @@ Exit codes:
 
 ## Environment variables
 
-| Variable                     | Meaning                                                                                                                                                      |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `MEDIAPLANE_HOME`            | The Mediaplane home when --home is not given. Default /opt/mediaplane.                                                                                       |
-| `MEDIAPLANE_IMAGE`           | Set by mediaplane.compose.yaml in the Mediaplane container: the image the host helper runs. Leave it unset when running from source.                         |
-| `MEDIAPLANE_COMPOSE_PROJECT` | For tests and development only: the full name of the Compose project to manage instead of mediaplane. It must be mediaplane-\<name>, such as mediaplane-dev. |
-| `DOCKER_HOST`                | Docker's own setting, passed to every docker command. In the Mediaplane container it points at the socket proxy.                                             |
+- `MEDIAPLANE_HOME`: The Mediaplane home when --home is not given. Default /opt/mediaplane.
+- `MEDIAPLANE_IMAGE`: Set by mediaplane.compose.yaml in the Mediaplane container: the image the host helper runs. Leave it unset when running from source.
+- `MEDIAPLANE_COMPOSE_PROJECT`: For tests and development only: the full name of the Compose project to manage instead of mediaplane. It must be mediaplane-\<name>, such as mediaplane-dev.
+- `DOCKER_HOST`: Docker's own setting, passed to every docker command. In the Mediaplane container it points at the socket proxy.

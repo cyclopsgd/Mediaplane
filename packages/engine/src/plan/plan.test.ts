@@ -3,12 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { HostFacts } from '../host/facts';
-import { HelperError } from '../host/report';
 import { COMPOSE_PATH, ENV_PATH, SECRETS_PATH } from '../paths';
 import { portKey } from '../preflight/checks';
 import type { HostProbe } from '../preflight/probe';
 import { renderEnvFile } from '../render/env';
-import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
+import {
+  HelperError,
+  RuntimeError,
+  type ContainerState,
+  type Runtime,
+} from '../runtime/types';
 import { fakeHash, fakeProbe, fakeRuntime, running } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureCatalog } from '../testing/fixtures';
 import { plan, planStack } from './plan';
@@ -292,24 +296,101 @@ describe('plan', () => {
       expect.objectContaining({
         code: 'host.helper-failed',
         message: 'the host helper failed: no such image',
+        hint: expect.stringContaining('MEDIAPLANE_IMAGE') as unknown,
       }),
     );
   });
 
-  it('explains a Docker that stops answering while the host helper runs', async () => {
+  it('explains a host helper that does not finish with the hint it carries', async () => {
     const probe: HostProbe = {
       ...fakeProbe(),
       prepare: () =>
-        Promise.reject(new RuntimeError('the host helper did not finish within 30 s')),
+        Promise.reject(
+          new HelperError('the host helper did not finish within 60 s', {
+            hint: 'fake: check the network shares',
+          }),
+        ),
+    };
+    const result = await planFor(await makeHome(), { probe });
+    expect(result.diagnostics).toContainEqual({
+      severity: 'error',
+      code: 'host.helper-failed',
+      message: 'the host helper did not finish within 60 s',
+      hint: 'fake: check the network shares',
+    });
+  });
+
+  it('explains a docker that cannot be started while the host helper runs', async () => {
+    const probe: HostProbe = {
+      ...fakeProbe(),
+      prepare: () => Promise.reject(new RuntimeError('docker was not found on PATH')),
     };
     const result = await planFor(await makeHome(), { probe });
     expect(result.ok).toBe(false);
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({
         code: 'docker.unavailable',
-        message: 'the host helper did not finish within 30 s',
+        message: 'docker was not found on PATH',
       }),
     );
+  });
+
+  describe('when Docker cannot be reached', () => {
+    const UNREACHABLE =
+      'cannot talk to Docker: failed to connect to the docker API at tcp://socket-proxy:2375: lookup socket-proxy: no such host';
+    const PROXY_ENV = {
+      MEDIAPLANE_IMAGE: 'mediaplane:local',
+      DOCKER_HOST: 'tcp://socket-proxy:2375',
+    };
+    const PROXY_HINT =
+      'Mediaplane reaches Docker through the socket proxy: on the host, check that the socket-proxy container is running, with "docker compose -f deploy/mediaplane.compose.yaml ps", and read its log with "docker compose -f deploy/mediaplane.compose.yaml logs socket-proxy"';
+    const DOCKER_HINT =
+      'start Docker, and make sure your user can run "docker ps" (for example, add it to the docker group)';
+
+    it.each([
+      ['from source', {}, DOCKER_HINT],
+      ['in the image, through the proxy', PROXY_ENV, PROXY_HINT],
+      [
+        'in the image, on the socket itself',
+        { ...PROXY_ENV, DOCKER_HOST: 'unix:///var/run/docker.sock' },
+        DOCKER_HINT,
+      ],
+    ])('says what to check when Mediaplane runs %s', async (_where, env, hint) => {
+      const runtime = fakeRuntime({ unavailable: UNREACHABLE });
+      const result = await planFor(await makeHome(), { runtime, env });
+      expect(result.diagnostics).toContainEqual({
+        severity: 'error',
+        code: 'docker.unavailable',
+        message: UNREACHABLE,
+        hint,
+      });
+    });
+
+    it('blames the stopped proxy, not the host helper that could not reach it', async () => {
+      const result = await plan({
+        home: await makeHome(),
+        catalog: fixtureCatalog,
+        // In the image, the host helper is the first docker call plan makes.
+        host: () =>
+          Promise.reject(
+            new HelperError(
+              'the host helper failed: failed to connect to the docker API at tcp://socket-proxy:2375: lookup socket-proxy: no such host',
+            ),
+          ),
+        env: PROXY_ENV,
+        runtime: fakeRuntime({ unavailable: UNREACHABLE }),
+        probe: fakeProbe(),
+      });
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([
+        {
+          severity: 'error',
+          code: 'docker.unavailable',
+          message: UNREACHABLE,
+          hint: PROXY_HINT,
+        },
+      ]);
+    });
   });
 
   it('asks for the host facts once the stack has loaded, and explains a failure', async () => {

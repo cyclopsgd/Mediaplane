@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { catalog } from '@mediaplane/catalog';
 import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -47,8 +48,9 @@ function allowList(command: readonly string[]): Map<string, RegExp[]> {
   return rules;
 }
 const rules = allowList(proxy.command ?? []);
+/** socket-proxy matches the decoded path (Go's URL.Path), so %2e%2e arrives as "..". */
 const allowed = (method: string, path: string): boolean =>
-  (rules.get(method) ?? []).some((rule) => rule.test(path));
+  (rules.get(method) ?? []).some((rule) => rule.test(decodeURIComponent(path)));
 
 const ID = 'f'.repeat(64);
 /** CI's Docker 28 speaks API 1.51; Docker 29.8 speaks 1.56. */
@@ -92,6 +94,25 @@ const OVERRIDE_CALLS: [string, string][] = [
 
 /** Calls the engine never makes. The proxy must refuse them (spec §7.2(2)). */
 const REFUSED: [string, string][] = [
+  // Paths that climb out of images/: only the daemon's router would stop them.
+  ['GET', `${V}/images/a/../../info/json`],
+  ['GET', `${V}/images/a/%2e%2e/%2e%2e/info/json`],
+  ['GET', `${V}/images/../containers/${ID}/json`],
+  ['GET', `${V}/images/./busybox/json`],
+  // Prunes, pause and unpause, and loading and saving images.
+  ['POST', `${V}/containers/prune`],
+  ['POST', `${V}/images/prune`],
+  ['POST', `${V}/networks/prune`],
+  ['POST', `${V}/volumes/prune`],
+  ['POST', `${V}/build/prune`],
+  ['POST', `${V}/containers/${ID}/pause`],
+  ['POST', `${V}/containers/${ID}/unpause`],
+  ['POST', `${V}/images/load`],
+  ['GET', `${V}/images/get`],
+  ['GET', `${V}/images/busybox/get`],
+  // Boundaries: socket-proxy anchors each pattern, so a longer path is not a match.
+  ['GET', `${V}/versionx`],
+  ['POST', `${V}/containers/create/x`],
   ['POST', `${V}/containers/${ID}/exec`],
   ['POST', `${V}/exec/${ID}/start`],
   ['GET', `${V}/containers/${ID}/logs`],
@@ -144,6 +165,9 @@ describe('mediaplane.compose.yaml', () => {
       MEDIAPLANE_HOME: HOME,
       MEDIAPLANE_IMAGE: mediaplane.image,
       DOCKER_HOST: 'tcp://socket-proxy:2375',
+      // The host's zone, for init's default. Never empty: Node reads an empty TZ as
+      // Etc/Unknown, which stack.yaml would accept.
+      TZ: '${TZ:-UTC}',
     });
     expect(mediaplane.ports).toBeUndefined();
   });
@@ -184,6 +208,16 @@ describe('the socket proxy allow-list', () => {
 
   it.each(REFUSED)('refuses %s %s', (method, path) => {
     expect(allowed(method, path)).toBe(false);
+  });
+
+  // The Docker CLI and Compose escape none of / : @ in a path, so these arrive as written.
+  it.each([
+    ...catalog.map((def) => `${def.image.repo}:${def.image.tag}@${def.image.digest}`),
+    'registry.example:5000/team/mediaplane:0.1.0',
+    'mediaplane:local',
+    `sha256:${ID}`,
+  ])('allows inspecting the image %s', (reference) => {
+    expect(allowed('GET', `${V}/images/${reference}/json`)).toBe(true);
   });
 
   it('allows the API at any 1.x version, and without one', () => {

@@ -14,9 +14,12 @@ Compose and wires the apps together for you.**
 >   proxy.
 > - **Next:** wiring the apps together. Until that lands, each app still needs
 >   setting up by hand. Jellyfin's wizard and Seerr's setup are open to anyone who
->   can reach them. By default, Sonarr, Radarr and Prowlarr ask for a login that
->   doesn't exist yet; their READMEs say how to set one. Keep
->   `network.bind: localhost` when you try it.
+>   can reach them until you complete them, so complete them first. By default,
+>   Sonarr, Radarr and Prowlarr ask for a login that doesn't exist yet; their READMEs
+>   say how to set one.
+> - **Who can reach them:** on a home network, `mediaplane init` publishes the web
+>   UIs on your LAN (`network.bind: lan`). To keep them on this machine only, set
+>   `network.bind: localhost` in `stack.yaml`.
 >
 > Watch the repo to follow along.
 

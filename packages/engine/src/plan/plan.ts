@@ -4,7 +4,6 @@ import { loadConfigFile } from '../config/load';
 import { checkSecretRefs } from '../config/secrets';
 import { error, hasErrors, type Diagnostic } from '../diagnostics';
 import type { HostFacts } from '../host/facts';
-import { HelperError } from '../host/report';
 import { COMPOSE_PATH, ENV_PATH, STACK_PATH } from '../paths';
 import { runPreflight } from '../preflight/checks';
 import type { HostProbe } from '../preflight/probe';
@@ -12,8 +11,13 @@ import { renderCompose, type ComposeFile } from '../render/compose';
 import { renderEnvFile } from '../render/env';
 import { composeToYaml } from '../render/yaml';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
-import { dockerAccessWarnings } from '../runtime/docker';
-import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
+import { dockerAccessWarnings, usesSocketProxy } from '../runtime/docker';
+import {
+  HelperError,
+  RuntimeError,
+  type ContainerState,
+  type Runtime,
+} from '../runtime/types';
 import { readSecretStore, type SecretStore } from '../secrets/store';
 import { secretsToGenerate, secretValues } from '../secrets/values';
 import { notYetHealthy, otherHomes, ownPorts, type ContainerChange } from './containers';
@@ -88,7 +92,7 @@ export async function planStack(
   try {
     host = typeof options.host === 'function' ? await options.host() : options.host;
   } catch (cause) {
-    const failure = helperOrDockerFailure(cause);
+    const failure = await helperOrDockerFailure(cause, options);
     if (failure === undefined) throw cause;
     return failed([...diagnostics, failure]);
   }
@@ -104,7 +108,7 @@ export async function planStack(
     current = await options.runtime.containers();
   } catch (cause) {
     if (!(cause instanceof RuntimeError)) throw cause;
-    return failed([...diagnostics, dockerUnavailable(cause)]);
+    return failed([...diagnostics, dockerUnavailable(cause, options.env)]);
   }
 
   diagnostics.push(...otherHomes(current, home));
@@ -116,7 +120,7 @@ export async function planStack(
       )),
     );
   } catch (cause) {
-    const failure = helperOrDockerFailure(cause);
+    const failure = await helperOrDockerFailure(cause, options);
     if (failure === undefined) throw cause;
     return failed([...diagnostics, failure]);
   }
@@ -136,7 +140,7 @@ export async function planStack(
     predicted = await predictContainers(compose, values, options.runtime, current);
   } catch (cause) {
     if (!(cause instanceof RuntimeError)) throw cause;
-    return failed([...diagnostics, dockerUnavailable(cause)]);
+    return failed([...diagnostics, dockerUnavailable(cause, options.env)]);
   }
   if (!predicted.ok) {
     return failed([
@@ -183,9 +187,16 @@ function failed(diagnostics: Diagnostic[]): { result: PlanResult; context: undef
   };
 }
 
-function dockerUnavailable(cause: RuntimeError): Diagnostic {
+/**
+ * Docker could not be reached. In the image, Mediaplane reaches it through the socket
+ * proxy, so a stopped proxy is the likely cause: Docker itself must be running for
+ * `docker exec` to work at all.
+ */
+function dockerUnavailable(cause: RuntimeError, env: NodeJS.ProcessEnv): Diagnostic {
   return error('docker.unavailable', cause.message, {
-    hint: 'start Docker, and make sure your user can run "docker ps" (for example, add it to the docker group)',
+    hint: usesSocketProxy(env)
+      ? 'Mediaplane reaches Docker through the socket proxy: on the host, check that the socket-proxy container is running, with "docker compose -f deploy/mediaplane.compose.yaml ps", and read its log with "docker compose -f deploy/mediaplane.compose.yaml logs socket-proxy"'
+      : 'start Docker, and make sure your user can run "docker ps" (for example, add it to the docker group)',
   });
 }
 
@@ -193,15 +204,38 @@ function dockerUnavailable(cause: RuntimeError): Diagnostic {
  * The error for a host helper or Docker call that failed, or undefined for anything else
  * (a bug, say), which is not Docker's to explain.
  */
-function helperOrDockerFailure(cause: unknown): Diagnostic | undefined {
+async function helperOrDockerFailure(
+  cause: unknown,
+  options: Pick<PlanOptions, 'runtime' | 'env'>,
+): Promise<Diagnostic | undefined> {
   // A HelperError is a RuntimeError too, so it is told apart first.
-  if (cause instanceof HelperError) return helperFailed(cause);
-  if (cause instanceof RuntimeError) return dockerUnavailable(cause);
+  if (cause instanceof HelperError) {
+    // The helper is a `docker run`. When Docker can't be reached either (a stopped socket
+    // proxy, say), that is the error to explain, not the helper.
+    const unreachable = await dockerUnreachable(options.runtime);
+    return unreachable === undefined
+      ? helperFailed(cause)
+      : dockerUnavailable(unreachable, options.env);
+  }
+  if (cause instanceof RuntimeError) return dockerUnavailable(cause, options.env);
   return undefined;
+}
+
+/** Why Docker can't be reached, or undefined when it answers. */
+async function dockerUnreachable(runtime: Runtime): Promise<RuntimeError | undefined> {
+  try {
+    await runtime.versions();
+    return undefined;
+  } catch (cause) {
+    if (cause instanceof RuntimeError) return cause;
+    throw cause;
+  }
 }
 
 function helperFailed(cause: HelperError): Diagnostic {
   return error('host.helper-failed', cause.message, {
-    hint: 'the host helper runs the image named by MEDIAPLANE_IMAGE: check that mediaplane.compose.yaml sets it, and that "docker image ls" lists that image',
+    hint:
+      cause.hint ??
+      'the host helper runs the image named by MEDIAPLANE_IMAGE: check that mediaplane.compose.yaml sets it, and that "docker image ls" lists that image',
   });
 }

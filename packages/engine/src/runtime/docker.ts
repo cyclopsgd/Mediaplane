@@ -4,6 +4,7 @@ import { warning, type Diagnostic } from '../diagnostics';
 import { COMPOSE_PATH, ENV_PATH, OVERRIDE_PATH } from '../paths';
 import { nodeExec, type Exec, type ExecResult } from './exec';
 import {
+  HelperError,
   RuntimeError,
   type CommandResult,
   type ContainerState,
@@ -39,14 +40,23 @@ const RAW_SOCKETS = new Set([
   'unix:///run/docker.sock',
 ]);
 
+/** Whether Mediaplane runs from its image: mediaplane.compose.yaml sets MEDIAPLANE_IMAGE. */
+function inImage(env: NodeJS.ProcessEnv): boolean {
+  return (env.MEDIAPLANE_IMAGE ?? '') !== '';
+}
+
+/** Whether Mediaplane runs from its image and reaches Docker through the socket proxy. */
+export function usesSocketProxy(env: NodeJS.ProcessEnv): boolean {
+  return inImage(env) && !RAW_SOCKETS.has(env.DOCKER_HOST ?? '');
+}
+
 /**
  * A warning when Mediaplane runs from its image (MEDIAPLANE_IMAGE is set) but reaches the
  * Docker socket directly, not through the socket proxy. Spec §7.2(2): the proxy is on by
  * default and can be disabled, with a warning.
  */
 export function dockerAccessWarnings(env: NodeJS.ProcessEnv): Diagnostic[] {
-  if ((env.MEDIAPLANE_IMAGE ?? '') === '') return [];
-  if (!RAW_SOCKETS.has(env.DOCKER_HOST ?? '')) return [];
+  if (!inImage(env) || usesSocketProxy(env)) return [];
   return [
     warning(
       'docker.no-proxy',
@@ -82,8 +92,8 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
       input?: string;
       env?: Record<string, string>;
       timeoutMs?: number;
-      /** What to say when the call times out, instead of the generic daemon advice. */
-      timeoutMessage?: string;
+      /** The error for a call that times out, instead of the generic daemon advice. */
+      timeoutError?: (cause: unknown) => RuntimeError;
     } = {},
   ): Promise<ExecResult> {
     const timeoutMs = extra.timeoutMs ?? DOCKER_TIMEOUTS.query;
@@ -95,10 +105,10 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
         timeoutMs,
       });
     } catch (cause) {
-      throw new RuntimeError(
-        spawnFailure(label, timeoutMs, cause, extra.timeoutMessage),
-        { cause },
-      );
+      if (extra.timeoutError !== undefined && hasCode(cause, 'ETIMEDOUT')) {
+        throw extra.timeoutError(cause);
+      }
+      throw new RuntimeError(spawnFailure(label, timeoutMs, cause), { cause });
     }
   }
 
@@ -271,7 +281,16 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
         ],
         {
           timeoutMs,
-          timeoutMessage: `the host helper did not finish within ${String(timeoutMs / 1000)} s; a data folder on a network share that is not responding is a common cause`,
+          // Usually a network share that stopped answering hangs it. A Docker that stopped
+          // answering would too: plan tells the two apart by asking Docker its version.
+          timeoutError: (cause) =>
+            new HelperError(
+              `the host helper did not finish within ${String(timeoutMs / 1000)} s`,
+              {
+                cause,
+                hint: 'check that the data folder and the Mediaplane home are reachable: a network share (NFS or SMB) that is not responding is the usual cause',
+              },
+            ),
         },
       );
       if (result.code === 0) return { ok: true, stdout: result.stdout };
@@ -418,11 +437,13 @@ function text(value: unknown): string {
 
 /**
  * One label's value from ps's "k=v,k=v" Labels string. Values can contain commas (the
- * config_files label lists several files), so a value runs up to the next ",<key>=".
+ * config_files label lists several files), so a value runs up to the next ",<key>=". A
+ * key is anything without a comma or "=": keys such as app.kubernetes.io/name hold "/",
+ * and Compose 5 prints the labels in any order.
  */
 function labelValue(labels: string, key: string): string | undefined {
   const name = key.replaceAll('.', '\\.');
-  return new RegExp(`(?:^|,)${name}=(.*?)(?=,[A-Za-z0-9_.-]+=|$)`).exec(labels)?.[1];
+  return new RegExp(`(?:^|,)${name}=(.*?)(?=,[^,=]+=|$)`).exec(labels)?.[1];
 }
 
 /**
@@ -440,18 +461,10 @@ function firstLine(value: string): string {
   return value.trim().split('\n')[0] ?? '';
 }
 
-function spawnFailure(
-  label: string,
-  timeoutMs: number,
-  cause: unknown,
-  timeoutMessage: string | undefined,
-): string {
+function spawnFailure(label: string, timeoutMs: number, cause: unknown): string {
   if (hasCode(cause, 'ENOENT')) return 'docker was not found on PATH';
   if (hasCode(cause, 'ETIMEDOUT')) {
-    return (
-      timeoutMessage ??
-      `docker ${label} did not finish within ${String(timeoutMs / 1000)}s; check that the Docker daemon is responding`
-    );
+    return `docker ${label} did not finish within ${String(timeoutMs / 1000)}s; check that the Docker daemon is responding`;
   }
   return `could not run docker: ${cause instanceof Error ? cause.message : String(cause)}`;
 }

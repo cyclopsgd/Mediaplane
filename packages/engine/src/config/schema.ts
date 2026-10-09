@@ -61,7 +61,7 @@ export const appSettingsSchema = z.looseObject({
     .boolean()
     .default(true)
     .describe(
-      'Turn the app off but keep its settings with false. Listing an app turns it on.',
+      'Turn the app off but keep its settings with false. Listing an app turns it on. The media server that media_server names cannot be turned off: change media_server instead.',
     ),
   port: z
     .int()

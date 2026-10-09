@@ -109,7 +109,7 @@ function items(schema: Schema, prefix: string): string[] {
  * an HTML tag and drops it from the page. Inside a code span a backslash would show, and
  * `<home>` is safe. A backtick with no closing one opens no span.
  */
-function prose(text: string): string {
+export function prose(text: string): string {
   const parts = text.replaceAll('\n', ' ').split('`');
   return parts
     .map((part, index) =>

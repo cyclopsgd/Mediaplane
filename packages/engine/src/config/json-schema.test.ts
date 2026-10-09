@@ -67,6 +67,17 @@ describe('the stack.yaml schema', () => {
     expect(description).toContain('no other media server can be enabled');
   });
 
+  it('says that the media server media_server names cannot be turned off', () => {
+    const entry = z.toJSONSchema(appEntrySchema(fixtureApp({ id: 'x' })), {
+      io: 'input',
+    }) as Schema & { properties?: Record<string, Schema> };
+    const { description } = entry.properties?.enabled ?? {};
+    expect(description).toContain('Turn the app off but keep its settings with false.');
+    expect(description).toContain(
+      'The media server that media_server names cannot be turned off: change media_server instead.',
+    );
+  });
+
   it('describes every field', () => {
     expect(
       undocumented(z.toJSONSchema(stackConfigSchema, { io: 'input' }) as Schema),

@@ -237,7 +237,7 @@
               "properties": {
                 "enabled": {
                   "default": true,
-                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on.",
+                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on. The media server that media_server names cannot be turned off: change media_server instead.",
                   "type": "boolean"
                 },
                 "port": {
@@ -312,7 +312,7 @@
               "properties": {
                 "enabled": {
                   "default": true,
-                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on.",
+                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on. The media server that media_server names cannot be turned off: change media_server instead.",
                   "type": "boolean"
                 },
                 "port": {
@@ -387,7 +387,7 @@
               "properties": {
                 "enabled": {
                   "default": true,
-                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on.",
+                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on. The media server that media_server names cannot be turned off: change media_server instead.",
                   "type": "boolean"
                 },
                 "port": {
@@ -462,7 +462,7 @@
               "properties": {
                 "enabled": {
                   "default": true,
-                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on.",
+                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on. The media server that media_server names cannot be turned off: change media_server instead.",
                   "type": "boolean"
                 },
                 "port": {
@@ -537,7 +537,7 @@
               "properties": {
                 "enabled": {
                   "default": true,
-                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on.",
+                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on. The media server that media_server names cannot be turned off: change media_server instead.",
                   "type": "boolean"
                 },
                 "port": {
@@ -612,7 +612,7 @@
               "properties": {
                 "enabled": {
                   "default": true,
-                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on.",
+                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on. The media server that media_server names cannot be turned off: change media_server instead.",
                   "type": "boolean"
                 },
                 "port": {
@@ -687,7 +687,7 @@
               "properties": {
                 "enabled": {
                   "default": true,
-                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on.",
+                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on. The media server that media_server names cannot be turned off: change media_server instead.",
                   "type": "boolean"
                 },
                 "port": {
@@ -767,7 +767,7 @@
               "properties": {
                 "enabled": {
                   "default": true,
-                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on.",
+                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on. The media server that media_server names cannot be turned off: change media_server instead.",
                   "type": "boolean"
                 },
                 "port": {
@@ -842,7 +842,7 @@
               "properties": {
                 "enabled": {
                   "default": true,
-                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on.",
+                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on. The media server that media_server names cannot be turned off: change media_server instead.",
                   "type": "boolean"
                 },
                 "port": {
@@ -927,7 +927,7 @@
               "properties": {
                 "enabled": {
                   "default": true,
-                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on.",
+                  "description": "Turn the app off but keep its settings with false. Listing an app turns it on. The media server that media_server names cannot be turned off: change media_server instead.",
                   "type": "boolean"
                 },
                 "port": {

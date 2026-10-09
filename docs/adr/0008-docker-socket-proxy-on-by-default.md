@@ -44,11 +44,15 @@ bug in Mediaplane itself, or in something it runs, such as Compose.
 
   Everything else is refused with `403 Forbidden`, including:
   - `exec`, logs, file copy, export, commit, build and `/session`;
-  - restart and update;
-  - pushing and tagging images, and image history;
-  - deleting images, networks or volumes;
+  - restart, update, pause and unpause;
+  - pushing, tagging, loading and saving images, and image history;
+  - deleting images, networks or volumes, and every prune;
   - `/info`, `/system`, `/events` and `/auth`;
   - swarm, services, secrets, configs, plugins and distribution.
+
+  socket-proxy anchors each pattern, so a longer path, such as `/versionx`, doesn't
+  match. Each segment of an image name must start with a letter or a digit, so a path
+  can't climb out of `images/` with `..`, written plainly or as `%2e%2e`.
 
   `deploy/deploy.test.ts` pins the captured calls as allowed, and a list of others as
   refused. Refusing logs does not hide them, because `attach` can read them too (see

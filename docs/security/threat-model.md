@@ -82,17 +82,141 @@ host network, read-only mounts
 
 ## Threats and controls
 
-| #   | Threat                                                                  | Controls today                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | What remains                                                                                                                                                                                                                                                                                                                                                                            |
-| --- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| T1  | A bug in Mediaplane, a library or Compose is used to drive Docker       | No listener in M1, and the input is your own `stack.yaml`. The proxy refuses `exec`, file copy, builds, every delete except of containers, and the system, swarm, secret, config and plugin APIs. The runtime refuses any project but `mediaplane` or `mediaplane-<name>`                                                                                                                                                                                                                                                                                                                                                                                                       | The proxy checks the method and the path, never the request body. Creating a privileged container, or one that mounts `/`, is allowed. See [What the proxy does not stop](#what-the-proxy-does-not-stop)                                                                                                                                                                                |
-| T2  | Someone on the LAN reaches an app                                       | Only web UIs are published: on the host's private addresses (`lan`), on localhost, or on every interface with a warning (`all`). Sonarr, Radarr and Prowlarr ask for a login from the LAN too, by default (`security.login_on_lan`)                                                                                                                                                                                                                                                                                                                                                                                                                                             | Until the wiring lands (Slices 3 to 7), Jellyfin's wizard and Seerr's setup are open to whoever reaches them first. Sonarr, Radarr and Prowlarr have no user until Slice 3 creates one, or you do. Until then, with `login_on_lan: true` nobody can sign in, and with `false` anyone on a local address gets in without a login. Keep `bind: localhost`                                 |
-| T3  | A cloud VM's private address is reachable from the internet             | On a detected cloud VM, `bind: lan` is refused unless `network.lan_subnet` is set. `bind: all` warns on every plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Detection relies on firmware strings. Use `bind: localhost`, with Tailscale or an SSH tunnel                                                                                                                                                                                                                                                                                            |
-| T4  | An app is compromised                                                   | It has no Docker access, and no other app's appdata. With a VPN, qBittorrent sits in Gluetun's network namespace                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | The apps that handle media share the data folder, which hardlinks need, so a compromised one can change your media                                                                                                                                                                                                                                                                      |
-| T5  | Secrets leak                                                            | Generated with `crypto.randomBytes`. Kept in 0600 files: `state/secrets.json`, inside a 0700 `state/`, and `generated/.env`. Never in `stack.yaml` or `compose.yaml`. Replaced with `***` in errors. Change records hold names, never values. Given to Compose in its environment or in the 0600 `generated/.env`, never on its command line                                                                                                                                                                                                                                                                                                                                    | Not encrypted at rest, so use full-disk encryption. `appdata/` holds credentials too: treat it as sensitive                                                                                                                                                                                                                                                                             |
-| T6  | Another user on the host uses Mediaplane's Docker access                | The proxy publishes no port, and answers only the address the name `mediaplane` has on its internal network: even the host gets `403 Forbidden`. Using Mediaplane needs `docker exec`, which means Docker access already                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Anyone in the `docker` group is already root on the host. A container joined to the proxy's network with the alias `mediaplane` passes, but joining needs Docker access too. Anyone who can write `stack.yaml` or `compose.override.yaml` in the home controls what Docker runs at the next `apply`, so keep the home writable by its owner only                                        |
-| T7  | A tampered image or dependency                                          | Every image is pinned by digest: the apps, the proxy, and Node and the Docker CLI in Mediaplane's image. npm packages come from the lockfile, and GitHub Actions are pinned by commit. CI runs two vulnerability scans that fail the build. Trivy scans Mediaplane's image on amd64 and arm64: its Alpine packages, the Docker CLI's Go standard library and Compose's Go modules. It fails on a critical vulnerability that has a fix. `pnpm audit` checks the CLI's production npm dependencies, which are bundled into one file where Trivy can't see them, and fails on a critical advisory. gitleaks scans the full history on every push to `main` and every pull request | Neither scan sees Node itself, which is not an Alpine package, nor the Docker CLI's own code: they stay current only when their pinned images are bumped. The audit needs the npm registry at CI time. Nothing bumps pins or dependencies automatically yet (Renovate, Slice 8). The catalog images are not scanned yet, and there is no SBOM or provenance yet. Both arrive in Slice 8 |
-| T8  | The home is mounted at another path, so Docker mounts the wrong folders | `plan` checks that `stack.yaml` inside the container is the very file the host has at that path (`preflight.home-path`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | The check compares `stack.yaml` only, not every folder in the home                                                                                                                                                                                                                                                                                                                      |
-| T9  | The proxy is turned off                                                 | Every `plan` and `apply` warns (`docker.no-proxy`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Without it, a bug reaches the whole Docker API                                                                                                                                                                                                                                                                                                                                          |
+### T1. A bug in Mediaplane, a library or Compose is used to drive Docker
+
+Controls today:
+
+- No listener in M1, and the input is your own `stack.yaml`.
+- The proxy refuses `exec`, file copy, builds, prunes, every delete except of containers,
+  and the system, swarm, secret, config and plugin APIs.
+- The runtime refuses any project but `mediaplane` or `mediaplane-<name>`.
+
+What remains:
+
+- The proxy checks the method and the path, never the request body. Creating a
+  privileged container, or one that mounts `/`, is allowed. See
+  [What the proxy does not stop](#what-the-proxy-does-not-stop).
+
+### T2. Someone on the LAN reaches an app
+
+Controls today:
+
+- Only web UIs are published: on the host's private addresses (`lan`), on localhost, or
+  on every interface with a warning (`all`).
+- Sonarr, Radarr and Prowlarr ask for a login from the LAN too, by default
+  (`security.login_on_lan`).
+
+What remains:
+
+- On a home network, `init` writes `bind: lan`, so the web UIs are on your LAN.
+- Until the wiring lands (Slices 3 to 7), Jellyfin's wizard and Seerr's setup are open to
+  whoever reaches them first. Complete them right after the first `apply`, or keep
+  `bind: localhost` until you have.
+- Sonarr, Radarr and Prowlarr have no user until Slice 3 creates one, or you do. Until
+  then, with `login_on_lan: true` nobody can sign in, and with `false` anyone on a local
+  address gets in without a login.
+
+### T3. A cloud VM's private address is reachable from the internet
+
+Controls today:
+
+- On a detected cloud VM, `init` writes `bind: localhost`, and `bind: lan` is refused
+  unless `network.lan_subnet` is set.
+- `bind: all` warns on every plan.
+
+What remains:
+
+- Detection relies on firmware strings. Use `bind: localhost`, with Tailscale or an SSH
+  tunnel.
+
+### T4. An app is compromised
+
+Controls today:
+
+- It has no Docker access, and no other app's appdata.
+- With a VPN, qBittorrent sits in Gluetun's network namespace.
+
+What remains:
+
+- The apps that handle media share the data folder, which hardlinks need, so a
+  compromised one can change your media.
+
+### T5. Secrets leak
+
+Controls today:
+
+- Generated with `crypto.randomBytes`.
+- Kept in 0600 files: `state/secrets.json`, inside a 0700 `state/`, and `generated/.env`.
+- Never in `stack.yaml` or `compose.yaml`.
+- Replaced with `***` in errors. Change records hold names, never values.
+- Given to Compose in its environment or in the 0600 `generated/.env`, never on its
+  command line.
+
+What remains:
+
+- Not encrypted at rest, so use full-disk encryption.
+- `appdata/` holds credentials too: treat it as sensitive.
+
+### T6. Another user on the host uses Mediaplane's Docker access
+
+Controls today:
+
+- The proxy publishes no port, and answers only the address the name `mediaplane` has on
+  its internal network: even the host gets `403 Forbidden`.
+- Using Mediaplane needs `docker exec`, which means Docker access already.
+
+What remains:
+
+- Anyone in the `docker` group is already root on the host.
+- A container joined to the proxy's network with the alias `mediaplane` passes, but
+  joining needs Docker access too.
+- Anyone who can write `stack.yaml` or `compose.override.yaml` in the home controls what
+  Docker runs at the next `apply`, so keep the home writable by its owner only.
+
+### T7. A tampered image or dependency
+
+Controls today:
+
+- Every image is pinned by digest: the apps, the proxy, and Node and the Docker CLI in
+  Mediaplane's image.
+- npm packages come from the lockfile, and GitHub Actions are pinned by commit.
+- CI runs two vulnerability scans that fail the build:
+  - Trivy scans Mediaplane's image on amd64 and arm64: its Alpine packages, the Docker
+    CLI's Go standard library and Compose's Go modules. It fails on a critical
+    vulnerability that has a fix.
+  - `pnpm audit` checks the CLI's production npm dependencies, which are bundled into one
+    file where Trivy can't see them, and fails on a critical advisory.
+- gitleaks scans the full history on every push to `main` and every pull request.
+
+What remains:
+
+- Neither scan sees Node itself, which is not an Alpine package, nor the Docker CLI's own
+  code: they stay current only when their pinned images are bumped.
+- The audit needs the npm registry at CI time.
+- Nothing bumps pins or dependencies automatically yet (Renovate, Slice 8).
+- The catalog images are not scanned yet, and there is no SBOM or provenance yet. Both
+  arrive in Slice 8.
+
+### T8. The home is mounted at another path, so Docker mounts the wrong folders
+
+Controls today:
+
+- `plan` checks that `stack.yaml` inside the container is the very file the host has at
+  that path (`preflight.home-path`).
+
+What remains:
+
+- The check compares `stack.yaml` only, not every folder in the home.
+
+### T9. The proxy is turned off
+
+Controls today:
+
+- Every `plan` and `apply` warns (`docker.no-proxy`).
+
+What remains:
+
+- Without it, a bug reaches the whole Docker API.
 
 ## What the proxy does not stop
 

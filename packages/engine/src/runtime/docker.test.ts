@@ -9,9 +9,10 @@ import {
   isManagedProject,
   parseContainers,
   parseHashes,
+  usesSocketProxy,
 } from './docker';
 import type { Exec, ExecOptions, ExecResult } from './exec';
-import { RuntimeError } from './types';
+import { HelperError, RuntimeError } from './types';
 
 interface Call {
   args: readonly string[];
@@ -481,7 +482,7 @@ describe('createDockerRuntime', () => {
     expect(result).not.toHaveProperty('missingSource');
   });
 
-  it('explains a helper that does not finish, not as a Docker daemon problem', async () => {
+  it('explains a helper that does not finish as a helper failure, with its own hint', async () => {
     const seen: (ExecOptions | undefined)[] = [];
     const exec: Exec = (_command, _args, options) => {
       seen.push(options);
@@ -491,11 +492,24 @@ describe('createDockerRuntime', () => {
     const error = await runtime
       .hostHelper('mediaplane:local', '{}', [], { uid: 1000, gid: 1000 })
       .catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(RuntimeError);
-    expect((error as RuntimeError).message).toBe(
-      'the host helper did not finish within 60 s; a data folder on a network share that is not responding is a common cause',
-    );
+    expect(error).toBeInstanceOf(HelperError);
+    expect(error).toMatchObject({
+      message: 'the host helper did not finish within 60 s',
+      hint: 'check that the data folder and the Mediaplane home are reachable: a network share (NFS or SMB) that is not responding is the usual cause',
+    });
     expect(seen[0]?.timeoutMs).toBe(60_000);
+  });
+
+  it('explains a helper that cannot start docker as a Docker problem', async () => {
+    const exec: Exec = () =>
+      Promise.reject(Object.assign(new Error('spawn docker ENOENT'), { code: 'ENOENT' }));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    const error = await runtime
+      .hostHelper('mediaplane:local', '{}', [], { uid: 1000, gid: 1000 })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RuntimeError);
+    expect(error).not.toBeInstanceOf(HelperError);
+    expect((error as RuntimeError).message).toBe('docker was not found on PATH');
   });
 
   it('refuses a mount target that could change the mount options, without running docker', async () => {
@@ -566,6 +580,27 @@ describe('dockerAccessWarnings', () => {
   );
 });
 
+describe('usesSocketProxy', () => {
+  it('is true only in the image, with Docker reached through the proxy', () => {
+    expect(
+      usesSocketProxy({
+        MEDIAPLANE_IMAGE: 'mediaplane:local',
+        DOCKER_HOST: 'tcp://socket-proxy:2375',
+      }),
+    ).toBe(true);
+    expect(usesSocketProxy({ DOCKER_HOST: 'tcp://socket-proxy:2375' })).toBe(false);
+    expect(usesSocketProxy({ MEDIAPLANE_IMAGE: '', DOCKER_HOST: 'tcp://x:2375' })).toBe(
+      false,
+    );
+    expect(
+      usesSocketProxy({
+        MEDIAPLANE_IMAGE: 'mediaplane:local',
+        DOCKER_HOST: 'unix:///var/run/docker.sock',
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('parseHashes', () => {
   it('reads "service hash" lines and ignores blanks', () => {
     expect(parseHashes(`sonarr ${HASH}\n\n`)).toEqual({ sonarr: HASH });
@@ -631,6 +666,18 @@ describe('parseContainers', () => {
     });
     expect(parseContainers(line)[0]?.workingDir).toBe('/srv/a');
   });
+
+  // Compose 5.5.1 prints labels in random order, and label keys can hold / : and @.
+  it.each(['app.kubernetes.io/name=probe', 'org.example:owner@team=probe'])(
+    'ends the folder at the next label, even when it is %s',
+    (next) => {
+      const line = JSON.stringify({
+        Service: 'sonarr',
+        Labels: `com.docker.compose.project.working_dir=/opt/mediaplane,${next},com.docker.compose.service=sonarr`,
+      });
+      expect(parseContainers(line)[0]?.workingDir).toBe('/opt/mediaplane');
+    },
+  );
 
   it('reads the folder when it is the last label', () => {
     const line = JSON.stringify({

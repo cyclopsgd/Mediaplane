@@ -8,6 +8,7 @@
 #   MEDIAPLANE_HOME   the Mediaplane home, mounted at the same path (default /opt/mediaplane)
 #   MEDIAPLANE_UID    the user that owns the home (default 1000)
 #   MEDIAPLANE_GID    its group (default 1000)
+#   TZ                the host's timezone, which init writes into stack.yaml (default UTC)
 #
 # Start it:      docker compose -f mediaplane.compose.yaml up -d
 # Use it:        docker exec -it mediaplane mediaplane plan
@@ -35,12 +36,13 @@ services:
       - -watchdoginterval=3600
       - -stoponwatchdog
       - -shutdowngracetime=5
-      # socket-proxy anchors each pattern (^…$) and matches it against the path.
-      # deploy/deploy.test.ts pins this list against the calls the engine makes.
+      # socket-proxy anchors each pattern (^…$) and matches it against the decoded path.
+      # deploy/deploy.test.ts pins this list against the calls the engine makes. Every
+      # segment of an image name starts with a letter or digit, so ".." can't pass.
       # kill is there because `docker run` passes on a signal it receives as a kill: that
       # is how a host helper that times out is stopped.
       - -allowHEAD=(/v1\.[0-9]+)?/_ping
-      - -allowGET=(/v1\.[0-9]+)?/(_ping|version|containers/json|containers/[a-zA-Z0-9][a-zA-Z0-9_.-]*/json|images/[a-zA-Z0-9][a-zA-Z0-9_.:/@-]*/json|networks|networks/[a-zA-Z0-9][a-zA-Z0-9_.-]*|volumes|volumes/[a-zA-Z0-9][a-zA-Z0-9_.-]*)
+      - -allowGET=(/v1\.[0-9]+)?/(_ping|version|containers/json|containers/[a-zA-Z0-9][a-zA-Z0-9_.-]*/json|images/[a-zA-Z0-9][a-zA-Z0-9_.:@-]*(/[a-zA-Z0-9][a-zA-Z0-9_.:@-]*)*/json|networks|networks/[a-zA-Z0-9][a-zA-Z0-9_.-]*|volumes|volumes/[a-zA-Z0-9][a-zA-Z0-9_.-]*)
       - -allowPOST=(/v1\.[0-9]+)?/(containers/create|containers/[a-zA-Z0-9][a-zA-Z0-9_.-]*/(start|stop|rename|attach|wait|kill)|images/create|networks/create|networks/[a-zA-Z0-9][a-zA-Z0-9_.-]*/(connect|disconnect)|volumes/create)
       - -allowDELETE=(/v1\.[0-9]+)?/containers/[a-zA-Z0-9][a-zA-Z0-9_.-]*
     volumes:
@@ -68,6 +70,8 @@ services:
       MEDIAPLANE_HOME: '${MEDIAPLANE_HOME:-/opt/mediaplane}'
       MEDIAPLANE_IMAGE: *mediaplane-image
       DOCKER_HOST: tcp://socket-proxy:2375
+      # init's default timezone. Never empty: Node reads an empty TZ as Etc/Unknown.
+      TZ: '${TZ:-UTC}'
     volumes:
       # The same path inside and out, because the host's Docker resolves every path in the
       # stack's compose.yaml (spec §4.1). Create the folder first: Compose won't.

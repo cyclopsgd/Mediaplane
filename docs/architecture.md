@@ -19,22 +19,21 @@ What it writes is an ordinary Docker Compose project, which runs without Mediapl
 ```text
 host (Docker)
 │
-├─ mediaplane-system
-│  ├─ mediaplane
+├─ mediaplane-system  Compose project
+│  ├─ mediaplane      container
 │  │    the CLI, idle until
 │  │    you run a command
-│  └─ socket-proxy
+│  └─ socket-proxy    container
 │       the only container
 │       with Docker's socket
 │
-├─ mediaplane
+├─ mediaplane         Compose project
 │    your stack: Sonarr,
 │    Radarr, Jellyfin, …
 │
-└─ host helper
-     a throwaway container,
-     during init, plan
-     and apply
+└─ host helper        container
+     throwaway, during init,
+     plan and apply
 ```
 
 - **`mediaplane-system`** is Mediaplane's own Compose project. Apply never manages it,
@@ -56,7 +55,12 @@ host (Docker)
   and `apply`, it runs a throwaway container of its own image on the host network, which
   reports what it sees as JSON. That container:
   - gets read-only mounts of the data folder, the home's `stack.yaml`, and `/dev` when
-    the VPN needs `/dev/net/tun`;
+    the VPN needs `/dev/net/tun`. Read-only has two limits
+    ([threat model](security/threat-model.md)):
+    - before Docker 25, or on a kernel older than 5.12, it is not recursive, so a mount
+      inside one of those folders, such as `/dev/shm`, stays writable;
+    - on any version, device files under `/dev` stay writable where Docker's device
+      rules and their file modes allow;
   - runs as Mediaplane's user, with no capabilities and a read-only root;
   - never pulls an image, and is removed when it exits.
 - **Running from source** (`pnpm mediaplane`, for development), `MEDIAPLANE_IMAGE` is
@@ -159,8 +163,8 @@ lock
 - **Converge forward** ([ADR 0004](adr/0004-converge-forward-apply.md)). When a step
   fails, the later ones are skipped and nothing is rolled back. Running `apply` again
   plans afresh, and does only what is left.
-- **Pulls come first.** Images are pulled before anything stops, so a network failure
-  leaves the running stack alone.
+- **Images are pulled before any container changes.** Nothing is stopped before the
+  pull, so a network failure leaves the running stack alone.
 - **Keys are saved before any container starts.**
 - **`up --wait`** waits until every app is healthy. It fails as soon as an app is marked
   unhealthy, and gives up after 10 minutes.
@@ -190,7 +194,8 @@ lock
 - **`stack.yaml`** is the only file you normally edit
   ([reference](reference/stack-yaml.md)). `init` writes a starter one. It sets `user:`
   to the user it runs as: in the container that is `MEDIAPLANE_UID`, or 1000 when run as
-  root. In the container it sets `timezone` to `UTC` unless you pass `--timezone`.
+  root. It sets `timezone` to the zone it runs in, unless you pass `--timezone`. In the
+  container that is `TZ`, which `deploy/.env` sets to the host's zone, or `UTC`.
 - **`secrets/`** holds your secret files, such as the VPN key, which `stack.yaml` points
   to. In the container Mediaplane sees nothing outside the home, so keep them here.
 - **`compose.override.yaml`** is yours. Mediaplane never writes it. Compose merges it

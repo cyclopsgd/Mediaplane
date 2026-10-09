@@ -38,7 +38,8 @@ describe('the Mediaplane image', () => {
     expect(compose.stdout.trim()).toBe('5.5.1');
   });
 
-  it('ships no package manager', async () => {
+  // apk stays: the Alpine package database it keeps (/lib/apk/db) is what Trivy scans.
+  it('ships no Node package manager', async () => {
     const found = await inImage(
       'sh',
       '-c',

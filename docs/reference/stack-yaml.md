@@ -46,7 +46,7 @@ Each field shows its type, then `required` or its default, if it has one.
 
 Under `apps.<app>`, where `<app>` is one of the apps listed at the end of this page.
 
-- `apps.<app>.enabled` (boolean; default `true`): Turn the app off but keep its settings with false. Listing an app turns it on.
+- `apps.<app>.enabled` (boolean; default `true`): Turn the app off but keep its settings with false. Listing an app turns it on. The media server that media_server names cannot be turned off: change media_server instead.
 - `apps.<app>.port` (integer, 1 to 65535): The host port the app's web UI is published on. The port inside the container stays the same, except for qBittorrent, where both move together.
 - `apps.<app>.version` (string): Run this image tag instead of the tested one. plan warns that it is an untested combination.
 - `apps.<app>.env` (map of name → string or secret reference; default `{}`): Extra environment variables for the app: strings, or secret references, which never appear in compose.yaml.

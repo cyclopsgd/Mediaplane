@@ -4,7 +4,7 @@ import {
   ENVIRONMENT,
   EXIT_CODES,
 } from '../../packages/cli/src/run';
-import { cell } from './stack-reference';
+import { cell, prose } from './stack-reference';
 
 type Program = ReturnType<typeof createProgram>;
 
@@ -69,13 +69,12 @@ export function renderCliReference(cli: Program = program()): string {
       '',
     );
   }
+  // A list, not a table: the descriptions are long, and a table scrolls on a phone.
   lines.push(
     '## Environment variables',
     '',
-    '| Variable | Meaning |',
-    '| --- | --- |',
     ...ENVIRONMENT.map(
-      (variable) => `| \`${variable.name}\` | ${cell(variable.description)} |`,
+      (variable) => `- \`${variable.name}\`: ${prose(variable.description)}`,
     ),
     '',
   );

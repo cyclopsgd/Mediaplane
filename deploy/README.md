@@ -11,16 +11,24 @@ Mediaplane runs as two containers in their own Compose project, `mediaplane-syst
 The stack Mediaplane deploys is a separate Compose project, `mediaplane`, so `apply` can
 never touch Mediaplane itself.
 
-> Mediaplane is pre-alpha. The apps are not wired together yet (Slices 3 to 7 do that),
-> and some of their first-run pages are open to anyone who can reach them. Keep
-> `network.bind: localhost` while you try it.
+> Mediaplane is pre-alpha. The apps are not wired together yet (Slices 3 to 7 do that).
+> On a home network, `init` publishes their web UIs on your LAN. Until the wiring lands:
+>
+> - Jellyfin's setup wizard and Seerr's setup are open to anyone on your LAN until you
+>   complete them, so complete them first;
+> - Sonarr, Radarr and Prowlarr ask for a login that has no user yet.
+>
+> To keep the web UIs on this machine only, see [First run](#first-run).
 
 ## What you need
 
 - **Linux** on amd64 or arm64.
 - **Docker Engine 24 or newer**, rootful, with its socket at `/var/run/docker.sock`, and
   the Compose plugin 2.24 or newer. Rootless Docker is not supported. Mediaplane checks
-  for Engine 24, and CI tests with the version GitHub's runners ship.
+  for Engine 24. The container brings its own Docker CLI 29.8.1 and Compose 5.5.1, which
+  have been tested only with Docker Engine 28 and 29 so far.
+- **No SELinux in enforcing mode.** Such hosts aren't supported yet: neither
+  Mediaplane's bind mounts nor the apps' carry a `:z` label.
 - **A folder for the Mediaplane home,** on a local filesystem that supports hard links,
   such as ext4, XFS or Btrfs. Mediaplane creates its lock and `stack.yaml` with a hard
   link, so FAT, exFAT and some network shares won't work.
@@ -48,8 +56,8 @@ sudo mkdir -p /opt/mediaplane
 sudo chown "$(id -u):$(id -g)" /opt/mediaplane
 ```
 
-Tell the deployment which image, user and Docker group to use, in `deploy/.env`, then
-start it:
+Tell the deployment which image, user, Docker group and timezone to use, in
+`deploy/.env`, then start it:
 
 ```bash
 cat > deploy/.env <<EOF
@@ -57,9 +65,13 @@ MEDIAPLANE_IMAGE=mediaplane:local
 MEDIAPLANE_UID=$(id -u)
 MEDIAPLANE_GID=$(id -g)
 DOCKER_GID=$(stat -c %g /var/run/docker.sock)
+TZ=$(timedatectl show --property=Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null)
 EOF
 docker compose -f deploy/mediaplane.compose.yaml up -d
 ```
+
+`TZ` is the host's timezone, for `init`. The line asks systemd, or reads `/etc/timezone`
+on a host without it. If it finds neither, `TZ` is empty and the container uses `UTC`.
 
 For a home somewhere else, add `MEDIAPLANE_HOME=/srv/mediaplane` to `deploy/.env`. The
 home is mounted at the same path inside the container, because the host's Docker resolves
@@ -93,8 +105,18 @@ mediaplane status
 - **`init`** writes the user it runs as into `stack.yaml`. Inside the container that is
   `MEDIAPLANE_UID`; run as root (`docker exec -u 0`), it writes 1000 instead. The apps
   that use the data folder run as that user, so it must be able to write there.
-- **The timezone.** The container doesn't know the host's timezone, so `init` writes
-  `UTC`. Pass `--timezone Europe/London`, for example, or edit `timezone:` afterwards.
+- **The timezone.** `init` writes the container's `TZ`: the host's zone from
+  `deploy/.env`, or `UTC` when that is empty. Pass `--timezone Europe/London`, for
+  example, or edit `timezone:` afterwards.
+- **Who can reach the apps.** On a home network, `init` writes `network.bind: lan`, so
+  the web UIs are published on your LAN, and you can open them from your other devices.
+  On a cloud VM it writes `localhost`. To keep the web UIs on this machine only, change
+  `bind: lan` to `bind: localhost` in `stack.yaml` before you run `apply`: `init` has no
+  option for it. Until the wiring lands (Slices 3 to 7):
+  - Jellyfin's setup wizard and Seerr's setup are open to anyone on your LAN until you
+    complete them. Complete them right after the first `apply`.
+  - Sonarr, Radarr and Prowlarr ask for a login that has no user yet. Their READMEs,
+    such as [Sonarr's](../catalog/sonarr/README.md), say how to create one.
 - **File secrets.** A secret written as `{ file: secrets/… }` is read from the home.
   Mediaplane's container sees nothing outside the home, so keep secret files there.
 - **Environment secrets.** A secret written as `{ env: NAME }` must be in the container's
@@ -180,16 +202,65 @@ to the proxy, run `up -d` again with `mediaplane.compose.yaml` alone.
 
 ## Troubleshooting
 
-| You see                                                                                 | What to do                                                                                                                                                                                                                        |
-| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `required variable … is missing a value`                                                | Create `deploy/.env` (Install)                                                                                                                                                                                                    |
-| `bind source path does not exist: /opt/mediaplane`                                      | Create the home first (Install)                                                                                                                                                                                                   |
-| `the Mediaplane home … is not the same folder on the Docker host`                       | Set `MEDIAPLANE_HOME` instead of editing the volume, so the paths match                                                                                                                                                           |
-| `cannot create …: the Mediaplane home must be on a filesystem that supports hard links` | Move the home to a local ext4, XFS or Btrfs filesystem                                                                                                                                                                            |
-| `EACCES` on a file in the home                                                          | Give `state/` and `generated/` to `MEDIAPLANE_UID`, using the ids in `deploy/.env`, for example `sudo chown -R 1000:1000 /opt/mediaplane/state /opt/mediaplane/generated`. Leave `appdata/` alone: some apps need their own owner |
-| `file … is missing, empty or unreadable`, for a secret file outside the home            | Move it into the home: the container sees nothing else                                                                                                                                                                            |
-| `the host helper failed: … No such image`                                               | `MEDIAPLANE_IMAGE` must name an image on this host: check `docker image ls`                                                                                                                                                       |
-| `Error response from daemon: Forbidden`                                                 | The proxy refused a call. Its log names it, as `blocked request`: `docker compose -f deploy/mediaplane.compose.yaml logs socket-proxy`                                                                                            |
+Each item is a message you may see, then what to do.
+
+- `required variable … is missing a value`
+
+  Create `deploy/.env`, as in [Install](#install).
+
+- `bind source path does not exist: /opt/mediaplane`
+
+  Create the home first, as in [Install](#install).
+
+- `the Mediaplane home … is not the same folder on the Docker host`
+
+  Set `MEDIAPLANE_HOME` in `deploy/.env` instead of editing the volume, so the paths
+  match.
+
+- `cannot create …: the Mediaplane home must be on a filesystem that supports hard links`
+
+  Move the home to a local ext4, XFS or Btrfs filesystem.
+
+- `EACCES` on a file in the home
+
+  Give `state/` and `generated/` to `MEDIAPLANE_UID`, using the ids in `deploy/.env`.
+  Leave `appdata/` alone: some apps need their own owner. For example:
+
+  ```bash
+  sudo chown -R 1000:1000 /opt/mediaplane/state /opt/mediaplane/generated
+  ```
+
+- `file … is missing, empty or unreadable`, for a secret file outside the home
+
+  Move it into the home: the container sees nothing else.
+
+- `cannot talk to Docker: failed to connect to the docker API at tcp://socket-proxy:2375`
+
+  The socket proxy is not running. Check it on the host, read its log, and start it
+  again:
+
+  ```bash
+  docker compose -f deploy/mediaplane.compose.yaml ps
+  docker compose -f deploy/mediaplane.compose.yaml logs socket-proxy
+  docker compose -f deploy/mediaplane.compose.yaml up -d
+  ```
+
+- `the host helper failed: … No such image`
+
+  `MEDIAPLANE_IMAGE` must name an image on this host: check `docker image ls`.
+
+- `the host helper did not finish within 60 s`
+
+  Check that the data folder and the home are reachable on the host. A network share
+  (NFS or SMB) that has stopped responding is the usual cause.
+
+- `Error response from daemon: Forbidden`
+
+  The proxy refused a call. Its log names it, as `blocked request`:
+
+  ```bash
+  docker compose -f deploy/mediaplane.compose.yaml logs socket-proxy
+  ```
 
 ## Removing Mediaplane
 

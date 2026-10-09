@@ -73,8 +73,8 @@ export interface Runtime {
    * Run the host helper (spec §4.2): a throwaway container of Mediaplane's own `image` on
    * the host network, as `user`, with no capabilities, a read-only root and `mounts`
    * bound read-only, running `mediaplane host-report <request>`. It never pulls. A helper
-   * that ran and failed is a `HelperResult`; this throws `RuntimeError` when docker can't
-   * be started or the helper doesn't finish in time.
+   * that ran and failed is a `HelperResult`. This throws a `HelperError` when the helper
+   * doesn't finish in time, and a `RuntimeError` when docker can't be started.
    */
   hostHelper(
     image: string,
@@ -87,4 +87,18 @@ export interface Runtime {
 /** Docker is missing or unreachable; the message says which, in words for the user. */
 export class RuntimeError extends Error {
   override readonly name: string = 'RuntimeError';
+}
+
+/**
+ * The host helper could not run, did not finish, or printed something the engine cannot
+ * read. `hint` says what to check, when the failure itself points to it.
+ */
+export class HelperError extends RuntimeError {
+  override readonly name: string = 'HelperError';
+  readonly hint: string | undefined;
+
+  constructor(message: string, options: ErrorOptions & { hint?: string } = {}) {
+    super(message, options);
+    this.hint = options.hint;
+  }
 }

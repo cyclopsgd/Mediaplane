@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { HostProbe } from '../preflight/probe';
+import { HelperError } from '../runtime/types';
 import { fakeProbe } from '../testing/fakes';
 import { FIXTURE_HOST } from '../testing/fixtures';
 import {
   collectHostReport,
-  HelperError,
   HOST_REPORT_SCHEMA,
   parseHostReport,
   parseHostRequest,
@@ -24,6 +24,7 @@ const REQUEST: HostRequest = {
 describe('collectHostReport', () => {
   it('looks at each path where the helper sees it, and reports it by its host path', async () => {
     const seen: string[] = [];
+    const measured: string[] = [];
     const base = fakeProbe({
       stats: { '/mediaplane-host/0/media': undefined },
       busyPorts: ['tcp/127.0.0.1:8989'],
@@ -34,9 +35,14 @@ describe('collectHostReport', () => {
         seen.push(path);
         return base.stat(path);
       },
+      freeBytes: (path) => {
+        measured.push(path);
+        return base.freeBytes(path);
+      },
     };
     const report = await collectHostReport(REQUEST, probe, () => FIXTURE_HOST);
     expect(seen).toEqual(['/mediaplane-host/0', '/mediaplane-host/0/media']);
+    expect(measured).toEqual(['/mediaplane-host/0']);
     expect(report).toEqual({
       schema: HOST_REPORT_SCHEMA,
       stat: {
