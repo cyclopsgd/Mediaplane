@@ -1,6 +1,7 @@
+import { realpathSync } from 'node:fs';
 import { chmod, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { ROOT } from './root';
 
@@ -75,10 +76,21 @@ async function licenceText(folder: string): Promise<string> {
   throw new Error(`no licence file in ${folder}: the bundle cannot ship without one`);
 }
 
-if (
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+/**
+ * Whether the module at `metaUrl` is the script Node was started with (`entry`, which is
+ * process.argv[1]). Node resolves symlinks in import.meta.url but not in argv[1], so the
+ * two are compared as real paths: a symlinked checkout must still run the build.
+ */
+export function ranAsScript(metaUrl: string, entry: string | undefined): boolean {
+  if (entry === undefined) return false;
+  try {
+    return fileURLToPath(metaUrl) === realpathSync(entry);
+  } catch {
+    return false; // The entry is no file (node -e, a REPL), so nothing ran this as a script.
+  }
+}
+
+if (ranAsScript(import.meta.url, process.argv[1])) {
   const { file, packages } = await bundle();
   console.log(`Wrote ${file}, bundling ${packages.join(', ')}.`);
 }
