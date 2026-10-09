@@ -8,10 +8,12 @@ Compose and wires the apps together for you.**
 
 > **Status: pre-alpha, not ready for use yet.**
 >
-> - **Works today:** `mediaplane plan` checks a real host and shows exactly what it would
->   deploy.
-> - **Being built now:** `apply`, which actually starts the stack.
-> - **Next:** wiring the apps together.
+> - **Works today:** `mediaplane plan` checks a real host and shows exactly what it
+>   would do. `mediaplane apply` then starts the stack and confirms that every app
+>   is healthy.
+> - **Next:** wiring the apps together. Until that lands, each app still needs
+>   setting up by hand, and Jellyfin's first-run page is open to anyone who can
+>   reach it.
 >
 > Watch the repo to follow along.
 
@@ -35,17 +37,19 @@ Mediaplane does that part for you:
 
 ## What works so far
 
-| Capability                                                                      | Status          |
-| ------------------------------------------------------------------------------- | --------------- |
-| Validate `stack.yaml`, with errors that say what to change                      | Done            |
-| Render a readable Compose project with images pinned by tag and digest          | Done            |
-| Check the host first: Docker versions, disk, data folder, ports, the VPN device | Done            |
-| Refuse to publish web UIs on a cloud VM's private address by mistake            | Done            |
-| Predict exactly which containers will change, using Compose's own config hashes | Done            |
-| Generate keys and start the stack (`mediaplane apply`)                          | **In progress** |
-| Wire the apps together (download clients, indexers, root folders, media server) | Planned         |
-| Detect manual changes and offer Re-apply or "Keep mine"                         | Planned         |
-| Web panel with a setup wizard                                                   | Planned (M2)    |
+| Capability                                                                      | Status       |
+| ------------------------------------------------------------------------------- | ------------ |
+| Validate `stack.yaml`, with errors that say what to change                      | Done         |
+| Render a readable Compose project with images pinned by tag and digest          | Done         |
+| Check the host first: Docker versions, disk, data folder, ports, the VPN device | Done         |
+| Refuse to publish web UIs on a cloud VM's private address by mistake            | Done         |
+| Predict exactly which containers will change, using Compose's own config hashes | Done         |
+| Generate keys and start the stack (`mediaplane apply`)                          | Done         |
+| See each app's health and every past apply (`status`, `history`)                | Done         |
+| Write a starter `stack.yaml` (`init`)                                           | Done         |
+| Wire the apps together (download clients, indexers, root folders, media server) | Planned      |
+| Detect manual changes and offer Re-apply or "Keep mine"                         | Planned      |
+| Web panel with a setup wizard                                                   | Planned (M2) |
 
 ## The stack
 
@@ -139,6 +143,20 @@ pnpm --silent mediaplane plan --home .mediaplane-dev
 The `user:` line makes the apps run as you, so they can write to the data folder you
 just created. `plan` exits with `0` when nothing would change, `2` when it would change
 something, and `1` on errors. Add `--json` for machine-readable output.
+
+To actually start the stack, use a stack without the VPN. A fake WireGuard key can't
+connect, so Gluetun would never become healthy. Change the qBittorrent line to
+`qbittorrent: { vpn: false }`, delete the `vpn:` line, then run:
+
+```bash
+pnpm --silent mediaplane apply --home .mediaplane-dev --yes
+pnpm --silent mediaplane status --home .mediaplane-dev
+```
+
+This starts real containers on this machine, with the web UIs on `localhost`. To
+remove them, run `docker compose -p mediaplane down`, then
+`sudo rm -rf .mediaplane-dev`. Seerr's folder belongs to uid 1000, which is why
+`sudo` is needed.
 
 ## Roadmap
 

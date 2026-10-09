@@ -22,8 +22,10 @@ Mediaplane renders `stack.yaml` into a **plain Compose project** in `generated/`
 
 ## Consequences
 
-- **Ejectable.** The generated project runs with `docker compose up -d` without
-  Mediaplane, and Portainer and other tools can manage it.
+- **Ejectable.** The generated project runs without Mediaplane. The header of
+  `generated/compose.yaml` gives the exact command:
+  `docker compose -p mediaplane --project-directory <home> -f <home>/generated/compose.yaml [-f <home>/compose.override.yaml] --env-file <home>/generated/.env up -d`.
+  Portainer and other tools can manage it too.
 - **Container-level overrides are free.** They use Compose's own merge, with no custom
   override language.
 - **Compose handles health-gated startup.** That includes

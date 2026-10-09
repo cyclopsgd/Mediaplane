@@ -27,6 +27,10 @@ Compose project names, so they never touch a real stack. The end-to-end suite pa
 own project names (starting `mediaplane-e2e-`) straight to the engine; the spawned-CLI
 tests set `MEDIAPLANE_COMPOSE_PROJECT`.
 
+The apply end-to-end test pulls the full app stack the first time, about 7 GB, and
+starts it, so allow several minutes. The test files run one at a time because they
+share host ports.
+
 Before committing, run `pnpm format && pnpm lint && pnpm typecheck && pnpm test`.
 
 ## Commits

@@ -16,6 +16,11 @@ describe('nodeExec', () => {
     expect(result).toMatchObject({ code: 3, stderr: 'nope\n' });
   });
 
+  it('reports exit code 1 for a command killed by a signal', async () => {
+    const result = await nodeExec(node, ['-e', 'process.kill(process.pid, "SIGKILL")']);
+    expect(result.code).toBe(1);
+  });
+
   it('passes arguments literally, without a shell', async () => {
     const result = await nodeExec(node, [
       '-e',

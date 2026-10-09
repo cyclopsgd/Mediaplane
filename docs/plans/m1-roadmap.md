@@ -122,7 +122,7 @@ Each slice plan must address the items for that slice.
     history exist.
 - **Tests:** a test that `plan()` writes nothing, alongside the new write code.
 
-**S2b (blockers for `apply`):**
+**S2b (blockers for `apply`):** all of these are in the S2b plan.
 
 - **Own ports are matched by exact address.** Preflight treats a port as the
   stack's own only when a container publishes it on the same address. Changing
