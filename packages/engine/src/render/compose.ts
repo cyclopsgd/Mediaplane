@@ -39,6 +39,11 @@ export function secretEnvName(appId: string, secret: string): string {
   return `MP_${appId}_${snake}`.replace(/-/g, '_').toUpperCase();
 }
 
+/** Name of the .env variable carrying a secret from apps.<id>.env, e.g. MP_SONARR_ENV_TOKEN. */
+export function appEnvSecretName(appId: string, name: string): string {
+  return `MP_${appId}_ENV_${name}`.replace(/-/g, '_').toUpperCase();
+}
+
 /** Escape a literal value so Compose does not interpolate it. */
 export function literal(value: string): string {
   return value.replaceAll('$', () => '$$');
@@ -133,7 +138,10 @@ function renderEnvironment(
   for (const step of def.credentials) {
     if (step.step === 'env') env[step.var] = `\${${secretEnvName(def.id, step.secret)}}`;
   }
-  for (const [key, value] of Object.entries(settings.env)) env[key] = literal(value);
+  for (const [key, value] of Object.entries(settings.env)) {
+    env[key] =
+      typeof value === 'string' ? literal(value) : `\${${appEnvSecretName(def.id, key)}}`;
+  }
   return Object.fromEntries(Object.entries(env).sort(([a], [b]) => compare(a, b)));
 }
 

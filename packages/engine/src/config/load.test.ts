@@ -96,6 +96,27 @@ describe('parseConfig', () => {
     expect(diagnostic?.message).toContain('inline secrets are not allowed');
   });
 
+  it('accepts secret references as env values', () => {
+    const result = parseConfig(
+      `${MINIMAL}apps:\n  gluetun: { env: { OPENVPN_PASSWORD: { file: secrets/vpn-pass } } }\n`,
+    );
+    if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));
+    expect(result.config.apps.gluetun?.env).toEqual({
+      OPENVPN_PASSWORD: { file: 'secrets/vpn-pass' },
+    });
+  });
+
+  it('explains an env value that is neither a string nor a reference', () => {
+    const [diagnostic] = diagnosticsOf(
+      `${MINIMAL}apps:\n  sonarr: { env: { X: { nope: 1 } } }\n`,
+    );
+    expect(diagnostic).toMatchObject({
+      code: 'config.invalid',
+      path: 'apps.sonarr.env.X',
+    });
+    expect(diagnostic?.message).toContain('env values are strings');
+  });
+
   it('suggests the closest key for an unknown top-level key', () => {
     const [diagnostic] = diagnosticsOf(`${MINIMAL}tmezone: Europe/London\n`);
     expect(diagnostic).toMatchObject({

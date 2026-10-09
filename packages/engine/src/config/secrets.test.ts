@@ -96,6 +96,27 @@ describe('secretRefs and checkSecretRefs', () => {
     expect(diagnostics.map((d) => d.path)).toEqual(['vpn.private_key']);
   });
 
+  it("includes references in enabled apps' env, ordered by app and name", () => {
+    const envConfig = configWith(
+      'apps:\n' +
+        '  sonarr: { env: { B_TOKEN: { env: FAKE_B }, A_TOKEN: { file: secrets/a }, PLAIN: x } }\n' +
+        '  radarr: { enabled: false, env: { C_TOKEN: { env: FAKE_C } } }\n',
+    );
+    expect(secretRefs(envConfig).map((r) => r.path)).toEqual([
+      'apps.sonarr.env.A_TOKEN',
+      'apps.sonarr.env.B_TOKEN',
+    ]);
+  });
+
+  it('reports a missing env reference with its path', async () => {
+    const envConfig = configWith(
+      'apps:\n  sonarr: { env: { TOKEN: { env: FAKE_MISSING } } }\n',
+    );
+    expect(await checkSecretRefs(envConfig, await homeWith({}), {})).toEqual([
+      expect.objectContaining({ code: 'secret.missing', path: 'apps.sonarr.env.TOKEN' }),
+    ]);
+  });
+
   it('reports each missing secret with its stack.yaml path', async () => {
     expect(await checkSecretRefs(config, await homeWith({}), {})).toEqual([
       expect.objectContaining({ code: 'secret.missing', path: 'admin.password' }),

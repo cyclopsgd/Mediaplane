@@ -18,6 +18,9 @@ const OVERRIDE_VALUE_MESSAGE = 'override values must be a string, number or bool
 const ENV_NAME_MESSAGE =
   'environment variable names use letters, digits and _, and cannot start with a digit';
 
+const ENV_VALUE_MESSAGE =
+  'env values are strings, or { file: … } / { env: … } references for secrets';
+
 const INLINE_SECRET =
   'inline secrets are not allowed in stack.yaml; use { file: secrets/<name> } or { env: VAR_NAME }';
 
@@ -44,7 +47,12 @@ export const appSettingsSchema = z.looseObject({
     .string()
     .regex(DOCKER_TAG, 'must be a Docker image tag such as 4.0.20')
     .optional(),
-  env: z.record(z.string().regex(ENV_NAME, ENV_NAME_MESSAGE), z.string()).default({}),
+  env: z
+    .record(
+      z.string().regex(ENV_NAME, ENV_NAME_MESSAGE),
+      z.union([z.string(), secretRefSchema], { error: ENV_VALUE_MESSAGE }),
+    )
+    .default({}),
 });
 export type AppSettings = z.infer<typeof appSettingsSchema>;
 

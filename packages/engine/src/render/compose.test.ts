@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { HostFacts } from '../host/facts';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
-import { literal, renderCompose, secretEnvName } from './compose';
+import { appEnvSecretName, literal, renderCompose, secretEnvName } from './compose';
 import { composeToYaml } from './yaml';
 
 function stackOf(source: string, host: HostFacts = FIXTURE_HOST): ResolvedStack {
@@ -181,5 +181,24 @@ describe('secretEnvName', () => {
 describe('literal', () => {
   it('doubles every dollar sign', () => {
     expect(literal('a$b$$c')).toBe('a$$b$$$$c');
+  });
+});
+
+describe('secret env references', () => {
+  it('renders a reference as a ${MP_…} variable, never the value or its source', () => {
+    const source = JELLYFIN_VPN_LAN.replace(
+      'sonarr: { env: { EXTRA: x } }',
+      'sonarr: { env: { EXTRA: x, TOKEN: { env: FAKE_TOKEN_SOURCE } } }',
+    );
+    const compose = renderCompose(stackOf(source));
+    expect(compose.services.sonarr?.environment?.TOKEN).toBe('${MP_SONARR_ENV_TOKEN}');
+    expect(JSON.stringify(compose)).not.toContain('FAKE_TOKEN_SOURCE');
+  });
+
+  it.each([
+    ['sonarr', 'TOKEN', 'MP_SONARR_ENV_TOKEN'],
+    ['my-app', 'openvpn_password', 'MP_MY_APP_ENV_OPENVPN_PASSWORD'],
+  ])('%s/%s → %s', (app, name, expected) => {
+    expect(appEnvSecretName(app, name)).toBe(expected);
   });
 });
