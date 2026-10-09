@@ -14,6 +14,15 @@ export interface PathStat {
   ino: number;
 }
 
+/** Everything preflight will ask a probe, so that a probe can look it all up at once. */
+export interface ProbeRequest {
+  stat: string[];
+  free: string[];
+  ports: { address: string; port: number; protocol: 'tcp' | 'udp' }[];
+  /** Files that must be the very same file on the Docker host (spec §4.1). */
+  sameAsHost: string[];
+}
+
 /** What preflight needs to know about the host. Tests swap in fakeProbe(). */
 export interface HostProbe {
   stat(path: string): Promise<PathStat | undefined>;
@@ -24,6 +33,13 @@ export interface HostProbe {
     port: number,
     protocol: 'tcp' | 'udp',
   ): Promise<boolean | undefined>;
+  /** Look up everything in `request` at once. Preflight calls it before any check. */
+  prepare?(request: ProbeRequest): Promise<void>;
+  /**
+   * Whether `path` here is the same file the Docker host has at that path; undefined when
+   * it can't tell. Only a probe inside a container can see a difference.
+   */
+  sameAsHost?(path: string): Promise<boolean | undefined>;
 }
 
 export const nodeProbe: HostProbe = {

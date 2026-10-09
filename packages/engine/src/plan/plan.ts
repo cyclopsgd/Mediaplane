@@ -4,6 +4,7 @@ import { loadConfigFile } from '../config/load';
 import { checkSecretRefs } from '../config/secrets';
 import { error, hasErrors, type Diagnostic } from '../diagnostics';
 import type { HostFacts } from '../host/facts';
+import { HelperError } from '../host/report';
 import { COMPOSE_PATH, ENV_PATH, STACK_PATH } from '../paths';
 import { runPreflight } from '../preflight/checks';
 import type { HostProbe } from '../preflight/probe';
@@ -92,12 +93,21 @@ export async function planStack(
   }
 
   diagnostics.push(...otherHomes(current, home));
-  diagnostics.push(
-    ...(await runPreflight(
-      { stack, versions, ownPorts: ownPorts(current) },
-      options.probe,
-    )),
-  );
+  try {
+    diagnostics.push(
+      ...(await runPreflight(
+        { stack, versions, ownPorts: ownPorts(current) },
+        options.probe,
+      )),
+    );
+  } catch (cause) {
+    // A HelperError is a RuntimeError too, so it is told apart first.
+    if (cause instanceof HelperError)
+      return failed([...diagnostics, helperFailed(cause)]);
+    if (cause instanceof RuntimeError)
+      return failed([...diagnostics, dockerUnavailable(cause)]);
+    throw cause;
+  }
   if (hasErrors(diagnostics)) return failed(diagnostics);
 
   const compose = renderCompose(stack);
@@ -164,5 +174,11 @@ function failed(diagnostics: Diagnostic[]): { result: PlanResult; context: undef
 function dockerUnavailable(cause: RuntimeError): Diagnostic {
   return error('docker.unavailable', cause.message, {
     hint: 'start Docker, and make sure your user can run "docker ps" (for example, add it to the docker group)',
+  });
+}
+
+function helperFailed(cause: HelperError): Diagnostic {
+  return error('host.helper-failed', cause.message, {
+    hint: 'the host helper runs the image named by MEDIAPLANE_IMAGE: check that mediaplane.compose.yaml sets it, and that "docker image ls" lists that image',
   });
 }

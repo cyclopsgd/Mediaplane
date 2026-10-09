@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { HelperError } from '../host/report';
 import { COMPOSE_PATH, ENV_PATH, SECRETS_PATH } from '../paths';
 import { portKey } from '../preflight/checks';
 import type { HostProbe } from '../preflight/probe';
@@ -275,6 +276,44 @@ describe('plan', () => {
         message: 'docker compose config did not finish within 60s',
       }),
     );
+  });
+
+  it('explains a host helper that cannot run', async () => {
+    const probe: HostProbe = {
+      ...fakeProbe(),
+      prepare: () =>
+        Promise.reject(new HelperError('the host helper failed: no such image')),
+    };
+    const result = await planFor(await makeHome(), { probe });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'host.helper-failed',
+        message: 'the host helper failed: no such image',
+      }),
+    );
+  });
+
+  it('explains a Docker that stops answering while the host helper runs', async () => {
+    const probe: HostProbe = {
+      ...fakeProbe(),
+      prepare: () =>
+        Promise.reject(new RuntimeError('the host helper did not finish within 30 s')),
+    };
+    const result = await planFor(await makeHome(), { probe });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'docker.unavailable',
+        message: 'the host helper did not finish within 30 s',
+      }),
+    );
+  });
+
+  it('lets an unexpected preflight error through rather than blaming Docker', async () => {
+    const bug = new TypeError('fake: a bug, not the helper');
+    const probe: HostProbe = { ...fakeProbe(), prepare: () => Promise.reject(bug) };
+    await expect(planFor(await makeHome(), { probe })).rejects.toBe(bug);
   });
 
   it('lets an unexpected error through rather than blaming Docker', async () => {

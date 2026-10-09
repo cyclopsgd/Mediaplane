@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Catalog } from '../catalog/types';
+import { helperProbe } from '../host/helper';
+import { HOST_REPORT_SCHEMA } from '../host/report';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
-import { fakeProbe } from '../testing/fakes';
+import { fakeProbe, fakeRuntime } from '../testing/fakes';
 import {
   FIXTURE_HOST,
   fixtureApp,
@@ -11,12 +13,13 @@ import {
 import {
   ownPortKey,
   portKey,
+  preflightRequest,
   runPreflight,
   versionAtLeast,
   writableBy,
   type PreflightInput,
 } from './checks';
-import type { PathStat } from './probe';
+import type { HostProbe, PathStat, ProbeRequest } from './probe';
 
 const GIB = 1024 ** 3;
 const STACK = `version: 1
@@ -198,5 +201,122 @@ describe('writableBy', () => {
     [dir({ uid: 0, gid: 0, mode: 0o40700 }), 0, 0, true],
   ])('%o for %i:%i is %s', (stat, uid, gid, expected) => {
     expect(writableBy(stat, uid, gid)).toBe(expected);
+  });
+});
+
+/** The fixture stack behind a VPN, whose Gluetun needs /dev/net/tun, published on the LAN. */
+function vpnStack(): ResolvedStack {
+  const catalog = fixtureCatalog.map((def) =>
+    def.id === 'gluetun'
+      ? fixtureApp({ ...def, extras: () => ({ devices: ['/dev/net/tun:/dev/net/tun'] }) })
+      : def,
+  );
+  return stackOf(
+    STACK.replace('  qbittorrent: { vpn: false }\n', '  qbittorrent: {}\n')
+      .replace('bind: localhost', 'bind: lan')
+      .concat('vpn: { provider: mullvad, private_key: { file: secrets/wg.key } }\n'),
+    catalog,
+  );
+}
+
+describe('preflightRequest', () => {
+  it('lists every path, folder and port preflight looks at', () => {
+    expect(preflightRequest(input())).toEqual({
+      stat: ['/srv/data', '/srv/data/torrents', '/srv/data/usenet', '/srv/data/media'],
+      free: ['/opt/mediaplane', '/srv/data'],
+      ports: [
+        { address: '127.0.0.1', port: 8096, protocol: 'tcp' },
+        { address: '127.0.0.1', port: 8080, protocol: 'tcp' },
+        { address: '127.0.0.1', port: 8989, protocol: 'tcp' },
+      ],
+      sameAsHost: ['/opt/mediaplane/stack.yaml'],
+    });
+  });
+
+  it("leaves out ports the project's own containers already publish", () => {
+    const request = preflightRequest(
+      input({ ownPorts: new Set([ownPortKey('tcp', 8989)]) }),
+    );
+    expect(request.ports.map((p) => p.port)).toEqual([8096, 8080]);
+  });
+
+  it('is everything runPreflight then asks the probe', async () => {
+    let prepared: ProbeRequest | undefined;
+    const asked: string[] = [];
+    const base = fakeProbe();
+    const recording: HostProbe = {
+      prepare: (request) => {
+        prepared = request;
+        return Promise.resolve();
+      },
+      stat: (path) => {
+        asked.push(`stat ${path}`);
+        return base.stat(path);
+      },
+      freeBytes: (path) => {
+        asked.push(`free ${path}`);
+        return base.freeBytes(path);
+      },
+      portFree: (address, port, protocol) => {
+        asked.push(`port ${portKey(protocol, address, port)}`);
+        return base.portFree(address, port, protocol);
+      },
+      sameAsHost: (path) => {
+        asked.push(`same ${path}`);
+        return Promise.resolve(true);
+      },
+    };
+    await runPreflight(input({ stack: vpnStack() }), recording);
+    const listed = [
+      ...(prepared?.stat ?? []).map((path) => `stat ${path}`),
+      ...(prepared?.free ?? []).map((path) => `free ${path}`),
+      ...(prepared?.ports ?? []).map(
+        (p) => `port ${portKey(p.protocol, p.address, p.port)}`,
+      ),
+      ...(prepared?.sameAsHost ?? []).map((path) => `same ${path}`),
+    ];
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.filter((call) => !listed.includes(call))).toEqual([]);
+    expect(prepared?.stat).toContain('/dev/net/tun');
+  });
+});
+
+describe('runPreflight through the host helper', () => {
+  it('reports a data folder the host lacks, and a home that is another folder there', async () => {
+    const runtime = fakeRuntime({
+      hostHelper: (request, mounts) => {
+        if (mounts.some((m) => m.source === '/srv/data')) {
+          return {
+            ok: false,
+            error: 'bind source path does not exist: /srv/data',
+            missingSource: '/srv/data',
+          };
+        }
+        const ports = request.ports.map((p): [string, boolean] => [
+          portKey(p.protocol, p.address, p.port),
+          true,
+        ]);
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            schema: HOST_REPORT_SCHEMA,
+            stat: {},
+            free: {},
+            ports: Object.fromEntries(ports),
+          }),
+        };
+      },
+    });
+    const probe = helperProbe({
+      runtime,
+      image: 'mediaplane:test',
+      user: { uid: 1000, gid: 1000 },
+      home: '/opt/mediaplane',
+      local: fakeProbe(),
+    });
+    expect(codes(await runPreflight(input(), probe))).toEqual([
+      'preflight.home-path',
+      'preflight.data-missing',
+    ]);
   });
 });

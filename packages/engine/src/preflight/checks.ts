@@ -1,7 +1,9 @@
+import { join } from 'node:path';
 import { error, warning, withHint, type Diagnostic } from '../diagnostics';
-import type { ResolvedStack } from '../resolver/resolve';
+import { STACK_PATH } from '../paths';
+import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { unique } from '../util/sort';
-import type { HostProbe, PathStat } from './probe';
+import type { HostProbe, PathStat, ProbeRequest } from './probe';
 
 export const MIN_DOCKER_ENGINE = '24.0.0';
 export const MIN_DOCKER_COMPOSE = '2.24.0';
@@ -37,12 +39,85 @@ export async function runPreflight(
   input: PreflightInput,
   probe: HostProbe,
 ): Promise<Diagnostic[]> {
+  await probe.prepare?.(preflightRequest(input));
   return [
     ...checkVersions(input.versions),
+    ...(await checkHome(input.stack, probe)),
     ...(await checkDisk(input.stack, probe)),
     ...(await checkDataRoot(input.stack, probe)),
     ...(await checkDevices(input.stack, probe)),
     ...(await checkPorts(input, probe)),
+  ];
+}
+
+/** Everything runPreflight will ask the probe, so a probe can look it all up at once. */
+export function preflightRequest(input: PreflightInput): ProbeRequest {
+  const { stack } = input;
+  const data = stack.config.paths.data;
+  return {
+    stat: unique([
+      data,
+      ...DATA_SUBDIRS.map((name) => `${data}/${name}`),
+      ...devicesNeeded(stack).map((device) => device.hostPath),
+    ]),
+    free: unique([stack.home, data]),
+    ports: portsToCheck(input).map(({ address, port, protocol }) => ({
+      address,
+      port,
+      protocol,
+    })),
+    sameAsHost: [join(stack.home, STACK_PATH)],
+  };
+}
+
+/** Each device an app maps in, by its host path. */
+function devicesNeeded(stack: ResolvedStack): { app: ResolvedApp; hostPath: string }[] {
+  return stack.apps.flatMap((app) =>
+    (app.def.extras?.(app.context).devices ?? []).map((device) => ({
+      app,
+      hostPath: device.split(':')[0] ?? device,
+    })),
+  );
+}
+
+/**
+ * Each published port, at each bind address, that must be free: the ones this project's
+ * own containers don't already publish.
+ */
+function portsToCheck(input: PreflightInput): {
+  app: ResolvedApp;
+  address: string;
+  port: number;
+  protocol: 'tcp' | 'udp';
+}[] {
+  return input.stack.apps.flatMap((app) =>
+    app.ports.flatMap((port) =>
+      input.ownPorts.has(ownPortKey(port.protocol, port.host))
+        ? []
+        : input.stack.bindAddresses.map((address) => ({
+            app,
+            address,
+            port: port.host,
+            protocol: port.protocol,
+          })),
+    ),
+  );
+}
+
+/**
+ * The home must be the same folder on the Docker host, because the host's daemon resolves
+ * every bind mount in compose.yaml (spec §4.1). Only a probe inside a container can tell.
+ */
+async function checkHome(stack: ResolvedStack, probe: HostProbe): Promise<Diagnostic[]> {
+  if ((await probe.sameAsHost?.(join(stack.home, STACK_PATH))) !== false) return [];
+  return [
+    error(
+      'preflight.home-path',
+      `the Mediaplane home ${stack.home} is not the same folder on the Docker host, so Docker would mount the wrong files`,
+      {
+        hint: `mount the home at the same path inside the Mediaplane container as on the host, as mediaplane.compose.yaml does with MEDIAPLANE_HOME (${stack.home}:${stack.home})`,
+      },
+    ),
   ];
 }
 
@@ -181,26 +256,23 @@ async function checkDevices(
   probe: HostProbe,
 ): Promise<Diagnostic[]> {
   const diagnostics: Diagnostic[] = [];
-  for (const app of stack.apps) {
-    for (const device of app.def.extras?.(app.context).devices ?? []) {
-      const hostPath = device.split(':')[0] ?? device;
-      const stat = await probe.stat(hostPath);
-      if (stat?.isCharacterDevice === true) continue;
-      diagnostics.push(
-        error(
-          'preflight.device-missing',
-          `${app.def.name} needs ${hostPath}, which does not exist on this host`,
-          {
-            path: `apps.${app.def.id}`,
-            ...withHint(
-              hostPath === '/dev/net/tun'
-                ? 'load the TUN module: sudo modprobe tun'
-                : undefined,
-            ),
-          },
-        ),
-      );
-    }
+  for (const { app, hostPath } of devicesNeeded(stack)) {
+    const stat = await probe.stat(hostPath);
+    if (stat?.isCharacterDevice === true) continue;
+    diagnostics.push(
+      error(
+        'preflight.device-missing',
+        `${app.def.name} needs ${hostPath}, which does not exist on this host`,
+        {
+          path: `apps.${app.def.id}`,
+          ...withHint(
+            hostPath === '/dev/net/tun'
+              ? 'load the TUN module: sudo modprobe tun'
+              : undefined,
+          ),
+        },
+      ),
+    );
   }
   return diagnostics;
 }
@@ -210,23 +282,18 @@ async function checkPorts(
   probe: HostProbe,
 ): Promise<Diagnostic[]> {
   const diagnostics: Diagnostic[] = [];
-  for (const app of input.stack.apps) {
-    for (const port of app.ports) {
-      for (const address of input.stack.bindAddresses) {
-        if (input.ownPorts.has(ownPortKey(port.protocol, port.host))) continue;
-        if ((await probe.portFree(address, port.host, port.protocol)) !== false) continue;
-        diagnostics.push(
-          error(
-            'preflight.port-in-use',
-            `${address}:${port.host}/${port.protocol}, which ${app.def.name} needs, is already in use on this host`,
-            {
-              path: `apps.${app.def.id}.port`,
-              hint: `stop whatever is using it, or set apps.${app.def.id}.port to a free port`,
-            },
-          ),
-        );
-      }
-    }
+  for (const { app, address, port, protocol } of portsToCheck(input)) {
+    if ((await probe.portFree(address, port, protocol)) !== false) continue;
+    diagnostics.push(
+      error(
+        'preflight.port-in-use',
+        `${address}:${port}/${protocol}, which ${app.def.name} needs, is already in use on this host`,
+        {
+          path: `apps.${app.def.id}.port`,
+          hint: `stop whatever is using it, or set apps.${app.def.id}.port to a free port`,
+        },
+      ),
+    );
   }
   return diagnostics;
 }
