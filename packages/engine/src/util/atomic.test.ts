@@ -42,6 +42,32 @@ describe('writeFileAtomic', () => {
   });
 });
 
+/** Run `action` under a strict umask, which filters the mode that open() and mkdir() ask for. */
+async function underUmask(mask: number, action: () => Promise<void>): Promise<void> {
+  const previous = process.umask(mask);
+  try {
+    await action();
+  } finally {
+    process.umask(previous);
+  }
+}
+
+describe('exact modes, whatever the umask', () => {
+  it('writeFileAtomic gives the file the mode asked for, not the umask-filtered one', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-atomic-'));
+    const path = join(dir, 'compose.yaml');
+    await underUmask(0o077, () => writeFileAtomic(path, 'x', 0o644));
+    expect(await modeOf(path)).toBe(0o644);
+  });
+
+  it('ensureDir gives a new folder the mode asked for, not the umask-filtered one', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-atomic-'));
+    const shared = join(dir, 'shared');
+    await underUmask(0o077, () => ensureDir(shared, 0o755));
+    expect(await modeOf(shared)).toBe(0o755);
+  });
+});
+
 describe('ensureDir', () => {
   it('creates the folder with the exact mode, and tightens an existing one', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'mediaplane-atomic-'));

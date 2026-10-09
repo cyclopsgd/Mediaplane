@@ -1,4 +1,5 @@
-import { open, readFile, rm } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { link, open, readFile, rename, rm } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { LOCK_PATH, STATE_DIR } from '../paths';
@@ -29,6 +30,9 @@ export class LockedError extends Error {
   }
 }
 
+/** Enough tries to clear one stale lock and create ours, with room to lose a race or two. */
+const MAX_ATTEMPTS = 3;
+
 /**
  * Take the single-writer lock (spec §5, stage 1): create state/lock exclusively, recording
  * the pid, host and start time. A lock left by a dead process on this host is cleared.
@@ -44,28 +48,86 @@ export async function acquireLock(
     host: hostname(),
     startedAt: now().toISOString(),
   };
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const file = await open(path, 'wx', 0o600);
-      try {
-        await file.writeFile(`${JSON.stringify(info)}\n`, 'utf8');
-      } finally {
-        await file.close();
-      }
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (await createLock(path, info)) {
       return { release: () => rm(path, { force: true }) };
-    } catch (cause) {
-      if (!hasCode(cause, 'EEXIST')) throw cause;
-      const holder = await readHolder(path);
-      if (holder === undefined || !isDead(holder)) throw new LockedError(holder);
-      await rm(path, { force: true });
     }
+    const holder = await readHolder(path);
+    if (holder === 'gone') continue; // released since we looked: try to create it again
+    if (holder === undefined || !isDead(holder)) throw new LockedError(holder);
+    await clearStale(path, holder);
   }
-  throw new LockedError(await readHolder(path));
+  const holder = await readHolder(path);
+  throw new LockedError(holder === 'gone' ? undefined : holder);
 }
 
-async function readHolder(path: string): Promise<LockInfo | undefined> {
+/**
+ * Create the lock file with its content already in it, or report that one exists (false).
+ * The content goes to a private temporary file first and is then hard-linked into place:
+ * link() fails if the lock exists, which makes the creation exclusive, and the lock never
+ * exists empty or half written, even if the write fails or the process dies.
+ */
+async function createLock(path: string, info: LockInfo): Promise<boolean> {
+  const temp = `${path}.tmp-${String(process.pid)}-${randomBytes(4).toString('hex')}`;
   try {
-    const data = JSON.parse(await readFile(path, 'utf8')) as Partial<LockInfo>;
+    const file = await open(temp, 'wx', 0o600);
+    try {
+      await file.writeFile(`${JSON.stringify(info)}\n`, 'utf8');
+    } finally {
+      await file.close();
+    }
+    try {
+      await link(temp, path);
+      return true;
+    } catch (cause) {
+      if (hasCode(cause, 'EEXIST')) return false;
+      throw cause;
+    }
+  } finally {
+    await rm(temp, { force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * Remove a lock judged stale, without ever deleting a live lock that replaced it. Deleting
+ * by name would: two runs can both judge the same lock stale, and the slower one would then
+ * delete the lock the faster one had just taken. So the lock is first claimed by renaming
+ * it to a name of our own, which only one run can do, and checked to be the lock we judged.
+ * If it is not, it is put back and the run that holds it is reported.
+ */
+async function clearStale(path: string, stale: LockInfo): Promise<void> {
+  const claimed = `${path}.stale-${String(process.pid)}-${randomBytes(4).toString('hex')}`;
+  try {
+    await rename(path, claimed);
+  } catch (cause) {
+    if (hasCode(cause, 'ENOENT')) return; // someone else cleared it first
+    throw cause;
+  }
+  const found = await readHolder(claimed);
+  if (found !== 'gone' && found !== undefined && sameHolder(found, stale)) {
+    await rm(claimed, { force: true });
+    return;
+  }
+  try {
+    await link(claimed, path);
+  } catch (cause) {
+    // EEXIST: something newer already took the lock, and that one stays.
+    if (!hasCode(cause, 'EEXIST')) throw cause;
+  }
+  await rm(claimed, { force: true });
+  throw new LockedError(found === 'gone' ? undefined : found);
+}
+
+/** The holder written in `path`; undefined when it is not a readable lock, 'gone' when absent. */
+async function readHolder(path: string): Promise<LockInfo | undefined | 'gone'> {
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (cause) {
+    return hasCode(cause, 'ENOENT') ? 'gone' : undefined;
+  }
+  try {
+    const data = JSON.parse(text) as Partial<LockInfo>;
     if (
       typeof data.pid === 'number' &&
       typeof data.host === 'string' &&
@@ -77,6 +139,10 @@ async function readHolder(path: string): Promise<LockInfo | undefined> {
   } catch {
     return undefined;
   }
+}
+
+function sameHolder(a: LockInfo, b: LockInfo): boolean {
+  return a.pid === b.pid && a.host === b.host && a.startedAt === b.startedAt;
 }
 
 /** Only a process on this host can be checked; one on another host is assumed alive. */
