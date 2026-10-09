@@ -55,6 +55,7 @@ const dir = (extra: Partial<PathStat> = {}): PathStat => ({
   gid: 1000,
   mode: 0o40755,
   dev: 1,
+  ino: 1,
   ...extra,
 });
 

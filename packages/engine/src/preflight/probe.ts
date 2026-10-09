@@ -10,6 +10,8 @@ export interface PathStat {
   mode: number;
   /** Filesystem (device) id: equal for paths on the same filesystem. */
   dev: number;
+  /** Inode number: with `dev`, it says whether two paths are the same file. */
+  ino: number;
 }
 
 /** What preflight needs to know about the host. Tests swap in fakeProbe(). */
@@ -35,6 +37,7 @@ export const nodeProbe: HostProbe = {
         gid: s.gid,
         mode: s.mode,
         dev: s.dev,
+        ino: s.ino,
       };
     } catch {
       return undefined;

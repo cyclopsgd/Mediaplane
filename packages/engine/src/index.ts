@@ -8,6 +8,7 @@ export * from './config/secrets';
 export * from './config/starter';
 export * from './catalog/types';
 export * from './host/facts';
+export * from './host/report';
 export * from './resolver/resolve';
 export * from './render/compose';
 export * from './render/env';

@@ -52,6 +52,7 @@ const owned = (uid: number, gid: number): PathStat => ({
   gid,
   mode: 0o40755,
   dev: 1,
+  ino: 1,
 });
 
 describe('requiredOwner', () => {

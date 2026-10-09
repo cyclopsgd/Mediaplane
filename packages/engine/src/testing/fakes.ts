@@ -30,6 +30,7 @@ export function fakeProbe(
     gid: 1000,
     mode: 0o40755,
     dev: 1,
+    ino: 1,
   };
   return {
     stat: (path) =>

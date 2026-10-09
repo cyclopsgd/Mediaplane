@@ -63,5 +63,5 @@ export interface Runtime {
 
 /** Docker is missing or unreachable; the message says which, in words for the user. */
 export class RuntimeError extends Error {
-  override readonly name = 'RuntimeError';
+  override readonly name: string = 'RuntimeError';
 }
