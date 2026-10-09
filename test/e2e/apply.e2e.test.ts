@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
@@ -7,38 +7,44 @@ import {
   COMPOSE_PATH,
   createDockerRuntime,
   detectHostFacts,
-  ENV_PATH,
   nodeExec,
   nodeProbe,
   renderEnvFile,
   type ApplyOptions,
 } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
-import { BUSYBOX, composeDown, removeHome } from './helpers';
+import { BUSYBOX, composeDown, makeHome, removeHome } from './helpers';
 
 const PROJECT = `mediaplane-e2e-${process.pid}-apply`;
 
-/** The M1 video stack without the VPN; the apps run as the user who owns the data folder. */
-function stackFor(data: string): string {
-  return `version: 1
-user: { uid: ${process.getuid?.() ?? 1000}, gid: ${process.getgid?.() ?? 1000} }
-paths: { data: ${data} }
-network: { bind: localhost }
-media_server: jellyfin
-apps:
-  sonarr: {}
-  radarr: {}
-  prowlarr: {}
-  qbittorrent: { vpn: false }
-  seerr: {}
-`;
+/**
+ * The command from the "To run this stack without Mediaplane" comment in compose.yaml's
+ * header, as arguments for `docker`, with the project name swapped for `project` so the
+ * test stays isolated. The home's path has no spaces, so splitting on whitespace is enough.
+ */
+function ejectArguments(compose: string, project: string): string[] {
+  const lines = compose
+    .split('\n')
+    .filter((line) => line.startsWith('#'))
+    .map((line) => line.slice(1).trim());
+  const first = lines.findIndex((line) => line.startsWith('docker compose '));
+  const last = lines.findIndex((line) => line.endsWith(' up -d'));
+  if (first < 0 || last < first) throw new Error('compose.yaml has no eject command');
+  const command = lines
+    .slice(first, last + 1)
+    .map((line) => line.replace(/\\$/, '').trim())
+    .join(' ');
+  const [docker, ...args] = command.split(/\s+/);
+  expect(docker).toBe('docker');
+  const name = args.indexOf('-p') + 1;
+  expect(args[name]).toBe('mediaplane');
+  args[name] = project;
+  return args;
 }
 
 describe('apply against real Docker', () => {
   it('starts the video stack healthy, then has nothing left to do', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-'));
-    await mkdir(join(home, 'data'));
-    await writeFile(join(home, 'stack.yaml'), stackFor(join(home, 'data')));
+    const home = await makeHome();
     const runtime = createDockerRuntime({ home, project: PROJECT });
     const options: ApplyOptions = {
       home,
@@ -73,25 +79,15 @@ describe('apply against real Docker', () => {
       });
       expect(second.outcome).toBe('no-changes');
 
-      // Ejectable: the command in compose.yaml's header recreates nothing.
+      // Ejectable: the command printed in compose.yaml's header recreates nothing. An
+      // empty compose.override.yaml makes the command's second -f real, and changes
+      // nothing in any container's configuration.
+      await writeFile(join(home, 'compose.override.yaml'), 'services: {}\n');
       const ids = containers.map((c) => c.id).sort();
-      const eject = await nodeExec(
-        'docker',
-        [
-          'compose',
-          '-p',
-          PROJECT,
-          '--project-directory',
-          home,
-          '-f',
-          join(home, COMPOSE_PATH),
-          '--env-file',
-          join(home, ENV_PATH),
-          'up',
-          '-d',
-        ],
-        { cwd: '/' },
-      );
+      const header = await readFile(join(home, COMPOSE_PATH), 'utf8');
+      const eject = await nodeExec('docker', ejectArguments(header, PROJECT), {
+        cwd: '/',
+      });
       expect(eject.code, eject.stderr).toBe(0);
       expect((await runtime.containers()).map((c) => c.id).sort()).toEqual(ids);
     } finally {

@@ -153,8 +153,16 @@ M1 is done when all of the following hold:
 5. **The VPN fails closed.** With the VPN tunnel down, qBittorrent has no route
    out. This is proven by an automated test.
 6. **Ejectable.** The generated Compose project runs without Mediaplane, using the
-   exact `docker compose -p mediaplane --project-directory … -f … [-f …] --env-file …
-   up -d` command printed in the generated file's header.
+   exact command printed in the generated file's header. An automated test runs that
+   command.
+
+   ```bash
+   docker compose -p mediaplane --project-directory <home> \
+     -f <home>/generated/compose.yaml -f <home>/compose.override.yaml \
+     --env-file <home>/generated/.env up -d
+   ```
+
+   Leave out the `-f <home>/compose.override.yaml` pair if there is no override file.
 7. **Honest docs.** The `stack.yaml` and CLI references are generated from code,
    and CI fails if they are out of date.
 

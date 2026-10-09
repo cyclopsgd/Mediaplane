@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,35 +15,9 @@ import {
   type ExecResult,
 } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
-import { BUSYBOX, composeDown } from './helpers';
+import { BUSYBOX, composeDown, makeHome } from './helpers';
 
 const PROJECT = `mediaplane-e2e-${process.pid}`;
-
-/**
- * The M1 video stack without the VPN (the VPN gets its own end-to-end test in Slice 3).
- * The apps run as the current user, who owns the temporary data folder.
- */
-function stackFor(data: string): string {
-  return `version: 1
-user: { uid: ${process.getuid?.() ?? 1000}, gid: ${process.getgid?.() ?? 1000} }
-paths: { data: ${data} }
-network: { bind: localhost }
-media_server: jellyfin
-apps:
-  sonarr: {}
-  radarr: {}
-  prowlarr: {}
-  qbittorrent: { vpn: false }
-  seerr: {}
-`;
-}
-
-async function makeHome(): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-'));
-  await mkdir(join(home, 'data'));
-  await writeFile(join(home, 'stack.yaml'), stackFor(join(home, 'data')));
-  return home;
-}
 
 /** `docker compose create` for the compose.yaml in `home`, as `project`. */
 function composeCreate(
