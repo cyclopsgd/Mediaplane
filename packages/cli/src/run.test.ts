@@ -3,9 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
+  collectHostReport,
+  invokingUser,
+  nodeProbe,
   plan,
   renderEnvFile,
   type ContainerState,
+  type HostRequest,
   type Runtime,
 } from '@mediaplane/engine';
 import {
@@ -15,7 +19,7 @@ import {
   fakeRuntime,
   running,
 } from '@mediaplane/engine/testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { run, type CliDeps, type Io } from './run';
 import { VERSION } from './version';
 
@@ -94,7 +98,11 @@ function expectNoSecrets(output: string, secrets: readonly string[]): void {
 }
 
 function deps(runtime: Runtime = fakeRuntime()): Partial<CliDeps> {
-  return { host: () => FIXTURE_HOST, runtime: () => runtime, probe: fakeProbe() };
+  return {
+    host: () => Promise.resolve(FIXTURE_HOST),
+    runtime: () => runtime,
+    probe: () => fakeProbe(),
+  };
 }
 
 function capture(env: NodeJS.ProcessEnv = {}, answers?: string[]) {
@@ -119,6 +127,31 @@ function capture(env: NodeJS.ProcessEnv = {}, answers?: string[]) {
         }),
   };
   return { io, stdout: () => out.join(''), stderr: () => err.join(''), questions };
+}
+
+/**
+ * A Docker whose host helper answers as the real one would on a healthy host: it sees this
+ * machine's stack.yaml (so the home is "the same folder"), and a fake probe otherwise.
+ */
+function dockerWithHelper(seen: string[][] = []): Runtime {
+  const host = fakeProbe();
+  return fakeRuntime({
+    hostHelper: async (request, mounts) => {
+      seen.push(mounts.map((m) => m.source));
+      const direct = (lookups: HostRequest['stat']) =>
+        lookups.map(({ key }) => ({ key, at: key }));
+      const report = await collectHostReport(
+        { ...request, stat: direct(request.stat), free: direct(request.free) },
+        {
+          ...host,
+          stat: (path) =>
+            path.endsWith('/stack.yaml') ? nodeProbe.stat(path) : host.stat(path),
+        },
+        () => FIXTURE_HOST,
+      );
+      return { ok: true, stdout: JSON.stringify(report) };
+    },
+  });
 }
 
 describe('mediaplane plan', () => {
@@ -264,6 +297,104 @@ describe('mediaplane plan', () => {
       `error: cannot read ${join(home, 'stack.yaml')} (EISDIR)\n`,
     );
     expect(term.stdout()).toBe('');
+  });
+
+  it('looks at the host through the host helper when it runs from its image', async () => {
+    const home = await makeHome();
+    const seen: string[][] = [];
+    const term = capture({
+      MEDIAPLANE_IMAGE: 'mediaplane:test',
+      DOCKER_HOST: 'tcp://socket-proxy:2375',
+    });
+    const runtime = dockerWithHelper(seen);
+    expect(await run(['plan', '--home', home], term.io, { runtime: () => runtime })).toBe(
+      2,
+    );
+    // First the host facts, with nothing mounted; then preflight's look at the host.
+    expect(seen[0]).toEqual([]);
+    expect([...(seen[1] ?? [])].sort()).toEqual(
+      ['/dev', '/srv/data', join(home, 'stack.yaml')].sort(),
+    );
+    expect(term.stderr()).not.toContain('without the socket proxy');
+  });
+
+  it('warns when it runs from its image without the socket proxy', async () => {
+    const term = capture({ MEDIAPLANE_IMAGE: 'mediaplane:test' });
+    const runtime = dockerWithHelper();
+    await run(['plan', '--home', await makeHome()], term.io, { runtime: () => runtime });
+    expect(term.stderr()).toContain(
+      'warning: Mediaplane is using the Docker socket directly, without the socket proxy',
+    );
+  });
+
+  it('runs the host helper from its own image, as its own user and never as root', async () => {
+    const calls: { image: string; user: { uid: number; gid: number } }[] = [];
+    const helper = dockerWithHelper();
+    const runtime: Runtime = {
+      ...helper,
+      hostHelper: (image, request, mounts, user) => {
+        calls.push({ image, user });
+        return helper.hostHelper(image, request, mounts, user);
+      },
+    };
+    const term = capture({ MEDIAPLANE_IMAGE: 'mediaplane:test' });
+    await run(['plan', '--home', await makeHome()], term.io, { runtime: () => runtime });
+    const own = { image: 'mediaplane:test', user: invokingUser() };
+    expect(calls).toEqual([own, own]);
+
+    // A Mediaplane container started as root still runs its helper as 1000:1000.
+    vi.spyOn(process, 'getuid').mockReturnValue(0);
+    vi.spyOn(process, 'getgid').mockReturnValue(0);
+    try {
+      calls.length = 0;
+      await run(['plan', '--home', await makeHome()], capture(term.io.env).io, {
+        runtime: () => runtime,
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(calls.map((c) => c.user)).toEqual([
+      { uid: 1000, gid: 1000 },
+      { uid: 1000, gid: 1000 },
+    ]);
+  });
+
+  it('never runs the host helper, or warns about the proxy, when run from source', async () => {
+    const calls: string[] = [];
+    const term = capture();
+    // This machine's own facts and probe: what preflight then finds does not matter here.
+    await run(['plan', '--home', await makeHome()], term.io, {
+      runtime: () => fakeRuntime({ calls }),
+    });
+    expect(calls).toContain('versions');
+    expect(calls.filter((call) => call.startsWith('host-helper'))).toEqual([]);
+    expect(term.stderr()).not.toContain('socket proxy');
+  });
+
+  it('explains host facts the host helper could not give, as a plan error', async () => {
+    const env = { MEDIAPLANE_IMAGE: 'mediaplane:test' };
+    // This fake Docker has no host helper, so every run of it fails.
+    const overrides = { runtime: () => fakeRuntime() };
+    const planned = capture(env);
+    expect(await run(['plan', '--home', await makeHome()], planned.io, overrides)).toBe(
+      1,
+    );
+    expect(planned.stderr()).toContain(
+      'error: the host helper failed: this fake Docker has no host helper\n  hint: the host helper runs the image named by MEDIAPLANE_IMAGE',
+    );
+    expect(planned.stderr()).toContain('Plan failed.');
+    const json = capture(env);
+    await run(['plan', '--home', await makeHome(), '--json'], json.io, overrides);
+    expect(JSON.parse(json.stdout())).toMatchObject({
+      ok: false,
+      diagnostics: [{ code: 'docker.no-proxy' }, { code: 'host.helper-failed' }],
+    });
+    const applied = capture(env);
+    expect(
+      await run(['apply', '--home', await makeHome(), '--yes'], applied.io, overrides),
+    ).toBe(1);
+    expect(applied.stderr()).toContain('error: the host helper failed:');
+    expect(applied.stderr()).toContain('Apply stopped before changing anything.');
   });
 
   it('reports unexpected errors as a JSON envelope with --json', async () => {
@@ -460,7 +591,7 @@ describe('mediaplane apply', () => {
     const home = await makeHome();
     const lowDisk = {
       ...deps(fakeDocker(home)),
-      probe: fakeProbe({ freeBytes: 5 * 1024 ** 3 }),
+      probe: () => fakeProbe({ freeBytes: 5 * 1024 ** 3 }),
     };
     const warnings = [
       `warning: only 5.0 GiB free at ${home}`,
@@ -488,8 +619,8 @@ describe('mediaplane apply', () => {
     const term = capture({ MEDIAPLANE_COMPOSE_PROJECT: 'mediaplane-system' });
     expect(
       await run(['plan', '--home', await makeHome()], term.io, {
-        host: () => FIXTURE_HOST,
-        probe: fakeProbe(),
+        host: () => Promise.resolve(FIXTURE_HOST),
+        probe: () => fakeProbe(),
       }),
     ).toBe(1);
     expect(term.stderr()).toContain(
@@ -647,5 +778,49 @@ describe('mediaplane history', () => {
     const empty = capture();
     expect(await run(['history', '--home', home], empty.io, deps())).toBe(0);
     expect(empty.stdout()).toBe('No changes have been applied yet.\n');
+  });
+});
+
+describe('mediaplane host-report', () => {
+  it('prints what it sees for a request, and is not listed in --help', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-report-'));
+    const term = capture();
+    const request = JSON.stringify({
+      facts: false,
+      stat: [{ key: '/srv/data', at: dir }],
+      free: [],
+      ports: [],
+    });
+    expect(await run(['host-report', request], term.io)).toBe(0);
+    expect(JSON.parse(term.stdout())).toMatchObject({
+      schema: 'mediaplane.host-report/v1',
+      stat: { '/srv/data': { isDirectory: true } },
+    });
+    const help = capture();
+    expect(await run(['--help'], help.io)).toBe(0);
+    expect(help.stdout()).toContain('plan');
+    expect(help.stdout()).not.toContain('host-report');
+  });
+
+  it('refuses a request it cannot read', async () => {
+    const term = capture();
+    expect(await run(['host-report', '{}'], term.io)).toBe(1);
+    expect(term.stderr()).toContain('the host helper was given a request it cannot read');
+  });
+
+  it('explains a CPU it does not support in one line, without a stack trace', async () => {
+    const real = Object.getOwnPropertyDescriptor(process, 'arch');
+    Object.defineProperty(process, 'arch', { value: 'ia32', configurable: true });
+    try {
+      const term = capture();
+      const request = JSON.stringify({ facts: true, stat: [], free: [], ports: [] });
+      expect(await run(['host-report', request], term.io)).toBe(1);
+      expect(term.stderr()).toBe(
+        'error: unsupported CPU architecture "ia32": Mediaplane supports amd64 and arm64\n',
+      );
+      expect(term.stdout()).toBe('');
+    } finally {
+      if (real !== undefined) Object.defineProperty(process, 'arch', real);
+    }
   });
 });

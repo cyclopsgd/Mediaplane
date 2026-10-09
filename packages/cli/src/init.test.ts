@@ -62,9 +62,10 @@ function capture(answers?: string[]) {
 }
 
 const deps = (cloud?: string): Partial<CliDeps> => ({
-  host: () => (cloud === undefined ? FIXTURE_HOST : { ...FIXTURE_HOST, cloud }),
+  host: () =>
+    Promise.resolve(cloud === undefined ? FIXTURE_HOST : { ...FIXTURE_HOST, cloud }),
   runtime: () => fakeRuntime(),
-  probe: fakeProbe(),
+  probe: () => fakeProbe(),
 });
 
 const newHome = () => mkdtemp(join(tmpdir(), 'mediaplane-init-'));

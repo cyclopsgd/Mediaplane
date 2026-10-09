@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { HostFacts } from '../host/facts';
 import { HelperError } from '../host/report';
 import { COMPOSE_PATH, ENV_PATH, SECRETS_PATH } from '../paths';
 import { portKey } from '../preflight/checks';
@@ -72,16 +73,10 @@ function planFor(
   {
     runtime = fakeRuntime(),
     probe = fakeProbe(),
-  }: { runtime?: Runtime; probe?: HostProbe } = {},
+    env = {},
+  }: { runtime?: Runtime; probe?: HostProbe; env?: NodeJS.ProcessEnv } = {},
 ) {
-  return plan({
-    home,
-    catalog: fixtureCatalog,
-    host: FIXTURE_HOST,
-    env: {},
-    runtime,
-    probe,
-  });
+  return plan({ home, catalog: fixtureCatalog, host: FIXTURE_HOST, env, runtime, probe });
 }
 
 describe('plan', () => {
@@ -234,6 +229,13 @@ describe('plan', () => {
     );
   });
 
+  it('warns when it runs from its image without the socket proxy', async () => {
+    const result = await planFor(await makeHome(), {
+      env: { MEDIAPLANE_IMAGE: 'mediaplane:test' },
+    });
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['docker.no-proxy']);
+  });
+
   it('never writes to the home directory', async () => {
     const home = await makeHome();
     const before = (await readdir(home, { recursive: true })).sort();
@@ -308,6 +310,52 @@ describe('plan', () => {
         message: 'the host helper did not finish within 30 s',
       }),
     );
+  });
+
+  it('asks for the host facts once the stack has loaded, and explains a failure', async () => {
+    const planWith = (home: string, host: () => Promise<HostFacts>) =>
+      plan({
+        home,
+        catalog: fixtureCatalog,
+        host,
+        env: {},
+        runtime: fakeRuntime(),
+        probe: fakeProbe(),
+      });
+    const home = await makeHome();
+    const asked: string[] = [];
+    const facts = () => {
+      asked.push('facts');
+      return Promise.resolve(FIXTURE_HOST);
+    };
+    expect(await planWith(home, facts)).toMatchObject({ ok: true, changed: true });
+    expect(asked).toEqual(['facts']);
+    // No stack to plan: the host helper is not run at all.
+    const empty = await mkdtemp(join(tmpdir(), 'mediaplane-plan-'));
+    expect(await planWith(empty, facts)).toMatchObject({ ok: false });
+    expect(asked).toEqual(['facts']);
+
+    const helper = await planWith(home, () =>
+      Promise.reject(new HelperError('the host helper failed: no such image')),
+    );
+    expect(helper.ok).toBe(false);
+    expect(helper.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'host.helper-failed',
+        message: 'the host helper failed: no such image',
+      }),
+    );
+    const docker = await planWith(home, () =>
+      Promise.reject(new RuntimeError('cannot talk to Docker: connection refused')),
+    );
+    expect(docker.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'docker.unavailable',
+        message: 'cannot talk to Docker: connection refused',
+      }),
+    );
+    const bug = new TypeError('fake: a bug, not the helper');
+    await expect(planWith(home, () => Promise.reject(bug))).rejects.toBe(bug);
   });
 
   it('lets an unexpected preflight error through rather than blaming Docker', async () => {

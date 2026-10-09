@@ -12,6 +12,7 @@ import { renderCompose, type ComposeFile } from '../render/compose';
 import { renderEnvFile } from '../render/env';
 import { composeToYaml } from '../render/yaml';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
+import { dockerAccessWarnings } from '../runtime/docker';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { readSecretStore, type SecretStore } from '../secrets/store';
 import { secretsToGenerate, secretValues } from '../secrets/values';
@@ -22,7 +23,12 @@ import { predictContainers, type PredictResult } from './predict';
 export interface PlanOptions {
   home: string;
   catalog: Catalog;
-  host: HostFacts;
+  /**
+   * Facts about the host, or how to get them once the stack has loaded. In its image,
+   * Mediaplane asks the host helper (helperHostFacts), so Docker or the helper failing
+   * is a plan error like any other.
+   */
+  host: HostFacts | (() => Promise<HostFacts>);
   env: NodeJS.ProcessEnv;
   runtime: Runtime;
   probe: HostProbe;
@@ -77,7 +83,16 @@ export async function planStack(
   if (!loaded.ok) return failed(loaded.diagnostics);
 
   const diagnostics = await checkSecretRefs(loaded.config, home, options.env);
-  const resolved = resolveStack(loaded.config, options.catalog, options.host, home);
+  diagnostics.push(...dockerAccessWarnings(options.env));
+  let host: HostFacts;
+  try {
+    host = typeof options.host === 'function' ? await options.host() : options.host;
+  } catch (cause) {
+    const failure = helperOrDockerFailure(cause);
+    if (failure === undefined) throw cause;
+    return failed([...diagnostics, failure]);
+  }
+  const resolved = resolveStack(loaded.config, options.catalog, host, home);
   diagnostics.push(...resolved.diagnostics);
   if (resolved.stack === undefined || hasErrors(diagnostics)) return failed(diagnostics);
   const stack = resolved.stack;
@@ -101,12 +116,9 @@ export async function planStack(
       )),
     );
   } catch (cause) {
-    // A HelperError is a RuntimeError too, so it is told apart first.
-    if (cause instanceof HelperError)
-      return failed([...diagnostics, helperFailed(cause)]);
-    if (cause instanceof RuntimeError)
-      return failed([...diagnostics, dockerUnavailable(cause)]);
-    throw cause;
+    const failure = helperOrDockerFailure(cause);
+    if (failure === undefined) throw cause;
+    return failed([...diagnostics, failure]);
   }
   if (hasErrors(diagnostics)) return failed(diagnostics);
 
@@ -175,6 +187,17 @@ function dockerUnavailable(cause: RuntimeError): Diagnostic {
   return error('docker.unavailable', cause.message, {
     hint: 'start Docker, and make sure your user can run "docker ps" (for example, add it to the docker group)',
   });
+}
+
+/**
+ * The error for a host helper or Docker call that failed, or undefined for anything else
+ * (a bug, say), which is not Docker's to explain.
+ */
+function helperOrDockerFailure(cause: unknown): Diagnostic | undefined {
+  // A HelperError is a RuntimeError too, so it is told apart first.
+  if (cause instanceof HelperError) return helperFailed(cause);
+  if (cause instanceof RuntimeError) return dockerUnavailable(cause);
+  return undefined;
 }
 
 function helperFailed(cause: HelperError): Diagnostic {

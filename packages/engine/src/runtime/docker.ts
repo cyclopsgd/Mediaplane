@@ -1,5 +1,6 @@
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
+import { warning, type Diagnostic } from '../diagnostics';
 import { COMPOSE_PATH, ENV_PATH, OVERRIDE_PATH } from '../paths';
 import { nodeExec, type Exec, type ExecResult } from './exec';
 import {
@@ -29,6 +30,32 @@ export function isManagedProject(project: string): boolean {
   return (
     /^mediaplane(?:-[a-z0-9][a-z0-9_-]*)?$/.test(project) && project !== SYSTEM_PROJECT
   );
+}
+
+/** Where Docker's own socket is: talking to it means there is no socket proxy. */
+const RAW_SOCKETS = new Set([
+  '',
+  'unix:///var/run/docker.sock',
+  'unix:///run/docker.sock',
+]);
+
+/**
+ * A warning when Mediaplane runs from its image (MEDIAPLANE_IMAGE is set) but reaches the
+ * Docker socket directly, not through the socket proxy. Spec §7.2(2): the proxy is on by
+ * default and can be disabled, with a warning.
+ */
+export function dockerAccessWarnings(env: NodeJS.ProcessEnv): Diagnostic[] {
+  if ((env.MEDIAPLANE_IMAGE ?? '') === '') return [];
+  if (!RAW_SOCKETS.has(env.DOCKER_HOST ?? '')) return [];
+  return [
+    warning(
+      'docker.no-proxy',
+      'Mediaplane is using the Docker socket directly, without the socket proxy',
+      {
+        hint: 'the proxy limits the Docker calls Mediaplane can make; deploy/README.md shows how to turn it back on',
+      },
+    ),
+  ];
 }
 
 export interface DockerRuntimeOptions {

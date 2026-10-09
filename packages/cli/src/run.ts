@@ -2,10 +2,15 @@ import { resolve } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
   apply,
+  collectHostReport,
   createDockerRuntime,
   detectHostFacts,
+  helperHostFacts,
+  helperProbe,
+  invokingUser,
   listRecords,
   nodeProbe,
+  parseHostRequest,
   plan,
   PROJECT_NAME,
   readRecord,
@@ -37,18 +42,14 @@ export interface Io {
 
 /** What the CLI talks to: the real host by default, fakes in tests. */
 export interface CliDeps {
-  host: () => HostFacts;
+  /** Facts about the host; from inside the Mediaplane container, through `runtime`. */
+  host: (runtime: Runtime) => Promise<HostFacts>;
   runtime: (home: string, project: string) => Runtime;
-  probe: HostProbe;
+  /** What preflight asks about the host, for the Mediaplane home `home`. */
+  probe: (runtime: Runtime, home: string) => HostProbe;
 }
 
 export const DEFAULT_HOME = '/opt/mediaplane';
-
-const defaultDeps: CliDeps = {
-  host: () => detectHostFacts(),
-  runtime: (home, project) => createDockerRuntime({ home, project }),
-  probe: nodeProbe,
-};
 
 /** An environment variable's value, treating "" as unset. */
 function setting(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -56,17 +57,40 @@ function setting(env: NodeJS.ProcessEnv, name: string): string | undefined {
   return value === undefined || value === '' ? undefined : value;
 }
 
-/** Run the CLI with user arguments (no node/script prefix) and return the exit code. */
-export async function run(
-  argv: readonly string[],
+/**
+ * The real host. In Mediaplane's image (mediaplane.compose.yaml sets MEDIAPLANE_IMAGE),
+ * the host's network, ports and folders outside the home can't be seen from the
+ * container, so a host helper container of that image looks at them (spec §4.2). Run from
+ * source, the CLI looks at the host itself.
+ */
+export function defaultDeps(env: NodeJS.ProcessEnv): CliDeps {
+  const runtime = (home: string, project: string) =>
+    createDockerRuntime({ home, project });
+  const image = setting(env, 'MEDIAPLANE_IMAGE');
+  if (image === undefined) {
+    return {
+      host: () => Promise.resolve(detectHostFacts()),
+      runtime,
+      probe: () => nodeProbe,
+    };
+  }
+  // Mediaplane's own user, as the helper must be; never root, even if the container is.
+  const user = invokingUser();
+  return {
+    host: (docker) => helperHostFacts({ runtime: docker, image, user }),
+    runtime,
+    probe: (docker, home) => helperProbe({ runtime: docker, image, user, home }),
+  };
+}
+
+/** The CLI's commands. Each action reports its exit code through `setExitCode`. */
+export function createProgram(
   io: Io,
-  overrides: Partial<CliDeps> = {},
-): Promise<number> {
-  const deps: CliDeps = { ...defaultDeps, ...overrides };
-  const json = argv.includes('--json');
+  deps: CliDeps,
+  setExitCode: (code: number) => void,
+): Command {
   const project = setting(io.env, 'MEDIAPLANE_COMPOSE_PROJECT') ?? PROJECT_NAME;
   const defaultHome = setting(io.env, 'MEDIAPLANE_HOME') ?? DEFAULT_HOME;
-  let exitCode = 0;
   const program = new Command('mediaplane')
     .description('Deploy and wire a self-hosted media stack from one stack.yaml')
     .version(VERSION)
@@ -87,16 +111,18 @@ export async function run(
     .option('--json', 'print machine-readable JSON')
     .action(async (options: { home: string; json?: boolean }) => {
       const home = resolve(options.home);
+      const runtime = deps.runtime(home, project);
       const result = await plan({
         home,
         catalog,
-        host: deps.host(),
+        // Asked for by plan, so a helper that fails is a plan error, not a crash.
+        host: () => deps.host(runtime),
         env: io.env,
-        runtime: deps.runtime(home, project),
-        probe: deps.probe,
+        runtime,
+        probe: deps.probe(runtime, home),
       });
       printPlan(result, { json: options.json === true }, io);
-      exitCode = result.ok ? (result.changed ? 2 : 0) : 1;
+      setExitCode(result.ok ? (result.changed ? 2 : 0) : 1);
     });
 
   program
@@ -115,17 +141,18 @@ export async function run(
           { json: asJson },
           io,
         );
-        exitCode = 1;
+        setExitCode(1);
         return;
       }
       const home = resolve(options.home);
+      const runtime = deps.runtime(home, project);
       const result = await apply({
         home,
         catalog,
-        host: deps.host(),
+        host: () => deps.host(runtime),
         env: io.env,
-        runtime: deps.runtime(home, project),
-        probe: deps.probe,
+        runtime,
+        probe: deps.probe(runtime, home),
         confirm: async (shown) => {
           if (!asJson) printPlan(shown, { json: false }, io);
           if (yes || ask === undefined) return true;
@@ -139,7 +166,9 @@ export async function run(
             },
       });
       printApply(result, { json: asJson }, io);
-      exitCode = result.outcome === 'success' || result.outcome === 'no-changes' ? 0 : 1;
+      setExitCode(
+        result.outcome === 'success' || result.outcome === 'no-changes' ? 0 : 1,
+      );
     });
 
   program
@@ -159,7 +188,7 @@ export async function run(
             : result.containers.filter((c) => c.service === app);
         if (app !== undefined && containers.length === 0) {
           printError(`no container for "${app}" in this stack`, { json: asJson }, io);
-          exitCode = 1;
+          setExitCode(1);
           return;
         }
         printStatus({ ...result, containers }, { json: asJson }, io);
@@ -186,7 +215,7 @@ export async function run(
           { json: asJson },
           io,
         );
-        exitCode = 1;
+        setExitCode(1);
         return;
       }
       printRecord(record, { json: asJson }, io);
@@ -210,9 +239,35 @@ export async function run(
     )
     .option('--json', 'print machine-readable JSON')
     .action(async (options: InitOptions) => {
-      exitCode = await init(options, io, deps.host());
+      const runtime = deps.runtime(resolve(options.home), project);
+      setExitCode(await init(options, io, await deps.host(runtime)));
     });
 
+  // What the host helper container runs (spec §4.2); not for people, so not in --help.
+  program
+    .command('host-report', { hidden: true })
+    .description("Print what this host's network, folders and ports look like")
+    .argument('<request>', 'what to look at, as JSON')
+    .action(async (request: string) => {
+      const report = await collectHostReport(parseHostRequest(request));
+      io.stdout(`${JSON.stringify(report)}\n`);
+    });
+
+  return program;
+}
+
+/** Run the CLI with user arguments (no node/script prefix) and return the exit code. */
+export async function run(
+  argv: readonly string[],
+  io: Io,
+  overrides: Partial<CliDeps> = {},
+): Promise<number> {
+  const deps: CliDeps = { ...defaultDeps(io.env), ...overrides };
+  const json = argv.includes('--json');
+  let exitCode = 0;
+  const program = createProgram(io, deps, (code) => {
+    exitCode = code;
+  });
   try {
     await program.parseAsync([...argv], { from: 'user' });
   } catch (cause) {

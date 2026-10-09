@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bindMount,
   createDockerRuntime,
+  dockerAccessWarnings,
   isManagedProject,
   parseContainers,
   parseHashes,
@@ -536,6 +537,33 @@ describe('isManagedProject', () => {
       createDockerRuntime({ home: '/opt/mediaplane', project: 'mediaplane-system' }),
     ).toThrow('refusing to manage the Compose project "mediaplane-system"');
   });
+});
+
+describe('dockerAccessWarnings', () => {
+  it('is quiet from source, and in the image when Docker is reached through the proxy', () => {
+    expect(dockerAccessWarnings({})).toEqual([]);
+    expect(dockerAccessWarnings({ DOCKER_HOST: '' })).toEqual([]);
+    expect(
+      dockerAccessWarnings({
+        MEDIAPLANE_IMAGE: 'mediaplane:local',
+        DOCKER_HOST: 'tcp://socket-proxy:2375',
+      }),
+    ).toEqual([]);
+  });
+
+  it.each([undefined, '', 'unix:///var/run/docker.sock', 'unix:///run/docker.sock'])(
+    'warns in the image when DOCKER_HOST is %j',
+    (dockerHost) => {
+      expect(
+        dockerAccessWarnings({
+          MEDIAPLANE_IMAGE: 'mediaplane:local',
+          DOCKER_HOST: dockerHost,
+        }),
+      ).toEqual([
+        expect.objectContaining({ code: 'docker.no-proxy', severity: 'warning' }),
+      ]);
+    },
+  );
 });
 
 describe('parseHashes', () => {
