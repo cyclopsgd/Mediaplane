@@ -92,6 +92,20 @@ Mediaplane works like `terraform plan` and `apply`. `plan` validates `stack.yaml
 the host, renders the Compose project and diffs it against what is running. It shows you
 the changes and touches nothing. `apply` does the same, then makes those changes.
 
+```mermaid
+flowchart LR
+  S["stack.yaml<br/>+ secrets/"] --> P["mediaplane plan"]
+  P -.->|checks| H["the host: Docker, disk,<br/>ports, data folder"]
+  P -.->|compares with| R["the running containers"]
+  P --> A["mediaplane apply"]
+  A --> K["generate keys<br/>(kept, never rotated)"]
+  K --> F["write compose.yaml<br/>and a private .env"]
+  F --> U["pull, then start and<br/>wait until healthy"]
+  U --> V["verify: plan again,<br/>nothing left to do"]
+  V --> L["record the change<br/>in state/history"]
+  U -.->|"next: wire the apps<br/>through their APIs"| W["download clients, indexers,<br/>root folders, media server"]
+```
+
 A few principles hold throughout:
 
 - **No forks.** Mediaplane runs the apps' own upstream images. Everything is configured
@@ -109,6 +123,58 @@ A few principles hold throughout:
   boundaries.
 - **Built for automation.** `plan` has meaningful exit codes and versioned `--json`
   output, so scripts and configuration-management tools can drive it.
+
+## What it looks like
+
+This is real output from a run on an arm64 VM, trimmed where marked. The stack is the
+example above without the VPN, which is why `plan` warns about qBittorrent.
+
+```console
+$ mediaplane plan
+warning: qBittorrent is running without a VPN (apps.qbittorrent.vpn: false)
+  hint: peers will see your real IP address; add a vpn: block and remove vpn: false
++ generated/compose.yaml
+  … the whole Compose file, as a diff …
++ generated/.env (secret values, not shown)
+
+Containers:
+  + create    byparr
+  + create    jellyfin
+  + create    prowlarr
+  + create    qbittorrent
+  + create    radarr
+  + create    seerr
+  + create    sonarr
+Secrets to generate: prowlarr.apiKey, qbittorrent.apiKey, radarr.apiKey, seerr.apiKey, sonarr.apiKey
+Plan: 2 files to write, 7 containers to change, 5 secrets to generate.
+
+$ mediaplane apply --yes
+  … the same plan …
+  done    secrets: generated prowlarr.apiKey, qbittorrent.apiKey, radarr.apiKey, seerr.apiKey, sonarr.apiKey
+  done    files: wrote generated/compose.yaml and generated/.env
+Pulling images (the first time can take several minutes)…
+  done    images: images present
+  done    appdata ownership: seerr → 1000:1000
+Starting containers and waiting until every app is healthy…
+  done    containers: every app is running and healthy
+  done    verify: no changes remain
+
+Apply complete. Change record: 20261009T125331Z-16a818bc
+
+$ mediaplane apply --yes
+No changes.
+
+$ mediaplane status
+APP          STATE    HEALTH
+byparr       running  healthy
+jellyfin     running  healthy
+prowlarr     running  healthy
+qbittorrent  running  healthy
+radarr       running  healthy
+seerr        running  healthy
+sonarr       running  healthy
+Last apply: 2026-10-09T12:53:31.563Z, success (20261009T125331Z-16a818bc)
+```
 
 ## Try it (from source)
 
@@ -145,8 +211,9 @@ MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane plan --home .
 The `user:` line makes the apps run as you, so they can write to the data folder you
 just created. `MEDIAPLANE_COMPOSE_PROJECT` gives this trial its own Compose project,
 `mediaplane-dev`, so a real `mediaplane` stack on the same host is never touched.
-`plan` exits with `0` when nothing would change, `2` when it would change something,
-and `1` on errors. Add `--json` for machine-readable output.
+`plan` exits with `0` when nothing would change, `2` when it would change something
+(including when an app is still waiting for its health check), and `1` on errors. Add
+`--json` for machine-readable output.
 
 To actually start the stack, use a stack without the VPN. A fake WireGuard key can't
 connect, so Gluetun would never become healthy. Change the qBittorrent line to
@@ -162,6 +229,75 @@ This starts real containers on this machine, with the web UIs on `localhost`. Th
 containers, run `docker compose -p mediaplane-dev down`, then
 `sudo rm -rf .mediaplane-dev`. Seerr's folder belongs to uid 1000, which is why `sudo`
 is needed.
+
+## Questions
+
+### Why not just generate the keys in a pipeline (CI, Ansible, a script)?
+
+You can, and that is the easy part. Any template can put a random API key in an
+environment variable. What a one-shot pipeline doesn't do well is everything after that:
+
+- **The wiring happens against running apps.** Sonarr learns about qBittorrent,
+  Prowlarr pushes indexers to Sonarr and Radarr, and Seerr connects to Jellyfin through
+  API calls. Those calls work only once the apps are up and healthy, they have to run in
+  the right order, and they need retries while the apps start. Some credentials can't
+  be chosen in advance at all. Jellyfin creates its own API key after its setup, and a
+  Plex claim token expires after four minutes.
+- **Re-runs have to be safe.** Run the pipeline again and it must not rotate the keys,
+  because that breaks every connection, and it must not redo work. Mediaplane keeps the
+  keys it generated and plans before it changes anything, so a second `apply` changes
+  nothing.
+- **Things change after deploy.** Someone edits a setting in a web UI, and a pipeline
+  never knows. Mediaplane will compare what it set with what is there now, and tell you
+  without overwriting your change.
+- **The host gets checked first.** Mediaplane checks ports, free disk, the data folder,
+  the VPN device, and whether this is a cloud VM. It refuses before touching anything.
+
+So Mediaplane isn't instead of a pipeline. It is built to run inside one:
+
+- your pipeline can template `stack.yaml`;
+- secrets can come from files or environment variables;
+- `plan` and `apply` run unattended, with exit codes and `--json` output.
+
+The pipeline decides what the stack is, and Mediaplane does the stateful part. Today
+that covers generating the keys, deploying and checking. The app-to-app wiring and
+change detection are what is being built next.
+
+### Why not just write the Compose file myself?
+
+You can, and Mediaplane's output is exactly that: a plain Compose project you can read
+and keep. What it adds is everything around the file:
+
+- images pinned by tag and digest;
+- one user and one data folder, so downloads can be hardlinked into the library instead
+  of copied;
+- health checks that actually pass;
+- qBittorrent routed through the VPN, so it has no network when the VPN is down;
+- keys that are generated once and kept;
+- next, the wiring between the apps.
+
+### Can it take over my existing setup?
+
+Not yet. Today it manages a stack it created itself. Adopting an existing install, and
+finding the apps and keys you already have, is on the list.
+
+### Is it safe to run?
+
+It is pre-alpha, so treat it as something to try rather than to rely on.
+
+Mediaplane controls Docker, and that is root-equivalent on the host. It keeps its
+secrets private:
+
+- they live in `state/secrets.json` and `generated/.env`, both mode 0600;
+- they never appear in `stack.yaml`, in `compose.yaml` or in any output.
+
+On a cloud VM it refuses to publish the web UIs on the private address unless you say
+so. [SECURITY.md](SECURITY.md) covers what is in scope.
+
+### Do I have to keep using it?
+
+No. The header of `generated/compose.yaml` gives the exact `docker compose` command that
+runs the stack without Mediaplane.
 
 ## Roadmap
 
