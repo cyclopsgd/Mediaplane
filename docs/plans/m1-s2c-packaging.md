@@ -123,11 +123,13 @@ These are added:
   includes images that CI pulls itself, such as Trivy.
   Use exactly the references in the Tech Stack table and in each task.
 - **Docker and Compose flags.** Compose spells some long flags differently in v2 and v5:
-  for example `--no-TTY` in v2 and `--no-tty` in v5. This slice adds only:
+  for example `--no-TTY` in v2 and `--no-tty` in v5. The restriction applies to Compose
+  long flags. This slice adds only:
   - `docker run` and `docker build` flags, which are the Docker CLI's and the same in
     every supported version: `--rm`, `--pull never`, `--network host`, `--user`,
     `--cap-drop ALL`, `--security-opt no-new-privileges`, `--read-only`, `--label`,
     `--mount`, `--entrypoint`, `--tag`;
+  - the Compose long flag `compose version --short`, which the runtime already uses;
   - in tests, Compose's `-p`, `-f`, `--env-file`, `up --detach --wait`, `ps --format json`
     and `down --remove-orphans`, which already run on v2.38 in CI and on v5.5.1 locally.
 
@@ -144,9 +146,11 @@ These are added:
   unit test there pins it. Widening it needs a new captured call and a change to ADR 0008.
 - **The host helper** runs only Mediaplane's own image (`MEDIAPLANE_IMAGE`), on the host
   network, as Mediaplane's own user, with every capability dropped, a read-only root and
-  only read-only bind mounts. It never pulls, and is always `--rm`.
-- **Running from source stays supported.** With `MEDIAPLANE_IMAGE` unset, the CLI behaves
-  exactly as in Slice 2b.
+  only read-only bind mounts. It never pulls, and is always `--rm`. The engine's own
+  helper containers are unnamed and `--rm`, and leftovers are found by the
+  `io.mediaplane.helper` label.
+- **Running from source stays supported.** With `MEDIAPLANE_IMAGE` unset, the CLI looks at
+  the host directly, and never runs the host helper or gives the no-proxy warning.
 - **Names in end-to-end tests:**
   - projects: `mediaplane-e2e-<pid>[-<suffix>]`;
   - containers: `mediaplane-e2e-<pid>-<suffix>`;
@@ -220,7 +224,8 @@ scripts/
     ├── cli-reference.ts (+test)    (new) Commander → cli.md
     └── catalog-facts.ts (+test)    (new) app.ts → README facts block
 packages/engine/src/
-├── runtime/types.ts                (changed) workingDir, HelperMount, hostHelper
+├── runtime/types.ts                (changed) workingDir, HelperMount, hostHelper,
+│                                             RuntimeError.name
 ├── runtime/docker.ts               (changed) working_dir label, hostHelper, no-proxy warning
 ├── preflight/probe.ts              (changed) PathStat.ino, ProbeRequest, prepare, sameAsHost
 ├── preflight/checks.ts             (changed) preflightRequest, the home-path check
@@ -233,12 +238,14 @@ packages/engine/src/
 ├── config/schema.ts                (changed) .describe() on every field
 ├── config/json-schema.ts           (new) the published JSON Schema
 ├── render/compose.ts               (changed) HEALTHCHECK_DEFAULTS
-└── testing/fakes.ts                (changed) hostHelper, PathStat.ino
+├── testing/fakes.ts                (changed) hostHelper, PathStat.ino
+└── testing/schema.ts               (new) the undocumented() test helper
 packages/cli/src/
 ├── run.ts                          (changed) createProgram, helper deps, host-report,
 │                                             exit codes, ENVIRONMENT
 └── init.ts                         (changed) the invoking user
 catalog/qbittorrent/app.ts, catalog/seerr/app.ts  (changed) option descriptions
+catalog/catalog.test.ts             (changed) descriptions and the README facts
 catalog/<app>/README.md             (new, ×10)
 test/e2e/helpers.ts                 (changed) buildImage, removeAsRoot, ejectArguments
 test/e2e/image.e2e.test.ts          (new) the image on its own
@@ -251,7 +258,7 @@ docs/security/threat-model.md       (new)
 docs/runbooks/app-wont-start.md     (new)
 docs/adr/0006-seerr-as-the-requests-app.md            (new)
 docs/adr/0008-docker-socket-proxy-on-by-default.md    (new)
-README.md, CONTRIBUTING.md, SECURITY.md               (changed)
+README.md, CONTRIBUTING.md, SECURITY.md, .gitignore   (changed)
 docs/plans/m1-roadmap.md, docs/design/m1-engine-cli.md (changed)
 package.json, tsconfig.json, vitest.config.ts          (changed)
 ```
@@ -556,7 +563,7 @@ Two roadmap S2c inputs.
   - `writeFileExclusive` throws `cannot create <path> (<code>): the Mediaplane home must be
     on a filesystem that supports hard links, such as ext4, XFS or Btrfs` for `EPERM`,
     `ENOTSUP`, `EOPNOTSUPP` and `ENOSYS` from `link()`, and
-    `cannot create <path> (<code>)` for any other failure except `EEXIST`;
+    `cannot create <path> (<code>)` for any other failure of `link()` except `EEXIST`;
   - `StarterAnswers.user: { uid: number; gid: number }`;
   - `invokingUser(ids?: { uid: number | undefined; gid: number | undefined }):
     { uid: number; gid: number }`, exported from the engine.
@@ -746,6 +753,7 @@ Facts checked on 2026-10-09:
 **Files:**
 - Create: `packages/engine/src/host/report.ts`, `packages/engine/src/host/report.test.ts`
 - Modify: `packages/engine/src/preflight/probe.ts` (`PathStat.ino`),
+  `packages/engine/src/runtime/types.ts` (`RuntimeError.name`),
   `packages/engine/src/testing/fakes.ts`, `packages/engine/src/index.ts`
 - Test (fixture updates for `ino`): `packages/engine/src/preflight/checks.test.ts`,
   `packages/engine/src/apply/ownership.test.ts`
@@ -1198,12 +1206,15 @@ Add to `describe('createDockerRuntime', …)` in
     const { exec } = recorder(() => ({
       code: 125,
       stdout: '',
-      stderr: "Unable to find image 'mediaplane:gone' locally\n",
+      stderr: 'docker: Error response from daemon: No such image: mediaplane:gone\n',
     }));
     const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
     expect(
       await runtime.hostHelper('mediaplane:gone', '{}', [], { uid: 1000, gid: 1000 }),
-    ).toEqual({ ok: false, error: "Unable to find image 'mediaplane:gone' locally" });
+    ).toEqual({
+      ok: false,
+      error: 'docker: Error response from daemon: No such image: mediaplane:gone',
+    });
   });
 ```
 
@@ -2233,8 +2244,11 @@ In `packages/engine/src/plan/plan.ts`:
       )),
     );
   } catch (cause) {
-    if (!(cause instanceof HelperError)) throw cause;
-    return failed([...diagnostics, helperFailed(cause)]);
+    if (cause instanceof HelperError)
+      return failed([...diagnostics, helperFailed(cause)]);
+    if (cause instanceof RuntimeError)
+      return failed([...diagnostics, dockerUnavailable(cause)]);
+    throw cause;
   }
 ```
 
@@ -2386,7 +2400,14 @@ function deps(runtime: Runtime = fakeRuntime()): Partial<CliDeps> {
 }
 ```
 
-3. Add below `capture()`:
+3. Update the two other places that still use the old `CliDeps` shape (`host` now returns
+   a Promise, and `probe` is now a factory):
+   - in "prints the plan warnings once, whether the apply goes ahead or not", change
+     `probe: fakeProbe({ freeBytes: 5 * 1024 ** 3 }),` to
+     `probe: () => fakeProbe({ freeBytes: 5 * 1024 ** 3 }),`;
+   - in "refuses a Compose project it must not manage", change the third argument of
+     `run()` to `{ host: () => Promise.resolve(FIXTURE_HOST), probe: () => fakeProbe() }`.
+4. Add below `capture()`:
 
 ```ts
 /**
@@ -2414,7 +2435,7 @@ function dockerWithHelper(seen: string[][] = []): Runtime {
 }
 ```
 
-4. Add to `describe('mediaplane plan', …)`:
+5. Add to `describe('mediaplane plan', …)`:
 
 ```ts
   it('looks at the host through the host helper when it runs from its image', async () => {
@@ -2444,7 +2465,7 @@ function dockerWithHelper(seen: string[][] = []): Runtime {
   });
 ```
 
-5. Add at the end of the file:
+6. Add at the end of the file:
 
 ```ts
 describe('mediaplane host-report', () => {
@@ -3169,6 +3190,7 @@ describe('the Mediaplane image', () => {
       '-c',
       'for c in npm npx yarn yarnpkg corepack pnpm; do command -v "$c" || true; done',
     );
+    expect(found.code).toBe(0);
     expect(found.stdout.trim()).toBe('');
   });
 
@@ -3750,12 +3772,12 @@ Run:
 
 ```bash
 docker compose -f deploy/mediaplane.compose.yaml config >/dev/null; echo "exit $?"
-MEDIAPLANE_IMAGE=mediaplane:local DOCKER_GID=0 docker compose -f deploy/mediaplane.compose.yaml config --quiet && echo valid
+MEDIAPLANE_IMAGE=mediaplane:local DOCKER_GID=0 docker compose -f deploy/mediaplane.compose.yaml config -q && echo valid
 ```
 
 Expected:
-- **The first** fails, naming `MEDIAPLANE_IMAGE` and `DOCKER_GID`, with each message
-  above, and prints `exit 1`.
+- **The first** fails with `required variable … is missing a value` for one of them, and
+  prints `exit 1`.
 - **The second** prints `valid`.
 
 `config` only parses, so nothing is started.
@@ -3849,10 +3871,10 @@ Expected: no errors.
 `test/e2e/deploy.e2e.test.ts`:
 
 ```ts
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   COMPOSE_PATH,
   createDockerRuntime,
@@ -3972,11 +3994,16 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
   }, 1_200_000);
 
   afterAll(async () => {
-    await composeDown(STACK);
-    if (override !== '') await system('down', '--remove-orphans');
+    const stackDown = await composeDown(STACK);
+    const systemDown =
+      override === '' ? undefined : await system('down', '--remove-orphans');
+    if (override !== '') await rm(dirname(override), { recursive: true, force: true });
     if (home !== '') await removeHome(home);
     if (data !== '') await removeAsRoot(data);
-    await nodeExec('docker', ['image', 'rm', TAG], { cwd: '/' });
+    const image = await nodeExec('docker', ['image', 'rm', TAG], { cwd: '/' });
+    expect(stackDown.code, stackDown.stderr).toBe(0);
+    if (systemDown !== undefined) expect(systemDown.code, systemDown.stderr).toBe(0);
+    expect(image.code, image.stderr).toBe(0);
   }, 300_000);
 
   it('runs hardened, as the home owner, without the Docker socket', async () => {
@@ -4286,7 +4313,7 @@ Add this job after `e2e`:
 
 - [ ] **Step 4: Check the workflow and commit**
 
-Run: `pnpm lint`
+Run: `pnpm format && pnpm lint && pnpm typecheck && pnpm test`
 
 Expected: PASS. Prettier also checks the workflow's YAML.
 
@@ -4496,7 +4523,7 @@ proxy back on, run `up -d` again with `mediaplane.compose.yaml` alone.
 | `the Mediaplane home … is not the same folder on the Docker host` | Set `MEDIAPLANE_HOME` instead of editing the volume, so the paths match |
 | `cannot create …/state/lock (EPERM): … hard links` | Move the home to a local ext4, XFS or Btrfs filesystem |
 | `EACCES` on a file in the home | Give `state/` and `generated/` to `MEDIAPLANE_UID`, for example `sudo chown -R "$(id -u):$(id -g)" /opt/mediaplane/state /opt/mediaplane/generated`. Leave `appdata/` alone: some apps need their own owner |
-| `the host helper failed: … Unable to find image` | `MEDIAPLANE_IMAGE` must name an image on this host: check `docker image ls` |
+| `the host helper failed: … No such image` | `MEDIAPLANE_IMAGE` must name an image on this host: check `docker image ls` |
 | `Error response from daemon: Forbidden` | The proxy refused a call. Its log names it: `docker compose -f deploy/mediaplane.compose.yaml logs socket-proxy` |
 
 ## Removing Mediaplane
@@ -4571,7 +4598,8 @@ bug in Mediaplane itself, or in something it runs, such as Compose.
   Every `plan` and `apply` then warns (`docker.no-proxy`).
 - **The code keeps its own limit.** The runtime refuses any Compose project except
   `mediaplane` and `mediaplane-<name>`, and never manages `mediaplane-system` (spec
-  §7.2(2)).
+  §7.2(2)). The one container created outside the managed project is the unnamed, `--rm`
+  host helper, labelled `io.mediaplane.helper`.
 
 ## Consequences
 
@@ -4669,7 +4697,7 @@ host network, read-only mounts
 | T2 | Someone on the LAN reaches an app | Only web UIs are published, on the LAN addresses (`lan`) or on localhost. A login is asked for from the LAN by default (`security.login_on_lan`) | Until the wiring lands (Slices 3 to 7), first-run setup pages are open to whoever reaches them first: Jellyfin's wizard, Seerr's setup, and the arrs' first login. Keep `bind: localhost` |
 | T3 | A cloud VM's private address is reachable from the internet | On a detected cloud VM, `bind: lan` is refused unless `network.lan_subnet` is set. `bind: all` warns on every plan | Detection relies on firmware strings. Use `bind: localhost`, with Tailscale or an SSH tunnel |
 | T4 | An app is compromised | It has no Docker access, and no other app's appdata. qBittorrent sits in Gluetun's network namespace | Every app shares the data folder, which hardlinks need, so a compromised app can change media |
-| T5 | Secrets leak | Generated with `crypto.randomBytes`. Kept in 0600 files inside a 0700 `state/`. Never in `stack.yaml` or `compose.yaml`. Replaced with `***` or `<redacted>` in errors and change records. Given to Compose in its environment, never on its command line | Not encrypted at rest, so use full-disk encryption. `appdata/` holds credentials too: treat it as sensitive |
+| T5 | Secrets leak | Generated with `crypto.randomBytes`. Kept in 0600 files inside a 0700 `state/`. Never in `stack.yaml` or `compose.yaml`. Replaced with `***` in errors. Change records hold names, never values. Given to Compose in its environment or in the 0600 `generated/.env`, never on its command line | Not encrypted at rest, so use full-disk encryption. `appdata/` holds credentials too: treat it as sensitive |
 | T6 | Another user on the host uses Mediaplane's Docker access | The proxy publishes no port, and accepts only the Mediaplane container's address. Using Mediaplane needs `docker exec`, which means Docker access already | Anyone in the `docker` group is already root on the host |
 | T7 | A tampered image or dependency | Every image is pinned by digest: the apps, the proxy, and Node and the Docker CLI in Mediaplane's image. GitHub Actions are pinned by commit. Trivy fails CI on fixable critical vulnerabilities in Mediaplane's image, and gitleaks scans every push | The catalog images are not scanned yet, and there is no SBOM or provenance yet. Both arrive in Slice 8 |
 | T8 | The home is mounted at another path, so Docker mounts the wrong folders | `plan` checks that `stack.yaml` inside the container is the very file the host has at that path (`preflight.home-path`) | None known |
@@ -4756,8 +4784,7 @@ In `README.md`:
    does and doesn't protect, and [SECURITY.md](SECURITY.md) covers what is in scope.
    ```
 
-In `CONTRIBUTING.md`, after the paragraph that starts "The apply end-to-end test pulls",
-add:
+In `CONTRIBUTING.md`, after the paragraph that starts "Before committing", add:
 
 ````markdown
 ### The image
@@ -4793,6 +4820,8 @@ In `docs/design/m1-engine-cli.md`, add at the end of §11:
   neither the host's ports, nor its folders outside the home, nor its devices. So the
   helper container (§4.2) also reports them to preflight: free ports, the data folder,
   `/dev/net/tun` and free space. It runs Mediaplane's own image, with read-only mounts.
+  The one container created outside the managed project is the unnamed, `--rm` host
+  helper, labelled `io.mediaplane.helper`.
 - **The home is checked.** Preflight fails (`preflight.home-path`) when the home inside
   the container is not the same folder as the host's at that path (§4.1).
 - **The proxy.** It is `wollomatic/socket-proxy`, with a per-method allow-list of the
@@ -4879,7 +4908,8 @@ Decisions:
     - `ENVIRONMENT: readonly { name: string; description: string }[]`.
   - In the scripts:
     - `renderStackReference(schema: Schema, catalog: Catalog): string`, `typeOf(schema:
-      Schema): string` and `type Schema`, in `scripts/docs/stack-reference.ts`;
+      Schema): string`, `cell(text: string): string` and `type Schema`, in
+      `scripts/docs/stack-reference.ts`;
     - `renderCliReference(program?): string`, in `scripts/docs/cli-reference.ts`;
     - `prettify(path: string, content: string): Promise<string>` and
       `generatedFiles(): Promise<{ path: string; content: string }[]>`, in
@@ -5470,7 +5500,8 @@ function rows(schema: Schema, prefix: string): Row[] {
   });
 }
 
-const cell = (text: string) => text.replaceAll('|', '\\|').replaceAll('\n', ' ');
+/** A Markdown table cell: pipes escaped, line breaks flattened. */
+export const cell = (text: string) => text.replaceAll('|', '\\|').replaceAll('\n', ' ');
 
 function table(list: readonly Row[]): string[] {
   return [
@@ -5564,13 +5595,12 @@ import {
   ENVIRONMENT,
   EXIT_CODES,
 } from '../../packages/cli/src/run';
+import { cell } from './stack-reference';
 
 type Program = ReturnType<typeof createProgram>;
 
 const GENERATED =
   '<!-- Generated by "pnpm docs:generate" from packages/cli/src/run.ts. Do not edit. -->';
-
-const cell = (text: string) => text.replaceAll('|', '\\|').replaceAll('\n', ' ');
 
 /** The CLI as a user sees it, with no environment: so the same on every machine. */
 function program(): Program {
@@ -5667,8 +5697,16 @@ export async function prettify(path: string, content: string): Promise<string> {
 /** Every generated file, by path from the repository root, with its current content. */
 export async function generatedFiles(): Promise<{ path: string; content: string }[]> {
   const schema = stackJsonSchema(catalog);
+  const published = {
+    $comment:
+      'Generated by "pnpm docs:generate" from packages/engine/src/config/schema.ts and the catalog. Do not edit.',
+    ...schema,
+  };
   const files = [
-    { path: 'docs/reference/stack.schema.json', content: `${JSON.stringify(schema, null, 2)}\n` },
+    {
+      path: 'docs/reference/stack.schema.json',
+      content: `${JSON.stringify(published, null, 2)}\n`,
+    },
     {
       path: 'docs/reference/stack-yaml.md',
       content: renderStackReference(schema as Schema, catalog),
@@ -5684,7 +5722,11 @@ async function main(check: boolean): Promise<number> {
   const stale: string[] = [];
   for (const { path, content } of await generatedFiles()) {
     const target = join(ROOT, path);
-    const current = await readFile(target, 'utf8').catch(() => undefined);
+    const current = await readFile(target, 'utf8').catch((cause: unknown) => {
+      if (cause instanceof Error && 'code' in cause && cause.code === 'ENOENT')
+        return undefined;
+      throw cause;
+    });
     if (current === content) continue;
     if (check) {
       stale.push(path);
@@ -5758,6 +5800,12 @@ and, below the table:
 After changing `packages/engine/src/config/schema.ts`, a command or option in
 `packages/cli/src/run.ts`, or an app in `catalog/`, run `pnpm docs:generate` and commit
 what it writes. CI fails while the generated docs are stale.
+```
+
+Also change the line that starts "Before committing, run" to:
+
+```markdown
+Before committing, run `pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check`.
 ```
 
 In `docs/design/m1-engine-cli.md`:
@@ -5894,8 +5942,8 @@ describe('renderFacts', () => {
   });
 
   it('describes images with their own health check, or none', () => {
-    expect(renderFacts(app('gluetun'))).toContain("the image's own");
-    expect(renderFacts(app('flaresolverr'))).toContain('none');
+    expect(renderFacts(app('gluetun'))).toContain("| Health check | the image's own |");
+    expect(renderFacts(app('flaresolverr'))).toContain('| Health check | none: ');
   });
 });
 
@@ -6826,7 +6874,7 @@ Expected: no output. Every line in a `text` block is 40 characters or fewer.
 - [ ] **Step 3: Commit**
 
 ```bash
-pnpm format && pnpm lint
+pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check
 git add docs/architecture.md
 git commit -m "docs: add the architecture overview"
 ```
@@ -6863,7 +6911,7 @@ already made, with the spec's reasons.
 
 - **`mediaplane apply` stops at the containers step:**
 
-  ```text
+  ```console
     failed  containers
   error: these apps did not start healthy: sonarr (unhealthy). Compose said: …
     hint: run "mediaplane status" to see each app, fix the cause, then run apply again
@@ -6964,7 +7012,7 @@ Seerr, version 3.5 or later, is M1's requests app (spec §2.1, §6.1, §6.5):
 - [ ] **Step 3: Commit**
 
 ```bash
-pnpm format && pnpm lint
+pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check
 git add docs/runbooks docs/adr/0006-seerr-as-the-requests-app.md
 git commit -m "docs: add the \"app won't start\" runbook and ADR 0006"
 ```
@@ -7029,9 +7077,12 @@ In `docs/plans/m1-roadmap.md`:
      `the \`--json\` output shapes in the generated docs (the \`stack.yaml\`, JSON Schema and CLI references, with their freshness check, arrive in S2c)`;
    - replace `a multi-arch release workflow` with
      `a multi-arch release workflow and manifest (arm64 CI itself runs from S2c)`.
-4. **"Every slice writes its own docs as it goes".** Make three changes:
+4. **"Every slice writes its own docs as it goes".** Make four changes:
    - change the ADR bullets to `0010 in S2a, 0004 in S2b, and 0006 and 0008 in S2c;`, and
      delete the `0006 in S7.` bullet;
+   - in the bullet "Each app's `catalog/<app>/README.md`", change "written when that
+     app's integration lands" to "written in S2c, and updated when that app's integration
+     lands";
    - in the runbooks list, change `"app won't start" in S6.` to `"app won't start" in S2c.`;
    - add this bullet at the end of the list:
 
