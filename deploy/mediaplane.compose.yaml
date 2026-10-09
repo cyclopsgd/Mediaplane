@@ -1,0 +1,88 @@
+# Mediaplane's own deployment (spec §4.4): the Mediaplane container and the Docker socket
+# proxy, as the Compose project "mediaplane-system". It is separate from the stack
+# Mediaplane manages (the "mediaplane" project), so apply can never recreate or remove it.
+#
+# Settings, from a .env file next to this one or from the environment:
+#   MEDIAPLANE_IMAGE  the Mediaplane image to run (required: none is published yet)
+#   DOCKER_GID        the group that owns the Docker socket: stat -c %g /var/run/docker.sock
+#   MEDIAPLANE_HOME   the Mediaplane home, mounted at the same path (default /opt/mediaplane)
+#   MEDIAPLANE_UID    the user that owns the home (default 1000)
+#   MEDIAPLANE_GID    its group (default 1000)
+#
+# Start it:      docker compose -f mediaplane.compose.yaml up -d
+# Use it:        docker exec -it mediaplane mediaplane plan
+# The full guide: deploy/README.md
+name: mediaplane-system
+
+# One image, named once: the container runs it, and so does the host helper.
+x-mediaplane-image: &mediaplane-image '${MEDIAPLANE_IMAGE:?set MEDIAPLANE_IMAGE to the Mediaplane image (see deploy/README.md)}'
+
+services:
+  # The only container that can reach Docker. It accepts connections from the mediaplane
+  # container only, and forwards only the Docker API calls Mediaplane makes (ADR 0008).
+  socket-proxy:
+    image: wollomatic/socket-proxy:1.13.1@sha256:3935b709275e4ec35d6ed5a5c4a1f0d01ed31eec5e7234efc3357ecd47689002
+    restart: unless-stopped
+    user: '65534:${DOCKER_GID:?set DOCKER_GID to the group of the Docker socket (stat -c %g /var/run/docker.sock)}'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    mem_limit: 64m
+    command:
+      - -listenip=0.0.0.0
+      - -allowfrom=mediaplane
+      - -allowhealthcheck
+      - -watchdoginterval=3600
+      - -stoponwatchdog
+      - -shutdowngracetime=5
+      # socket-proxy anchors each pattern (^…$) and matches it against the path.
+      # deploy/deploy.test.ts pins this list against the calls the engine makes.
+      # kill is there because `docker run` passes on a signal it receives as a kill: that
+      # is how a host helper that times out is stopped.
+      - -allowHEAD=(/v1\.[0-9]+)?/_ping
+      - -allowGET=(/v1\.[0-9]+)?/(_ping|version|containers/json|containers/[a-zA-Z0-9][a-zA-Z0-9_.-]*/json|images/[a-zA-Z0-9][a-zA-Z0-9_.:/@-]*/json|networks|networks/[a-zA-Z0-9][a-zA-Z0-9_.-]*|volumes|volumes/[a-zA-Z0-9][a-zA-Z0-9_.-]*)
+      - -allowPOST=(/v1\.[0-9]+)?/(containers/create|containers/[a-zA-Z0-9][a-zA-Z0-9_.-]*/(start|stop|rename|attach|wait|kill)|images/create|networks/create|networks/[a-zA-Z0-9][a-zA-Z0-9_.-]*/(connect|disconnect)|volumes/create)
+      - -allowDELETE=(/v1\.[0-9]+)?/containers/[a-zA-Z0-9][a-zA-Z0-9_.-]*
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [docker-api]
+    healthcheck:
+      test: ['CMD', './healthcheck']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  mediaplane:
+    image: *mediaplane-image
+    container_name: mediaplane
+    # Fixed, so a recreated container can still clear a stale lock its predecessor left:
+    # the lock records the host it was taken on.
+    hostname: mediaplane
+    restart: unless-stopped
+    init: true
+    user: '${MEDIAPLANE_UID:-1000}:${MEDIAPLANE_GID:-1000}'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    environment:
+      MEDIAPLANE_HOME: '${MEDIAPLANE_HOME:-/opt/mediaplane}'
+      MEDIAPLANE_IMAGE: *mediaplane-image
+      DOCKER_HOST: tcp://socket-proxy:2375
+    volumes:
+      # The same path inside and out, because the host's Docker resolves every path in the
+      # stack's compose.yaml (spec §4.1). Create the folder first: Compose won't.
+      - type: bind
+        source: '${MEDIAPLANE_HOME:-/opt/mediaplane}'
+        target: '${MEDIAPLANE_HOME:-/opt/mediaplane}'
+        bind:
+          create_host_path: false
+    networks: [docker-api]
+    depends_on:
+      socket-proxy:
+        condition: service_healthy
+
+networks:
+  # These two containers only, and no route out: in M1, Mediaplane needs nothing but the
+  # proxy, because image pulls happen in the Docker daemon.
+  docker-api:
+    internal: true

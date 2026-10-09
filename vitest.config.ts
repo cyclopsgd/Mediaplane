@@ -6,6 +6,7 @@ export default defineConfig({
       'packages/*/src/**/*.test.ts',
       'catalog/**/*.test.ts',
       'scripts/**/*.test.ts',
+      'deploy/**/*.test.ts',
     ],
     coverage: {
       provider: 'v8',

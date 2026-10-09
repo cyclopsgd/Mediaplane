@@ -1,0 +1,9 @@
+#!/bin/sh
+# Mediaplane's host shim (spec §4.4): run a mediaplane command in its container, so that
+# `mediaplane plan` works on the host. Install it with:
+#   sudo install -m 0755 deploy/mediaplane /usr/local/bin/mediaplane
+# On a terminal it adds -t, so apply can ask before it changes anything. The check is made
+# here, not inside $(...), whose standard output is never a terminal.
+tty=
+if [ -t 0 ] && [ -t 1 ]; then tty=-t; fi
+exec docker exec -i $tty "${MEDIAPLANE_CONTAINER:-mediaplane}" mediaplane "$@"
