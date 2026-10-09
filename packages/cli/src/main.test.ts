@@ -6,28 +6,36 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { VERSION } from './version';
 
-const STACK = `version: 1
-paths: { data: /srv/data }
+const MAIN = fileURLToPath(new URL('./main.ts', import.meta.url));
+// Real Docker, but never the real stack: plan only reads, under its own project name.
+const ENV = {
+  ...process.env,
+  MEDIAPLANE_COMPOSE_PROJECT: `mediaplane-test-${process.pid}`,
+};
+
+function stackFor(data: string): string {
+  return `version: 1
+user: { uid: ${process.getuid?.() ?? 1000}, gid: ${process.getgid?.() ?? 1000} }
+paths: { data: ${data} }
 network: { bind: localhost }
 media_server: jellyfin
-vpn: { provider: mullvad, private_key: { file: secrets/wg.key } }
 apps:
   sonarr: {}
-  qbittorrent: {}
+  qbittorrent: { vpn: false }
 `;
+}
 
 function spawnMain(...args: string[]) {
-  const main = fileURLToPath(new URL('./main.ts', import.meta.url));
-  return spawnSync(process.execPath, ['--import', 'tsx', main, ...args], {
+  return spawnSync(process.execPath, ['--import', 'tsx', MAIN, ...args], {
     encoding: 'utf8',
+    env: ENV,
   });
 }
 
 function freshHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'mediaplane-main-'));
-  mkdirSync(join(home, 'secrets'));
-  writeFileSync(join(home, 'secrets', 'wg.key'), 'fake-wireguard-key-for-tests\n');
-  writeFileSync(join(home, 'stack.yaml'), STACK);
+  mkdirSync(join(home, 'data'));
+  writeFileSync(join(home, 'stack.yaml'), stackFor(join(home, 'data')));
   return home;
 }
 
@@ -45,23 +53,23 @@ describe('main', () => {
     expect(result.stdout).toBe('');
   });
 
-  it('exits 2 for a plan that would write files', () => {
-    const home = freshHome();
-    const result = spawnMain('plan', '--home', home);
+  it('exits 2 for a plan that would change something', () => {
+    const result = spawnMain('plan', '--home', freshHome());
+    expect(result.stderr).not.toContain('error:');
     expect(result.status).toBe(2);
     expect(result.stdout).toContain('+ generated/compose.yaml');
+    expect(result.stdout).toContain('  + create    sonarr\n');
   });
 
   it('keeps the plan exit code when stdout is closed early', () => {
     const home = freshHome();
-    const main = fileURLToPath(new URL('./main.ts', import.meta.url));
     const result = spawnSync(
       'bash',
       [
         '-c',
-        `"${process.execPath}" --import tsx "${main}" plan --home "${home}" | head -1; echo "status=\${PIPESTATUS[0]}"`,
+        `"${process.execPath}" --import tsx "${MAIN}" plan --home "${home}" | head -1; echo "status=\${PIPESTATUS[0]}"`,
       ],
-      { encoding: 'utf8' },
+      { encoding: 'utf8', env: ENV },
     );
     expect(result.stdout).toContain('status=2');
     expect(result.stderr).not.toContain('EPIPE');
