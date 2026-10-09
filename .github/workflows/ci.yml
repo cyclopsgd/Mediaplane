@@ -10,12 +10,15 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A new push cancels the previous run on a branch, but never the previous commit's full
+  # run on main.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   check:
     name: Lint, type-check and test
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,12 +33,13 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test:coverage
 
-  # Decides whether the end-to-end and image jobs, which pull images, are needed. Skipping
-  # them inside the workflow, rather than with an `on:` path filter, means a required check
-  # reports "skipped" instead of never appearing.
+  # Decides whether the end-to-end and image jobs, which pull images, are needed. The
+  # decision is made inside the workflow, rather than with an `on:` path filter, so the
+  # workflow still runs on a docs-only push and `gate` (the last job) still reports.
   changes:
     name: Detect code changes
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
       code: ${{ steps.diff.outputs.code }}
     steps:
@@ -50,7 +54,7 @@ jobs:
         run: |
           # No usable base (a new branch, or a force-push past fetched history): run it all.
           if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-            echo "No usable base commit, so the end-to-end tests run."
+            echo "No usable base commit, so the end-to-end and image jobs run."
             echo "code=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -59,7 +63,7 @@ jobs:
           if grep -q -v -E '(\.md$|^docs/|^LICENSE$|^$)' <<<"$changed"; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Only docs changed, so the end-to-end tests are skipped."
+            echo "Only docs changed, so the end-to-end and image jobs are skipped."
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -101,6 +105,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: docker version && docker compose version
       - run: pnpm test:e2e
+      # If the job ran out of disk, this shows how much was left at the end.
+      - name: Disk space at the end
+        if: always()
+        run: df -h /
 
   image:
     name: Image (${{ matrix.arch }}, Trivy)
@@ -121,19 +129,28 @@ jobs:
         with:
           persist-credentials: false
       # Native on each runner: no emulation. A multi-arch manifest comes with publishing (S8).
+      # The image scanned here and the one the e2e tests build are two builds of the same
+      # Dockerfile. They are the same image only because every input of the Dockerfile is
+      # pinned; an unpinned layer would let them differ.
       - name: Build the image
         run: docker build --tag mediaplane:ci .
+      # The tarball goes in its own folder, and only that folder is mounted, read-only.
       - name: Scan it with Trivy (fails on critical vulnerabilities that have a fix)
         run: |
-          docker save mediaplane:ci --output "$RUNNER_TEMP/mediaplane.tar"
-          docker run --rm --volume "$RUNNER_TEMP:/scan" \
+          scan="$(mktemp -d -p "$RUNNER_TEMP")"
+          docker save mediaplane:ci --output "$scan/mediaplane.tar"
+          docker run --rm --volume "$scan:/scan:ro" \
             aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
             image --input /scan/mediaplane.tar --scanners vuln --severity CRITICAL \
             --ignore-unfixed --exit-code 1 --no-progress
+      - name: Disk space at the end
+        if: always()
+        run: df -h /
 
   secrets:
     name: Secret scan (gitleaks, full history)
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -144,3 +161,47 @@ jobs:
           docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo"
           ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
           git /repo --config /repo/.gitleaks.toml --redact --verbose
+
+  # Branch protection should require only this check. A matrix job that a job-level `if`
+  # skips reports under its unexpanded name, so on a docs-only push the per-architecture
+  # checks never exist and a required one would wait forever. This job always runs and
+  # always reports. `always()`, not `!cancelled()`: a cancelled run must not pass.
+  gate:
+    name: All checks passed
+    needs: [check, changes, e2e, image, secrets]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Did every job that had to run succeed?
+        env:
+          CHECK: ${{ needs.check.result }}
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          E2E: ${{ needs.e2e.result }}
+          IMAGE: ${{ needs.image.result }}
+          SECRETS: ${{ needs.secrets.result }}
+        run: |
+          printf '%-8s %s\n' check "$CHECK" changes "$CHANGES" e2e "$E2E" \
+            image "$IMAGE" secrets "$SECRETS"
+          echo "code changed: ${CODE:-unknown}"
+          status=0
+          for result in "$CHECK" "$CHANGES" "$E2E" "$IMAGE" "$SECRETS"; do
+            case "$result" in
+              failure | cancelled) status=1 ;;
+            esac
+          done
+          if [ "$status" -ne 0 ]; then
+            echo "A job failed or was cancelled."
+          fi
+          # Skipped is a pass only when the docs-only check said to skip them.
+          if [ "$CODE" = "true" ]; then
+            for job in e2e:"$E2E" image:"$IMAGE"; do
+              if [ "${job#*:}" != "success" ]; then
+                echo "${job%%:*} should have run, but its result is ${job#*:}."
+                status=1
+              fi
+            done
+          fi
+          exit "$status"
