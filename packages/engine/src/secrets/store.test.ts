@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { emptySecretStore, readSecretStore, SECRETS_PATH } from './store';
+import { SECRETS_PATH } from '../paths';
+import { emptySecretStore, readSecretStore } from './store';
 
 async function homeWithStore(content: string): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), 'mediaplane-store-'));

@@ -2,13 +2,13 @@ import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { COMPOSE_PATH, SECRETS_PATH } from '../paths';
 import { portKey } from '../preflight/checks';
 import type { HostProbe } from '../preflight/probe';
 import { RuntimeError, type Runtime } from '../runtime/types';
-import { SECRETS_PATH } from '../secrets/store';
 import { fakeHash, fakeProbe, fakeRuntime, running } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureCatalog } from '../testing/fixtures';
-import { COMPOSE_PATH, plan } from './plan';
+import { plan } from './plan';
 
 const STACK = `version: 1
 paths: { data: /srv/data }

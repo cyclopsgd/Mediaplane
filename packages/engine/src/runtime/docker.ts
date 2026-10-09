@@ -1,5 +1,6 @@
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
+import { OVERRIDE_PATH } from '../paths';
 import { nodeExec, type Exec, type ExecResult } from './exec';
 import {
   RuntimeError,
@@ -7,8 +8,6 @@ import {
   type HashesResult,
   type Runtime,
 } from './types';
-
-export const OVERRIDE_PATH = 'compose.override.yaml';
 
 /** Mediaplane's own deployment (spec §4.4): read-only to Mediaplane, never managed. */
 export const SYSTEM_PROJECT = 'mediaplane-system';

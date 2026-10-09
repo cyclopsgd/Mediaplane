@@ -4,6 +4,7 @@ import { loadConfigFile } from '../config/load';
 import { checkSecretRefs } from '../config/secrets';
 import { error, hasErrors, type Diagnostic } from '../diagnostics';
 import type { HostFacts } from '../host/facts';
+import { COMPOSE_PATH, STACK_PATH } from '../paths';
 import { runPreflight } from '../preflight/checks';
 import type { HostProbe } from '../preflight/probe';
 import { renderCompose } from '../render/compose';
@@ -15,8 +16,6 @@ import { secretsToGenerate, secretValues } from '../secrets/values';
 import { ownPorts, type ContainerChange } from './containers';
 import { diffFiles, type FileChange } from './files';
 import { predictContainers, type PredictResult } from './predict';
-
-export const COMPOSE_PATH = 'generated/compose.yaml';
 
 export interface PlanOptions {
   home: string;
@@ -48,7 +47,7 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
       }),
     ]);
   }
-  const loaded = await loadConfigFile(join(home, 'stack.yaml'));
+  const loaded = await loadConfigFile(join(home, STACK_PATH));
   if (!loaded.ok) return failed(loaded.diagnostics);
 
   const diagnostics = await checkSecretRefs(loaded.config, home, options.env);

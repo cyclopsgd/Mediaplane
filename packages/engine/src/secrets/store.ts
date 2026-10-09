@@ -1,8 +1,7 @@
 import { join } from 'node:path';
 import { z } from 'zod';
+import { SECRETS_PATH } from '../paths';
 import { readIfExists } from '../util/fs';
-
-export const SECRETS_PATH = 'state/secrets.json';
 
 const storeSchema = z.strictObject({
   version: z.literal(1),
