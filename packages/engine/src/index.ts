@@ -14,3 +14,5 @@ export * from './secrets/values';
 export * from './runtime/types';
 export * from './runtime/exec';
 export * from './runtime/docker';
+export * from './preflight/probe';
+export * from './preflight/checks';
