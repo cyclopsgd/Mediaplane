@@ -874,3 +874,26 @@ Documentation lives in the repo and is updated with the code.
 | Sonarr v5 (new API) arrives | Stay on `/api/v3` until v5 is stable, then add a v5 adapter path selected by version |
 | Byparr's FlareSolverr compatibility is confirmed in code but not advertised upstream | End-to-end tests run a proxied request through it. FlareSolverr is the fallback |
 | Lost `state/` | Key recovery from appdata, plus name-based re-adoption (§6.1, §6.3) |
+
+---
+
+## 11. Refinements made while planning
+
+These keep the spec's intent. They are grouped by the slice whose plan made them.
+
+### Slice 2b: apply (2026-10-09)
+
+- **Apply plans before it generates keys.** §5 lists keys before plan. Apply
+  plans first (the plan names the keys it would generate), asks for
+  confirmation, and only then generates and saves them. A cancelled apply
+  therefore writes nothing.
+- **The runtime also uses `compose run`.** Besides the commands in §3.2, it
+  runs `docker compose run --rm --no-deps` for the appdata ownership helper: a
+  throwaway container of the app's own image that runs `chown` as root.
+- **Apply has an appdata ownership stage, between pull and start.** Apps that
+  run as a fixed uid (Seerr runs as 1000) or as the stack's `user:` get
+  `appdata/<app>` owned by that user before they start (§4.3).
+- **Apps that are not healthy yet are part of the plan.** A running app whose
+  health check is `starting` or `unhealthy` makes the plan changed, so after a
+  failed start, running apply again waits for it again, and verify (§5 step 11)
+  fails while it is still not healthy (ADR 0004).

@@ -71,7 +71,7 @@ each one, or corrects it in the catalog:
 
 | Value | Verified in |
 |---|---|
-| Health-check commands for each image (`curl` in linuxserver images, `wget` in Seerr). The tools were confirmed present in every pinned image on 2026-10-09; S2b confirms the checks pass | S2b |
+| Health-check commands for each image (`curl` in linuxserver images, `wget` in Seerr). The tools were confirmed present in every pinned image on 2026-10-09. **Verified on arm64 on 2026-10-09** by S2b's end-to-end test, which applies the video stack and sees every app healthy; amd64 is pending that test's first CI run | S2b (arm64 done, amd64 pending CI) |
 | Gluetun's built-in health check with `depends_on: service_healthy`. It needs a working tunnel, so it is verified with S3's local WireGuard server | S3 |
 | `FIREWALL_OUTBOUND_SUBNETS` accepting a comma-separated list | S3 |
 | qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace | S3 |
@@ -83,7 +83,8 @@ each one, or corrects it in the catalog:
 The Slice 1 final review (2026-10-08) approved the merge. It also raised the
 design gaps below, which only matter once Mediaplane writes files or deploys.
 The Slice 2a final review (2026-10-09) added the S2b list and two S3 items.
-Each slice plan must address the items for that slice.
+The Slice 2b final review (2026-10-09) added the S2c list, two S4 items and an
+M2 item. Each slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -146,6 +147,22 @@ Each slice plan must address the items for that slice.
   the next catalog secret.
 - **The eject command in the docs.** ADR 0002 and spec §2.3 still say plain
   `docker compose up -d`. Update them to the exact command once `.env` exists.
+  **Done in S2b:** both give the exact command from the generated header, and
+  the end-to-end test runs that command.
+
+**S2c:**
+
+- **A stable hostname.** The lock records the host it was taken on, and only
+  clears a stale lock from the same host. Give the Mediaplane container a fixed
+  `hostname:`, so a recreated container can still clear its own stale lock.
+- **Hard links in the home.** The lock (and `init`'s `stack.yaml`) is created
+  with a hard link, so the Mediaplane home needs a filesystem that supports
+  them. Document it.
+- **`init` and uid 1000.** `init` tells the user to make the data folder
+  writable by uid 1000. Consider the invoking user instead.
+- **A different home.** Warn when the project's containers carry a
+  `com.docker.compose.project.working_dir` from a different home, which means
+  another home already manages a project with this name.
 
 **S3:**
 
@@ -161,8 +178,15 @@ Each slice plan must address the items for that slice.
   a public or `0.0.0.0/0` subnet can't widen `TRUSTEDNETWORKS` or the
   authentication bypass.
 
-**S4:** override field names are case-sensitive, so the managed-field
-comparison must match them exactly.
+**S4:**
+
+- Override field names are case-sensitive, so the managed-field comparison must
+  match them exactly.
+- **Appdata ownership is checked only on change.** Apply checks it only when
+  something else changes, and never re-checks it for apps that are running.
+- **An override can move an appdata mount.** When `compose.override.yaml`
+  remaps an app's appdata mount, the ownership helper's chown runs on the
+  override's host path, not on `appdata/<app>`.
 
 **S8 (before going public):**
 
@@ -172,6 +196,10 @@ comparison must match them exactly.
 - **Docs:** make the `--json` contract explicit (pin its fields and document
   `mediaplane.plan/v1`). Drop the internal "Slice 1" wording from the README.
 - **Tests:** tighten the catalog tag test, and add Renovate.
+
+**M2 (the panel):** `trigger: 'cli'` is a literal in `mediaplane.change/v1`.
+Decide an additive rule, or a v2 of the schema, before the panel writes change
+records.
 
 ## Spec refinements made while planning (2026-10-08)
 
