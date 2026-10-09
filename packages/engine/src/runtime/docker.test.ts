@@ -218,6 +218,102 @@ describe('createDockerRuntime', () => {
     ]);
     expect(containers.map((c) => c.service)).toEqual(['sonarr', 'byparr']);
   });
+
+  const projectArgs = (dir: string) => [
+    'compose',
+    '-p',
+    'mediaplane-test',
+    '--project-directory',
+    dir,
+    '-f',
+    join(dir, 'generated/compose.yaml'),
+    '--env-file',
+    join(dir, 'generated/.env'),
+  ];
+
+  it('pulls missing images for the written project', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-runtime-'));
+    const { exec, calls } = recorder(() => ok(''));
+    const runtime = createDockerRuntime({ home: dir, project: 'mediaplane-test', exec });
+    expect(await runtime.pull({})).toEqual({ ok: true });
+    expect(calls[0]?.args).toEqual([
+      ...projectArgs(dir),
+      'pull',
+      '--policy',
+      'missing',
+      '--quiet',
+    ]);
+    expect(calls[0]?.options?.timeoutMs).toBe(1_800_000);
+  });
+
+  it('starts the project and waits for it to be healthy', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-runtime-'));
+    await writeFile(join(dir, 'compose.override.yaml'), 'services: {}\n');
+    const { exec, calls } = recorder(() => ok(''));
+    const runtime = createDockerRuntime({ home: dir, project: 'mediaplane-test', exec });
+    expect(await runtime.up(600, {})).toEqual({ ok: true });
+    expect(calls[0]?.args).toEqual([
+      'compose',
+      '-p',
+      'mediaplane-test',
+      '--project-directory',
+      dir,
+      '-f',
+      join(dir, 'generated/compose.yaml'),
+      '-f',
+      join(dir, 'compose.override.yaml'),
+      '--env-file',
+      join(dir, 'generated/.env'),
+      'up',
+      '--detach',
+      '--wait',
+      '--wait-timeout',
+      '600',
+      '--remove-orphans',
+      '--quiet-pull',
+    ]);
+    expect(calls[0]?.options?.timeoutMs).toBe(720_000);
+  });
+
+  it('runs chown as root in a throwaway container of the service', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-runtime-'));
+    const { exec, calls } = recorder(() => ok(''));
+    const runtime = createDockerRuntime({ home: dir, project: 'mediaplane-test', exec });
+    expect(
+      await runtime.chown('seerr', '/app/config', { uid: 1000, gid: 1000 }, {}),
+    ).toEqual({
+      ok: true,
+    });
+    expect(calls[0]?.args).toEqual([
+      ...projectArgs(dir),
+      'run',
+      '--rm',
+      '--no-deps',
+      '--no-tty',
+      '--user',
+      '0:0',
+      '--entrypoint',
+      'chown',
+      'seerr',
+      '-R',
+      '1000:1000',
+      '/app/config',
+    ]);
+  });
+
+  it("reports a failed command with Compose's last lines, secrets replaced", async () => {
+    const { exec } = recorder(() => ({
+      code: 1,
+      stdout: '',
+      stderr:
+        'progress 1\nprogress 2\nContainer x Error\nfake-secret-value rejected\napplication not healthy after 10m0s\n',
+    }));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane-test', exec });
+    expect(await runtime.up(600, { MP_X: 'fake-secret-value' })).toEqual({
+      ok: false,
+      error: 'Container x Error\n*** rejected\napplication not healthy after 10m0s',
+    });
+  });
 });
 
 describe('isManagedProject', () => {

@@ -1,9 +1,10 @@
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
-import { OVERRIDE_PATH } from '../paths';
+import { COMPOSE_PATH, ENV_PATH, OVERRIDE_PATH } from '../paths';
 import { nodeExec, type Exec, type ExecResult } from './exec';
 import {
   RuntimeError,
+  type CommandResult,
   type ContainerState,
   type HashesResult,
   type Runtime,
@@ -13,7 +14,7 @@ import {
 export const SYSTEM_PROJECT = 'mediaplane-system';
 
 /** How long a docker call may take before Mediaplane gives up on it, in ms. */
-export const DOCKER_TIMEOUTS = { query: 60_000 } as const;
+export const DOCKER_TIMEOUTS = { query: 60_000, pull: 1_800_000, run: 300_000 } as const;
 
 /**
  * Whether Mediaplane may act on a Compose project: "mediaplane" or "mediaplane-<name>",
@@ -58,6 +59,23 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
     } catch (cause) {
       throw new RuntimeError(spawnFailure(label, timeoutMs, cause), { cause });
     }
+  }
+
+  /** The written project: compose.yaml, the user's override if present, and .env. */
+  async function projectArgs(): Promise<string[]> {
+    const override = join(options.home, OVERRIDE_PATH);
+    return [
+      'compose',
+      '-p',
+      options.project,
+      '--project-directory',
+      options.home,
+      '-f',
+      join(options.home, COMPOSE_PATH),
+      ...((await exists(override)) ? ['-f', override] : []),
+      '--env-file',
+      join(options.home, ENV_PATH),
+    ];
   }
 
   return {
@@ -124,7 +142,70 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
       }
       return parseContainers(result.stdout);
     },
+
+    async pull(values) {
+      const result = await docker(
+        'compose pull',
+        [...(await projectArgs()), 'pull', '--policy', 'missing', '--quiet'],
+        { timeoutMs: DOCKER_TIMEOUTS.pull },
+      );
+      return commandResult(result, values);
+    },
+
+    async up(waitSeconds, values) {
+      const result = await docker(
+        'compose up',
+        [
+          ...(await projectArgs()),
+          'up',
+          '--detach',
+          '--wait',
+          '--wait-timeout',
+          String(waitSeconds),
+          '--remove-orphans',
+          '--quiet-pull',
+        ],
+        { timeoutMs: (waitSeconds + 120) * 1000 },
+      );
+      return commandResult(result, values);
+    },
+
+    async chown(service, path, owner, values) {
+      const result = await docker(
+        'compose run',
+        [
+          ...(await projectArgs()),
+          'run',
+          '--rm',
+          '--no-deps',
+          '--no-tty',
+          '--user',
+          '0:0',
+          '--entrypoint',
+          'chown',
+          service,
+          '-R',
+          `${String(owner.uid)}:${String(owner.gid)}`,
+          path,
+        ],
+        { timeoutMs: DOCKER_TIMEOUTS.run },
+      );
+      return commandResult(result, values);
+    },
   };
+}
+
+/** Success, or Compose's last three stderr lines with secret values replaced. */
+function commandResult(
+  result: ExecResult,
+  values: Record<string, string>,
+): CommandResult {
+  if (result.code === 0) return { ok: true };
+  const lines = result.stderr
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line !== '');
+  return { ok: false, error: redact(lines.slice(-3).join('\n'), values) };
 }
 
 /** `docker compose config --hash` output: one "service hash" pair per line. */

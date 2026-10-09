@@ -1,8 +1,12 @@
 import { createHash } from 'node:crypto';
-import { parse } from 'yaml';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { parse, stringify } from 'yaml';
+import { COMPOSE_PATH, ENV_PATH } from '../paths';
 import type { HostProbe, PathStat } from '../preflight/probe';
 import {
   RuntimeError,
+  type CommandResult,
   type ContainerState,
   type HashesResult,
   type Runtime,
@@ -65,24 +69,90 @@ export function fakeHash(
   );
 }
 
+export interface FakeRuntimeOptions {
+  versions?: { engine: string; compose: string };
+  containers?: ContainerState[];
+  hashes?: HashesResult;
+  /** When set, Docker is unreachable with this message. */
+  unavailable?: string;
+  pull?: CommandResult;
+  up?: CommandResult;
+  chown?: CommandResult;
+  /** Each call is appended here, e.g. "pull" or "chown seerr 1000:1000 /app/config". */
+  calls?: string[];
+}
+
 /** A Docker that answers from memory. */
-export function fakeRuntime(
-  options: {
-    versions?: { engine: string; compose: string };
-    containers?: ContainerState[];
-    hashes?: HashesResult;
-    /** When set, Docker is unreachable with this message. */
-    unavailable?: string;
-  } = {},
-): Runtime {
+export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
+  const record = (call: string) => options.calls?.push(call);
   return {
-    versions: () =>
-      options.unavailable === undefined
+    versions: () => {
+      record('versions');
+      return options.unavailable === undefined
         ? Promise.resolve(options.versions ?? { engine: '29.8.0', compose: '5.5.1' })
-        : Promise.reject(new RuntimeError(options.unavailable)),
-    configHashes: (compose, values) =>
-      Promise.resolve(options.hashes ?? { ok: true, hashes: fakeHash(compose, values) }),
-    containers: () => Promise.resolve(options.containers ?? []),
+        : Promise.reject(new RuntimeError(options.unavailable));
+    },
+    configHashes: (compose, values) => {
+      record('configHashes');
+      return Promise.resolve(
+        options.hashes ?? { ok: true, hashes: fakeHash(compose, values) },
+      );
+    },
+    containers: () => {
+      record('containers');
+      return Promise.resolve(options.containers ?? []);
+    },
+    pull: () => {
+      record('pull');
+      return Promise.resolve(options.pull ?? { ok: true });
+    },
+    up: () => {
+      record('up');
+      return Promise.resolve(options.up ?? { ok: true });
+    },
+    chown: (service, path, owner) => {
+      record(`chown ${service} ${String(owner.uid)}:${String(owner.gid)} ${path}`);
+      return Promise.resolve(options.chown ?? { ok: true });
+    },
+  };
+}
+
+/**
+ * A Docker whose `up` starts what is written in `home`. Afterwards containers() reports a
+ * running, healthy `fake-<service>` per service, labelled with the fakeHash of the written
+ * compose.yaml and .env. Like Compose, it hashes a guest (`network_mode: service:<host>`)
+ * as `container:<host's id>`.
+ */
+export function fakeDocker(
+  home: string,
+  options: FakeRuntimeOptions & { upChangesNothing?: boolean } = {},
+): Runtime & { calls: string[] } {
+  const calls: string[] = [];
+  const base = fakeRuntime({ ...options, calls });
+  let containers = options.containers ?? [];
+  return {
+    ...base,
+    calls,
+    containers: () => {
+      calls.push('containers');
+      return Promise.resolve(containers);
+    },
+    up: async (waitSeconds, values) => {
+      const result = await base.up(waitSeconds, values);
+      if (!result.ok || options.upChangesNothing === true) return result;
+      const compose = parse(await readFile(join(home, COMPOSE_PATH), 'utf8')) as {
+        services: Record<string, Record<string, unknown>>;
+      };
+      for (const config of Object.values(compose.services)) {
+        const mode = config.network_mode;
+        const host =
+          typeof mode === 'string' ? /^service:(.+)$/.exec(mode)?.[1] : undefined;
+        if (host !== undefined) config.network_mode = `container:fake-${host}`;
+      }
+      const env = parseEnvFile(await readFile(join(home, ENV_PATH), 'utf8'));
+      containers = running(fakeHash(stringify(compose), env));
+      return result;
+    },
   };
 }
 
