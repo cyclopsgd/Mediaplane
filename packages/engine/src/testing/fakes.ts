@@ -88,7 +88,10 @@ export function fakeRuntime(
 
 const UNESCAPE: Record<string, string> = { n: '\n', r: '\r', t: '\t' };
 
-/** The inverse of renderEnvFile, for tests and fakes. */
+/**
+ * The inverse of renderEnvFile, for tests and fakes. It refuses what Compose would
+ * misread: a single-quoted value ending in \' (Compose takes that as an escaped quote).
+ */
 export function parseEnvFile(text: string): Record<string, string> {
   const values: Record<string, string> = {};
   for (const line of text.split('\n')) {
@@ -96,6 +99,11 @@ export function parseEnvFile(text: string): Record<string, string> {
     const equals = line.indexOf('=');
     const name = line.slice(0, equals);
     const raw = line.slice(equals + 1);
+    if (raw.startsWith("'") && raw.endsWith("\\'")) {
+      throw new Error(
+        `Compose would misread ${name}: its closing quote follows a backslash`,
+      );
+    }
     values[name] = raw.startsWith('"')
       ? raw
           .slice(1, -1)

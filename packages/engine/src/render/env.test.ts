@@ -12,6 +12,12 @@ describe('envValue', () => {
     ['it\'s "q" $X \\b', '"it\'s \\"q\\" \\$X \\\\b"'],
     ['line1\nline2', '"line1\\nline2"'],
     ['cr\rtab\t', '"cr\\rtab\\t"'],
+    // Compose reads \' as an escaped quote even inside single quotes, so a trailing
+    // backslash would swallow the closing quote.
+    ['abc\\', '"abc\\\\"'],
+    ['\\', '"\\\\"'],
+    ['say "hi"\\', '"say \\"hi\\"\\\\"'],
+    ["it's abc\\", '"it\'s abc\\\\"'],
   ])('%j → %s', (value, expected) => {
     expect(envValue(value)).toBe(expected);
   });
@@ -38,6 +44,9 @@ describe('renderEnvFile', () => {
       MP_B: 'line1\nline2\ttab\rcr',
       MP_C: '',
       MP_D: '$HOME ${X}',
+      MP_E: 'abc\\',
+      MP_F: 'say "hi"\\',
+      MP_G: 'tail',
     };
     expect(parseEnvFile(renderEnvFile(values))).toEqual(values);
   });

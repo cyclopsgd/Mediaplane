@@ -15,11 +15,13 @@ export function renderEnvFile(values: Record<string, string>): string {
 
 /**
  * One value in Compose's .env syntax. Single quotes keep everything literal. A value with
- * a single quote or a line break uses double quotes instead, where \ " $ and line breaks
- * must be escaped. (Checked against Compose 5.5.1, 2026-10-09.)
+ * a single quote, a line break, or a trailing backslash uses double quotes instead, where
+ * \ " $ and line breaks must be escaped. (A trailing backslash needs them because Compose
+ * reads \' as an escaped quote even inside single quotes, so it would swallow the closing
+ * quote and the next line.) Checked against Compose 5.5.1, 2026-10-09.
  */
 export function envValue(value: string): string {
-  if (!/['\n\r\t]/.test(value)) return `'${value}'`;
+  if (!/['\n\r\t]|\\$/.test(value)) return `'${value}'`;
   const escaped = value
     .replaceAll('\\', '\\\\')
     .replaceAll('"', '\\"')

@@ -6,18 +6,30 @@ import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { compare } from '../util/sort';
 import type { SecretStore } from './store';
 
-/** "<app>.<secret>" for every secret Mediaplane must generate on the next apply. */
-export function secretsToGenerate(stack: ResolvedStack, store: SecretStore): string[] {
-  const missing: string[] = [];
+/**
+ * Every secret Mediaplane must generate on the next apply: the ones the catalog says to
+ * generate that the store does not have yet. The one list that plan (which prints it) and
+ * apply (which fills the store from it) both walk, in app order, then secret-name order.
+ */
+export function missingGeneratedSecrets(
+  stack: ResolvedStack,
+  store: SecretStore,
+): { app: string; name: string; kind: 'hex32' | 'qbt' }[] {
+  const missing: { app: string; name: string; kind: 'hex32' | 'qbt' }[] = [];
   for (const app of stack.apps) {
     const secrets = Object.entries(app.def.secrets).sort(([a], [b]) => compare(a, b));
     for (const [name, source] of secrets) {
       if ('generate' in source && store.apps[app.def.id]?.[name] === undefined) {
-        missing.push(`${app.def.id}.${name}`);
+        missing.push({ app: app.def.id, name, kind: source.generate });
       }
     }
   }
   return missing;
+}
+
+/** "<app>.<secret>" for every secret Mediaplane must generate on the next apply. */
+export function secretsToGenerate(stack: ResolvedStack, store: SecretStore): string[] {
+  return missingGeneratedSecrets(stack, store).map(({ app, name }) => `${app}.${name}`);
 }
 
 /** The value of every ${MP_…} variable compose.yaml references. Unknown values are "". */

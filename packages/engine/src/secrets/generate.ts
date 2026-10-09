@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { ResolvedStack } from '../resolver/resolve';
-import { compare } from '../util/sort';
 import type { SecretStore } from './store';
+import { missingGeneratedSecrets } from './values';
 
 /** Cryptographically random bytes. Tests pass a deterministic source instead. */
 export type RandomBytes = (size: number) => Buffer;
@@ -35,13 +35,9 @@ export function withGeneratedSecrets(
     Object.entries(store.apps).map(([id, secrets]) => [id, { ...secrets }]),
   );
   const generated: string[] = [];
-  for (const app of stack.apps) {
-    const secrets = Object.entries(app.def.secrets).sort(([a], [b]) => compare(a, b));
-    for (const [name, source] of secrets) {
-      if (!('generate' in source) || apps[app.def.id]?.[name] !== undefined) continue;
-      (apps[app.def.id] ??= {})[name] = generateSecret(source.generate, random);
-      generated.push(`${app.def.id}.${name}`);
-    }
+  for (const { app, name, kind } of missingGeneratedSecrets(stack, store)) {
+    (apps[app] ??= {})[name] = generateSecret(kind, random);
+    generated.push(`${app}.${name}`);
   }
   return { store: { version: 1, apps }, generated };
 }

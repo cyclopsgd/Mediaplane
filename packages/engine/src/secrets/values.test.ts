@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
 import { emptySecretStore, type SecretStore } from './store';
-import { secretsToGenerate, secretValues } from './values';
+import { missingGeneratedSecrets, secretsToGenerate, secretValues } from './values';
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -34,6 +34,18 @@ async function stackIn(source = STACK): Promise<ResolvedStack> {
 }
 
 const stored: SecretStore = { version: 1, apps: { sonarr: { apiKey: '0'.repeat(32) } } };
+
+describe('missingGeneratedSecrets', () => {
+  it('names the app, the secret and how to generate it', async () => {
+    expect(missingGeneratedSecrets(await stackIn(), emptySecretStore())).toEqual([
+      { app: 'sonarr', name: 'apiKey', kind: 'hex32' },
+    ]);
+  });
+
+  it('is empty once the store has them', async () => {
+    expect(missingGeneratedSecrets(await stackIn(), stored)).toEqual([]);
+  });
+});
 
 describe('secretsToGenerate', () => {
   it('lists generated secrets that are not in the store yet', async () => {

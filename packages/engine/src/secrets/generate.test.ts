@@ -1,18 +1,20 @@
 import { describe, expect, it } from 'vitest';
+import type { Catalog } from '../catalog/types';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
-import { emptySecretStore } from './store';
+import { emptySecretStore, type SecretStore } from './store';
 import { generateSecret, withGeneratedSecrets, type RandomBytes } from './generate';
+import { secretsToGenerate } from './values';
 
 const constant =
   (byte: number): RandomBytes =>
   (size) =>
     Buffer.alloc(size, byte);
 
-function stackOf(source: string): ResolvedStack {
+function stackOf(source: string, catalog: Catalog = fixtureCatalog): ResolvedStack {
   const result = resolveStack(
     fixtureConfig(source),
-    fixtureCatalog,
+    catalog,
     FIXTURE_HOST,
     '/opt/mediaplane',
   );
@@ -73,5 +75,45 @@ describe('withGeneratedSecrets', () => {
     };
     const result = withGeneratedSecrets(stackOf(STACK), existing, constant(0xab));
     expect(result).toEqual({ store: existing, generated: [] });
+  });
+});
+
+describe('withGeneratedSecrets agrees with secretsToGenerate', () => {
+  // Three apps with generated secrets, one of them with two, so order and filtering show.
+  const catalog: Catalog = fixtureCatalog.map((app) => {
+    if (app.id === 'qbittorrent')
+      return { ...app, secrets: { apiKey: { generate: 'qbt' } } };
+    if (app.id === 'prowlarr') {
+      return {
+        ...app,
+        secrets: { token: { generate: 'qbt' }, apiKey: { generate: 'hex32' } },
+      };
+    }
+    return app;
+  });
+  const stack = stackOf(`${STACK}  prowlarr: {}\n`, catalog);
+
+  it('generates exactly what the plan says it will, in the same order', () => {
+    const planned = secretsToGenerate(stack, emptySecretStore());
+    expect(planned).toHaveLength(4);
+    const result = withGeneratedSecrets(stack, emptySecretStore());
+    expect(result.generated).toEqual(planned);
+    expect(result.store.apps.qbittorrent?.apiKey).toMatch(/^qbt_[0-9A-Za-z]{28}$/);
+    expect(result.store.apps.prowlarr?.token).toMatch(/^qbt_[0-9A-Za-z]{28}$/);
+    expect(result.store.apps.prowlarr?.apiKey).toMatch(/^[0-9a-f]{32}$/);
+    expect(result.store.apps.sonarr?.apiKey).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it('still agrees when some secrets are already stored', () => {
+    const partial: SecretStore = {
+      version: 1,
+      apps: { prowlarr: { apiKey: '0'.repeat(32) }, sonarr: { apiKey: '1'.repeat(32) } },
+    };
+    const planned = secretsToGenerate(stack, partial);
+    expect(planned).toHaveLength(2);
+    const result = withGeneratedSecrets(stack, partial);
+    expect(result.generated).toEqual(planned);
+    expect(result.store.apps.prowlarr?.apiKey).toBe('0'.repeat(32));
+    expect(result.store.apps.sonarr?.apiKey).toBe('1'.repeat(32));
   });
 });
