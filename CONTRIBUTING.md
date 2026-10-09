@@ -3,7 +3,7 @@
 ## Setup
 
 You need Node 24 (see `.nvmrc`), pnpm through Corepack, and Docker. The secret-scan hook
-uses Docker, and so will the end-to-end tests later.
+uses Docker, and so do the end-to-end tests (`pnpm test:e2e`).
 
 ```bash
 corepack enable
@@ -23,7 +23,9 @@ pnpm install        # also points git at the repo's hooks in .githooks/
 
 The unit tests use in-memory fakes for Docker and the host. The spawned-CLI tests in
 `packages/cli/src/main.test.ts` and `pnpm test:e2e` use the real Docker, under their own
-Compose project names (`MEDIAPLANE_COMPOSE_PROJECT`), so they never touch a real stack.
+Compose project names, so they never touch a real stack. The end-to-end suite passes its
+own project names (starting `mediaplane-e2e-`) straight to the engine; the spawned-CLI
+tests set `MEDIAPLANE_COMPOSE_PROJECT`.
 
 Before committing, run `pnpm format && pnpm lint && pnpm typecheck && pnpm test`.
 

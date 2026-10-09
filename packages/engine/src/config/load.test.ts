@@ -253,6 +253,17 @@ describe('parseConfig', () => {
     });
   });
 
+  it('rejects subnets with leading zeros in an octet', () => {
+    const [diagnostic] = diagnosticsOf(
+      `${MINIMAL}network: { lan_subnet: 010.001.1.0/24 }\n`,
+    );
+    expect(diagnostic).toMatchObject({
+      code: 'config.invalid',
+      path: 'network.lan_subnet',
+    });
+    expect(parseConfig(`${MINIMAL}network: { lan_subnet: 10.1.1.0/24 }\n`).ok).toBe(true);
+  });
+
   it('rejects data paths containing ":"', () => {
     const [diagnostic] = diagnosticsOf(MINIMAL.replace('/srv/data', '/srv/data:/x'));
     expect(diagnostic).toMatchObject({ code: 'config.invalid', path: 'paths.data' });

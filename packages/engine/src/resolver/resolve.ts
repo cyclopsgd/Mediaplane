@@ -519,7 +519,7 @@ function bindAddresses(
           diagnostics: [
             error(
               'network.cloud-lan',
-              `network.bind is "lan", but this host looks like a ${host.cloud} VM, where private addresses are often reachable from the internet`,
+              `network.bind is "lan", but this host looks like it runs on ${host.cloud}, where private addresses are often reachable from the internet`,
               {
                 path: 'network.bind',
                 hint: 'use bind: localhost and reach the stack through Tailscale or an SSH tunnel; if you are sure, set network.lan_subnet to the private network to publish on',
@@ -543,7 +543,10 @@ function bindAddresses(
               : `network.bind is "lan", but none of this host's private addresses is inside network.lan_subnet ${subnet}`,
             {
               path: subnet === undefined ? 'network.bind' : 'network.lan_subnet',
-              hint: 'use bind: localhost and reach the stack through Tailscale or an SSH tunnel',
+              hint:
+                subnet === undefined
+                  ? 'use bind: localhost and reach the stack through Tailscale or an SSH tunnel'
+                  : "check network.lan_subnet against this host's addresses, or use bind: localhost",
             },
           ),
         ],

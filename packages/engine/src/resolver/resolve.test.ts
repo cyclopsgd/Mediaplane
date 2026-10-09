@@ -329,7 +329,11 @@ describe('resolveStack: binding', () => {
       host: { arch: 'amd64', privateAddresses: [] },
     });
     expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'network.no-lan-address', path: 'network.bind' }),
+      expect.objectContaining({
+        code: 'network.no-lan-address',
+        path: 'network.bind',
+        hint: 'use bind: localhost and reach the stack through Tailscale or an SSH tunnel',
+      }),
     );
   });
 
@@ -353,6 +357,7 @@ describe('resolveStack: binding', () => {
       expect.objectContaining({
         code: 'network.no-lan-address',
         path: 'network.lan_subnet',
+        hint: "check network.lan_subnet against this host's addresses, or use bind: localhost",
       }),
     );
   });
@@ -378,7 +383,12 @@ describe('resolveStack: cloud hosts', () => {
     const result = resolve('  qbittorrent: {}\n', { base: lan, host: cloudHost });
     expect(result.stack).toBeUndefined();
     expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'network.cloud-lan', path: 'network.bind' }),
+      expect.objectContaining({
+        code: 'network.cloud-lan',
+        path: 'network.bind',
+        message:
+          'network.bind is "lan", but this host looks like it runs on Oracle Cloud, where private addresses are often reachable from the internet',
+      }),
     );
   });
 

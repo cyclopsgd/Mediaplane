@@ -2,13 +2,14 @@ import { z } from 'zod';
 import { compare } from '../util/sort';
 
 export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const IPV4_CIDR = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(?:\d|[12]\d|3[0-2])$/;
+/** An octet 0-255 without leading zeros, which some parsers read as octal. */
+const OCTET = '(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)';
+const IPV4_CIDR = new RegExp(`^${OCTET}(?:\\.${OCTET}){3}\\/(?:\\d|[12]\\d|3[0-2])$`);
 /** A Docker image tag: letters, digits, "_", "." and "-", not starting with "." or "-". */
 const DOCKER_TAG = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 
 function isIpv4Cidr(value: string): boolean {
-  const match = IPV4_CIDR.exec(value);
-  return match !== null && match.slice(1, 5).every((octet) => Number(octet) <= 255);
+  return IPV4_CIDR.test(value);
 }
 /** `<app>.<resource>` or `<app>.<resource>.<field>`; field names are camelCase. */
 const OVERRIDE_KEY = /^[a-z0-9-]+(?:\.[A-Za-z0-9_]+){1,2}$/;
