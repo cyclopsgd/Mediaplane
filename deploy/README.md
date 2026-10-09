@@ -12,7 +12,8 @@ The stack Mediaplane deploys is a separate Compose project, `mediaplane`, so `ap
 never touch Mediaplane itself.
 
 > Mediaplane is pre-alpha. The apps are not wired together yet (Slices 3 to 7 do that).
-> On a home network, `init` publishes their web UIs on your LAN. Until the wiring lands:
+> On a home network, `init` sets their web UIs to be published on your LAN. Until the
+> wiring lands:
 >
 > - Jellyfin's setup wizard and Seerr's setup are open to anyone on your LAN until you
 >   complete them, so complete them first;
@@ -234,7 +235,7 @@ Each item is a message you may see, then what to do.
 
   Move it into the home: the container sees nothing else.
 
-- `cannot talk to Docker: failed to connect to the docker API at tcp://socket-proxy:2375`
+- `… failed to connect to the docker API at tcp://socket-proxy:2375 …`
 
   The socket proxy is not running. Check it on the host, read its log, and start it
   again:
