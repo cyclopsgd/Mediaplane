@@ -30,6 +30,13 @@ describe('catalog', () => {
       expect(new Set(names).size).toBe(names.length);
     });
 
+    it('has unique container ports per protocol', () => {
+      const listeners = app.ports.map(
+        (port) => `${port.protocol ?? 'tcp'}/${port.container}`,
+      );
+      expect(new Set(listeners).size).toBe(listeners.length);
+    });
+
     it('only injects secrets it declares', () => {
       for (const step of app.credentials) {
         if (step.step === 'env') expect(Object.keys(app.secrets)).toContain(step.secret);

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import type { AppDefinition, PortSpec } from '../catalog/types';
 import type { HostFacts } from '../host/facts';
-import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
+import {
+  FIXTURE_HOST,
+  fixtureApp,
+  fixtureCatalog,
+  fixtureConfig,
+} from '../testing/fixtures';
 import { resolveStack, type ResolveResult } from './resolve';
 
 const BASE = `version: 1
@@ -214,6 +220,79 @@ describe('resolveStack: ports and images', () => {
     );
     expect(app(result, 'sonarr')?.image).toBe('registry.test/sonarr:2.0.0');
     expect(codes(result)).toEqual(['app.untested-version']);
+  });
+});
+
+describe('resolveStack: namespace port conflicts', () => {
+  // Gluetun's fixture reserves 8000 for its control server.
+  const guest = (id: string, ports: PortSpec[]) =>
+    fixtureApp({
+      id,
+      ports,
+      networkVia: () => 'gluetun',
+      implies: () => ['gluetun'],
+    });
+  const web = (container: number): PortSpec => ({
+    name: 'web',
+    container,
+    hostEqualsContainer: { env: 'WEB_PORT' },
+  });
+  const resolveWith = (apps: AppDefinition[]) => {
+    const config = fixtureConfig(
+      `${BASE}apps:\n${apps.map((a) => `  ${a.id}: {}\n`).join('')}`,
+    );
+    return resolveStack(
+      config,
+      [...apps, ...fixtureCatalog],
+      FIXTURE_HOST,
+      '/opt/mediaplane',
+    );
+  };
+
+  it('blames the guest even when its id sorts before the namespace host', () => {
+    const result = resolveWith([guest('aaa-guest', [web(8000)])]);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'port.namespace-conflict',
+        message:
+          "gluetun and aaa-guest both listen on port 8000/tcp inside gluetun's network",
+        path: 'apps.aaa-guest.port',
+        hint: 'set apps.aaa-guest.port to another port',
+      }),
+    );
+    expect(result.diagnostics.map((d) => d.path)).not.toContain('apps.gluetun.port');
+  });
+
+  it('gives no hint when the clash is not on the port that apps.<id>.port moves', () => {
+    const result = resolveWith([
+      guest('zzz-guest', [web(9000), { name: 'rpc', container: 8000, publish: false }]),
+    ]);
+    const conflict = result.diagnostics.find((d) => d.code === 'port.namespace-conflict');
+    expect(conflict?.path).toBe('apps.zzz-guest.port');
+    expect(conflict?.hint).toBeUndefined();
+  });
+
+  it('blames the later app when both share the host namespace', () => {
+    const result = resolveWith([
+      guest('aaa-guest', [web(9000)]),
+      guest('bbb-guest', [web(9000)]),
+    ]);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'port.namespace-conflict',
+        path: 'apps.bbb-guest.port',
+        hint: 'set apps.bbb-guest.port to another port',
+      }),
+    );
+  });
+
+  it('ignores duplicate ports inside one app (a catalog test covers them)', () => {
+    const twice: PortSpec[] = [
+      { name: 'one', container: 7000, publish: false },
+      { name: 'two', container: 7000, publish: false },
+    ];
+    const result = resolveWith([fixtureApp({ id: 'twice', ports: twice })]);
+    expect(result.diagnostics).toEqual([]);
   });
 });
 

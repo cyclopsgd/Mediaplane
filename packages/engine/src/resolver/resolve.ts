@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AppContext, AppDefinition, Catalog } from '../catalog/types';
+import type { AppContext, AppDefinition, Catalog, PortSpec } from '../catalog/types';
 import type { AppSettings, StackConfig } from '../config/schema';
 import { error, hasErrors, warning, withHint, type Diagnostic } from '../diagnostics';
 import { inSubnet, networkOf, type HostFacts } from '../host/facts';
@@ -444,31 +444,43 @@ function checkPortConflicts(apps: readonly ResolvedApp[]): Diagnostic[] {
 
 /**
  * Apps sharing a network namespace (qBittorrent inside Gluetun) listen on the same
- * interfaces, so their container ports must differ, published or not.
+ * interfaces, so their container ports must differ, published or not. The guest (the app
+ * that sets networkVia) is blamed, because it is the one the user can move; with two
+ * guests, or none, the later app is blamed.
  */
 function checkNamespacePorts(apps: readonly ResolvedApp[]): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
-  const listeners = new Map<string, ResolvedApp>();
+  const listeners = new Map<string, { app: ResolvedApp; spec: PortSpec }>();
   for (const app of apps) {
     const namespace = app.networkVia ?? app.def.id;
     for (const spec of app.def.ports) {
       const port = app.containerPorts[spec.name] ?? spec.container;
       const protocol = spec.protocol ?? 'tcp';
       const key = `${namespace}/${protocol}/${port}`;
-      const other = listeners.get(key);
-      if (other === undefined) {
-        listeners.set(key, app);
+      const first = listeners.get(key);
+      if (first === undefined) {
+        listeners.set(key, { app, spec });
         continue;
       }
-      const movable = app.def.ports.some((p) => p.hostEqualsContainer !== undefined);
+      // Duplicate ports within one app are a catalog error, caught by the catalog tests.
+      if (first.app.def.id === app.def.id) continue;
+      const [blamed, other] =
+        first.app.networkVia !== undefined && app.networkVia === undefined
+          ? [first, { app, spec }]
+          : [{ app, spec }, first];
+      // apps.<id>.port moves only the first published port, and only if host and
+      // container ports must match.
+      const primary = blamed.app.def.ports.find((p) => p.publish !== false);
+      const movable =
+        blamed.spec === primary && blamed.spec.hostEqualsContainer !== undefined;
       diagnostics.push(
         error(
           'port.namespace-conflict',
-          `${other.def.name} and ${app.def.name} both listen on port ${port}/${protocol} inside ${namespace}'s network`,
+          `${other.app.def.name} and ${blamed.app.def.name} both listen on port ${port}/${protocol} inside ${namespace}'s network`,
           {
-            path: `apps.${app.def.id}.port`,
+            path: `apps.${blamed.app.def.id}.port`,
             ...withHint(
-              movable ? `set apps.${app.def.id}.port to another port` : undefined,
+              movable ? `set apps.${blamed.app.def.id}.port to another port` : undefined,
             ),
           },
         ),
