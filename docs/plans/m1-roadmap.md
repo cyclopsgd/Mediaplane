@@ -12,7 +12,8 @@ vertical slices. Each slice:
 Detailed plans so far:
 
 - Slice 1: [`m1-s1-pure-core.md`](m1-s1-pure-core.md) (done).
-- Slice 2a: [`m1-s2a-plan-against-docker.md`](m1-s2a-plan-against-docker.md).
+- Slice 2a: [`m1-s2a-plan-against-docker.md`](m1-s2a-plan-against-docker.md) (done).
+- Slice 2b: [`m1-s2b-apply.md`](m1-s2b-apply.md).
 
 ## Slices
 
