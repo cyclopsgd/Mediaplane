@@ -88,6 +88,16 @@ describe('the real catalog', () => {
     expect(render(SPEC_EXAMPLE).compose.services.byparr?.ports).toBeUndefined();
   });
 
+  it('gives Byparr a health check that passes within a minute', () => {
+    expect(render(SPEC_EXAMPLE).compose.services.byparr?.healthcheck).toEqual({
+      test: ['CMD', 'curl', '-fsS', '-o', '/dev/null', 'http://127.0.0.1:8191/health'],
+      interval: '30s',
+      timeout: '10s',
+      retries: 5,
+      start_period: '60s',
+    });
+  });
+
   it('pins every image by digest', () => {
     for (const service of Object.values(render(SPEC_EXAMPLE).compose.services)) {
       expect(service.image).toMatch(/:[^@]+@sha256:[0-9a-f]{64}$/);

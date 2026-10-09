@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { createServer, type AddressInfo, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +14,46 @@ const ENV = {
   MEDIAPLANE_COMPOSE_PROJECT: `mediaplane-test-${process.pid}`,
 };
 
+function listen(): Promise<Server> {
+  return new Promise((done) => {
+    const server = createServer();
+    server.listen(0, '127.0.0.1', () => {
+      done(server);
+    });
+  });
+}
+
+/**
+ * Ports nothing on this host listens on, so the spawned plan passes preflight even on a
+ * machine that runs a real stack on the default ports.
+ */
+async function freePorts(): Promise<{
+  sonarr: number;
+  qbittorrent: number;
+  jellyfin: number;
+}> {
+  const held = [await listen(), await listen(), await listen()] as const;
+  const portOf = (server: Server) => (server.address() as AddressInfo).port;
+  const ports = {
+    sonarr: portOf(held[0]),
+    qbittorrent: portOf(held[1]),
+    jellyfin: portOf(held[2]),
+  };
+  await Promise.all(
+    held.map(
+      (server) =>
+        new Promise<void>((done) => {
+          server.close(() => {
+            done();
+          });
+        }),
+    ),
+  );
+  return ports;
+}
+
+const PORTS = await freePorts();
+
 function stackFor(data: string): string {
   return `version: 1
 user: { uid: ${process.getuid?.() ?? 1000}, gid: ${process.getgid?.() ?? 1000} }
@@ -20,8 +61,9 @@ paths: { data: ${data} }
 network: { bind: localhost }
 media_server: jellyfin
 apps:
-  sonarr: {}
-  qbittorrent: { vpn: false }
+  sonarr: { port: ${PORTS.sonarr} }
+  qbittorrent: { vpn: false, port: ${PORTS.qbittorrent} }
+  jellyfin: { port: ${PORTS.jellyfin} }
 `;
 }
 

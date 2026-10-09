@@ -43,6 +43,12 @@ describe('catalog', () => {
       }
     });
 
+    it('names no secret env<Name>, which would collide with apps.<id>.env', () => {
+      // secretEnvName(id, 'envToken') is MP_<ID>_ENV_TOKEN, the same variable as
+      // apps.<id>.env.TOKEN (appEnvSecretName).
+      for (const name of Object.keys(app.secrets)) expect(name).not.toMatch(/^env[A-Z]/);
+    });
+
     it('accepts empty options and implies only catalog apps', () => {
       const options = (app.options ?? NO_OPTIONS).parse({});
       for (const implied of app.implies?.(options) ?? []) {

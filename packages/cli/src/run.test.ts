@@ -152,9 +152,16 @@ describe('mediaplane plan', () => {
   });
 
   it('treats an empty MEDIAPLANE_HOME as unset', async () => {
+    const homes: string[] = [];
     const term = capture({ MEDIAPLANE_HOME: '' });
-    expect(await run(['plan'], term.io, deps())).toBe(1);
-    expect(term.stderr()).toContain('no stack.yaml at /opt/mediaplane/stack.yaml');
+    await run(['plan'], term.io, {
+      ...deps(),
+      runtime: (home) => {
+        homes.push(home);
+        return fakeRuntime();
+      },
+    });
+    expect(homes).toEqual(['/opt/mediaplane']);
   });
 
   it('passes MEDIAPLANE_COMPOSE_PROJECT to the runtime', async () => {

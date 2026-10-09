@@ -72,7 +72,7 @@ each one, or corrects it in the catalog:
 | Value | Verified in |
 |---|---|
 | Health-check commands for each image (`curl` in linuxserver images, `wget` in Seerr). The tools were confirmed present in every pinned image on 2026-10-09; S2b confirms the checks pass | S2b |
-| Gluetun's built-in health check with `depends_on: service_healthy` | S2b |
+| Gluetun's built-in health check with `depends_on: service_healthy`. It needs a working tunnel, so it is verified with S3's local WireGuard server | S3 |
 | `FIREWALL_OUTBOUND_SUBNETS` accepting a comma-separated list | S3 |
 | qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace | S3 |
 | The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs) | S3 |
