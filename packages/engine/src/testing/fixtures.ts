@@ -63,6 +63,8 @@ export const fixtureCatalog: Catalog = [
     ports: [{ name: 'control', container: 8000, publish: false }],
     runAs: 'image-default',
     health: 'image',
+    secrets: { wireguardKey: { userProvided: 'vpn.private_key' } },
+    credentials: [{ step: 'env', var: 'WIREGUARD_PRIVATE_KEY', secret: 'wireguardKey' }],
     extras: () => ({ cap_add: ['NET_ADMIN'] }),
     validate: (ctx) => (ctx.config.vpn ? [] : [error('vpn.missing', 'no vpn: block')]),
   }),

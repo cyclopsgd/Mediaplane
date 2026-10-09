@@ -10,6 +10,7 @@ services:
       - NET_ADMIN
     environment:
       TZ: "Europe/London"
+      WIREGUARD_PRIVATE_KEY: "${MP_GLUETUN_WIREGUARD_KEY}"
     volumes:
       - /opt/mediaplane/appdata/gluetun:/config
     ports:

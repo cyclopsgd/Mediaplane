@@ -101,7 +101,10 @@ describe('renderCompose', () => {
       PGID: '1000',
       TZ: 'Europe/London',
     });
-    expect(compose.services.gluetun?.environment).toEqual({ TZ: 'Europe/London' });
+    expect(compose.services.gluetun?.environment).toEqual({
+      TZ: 'Europe/London',
+      WIREGUARD_PRIVATE_KEY: '${MP_GLUETUN_WIREGUARD_KEY}',
+    });
   });
 
   it('sorts environment keys', () => {
