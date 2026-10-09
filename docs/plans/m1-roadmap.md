@@ -77,11 +77,12 @@ each one, or corrects it in the catalog:
 | The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs) | S3 |
 | Seerr running as uid 1000 with `init: true` | S7 |
 
-## Inputs for later slices from the Slice 1 reviews (2026-10-08)
+## Inputs for later slices from the reviews
 
-The Slice 1 final review approved the merge. It also raised the design gaps
-below, which only matter once Mediaplane writes files or deploys. Each slice
-plan must address the items for that slice.
+The Slice 1 final review (2026-10-08) approved the merge. It also raised the
+design gaps below, which only matter once Mediaplane writes files or deploys.
+The Slice 2a final review (2026-10-09) added the S2b list and two S3 items.
+Each slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -120,6 +121,31 @@ plan must address the items for that slice.
     history exist.
 - **Tests:** a test that `plan()` writes nothing, alongside the new write code.
 
+**S2b (blockers for `apply`):**
+
+- **Own ports are matched by exact address.** Preflight treats a port as the
+  stack's own only when a container publishes it on the same address. Changing
+  `network.bind` while the containers run then gives a false
+  `preflight.port-in-use`. Key own ports on protocol and port instead.
+- **Runtime errors from `configHashes`.** A `RuntimeError` thrown by
+  `configHashes` escapes `plan()` without the `docker.unavailable` handling
+  that `versions()` and `containers()` get.
+- **No timeout in `nodeExec`.** A hung `docker` call hangs `plan` and `apply`.
+- **Malformed `ps` output.** A line that isn't JSON throws a `SyntaxError`. Make
+  it a `RuntimeError`, and skip lines that aren't JSON objects.
+- **Duplicate containers for one service.** When a service has more than one
+  container, the last one wins. Handle it explicitly.
+- **Validate `MEDIAPLANE_COMPOSE_PROJECT`** (`mediaplane` or `mediaplane-*`)
+  before `apply` can act on it (spec §7.2(2)).
+- **The test environment.** `main.test` needs ports 8989, 8080 and 8096 free,
+  and `run.test` assumes `/opt/mediaplane` doesn't exist. So `pnpm test` fails
+  on a host that runs a real stack.
+- **Secret name collisions.** A catalog secret named `env<X>` would map to the
+  same `MP_<APP>_ENV_<X>` variable as `apps.<id>.env.<X>`. Add a guard test with
+  the next catalog secret.
+- **The eject command in the docs.** ADR 0002 and spec §2.3 still say plain
+  `docker compose up -d`. Update them to the exact command once `.env` exists.
+
 **S3:**
 
 - Gluetun's `FIREWALL_OUTBOUND_SUBNETS` and Servarr's `TRUSTEDNETWORKS` should
@@ -128,6 +154,11 @@ plan must address the items for that slice.
 - Warn when `lanSubnets` is empty but a feature needs it.
 - Servarr `TRUSTEDNETWORKS` should add Mediaplane's Docker network once
   requests are proxied (ruling R12; spec §6.1).
+- **`lanSubnets` on cloud hosts.** On a cloud VM without an explicit
+  `lan_subnet`, leave `lanSubnets` empty.
+- **Keep `lan_subnet` private.** Require `lan_subnet` to be inside RFC 1918, so
+  a public or `0.0.0.0/0` subnet can't widen `TRUSTEDNETWORKS` or the
+  authentication bypass.
 
 **S4:** override field names are case-sensitive, so the managed-field
 comparison must match them exactly.
