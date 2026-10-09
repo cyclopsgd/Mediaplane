@@ -91,6 +91,8 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
         options.project,
         'ps',
         '--all',
+        // Full IDs: a guest's hash depends on its host's full ID (see predictContainers).
+        '--no-trunc',
         '--format',
         'json',
       ]);
@@ -128,7 +130,7 @@ interface PsPublisher {
   Protocol?: unknown;
 }
 
-/** `docker compose ps --format json` output: one JSON object per line. */
+/** `docker compose ps --no-trunc --format json` output: one JSON object per line. */
 export function parseContainers(stdout: string): ContainerState[] {
   return stdout
     .split('\n')

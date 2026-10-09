@@ -6,7 +6,7 @@ import { portKey } from '../preflight/checks';
 import type { HostProbe } from '../preflight/probe';
 import type { Runtime } from '../runtime/types';
 import { SECRETS_PATH } from '../secrets/store';
-import { fakeProbe, fakeRuntime, running } from '../testing/fakes';
+import { fakeHash, fakeProbe, fakeRuntime, running } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureCatalog } from '../testing/fixtures';
 import { COMPOSE_PATH, plan } from './plan';
 
@@ -88,6 +88,36 @@ describe('plan', () => {
     expect(result).toMatchObject({ ok: true, changed: false, secrets: { generate: [] } });
     expect(result.files).toEqual([expect.objectContaining({ status: 'unchanged' })]);
     expect(result.containers.every((c) => c.action === 'unchanged')).toBe(true);
+  });
+
+  it('keeps the VPN guest unchanged when it and its host are current', async () => {
+    const home = await makeHome({ withStore: true });
+    const asked: { compose: string; values: Record<string, string> }[] = [];
+    const base = fakeRuntime();
+    const runtime: Runtime = {
+      ...base,
+      configHashes: (compose, values) => {
+        asked.push({ compose, values });
+        return base.configHashes(compose, values);
+      },
+    };
+    await planFor(home, { runtime });
+    const { compose, values } = asked[0] ?? { compose: '', values: {} };
+    // Compose records qbittorrent's hash with gluetun's container ID in its network_mode.
+    const guest = compose.replace(
+      'network_mode: service:gluetun',
+      'network_mode: container:fake-gluetun',
+    );
+    const labels = {
+      ...fakeHash(compose, values),
+      qbittorrent: fakeHash(guest, values).qbittorrent ?? '',
+    };
+    const result = await planFor(home, {
+      runtime: fakeRuntime({ containers: running(labels) }),
+    });
+    expect(result.containers).toEqual(
+      SERVICES.map((service) => ({ service, action: 'unchanged' })),
+    );
   });
 
   it('never writes to the home directory', async () => {

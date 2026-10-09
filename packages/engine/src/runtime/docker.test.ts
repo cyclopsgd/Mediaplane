@@ -22,10 +22,12 @@ function recorder(respond: (args: readonly string[]) => ExecResult) {
 
 const ok = (stdout: string): ExecResult => ({ code: 0, stdout, stderr: '' });
 const HASH = 'a'.repeat(64);
+/** `ps --no-trunc` reports full 64-character container IDs. */
+const SONARR_ID = 'd5a2f5c9b82d'.padEnd(64, '0');
 
 const PS_SONARR = JSON.stringify({
   Service: 'sonarr',
-  ID: 'd5a2f5c9b82d',
+  ID: SONARR_ID,
   State: 'running',
   Health: 'healthy',
   Labels: `com.docker.compose.project.config_files=/opt/mediaplane/generated/compose.yaml,/opt/mediaplane/compose.override.yaml,com.docker.compose.config-hash=${HASH},com.docker.compose.service=sonarr`,
@@ -36,7 +38,7 @@ const PS_SONARR = JSON.stringify({
 });
 const PS_BYPARR = JSON.stringify({
   Service: 'byparr',
-  ID: '0b1c2d3e4f5a',
+  ID: '0b1c2d3e4f5a'.padEnd(64, '0'),
   State: 'exited',
   Health: '',
   Labels: 'com.docker.compose.service=byparr',
@@ -170,7 +172,7 @@ describe('createDockerRuntime', () => {
     });
   });
 
-  it("lists the project's containers by name only", async () => {
+  it("lists the project's containers by name only, with full container IDs", async () => {
     const { exec, calls } = recorder(() => ok(`${PS_SONARR}\n${PS_BYPARR}\n`));
     const containers = await createDockerRuntime({
       home,
@@ -183,6 +185,7 @@ describe('createDockerRuntime', () => {
       'p',
       'ps',
       '--all',
+      '--no-trunc',
       '--format',
       'json',
     ]);
@@ -201,7 +204,7 @@ describe('parseContainers', () => {
     expect(parseContainers(`${PS_SONARR}\n`)).toEqual([
       {
         service: 'sonarr',
-        id: 'd5a2f5c9b82d',
+        id: SONARR_ID,
         state: 'running',
         health: 'healthy',
         configHash: HASH,

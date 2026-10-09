@@ -7,6 +7,7 @@ export interface PublishedAddress {
 /** One container of the Compose project, as `docker compose ps` reports it. */
 export interface ContainerState {
   service: string;
+  /** The full 64-character container ID. */
   id: string;
   /** "running", "exited", "created", … */
   state: string;

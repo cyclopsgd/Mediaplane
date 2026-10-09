@@ -4,15 +4,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
+  composeToYaml,
   createDockerRuntime,
   detectHostFacts,
   nodeExec,
   nodeProbe,
   plan,
+  predictContainers,
+  type ComposeFile,
+  type ExecResult,
 } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
 
 const PROJECT = `mediaplane-e2e-${process.pid}`;
+const BUSYBOX =
+  'busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e';
 
 /**
  * The M1 video stack without the VPN (the VPN gets its own end-to-end test in Slice 3).
@@ -38,6 +44,34 @@ async function makeHome(): Promise<string> {
   await mkdir(join(home, 'data'));
   await writeFile(join(home, 'stack.yaml'), stackFor(join(home, 'data')));
   return home;
+}
+
+/** `docker compose create` for the compose.yaml in `home`, as `project`. */
+function composeCreate(
+  project: string,
+  home: string,
+  values: Record<string, string> = {},
+): Promise<ExecResult> {
+  return nodeExec(
+    'docker',
+    [
+      'compose',
+      '-p',
+      project,
+      '--project-directory',
+      home,
+      '-f',
+      join(home, 'compose.yaml'),
+      'create',
+    ],
+    { env: { ...process.env, ...values }, cwd: '/' },
+  );
+}
+
+function composeDown(project: string): Promise<ExecResult> {
+  return nodeExec('docker', ['compose', '-p', project, 'down', '--remove-orphans'], {
+    cwd: '/',
+  });
 }
 
 function planFor(home: string) {
@@ -95,7 +129,7 @@ describe('plan against real Docker', () => {
     const compose = [
       'services:',
       '  probe:',
-      '    image: busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e',
+      `    image: ${BUSYBOX}`,
       '    command: ["true"]',
       '    environment:',
       '      FAKE_SECRET: "${MP_FAKE_SECRET}"',
@@ -108,20 +142,7 @@ describe('plan against real Docker', () => {
     const predicted = await runtime.configHashes(compose, values);
     await writeFile(join(home, 'compose.yaml'), compose);
     try {
-      const created = await nodeExec(
-        'docker',
-        [
-          'compose',
-          '-p',
-          project,
-          '--project-directory',
-          home,
-          '-f',
-          join(home, 'compose.yaml'),
-          'create',
-        ],
-        { env: { ...process.env, ...values }, cwd: '/' },
-      );
+      const created = await composeCreate(project, home, values);
       expect(created.code, created.stderr).toBe(0);
       const containers = await runtime.containers();
       expect(containers).toEqual([
@@ -132,10 +153,78 @@ describe('plan against real Docker', () => {
         hashes: { probe: containers[0]?.configHash },
       });
     } finally {
-      await nodeExec('docker', ['compose', '-p', project, 'down', '--remove-orphans'], {
-        cwd: '/',
-      });
+      await composeDown(project);
     }
+  });
+
+  it("predicts a guest in another service's network namespace", async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-'));
+    const project = `${PROJECT}-ns`;
+    // Only ever created, never started, so busybox's default command is fine. The name
+    // matches -p, so nothing here can reach another project.
+    const compose = (aEnvironment?: Record<string, string>): ComposeFile => ({
+      name: project,
+      services: {
+        a: {
+          image: BUSYBOX,
+          restart: 'unless-stopped',
+          ...(aEnvironment === undefined ? {} : { environment: aEnvironment }),
+          labels: {},
+        },
+        b: {
+          image: BUSYBOX,
+          restart: 'unless-stopped',
+          network_mode: 'service:a',
+          labels: {},
+        },
+      },
+    });
+    const runtime = createDockerRuntime({ home, project });
+    const predict = async (file: ComposeFile) =>
+      predictContainers(file, {}, runtime, await runtime.containers());
+    let down: ExecResult | undefined;
+    try {
+      await writeFile(join(home, 'compose.yaml'), composeToYaml(compose()));
+      const created = await composeCreate(project, home);
+      expect(created.code, created.stderr).toBe(0);
+      // `create` leaves both containers "created" with matching hashes: up would only
+      // start them. Without the guest pass, b would show as recreate.
+      expect(await predict(compose())).toEqual({
+        ok: true,
+        changes: [
+          { service: 'a', action: 'start' },
+          { service: 'b', action: 'start' },
+        ],
+      });
+
+      // Change only a: Compose recreates b with it, in a's new network namespace.
+      const changed = compose({ FAKE_CHANGE: '1' });
+      expect(await predict(changed)).toEqual({
+        ok: true,
+        changes: [
+          { service: 'a', action: 'recreate' },
+          { service: 'b', action: 'recreate' },
+        ],
+      });
+      const before = await runtime.containers();
+      await writeFile(join(home, 'compose.yaml'), composeToYaml(changed));
+      const recreated = await composeCreate(project, home);
+      expect(recreated.code, recreated.stderr).toBe(0);
+      const after = await runtime.containers();
+      expect(after.map((c) => c.id)).not.toContain(before[0]?.id);
+      expect(after.map((c) => c.id)).not.toContain(before[1]?.id);
+      // And with the containers current again, nothing changes but the start.
+      expect(await predict(changed)).toEqual({
+        ok: true,
+        changes: [
+          { service: 'a', action: 'start' },
+          { service: 'b', action: 'start' },
+        ],
+      });
+    } finally {
+      down = await composeDown(project);
+    }
+    expect(down.code, down.stderr).toBe(0);
   });
 
   it('reports a compose.override.yaml that Compose rejects', async () => {

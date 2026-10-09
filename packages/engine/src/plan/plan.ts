@@ -12,8 +12,9 @@ import { resolveStack } from '../resolver/resolve';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { readSecretStore } from '../secrets/store';
 import { secretsToGenerate, secretValues } from '../secrets/values';
-import { ownPorts, planContainers, type ContainerChange } from './containers';
+import { ownPorts, type ContainerChange } from './containers';
 import { diffFiles, type FileChange } from './files';
+import { predictContainers } from './predict';
 
 export const COMPOSE_PATH = 'generated/compose.yaml';
 
@@ -79,27 +80,31 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
   );
   if (hasErrors(diagnostics)) return failed(diagnostics);
 
-  const compose = composeToYaml(renderCompose(stack), home);
-  const files = await diffFiles(home, [{ path: COMPOSE_PATH, content: compose }]);
+  const compose = renderCompose(stack);
+  const files = await diffFiles(home, [
+    { path: COMPOSE_PATH, content: composeToYaml(compose, home) },
+  ]);
   const store = await readSecretStore(home);
   const generate = secretsToGenerate(stack, store);
-  const hashes = await options.runtime.configHashes(
+  const predicted = await predictContainers(
     compose,
     await secretValues(stack, store, options.env),
+    options.runtime,
+    current,
   );
-  if (!hashes.ok) {
+  if (!predicted.ok) {
     return failed([
       ...diagnostics,
       error(
         'compose.invalid',
-        `docker compose rejected the configuration: ${hashes.error}`,
+        `docker compose rejected the configuration: ${predicted.error}`,
         {
           hint: 'if you have a compose.override.yaml next to stack.yaml, check it',
         },
       ),
     ]);
   }
-  const containers = planContainers(hashes.hashes, current);
+  const containers = predicted.changes;
   return {
     ok: true,
     changed:

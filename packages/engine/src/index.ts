@@ -9,6 +9,7 @@ export * from './render/compose';
 export * from './render/yaml';
 export * from './plan/files';
 export * from './plan/containers';
+export * from './plan/predict';
 export * from './plan/plan';
 export * from './secrets/store';
 export * from './secrets/values';

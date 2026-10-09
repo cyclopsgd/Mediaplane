@@ -15,7 +15,11 @@ export function composeHeader(home: string): string {
   ].join('\n');
 }
 
-export function composeToYaml(compose: ComposeFile, home: string): string {
+/**
+ * The compose file as YAML. With a `home`, it starts with the do-not-edit header; without
+ * one there is no header, which is enough for hashing (comments don't change Compose's hash).
+ */
+export function composeToYaml(compose: ComposeFile, home?: string): string {
   const doc = new Document(compose);
   // Compose's YAML parser resolves more plain scalars than YAML 1.2 does: "80:80" is read
   // as a base-60 number, and "1_000", "0b101" and "2024-01-01" as a number or a timestamp.
@@ -41,6 +45,6 @@ export function composeToYaml(compose: ComposeFile, home: string): string {
       }
     },
   });
-  doc.commentBefore = composeHeader(home);
+  if (home !== undefined) doc.commentBefore = composeHeader(home);
   return doc.toString({ lineWidth: 0 });
 }
