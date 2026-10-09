@@ -36,6 +36,11 @@ cd Mediaplane
 docker build --tag mediaplane:local .
 ```
 
+Mediaplane's container must not run as root. The commands below use your own ids, so run
+them as a normal user. If `id -u` prints 0, as on a VPS or LXC container where you only
+have root, create a normal user and use its ids in their place, in the `chown` and in
+`deploy/.env`.
+
 Create the home, owned by the user Mediaplane will run as. Here that is you:
 
 ```bash
@@ -55,10 +60,6 @@ DOCKER_GID=$(stat -c %g /var/run/docker.sock)
 EOF
 docker compose -f deploy/mediaplane.compose.yaml up -d
 ```
-
-These commands use your own ids. If `id -u` prints 0, as on a VPS or LXC container where
-you only have root, use a normal user's ids in both places instead, and create that user
-if there is none. Mediaplane's container must not run as root.
 
 For a home somewhere else, add `MEDIAPLANE_HOME=/srv/mediaplane` to `deploy/.env`. The
 home is mounted at the same path inside the container, because the host's Docker resolves
@@ -179,16 +180,16 @@ to the proxy, run `up -d` again with `mediaplane.compose.yaml` alone.
 
 ## Troubleshooting
 
-| You see                                                                                 | What to do                                                                                                                                                                                                  |
-| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `required variable … is missing a value`                                                | Create `deploy/.env` (Install)                                                                                                                                                                              |
-| `bind source path does not exist: /opt/mediaplane`                                      | Create the home first (Install)                                                                                                                                                                             |
-| `the Mediaplane home … is not the same folder on the Docker host`                       | Set `MEDIAPLANE_HOME` instead of editing the volume, so the paths match                                                                                                                                     |
-| `cannot create …: the Mediaplane home must be on a filesystem that supports hard links` | Move the home to a local ext4, XFS or Btrfs filesystem                                                                                                                                                      |
-| `EACCES` on a file in the home                                                          | Give `state/` and `generated/` to `MEDIAPLANE_UID`, for example `sudo chown -R "$(id -u):$(id -g)" /opt/mediaplane/state /opt/mediaplane/generated`. Leave `appdata/` alone: some apps need their own owner |
-| `file … is missing, empty or unreadable`, for a secret file outside the home            | Move it into the home: the container sees nothing else                                                                                                                                                      |
-| `the host helper failed: … No such image`                                               | `MEDIAPLANE_IMAGE` must name an image on this host: check `docker image ls`                                                                                                                                 |
-| `Error response from daemon: Forbidden`                                                 | The proxy refused a call. Its log names it, as `blocked request`: `docker compose -f deploy/mediaplane.compose.yaml logs socket-proxy`                                                                      |
+| You see                                                                                 | What to do                                                                                                                                                                                                                        |
+| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `required variable … is missing a value`                                                | Create `deploy/.env` (Install)                                                                                                                                                                                                    |
+| `bind source path does not exist: /opt/mediaplane`                                      | Create the home first (Install)                                                                                                                                                                                                   |
+| `the Mediaplane home … is not the same folder on the Docker host`                       | Set `MEDIAPLANE_HOME` instead of editing the volume, so the paths match                                                                                                                                                           |
+| `cannot create …: the Mediaplane home must be on a filesystem that supports hard links` | Move the home to a local ext4, XFS or Btrfs filesystem                                                                                                                                                                            |
+| `EACCES` on a file in the home                                                          | Give `state/` and `generated/` to `MEDIAPLANE_UID`, using the ids in `deploy/.env`, for example `sudo chown -R 1000:1000 /opt/mediaplane/state /opt/mediaplane/generated`. Leave `appdata/` alone: some apps need their own owner |
+| `file … is missing, empty or unreadable`, for a secret file outside the home            | Move it into the home: the container sees nothing else                                                                                                                                                                            |
+| `the host helper failed: … No such image`                                               | `MEDIAPLANE_IMAGE` must name an image on this host: check `docker image ls`                                                                                                                                                       |
+| `Error response from daemon: Forbidden`                                                 | The proxy refused a call. Its log names it, as `blocked request`: `docker compose -f deploy/mediaplane.compose.yaml logs socket-proxy`                                                                                            |
 
 ## Removing Mediaplane
 
