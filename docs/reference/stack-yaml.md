@@ -59,15 +59,15 @@ Under `apps.<app>`, where `<app>` is one of the apps listed at the end of this p
 
 ## Apps
 
-| App          | Id             |
-| ------------ | -------------- |
-| Byparr       | `byparr`       |
-| FlareSolverr | `flaresolverr` |
-| Gluetun      | `gluetun`      |
-| Jellyfin     | `jellyfin`     |
-| Plex         | `plex`         |
-| Prowlarr     | `prowlarr`     |
-| qBittorrent  | `qbittorrent`  |
-| Radarr       | `radarr`       |
-| Seerr        | `seerr`        |
-| Sonarr       | `sonarr`       |
+| App                                                  | Id             |
+| ---------------------------------------------------- | -------------- |
+| [Byparr](../../catalog/byparr/README.md)             | `byparr`       |
+| [FlareSolverr](../../catalog/flaresolverr/README.md) | `flaresolverr` |
+| [Gluetun](../../catalog/gluetun/README.md)           | `gluetun`      |
+| [Jellyfin](../../catalog/jellyfin/README.md)         | `jellyfin`     |
+| [Plex](../../catalog/plex/README.md)                 | `plex`         |
+| [Prowlarr](../../catalog/prowlarr/README.md)         | `prowlarr`     |
+| [qBittorrent](../../catalog/qbittorrent/README.md)   | `qbittorrent`  |
+| [Radarr](../../catalog/radarr/README.md)             | `radarr`       |
+| [Seerr](../../catalog/seerr/README.md)               | `seerr`        |
+| [Sonarr](../../catalog/sonarr/README.md)             | `sonarr`       |

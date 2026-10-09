@@ -111,8 +111,25 @@ function renderService(
   };
 }
 
-function healthcheck(test: string[], startPeriod = '60s'): ComposeHealthcheck {
-  return { test, interval: '30s', timeout: '10s', retries: 5, start_period: startPeriod };
+/** The timing Mediaplane gives every catalog health check (the app READMEs show it). */
+export const HEALTHCHECK_DEFAULTS = {
+  interval: '30s',
+  timeout: '10s',
+  retries: 5,
+  startPeriod: '60s',
+} as const;
+
+function healthcheck(
+  test: string[],
+  startPeriod: string = HEALTHCHECK_DEFAULTS.startPeriod,
+): ComposeHealthcheck {
+  return {
+    test,
+    interval: HEALTHCHECK_DEFAULTS.interval,
+    timeout: HEALTHCHECK_DEFAULTS.timeout,
+    retries: HEALTHCHECK_DEFAULTS.retries,
+    start_period: startPeriod,
+  };
 }
 
 function renderEnvironment(

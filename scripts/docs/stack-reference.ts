@@ -194,7 +194,9 @@ export function renderStackReference(schema: Schema, catalog: Catalog): string {
     '',
     '| App | Id |',
     '| --- | --- |',
-    ...catalog.map((def) => `| ${def.name} | \`${def.id}\` |`),
+    ...catalog.map(
+      (def) => `| [${def.name}](../../catalog/${def.id}/README.md) | \`${def.id}\` |`,
+    ),
     '',
   ].join('\n');
 }
