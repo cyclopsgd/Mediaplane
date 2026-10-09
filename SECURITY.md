@@ -17,7 +17,12 @@ scope:
 
 - anything that lets someone drive Mediaplane without authorisation;
 - anything that lets someone read its secrets;
-- anything that makes it act outside its own Compose project.
+- anything that makes it act outside its own Compose project;
+- anything that gets a Docker call past the socket proxy's allow-list, or makes the
+  host helper write to the host.
+
+[`docs/security/threat-model.md`](docs/security/threat-model.md) describes what
+Mediaplane protects, how, and what it does not protect against.
 
 Vulnerabilities in the upstream apps that Mediaplane deploys, such as Sonarr or Jellyfin,
 should be reported to those projects.

@@ -35,6 +35,34 @@ share host ports.
 
 Before committing, run `pnpm format && pnpm lint && pnpm typecheck && pnpm test`.
 
+### The image
+
+`pnpm bundle` writes the CLI as one file, `dist/mediaplane.mjs`, which is what the image
+runs. To build the image, and to test it end to end (each test builds its own copy):
+
+```bash
+docker build --tag mediaplane:local .
+pnpm vitest run --config vitest.e2e.config.ts test/e2e/image.e2e.test.ts test/e2e/deploy.e2e.test.ts
+```
+
+The deploy test starts `deploy/mediaplane.compose.yaml` under its own names and applies a
+small stack from inside the container.
+
+CI runs these jobs:
+
+- lint, type-check and unit tests;
+- the end-to-end tests, natively on amd64 and on arm64 runners;
+- an image build on each of the two, scanned with Trivy, which fails on any critical
+  vulnerability that has a fix;
+- gitleaks, over the full history.
+
+A change to docs only skips the end-to-end and image jobs. Branch protection should
+require only the last job, `All checks passed`, because the per-architecture checks
+never appear on a docs-only push.
+
+The Docker API calls the engine may make are listed in `deploy/deploy.test.ts`. A change
+that needs a new one must add it there, to the proxy's allow-list, and to ADR 0008.
+
 ## Commits
 
 Use [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`,

@@ -897,3 +897,31 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   health check is `starting` or `unhealthy` makes the plan changed, so after a
   failed start, running apply again waits for it again, and verify (§5 step 11)
   fails while it is still not healthy (ADR 0004).
+
+### Slice 2c: packaging (2026-10-09)
+
+- **Where the deployment lives.** It is `deploy/mediaplane.compose.yaml`,
+  started with `docker compose -f deploy/mediaplane.compose.yaml up -d`. Until
+  images are published (S8), it needs `MEDIAPLANE_IMAGE`, the image to run. It
+  also needs `DOCKER_GID`, the group that owns the Docker socket.
+- **The host helper does more than addresses.** Inside the container,
+  Mediaplane can see neither the host's ports, nor its folders outside the home,
+  nor its devices. So the helper container (§4.2) also reports them to
+  preflight: free ports, the data folder, `/dev/net/tun` and free space, and
+  whether the home's `stack.yaml` is the host's own. It runs Mediaplane's own
+  image, with read-only mounts, during `init`, `plan` and `apply`. The one
+  container created outside the managed project is the unnamed, `--rm` host
+  helper, labelled `io.mediaplane.helper`.
+- **The home is checked.** Preflight fails (`preflight.home-path`) when the home
+  inside the container is not the same folder as the host's at that path (§4.1).
+- **The proxy.** It is `wollomatic/socket-proxy`, with a per-method allow-list
+  of the paths of the Docker API calls the engine makes. Of deletes, only
+  containers' are allowed, and with them their anonymous volumes. The list
+  allows `kill`, which `docker run` sends when a timed-out host helper is
+  stopped (ADR 0008).
+- **Trivy for Mediaplane's own image runs from S2c** (§7.2(7)). Scanning the
+  catalog images, the SBOM and provenance stay in S8.
+- **CI runs on arm64 from S2c** (§8.2), on GitHub's `ubuntu-24.04-arm` runners,
+  which are free because the repo is public. The image is built, scanned and
+  tested end to end natively on each architecture. A multi-arch manifest comes
+  with publishing, in S8.

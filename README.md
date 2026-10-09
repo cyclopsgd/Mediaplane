@@ -10,7 +10,8 @@ Compose and wires the apps together for you.**
 >
 > - **Works today:** `mediaplane plan` checks a real host and shows exactly what it
 >   would do. `mediaplane apply` then starts the stack and confirms that every app
->   is healthy.
+>   is healthy. Mediaplane runs in its own hardened container, behind a Docker socket
+>   proxy.
 > - **Next:** wiring the apps together. Until that lands, each app still needs
 >   setting up by hand, and the apps' first-run setup pages are open to anyone who
 >   can reach them: Jellyfin's wizard, Seerr's setup, and Sonarr, Radarr and
@@ -49,6 +50,7 @@ Mediaplane does that part for you:
 | Generate keys and start the stack (`mediaplane apply`)                          | Done         |
 | See each app's health and every past apply (`status`, `history`)                | Done         |
 | Write a starter `stack.yaml` (`init`)                                           | Done         |
+| Run in a hardened container, behind a Docker socket proxy                       | Done         |
 | Wire the apps together (download clients, indexers, root folders, media server) | Planned      |
 | Detect manual changes and offer Re-apply or "Keep mine"                         | Planned      |
 | Web panel with a setup wizard                                                   | Planned (M2) |
@@ -183,6 +185,19 @@ sonarr       running  healthy
 Last apply: 2026-10-09T12:53:31.563Z, success (20261009T125331Z-16a818bc)
 ```
 
+## Run it in a container
+
+Mediaplane runs as its own container next to a Docker socket proxy, in a Compose
+project of its own. No image is published yet (that comes in Slice 8), so build one from
+a checkout:
+
+```bash
+docker build --tag mediaplane:local .
+```
+
+Then follow [`deploy/README.md`](deploy/README.md) to start it and run
+`mediaplane plan` inside it.
+
 ## Try it (from source)
 
 `mediaplane plan` already checks a real host and shows exactly what `apply` would do:
@@ -299,7 +314,10 @@ secrets private:
 - they never appear in `stack.yaml`, in `compose.yaml` or in any output.
 
 On a cloud VM it refuses to publish the web UIs on the private address unless you say
-so. [SECURITY.md](SECURITY.md) covers what is in scope.
+so. In its container, Mediaplane never touches the Docker socket. It goes through a
+proxy that allows only the Docker calls it makes, which is defence in depth rather
+than a boundary. The [threat model](docs/security/threat-model.md) explains what that
+does and doesn't protect, and [SECURITY.md](SECURITY.md) covers what is in scope.
 
 ### Do I have to keep using it?
 

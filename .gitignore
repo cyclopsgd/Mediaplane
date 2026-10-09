@@ -8,6 +8,9 @@ dist/
 /.mediaplane-dev/
 /stack.yaml
 /secrets/
+# This machine's settings for deploy/mediaplane.compose.yaml (see deploy/README.md).
+/deploy/.env
+/deploy/no-proxy.yaml
 
 # Local tooling scratch (Claude Code worktrees, superpowers SDD workspaces)
 /.claude/worktrees/
