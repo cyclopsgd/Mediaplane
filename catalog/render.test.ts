@@ -95,7 +95,7 @@ describe('the real catalog', () => {
   });
 
   it('keeps secrets out of compose.yaml', () => {
-    const yaml = composeToYaml(render(SPEC_EXAMPLE).compose);
+    const yaml = composeToYaml(render(SPEC_EXAMPLE).compose, '/opt/mediaplane');
     for (const reference of [
       '${MP_SONARR_API_KEY}',
       '${MP_RADARR_API_KEY}',

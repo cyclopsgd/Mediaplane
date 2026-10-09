@@ -37,7 +37,7 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
   diagnostics.push(...resolved.diagnostics);
   if (resolved.stack === undefined || hasErrors(diagnostics)) return failed(diagnostics);
 
-  const compose = composeToYaml(renderCompose(resolved.stack));
+  const compose = composeToYaml(renderCompose(resolved.stack), home);
   const files = await diffFiles(home, [{ path: COMPOSE_PATH, content: compose }]);
   return {
     ok: true,

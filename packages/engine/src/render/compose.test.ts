@@ -42,18 +42,19 @@ apps:
 describe('golden files', () => {
   it('renders the Jellyfin + VPN + LAN stack', async () => {
     await expect(
-      composeToYaml(renderCompose(stackOf(JELLYFIN_VPN_LAN))),
+      composeToYaml(renderCompose(stackOf(JELLYFIN_VPN_LAN)), '/opt/mediaplane'),
     ).toMatchFileSnapshot('./__golden__/jellyfin-vpn-lan.compose.yaml');
   });
 
   it('renders the Plex + no VPN + localhost stack', async () => {
     await expect(
-      composeToYaml(renderCompose(stackOf(PLEX_NO_VPN_LOCALHOST))),
+      composeToYaml(renderCompose(stackOf(PLEX_NO_VPN_LOCALHOST)), '/opt/mediaplane'),
     ).toMatchFileSnapshot('./__golden__/plex-no-vpn-localhost.compose.yaml');
   });
 
   it('renders identical output for identical input', () => {
-    const render = () => composeToYaml(renderCompose(stackOf(JELLYFIN_VPN_LAN)));
+    const render = () =>
+      composeToYaml(renderCompose(stackOf(JELLYFIN_VPN_LAN)), '/opt/mediaplane');
     expect(render()).toBe(render());
   });
 });

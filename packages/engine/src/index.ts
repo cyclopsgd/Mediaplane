@@ -11,3 +11,6 @@ export * from './plan/files';
 export * from './plan/plan';
 export * from './secrets/store';
 export * from './secrets/values';
+export * from './runtime/types';
+export * from './runtime/exec';
+export * from './runtime/docker';
