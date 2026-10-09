@@ -20,7 +20,7 @@ mediaplane plan [options]
 Exit codes:
 
 - 0: nothing would change
-- 2: apply would change something, including apps still waiting for their health check
+- 2: apply would change something, or apps are still waiting for a health check
 - 1: an error; nothing was changed
 
 ## `mediaplane apply`
@@ -40,7 +40,8 @@ mediaplane apply [options]
 Exit codes:
 
 - 0: applied, or nothing needed changing
-- 1: a step failed, the apply was cancelled, or stack.yaml or the host has errors
+- 1: a step failed, or the apply was cancelled
+- 1: any other error: stack.yaml or the host, a held lock, Docker unreachable
 
 ## `mediaplane status`
 
@@ -111,9 +112,9 @@ Exit codes:
 
 ## Environment variables
 
-| Variable                     | Meaning                                                                                                                              |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `MEDIAPLANE_HOME`            | The Mediaplane home when --home is not given. Default /opt/mediaplane.                                                               |
-| `MEDIAPLANE_IMAGE`           | Set by mediaplane.compose.yaml in the Mediaplane container: the image the host helper runs. Leave it unset when running from source. |
-| `MEDIAPLANE_COMPOSE_PROJECT` | For tests and development only: manage the Compose project mediaplane-\<name> instead of mediaplane.                                 |
-| `DOCKER_HOST`                | Docker's own setting, passed to every docker command. In the Mediaplane container it points at the socket proxy.                     |
+| Variable                     | Meaning                                                                                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MEDIAPLANE_HOME`            | The Mediaplane home when --home is not given. Default /opt/mediaplane.                                                                                       |
+| `MEDIAPLANE_IMAGE`           | Set by mediaplane.compose.yaml in the Mediaplane container: the image the host helper runs. Leave it unset when running from source.                         |
+| `MEDIAPLANE_COMPOSE_PROJECT` | For tests and development only: the full name of the Compose project to manage instead of mediaplane. It must be mediaplane-\<name>, such as mediaplane-dev. |
+| `DOCKER_HOST`                | Docker's own setting, passed to every docker command. In the Mediaplane container it points at the socket proxy.                                             |

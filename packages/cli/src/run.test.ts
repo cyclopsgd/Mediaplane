@@ -20,7 +20,7 @@ import {
   running,
 } from '@mediaplane/engine/testing';
 import { describe, expect, it, vi } from 'vitest';
-import { run, type CliDeps, type Io } from './run';
+import { EXIT_CODES, run, type CliDeps, type Io } from './run';
 import { VERSION } from './version';
 
 const STACK = `version: 1
@@ -826,6 +826,12 @@ describe('mediaplane host-report', () => {
 });
 
 describe('--help', () => {
+  it('keeps every exit-code line within 80 columns, as --help does not wrap them', () => {
+    for (const lines of Object.values(EXIT_CODES)) {
+      for (const line of lines) expect(`  ${line}`.length).toBeLessThanOrEqual(80);
+    }
+  });
+
   it("lists each command's exit codes", async () => {
     const term = capture();
     expect(await run(['plan', '--help'], term.io)).toBe(0);

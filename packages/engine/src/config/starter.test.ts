@@ -46,6 +46,12 @@ describe('starterStack', () => {
     );
   });
 
+  it('points people at the generated stack.yaml reference', () => {
+    expect(starterStack(ANSWERS).split('\n')).toContain(
+      '# Reference: https://github.com/cyclopsgd/Mediaplane/blob/main/docs/reference/stack-yaml.md',
+    );
+  });
+
   it('turns the VPN off for qBittorrent when there is no provider', () => {
     const config = configOf({ ...ANSWERS, vpnProvider: undefined });
     expect(config.vpn).toBeUndefined();

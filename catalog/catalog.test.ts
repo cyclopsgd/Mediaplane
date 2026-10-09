@@ -55,6 +55,10 @@ describe('catalog', () => {
       for (const name of Object.keys(app.secrets)) expect(name).not.toMatch(/^env[A-Z]/);
     });
 
+    it('has options that are an object, or none, so the JSON Schema can list them', () => {
+      expect(app.options === undefined || app.options instanceof z.ZodObject).toBe(true);
+    });
+
     it('accepts empty options and implies only catalog apps', () => {
       const options = (app.options ?? NO_OPTIONS).parse({});
       for (const implied of app.implies?.(options) ?? []) {

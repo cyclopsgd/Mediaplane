@@ -9,12 +9,24 @@ export const STACK_SCHEMA_URL =
 
 type JsonSchema = Record<string, unknown>;
 
-/** What stack.yaml takes under apps.<id>: the settings every app takes, and its own. */
+/**
+ * What stack.yaml takes under apps.<id>: the settings every app takes, and its own. An
+ * app's options must be an object (or absent): any other shape can't be listed here, and
+ * the strict entry would then reject settings the resolver accepts.
+ */
 export function appEntrySchema(def: AppDefinition): z.ZodType {
-  const own = def.options instanceof z.ZodObject ? def.options.shape : {};
+  if (def.options !== undefined && !(def.options instanceof z.ZodObject)) {
+    throw new Error(`${def.id}: an app's options must be a z.object, to list them`);
+  }
+  const own = def.options?.shape ?? {};
+  // A media server other than media_server is a resolver error (app.media-server-conflict).
+  const needs =
+    def.category === 'media-server'
+      ? ` Can only be enabled when media_server is ${def.id}.`
+      : '';
   return z
     .strictObject({ ...appSettingsSchema.shape, ...own })
-    .describe(`${def.name}. Listing it runs it.`);
+    .describe(`${def.name}.${needs}`);
 }
 
 /**

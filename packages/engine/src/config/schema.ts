@@ -228,7 +228,9 @@ const stackShape = {
       z.preprocess((value) => value ?? {}, appSettingsSchema),
     )
     .default({})
-    .describe('The apps to run, by id. Listing an app runs it, even with no settings.'),
+    .describe(
+      'The apps to run, by id. Listing an app runs it, unless it sets enabled: false. The media server that media_server names runs without being listed, and no other media server can be enabled. Apps also bring along the apps they need, such as Gluetun for qBittorrent.',
+    ),
   overrides: z
     .record(
       z.string().regex(OVERRIDE_KEY, OVERRIDE_KEY_MESSAGE),

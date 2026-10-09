@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import type { AppDefinition } from '../catalog/types';
 import { fixtureApp, fixtureCatalog } from '../testing/fixtures';
 import { undocumented, type DescribedSchema as Schema } from '../testing/schema';
 import { appEntrySchema, STACK_SCHEMA_URL, stackJsonSchema } from './json-schema';
@@ -38,7 +39,34 @@ describe('stackJsonSchema', () => {
   });
 });
 
+describe('appEntrySchema', () => {
+  const descriptionOf = (def: Partial<AppDefinition> & { id: string }) =>
+    z.toJSONSchema(appEntrySchema(fixtureApp(def)), { io: 'input' }).description;
+
+  it('names the app, and says which media_server a media server needs', () => {
+    expect(descriptionOf({ id: 'sonarr' })).toBe('sonarr.');
+    expect(descriptionOf({ id: 'plex', category: 'media-server' })).toBe(
+      'plex. Can only be enabled when media_server is plex.',
+    );
+  });
+
+  it("refuses options that aren't an object, which would reject valid settings", () => {
+    const def = fixtureApp({ id: 'odd', options: z.record(z.string(), z.unknown()) });
+    expect(() => appEntrySchema(def)).toThrow(/odd.*options.*object/);
+  });
+});
+
 describe('the stack.yaml schema', () => {
+  it('says what runs an app: listing it, unless disabled, and the chosen media server', () => {
+    const { description } = z.toJSONSchema(stackConfigSchema, { io: 'input' }).properties
+      ?.apps as Schema;
+    expect(description).toContain(
+      'Listing an app runs it, unless it sets enabled: false.',
+    );
+    expect(description).toContain('media server that media_server names runs');
+    expect(description).toContain('no other media server can be enabled');
+  });
+
   it('describes every field', () => {
     expect(
       undocumented(z.toJSONSchema(stackConfigSchema, { io: 'input' }) as Schema),

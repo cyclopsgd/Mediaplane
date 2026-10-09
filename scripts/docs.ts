@@ -3,15 +3,18 @@ import { dirname, join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import { stackJsonSchema } from '@mediaplane/engine';
 import { format, resolveConfig } from 'prettier';
-import { ranAsScript } from './bundle';
 import { renderCliReference } from './docs/cli-reference';
 import { renderStackReference } from './docs/stack-reference';
-import { ROOT } from './root';
+import { ranAsScript, ROOT } from './root';
 
-/** Formatted as Prettier would, so `pnpm lint` and `pnpm docs:check` agree. */
+/**
+ * Formatted as the Prettier CLI would, which reads .editorconfig too, so `pnpm lint` and
+ * `pnpm docs:check` agree.
+ */
 export async function prettify(path: string, content: string): Promise<string> {
   const filepath = join(ROOT, path);
-  return format(content, { ...(await resolveConfig(filepath)), filepath });
+  const config = await resolveConfig(filepath, { editorconfig: true });
+  return format(content, { ...config, filepath });
 }
 
 /** Every generated file, by path from the repository root, with its current content. */

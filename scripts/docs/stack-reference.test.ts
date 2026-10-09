@@ -1,32 +1,46 @@
 import { catalog } from '@mediaplane/catalog';
 import { stackJsonSchema } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
-import { cell, renderStackReference, typeOf, type Schema } from './stack-reference';
+import {
+  cell,
+  renderStackReference,
+  typeOf,
+  yamlValue,
+  type Schema,
+} from './stack-reference';
 
 const text = renderStackReference(stackJsonSchema(catalog), catalog);
 
 describe('renderStackReference', () => {
   it('lists each field with its type, default and description', () => {
-    expect(text).toContain('| `paths.data` | string | required | The data folder');
+    expect(text).toContain('- `paths.data` (string; required): The data folder');
     expect(text).toContain(
-      '| `network.bind` | one of `lan`, `localhost`, `all` | `"lan"` |',
+      '- `network.bind` (`lan`, `localhost` or `all`; default `lan`): ',
     );
-    expect(text).toContain(
-      '| `admin.password` | secret reference |  | The admin password',
-    );
+    expect(text).toContain('- `admin.password` (secret reference): The admin password');
     // Required once user: is given; user: itself has a default.
-    expect(text).toContain(
-      '| `user.uid` | integer, at least 0 | required | The user id. |',
-    );
+    expect(text).toContain('- `user.uid` (integer, at least 0; required): The user id.');
+    expect(text).toContain('- `user` (object; default `{ uid: 1000, gid: 1000 }`): ');
+    expect(text).toContain('- `timezone` (string; default `Etc/UTC`): ');
   });
 
   it("lists the settings every app takes once, and each app's own", () => {
-    expect(text).toContain('| `apps.<app>.port` | integer, 1 to 65535 |  |');
+    expect(text).toContain('- `apps.<app>.port` (integer, 1 to 65535): ');
     expect(text).toContain(
-      '| `apps.<app>.env` | map of name → string or secret reference | `{}` |',
+      '- `apps.<app>.env` (map of name → string or secret reference; default `{}`): ',
     );
-    expect(text).toContain('| `apps.qbittorrent.vpn` | boolean | `true` |');
+    expect(text).toContain('- `apps.qbittorrent.vpn` (boolean; default `true`): ');
     expect(text).not.toContain('`apps.sonarr.port`');
+  });
+
+  it('puts fields in lists, not wide tables, so they read on a phone', () => {
+    expect(text).not.toContain('| Field |');
+    expect(text).not.toContain('| Description |');
+  });
+
+  it("keeps <app> in a description from being read as an HTML tag, but not in a field's name", () => {
+    expect(text).toContain('by \\<app>.\\<resource>.\\<field>');
+    expect(text).toContain('`apps.<app>.port`');
   });
 
   it('names every app and says it is generated', () => {
@@ -39,12 +53,43 @@ describe('cell', () => {
   it('keeps a table row on one line, and keeps <app> from being read as an HTML tag', () => {
     expect(cell('a | b\nby <app>.<field>')).toBe('a \\| b by \\<app>.\\<field>');
   });
+
+  it('leaves < alone in a code span, where a backslash would show, but escapes |', () => {
+    expect(cell('`<home>/x` → `/config`, not <app>')).toBe(
+      '`<home>/x` → `/config`, not \\<app>',
+    );
+    expect(cell('`a | <b>`')).toBe('`a \\| <b>`');
+  });
+
+  it('escapes < after a backtick that opens no code span', () => {
+    expect(cell('a ` <b>')).toBe('a ` \\<b>');
+  });
+});
+
+describe('yamlValue', () => {
+  it.each([
+    ['lan', 'lan'],
+    ['Etc/UTC', 'Etc/UTC'],
+    ['', '""'],
+    ['a: b', '"a: b"'],
+    ['true', '"true"'],
+    ['1000', '"1000"'],
+    [true, 'true'],
+    [1000, '1000'],
+    [{}, '{}'],
+    [[], '[]'],
+    [{ uid: 1000, gid: 1000 }, '{ uid: 1000, gid: 1000 }'],
+    [{ bind: 'lan', tags: ['a', 2] }, '{ bind: lan, tags: [a, 2] }'],
+  ] satisfies [unknown, string][])('%j is %s', (value, expected) => {
+    expect(yamlValue(value)).toBe(expected);
+  });
 });
 
 describe('typeOf', () => {
   it.each([
     [{ type: 'boolean' }, 'boolean'],
     [{ const: 1 }, '`1`'],
+    [{ enum: ['lan', 'localhost', 'all'] }, '`lan`, `localhost` or `all`'],
     [{ type: ['string', 'number', 'boolean'] }, 'string, number or boolean'],
     [{ type: 'integer', minimum: 1, maximum: 65535 }, 'integer, 1 to 65535'],
     [{ anyOf: [{ type: 'null' }, { type: 'object' }] }, 'object'],

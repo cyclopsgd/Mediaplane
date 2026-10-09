@@ -1,20 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  realpath,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { VERSION } from '../packages/cli/src/version';
-import { bundle, packagesOf, ranAsScript } from './bundle';
+import { bundle, packagesOf } from './bundle';
 
 /** Run the bundle like the image does: no MEDIAPLANE_IMAGE, and never for over 20 s. */
 function runBundle(file: string, args: string[]) {
@@ -64,28 +54,6 @@ describe('bundle', () => {
       await rm(out, { recursive: true, force: true });
     }
   }, 60_000);
-});
-
-describe('ranAsScript', () => {
-  it('is true for the script Node started, also through a symlinked folder', async () => {
-    const dir = await realpath(await mkdtemp(join(tmpdir(), 'mediaplane-guard-')));
-    try {
-      await mkdir(join(dir, 'real'));
-      const script = join(dir, 'real', 'run.ts');
-      await writeFile(script, '');
-      await writeFile(join(dir, 'real', 'other.ts'), '');
-      await symlink(join(dir, 'real'), join(dir, 'link'));
-      const url = pathToFileURL(script).href;
-
-      expect(ranAsScript(url, script)).toBe(true);
-      expect(ranAsScript(url, join(dir, 'link', 'run.ts'))).toBe(true);
-      expect(ranAsScript(url, join(dir, 'link', 'other.ts'))).toBe(false);
-      expect(ranAsScript(url, join(dir, 'real', 'missing.ts'))).toBe(false);
-      expect(ranAsScript(url, undefined)).toBe(false);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
 });
 
 describe('packagesOf', () => {

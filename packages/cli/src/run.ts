@@ -55,12 +55,13 @@ export const DEFAULT_HOME = '/opt/mediaplane';
 export const EXIT_CODES: Readonly<Record<string, readonly string[]>> = {
   plan: [
     '0: nothing would change',
-    '2: apply would change something, including apps still waiting for their health check',
+    '2: apply would change something, or apps are still waiting for a health check',
     '1: an error; nothing was changed',
   ],
   apply: [
     '0: applied, or nothing needed changing',
-    '1: a step failed, the apply was cancelled, or stack.yaml or the host has errors',
+    '1: a step failed, or the apply was cancelled',
+    '1: any other error: stack.yaml or the host, a held lock, Docker unreachable',
   ],
   status: ['0: the containers were listed', '1: an error, or no container for that app'],
   history: ['0: the records were listed or shown', '1: an error, or no such record'],
@@ -84,7 +85,7 @@ export const ENVIRONMENT: readonly { name: string; description: string }[] = [
   {
     name: 'MEDIAPLANE_COMPOSE_PROJECT',
     description:
-      'For tests and development only: manage the Compose project mediaplane-<name> instead of mediaplane.',
+      'For tests and development only: the full name of the Compose project to manage instead of mediaplane. It must be mediaplane-<name>, such as mediaplane-dev.',
   },
   {
     name: 'DOCKER_HOST',

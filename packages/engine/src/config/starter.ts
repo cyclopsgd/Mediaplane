@@ -22,7 +22,7 @@ export function starterStack(answers: StarterAnswers): string {
   return [
     `# yaml-language-server: $schema=${STACK_SCHEMA_URL}`,
     '# Mediaplane stack: the one file that describes your media stack.',
-    '# Reference: https://github.com/cyclopsgd/Mediaplane',
+    '# Reference: https://github.com/cyclopsgd/Mediaplane/blob/main/docs/reference/stack-yaml.md',
     'version: 1',
     `timezone: ${scalar(answers.timezone)}`,
     '# The apps run as this user and group. Make sure they can write to the data folder.',

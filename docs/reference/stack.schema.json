@@ -223,7 +223,7 @@
       "additionalProperties": false
     },
     "apps": {
-      "description": "The apps to run, by id. Listing an app runs it, even with no settings.",
+      "description": "The apps to run, by id. Listing an app runs it, unless it sets enabled: false. The media server that media_server names runs without being listed, and no other media server can be enabled. Apps also bring along the apps they need, such as Gluetun for qBittorrent.",
       "default": {},
       "type": "object",
       "properties": {
@@ -298,7 +298,7 @@
                 }
               },
               "additionalProperties": false,
-              "description": "Byparr. Listing it runs it."
+              "description": "Byparr."
             }
           ]
         },
@@ -373,7 +373,7 @@
                 }
               },
               "additionalProperties": false,
-              "description": "FlareSolverr. Listing it runs it."
+              "description": "FlareSolverr."
             }
           ]
         },
@@ -448,7 +448,7 @@
                 }
               },
               "additionalProperties": false,
-              "description": "Gluetun. Listing it runs it."
+              "description": "Gluetun."
             }
           ]
         },
@@ -523,7 +523,7 @@
                 }
               },
               "additionalProperties": false,
-              "description": "Jellyfin. Listing it runs it."
+              "description": "Jellyfin. Can only be enabled when media_server is jellyfin."
             }
           ]
         },
@@ -598,7 +598,7 @@
                 }
               },
               "additionalProperties": false,
-              "description": "Plex. Listing it runs it."
+              "description": "Plex. Can only be enabled when media_server is plex."
             }
           ]
         },
@@ -673,7 +673,7 @@
                 }
               },
               "additionalProperties": false,
-              "description": "Prowlarr. Listing it runs it."
+              "description": "Prowlarr."
             }
           ]
         },
@@ -753,7 +753,7 @@
                 }
               },
               "additionalProperties": false,
-              "description": "qBittorrent. Listing it runs it."
+              "description": "qBittorrent."
             }
           ]
         },
@@ -828,7 +828,7 @@
                 }
               },
               "additionalProperties": false,
-              "description": "Radarr. Listing it runs it."
+              "description": "Radarr."
             }
           ]
         },
@@ -913,7 +913,7 @@
                 }
               },
               "additionalProperties": false,
-              "description": "Seerr. Listing it runs it."
+              "description": "Seerr."
             }
           ]
         },
@@ -988,7 +988,7 @@
                 }
               },
               "additionalProperties": false,
-              "description": "Sonarr. Listing it runs it."
+              "description": "Sonarr."
             }
           ]
         }
