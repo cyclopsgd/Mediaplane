@@ -13,10 +13,10 @@ Compose and wires the apps together for you.**
 >   is healthy. Mediaplane runs in its own hardened container, behind a Docker socket
 >   proxy.
 > - **Next:** wiring the apps together. Until that lands, each app still needs
->   setting up by hand, and the apps' first-run setup pages are open to anyone who
->   can reach them: Jellyfin's wizard, Seerr's setup, and Sonarr, Radarr and
->   Prowlarr until their login is configured. Keep `network.bind: localhost` when
->   you try it.
+>   setting up by hand. Jellyfin's wizard and Seerr's setup are open to anyone who
+>   can reach them. By default, Sonarr, Radarr and Prowlarr ask for a login that
+>   doesn't exist yet; their READMEs say how to set one. Keep
+>   `network.bind: localhost` when you try it.
 >
 > Watch the repo to follow along.
 
@@ -40,20 +40,21 @@ Mediaplane does that part for you:
 
 ## What works so far
 
-| Capability                                                                      | Status       |
-| ------------------------------------------------------------------------------- | ------------ |
-| Validate `stack.yaml`, with errors that say what to change                      | Done         |
-| Render a readable Compose project with images pinned by tag and digest          | Done         |
-| Check the host first: Docker versions, disk, data folder, ports, the VPN device | Done         |
-| Refuse to publish web UIs on a cloud VM's private address by mistake            | Done         |
-| Predict exactly which containers will change, using Compose's own config hashes | Done         |
-| Generate keys and start the stack (`mediaplane apply`)                          | Done         |
-| See each app's health and every past apply (`status`, `history`)                | Done         |
-| Write a starter `stack.yaml` (`init`)                                           | Done         |
-| Run in a hardened container, behind a Docker socket proxy                       | Done         |
-| Wire the apps together (download clients, indexers, root folders, media server) | Planned      |
-| Detect manual changes and offer Re-apply or "Keep mine"                         | Planned      |
-| Web panel with a setup wizard                                                   | Planned (M2) |
+| Capability                                                                        | Status       |
+| --------------------------------------------------------------------------------- | ------------ |
+| Validate `stack.yaml`, with errors that say what to change                        | Done         |
+| Render a readable Compose project with images pinned by tag and digest            | Done         |
+| Check the host first: Docker versions, disk, data folder, ports, the VPN device   | Done         |
+| Refuse to publish web UIs on a cloud VM's private address by mistake              | Done         |
+| Predict exactly which containers will change, using Compose's own config hashes   | Done         |
+| Generate keys and start the stack (`mediaplane apply`)                            | Done         |
+| See each app's health and every past apply (`status`, `history`)                  | Done         |
+| Write a starter `stack.yaml` (`init`)                                             | Done         |
+| Run in a hardened container, behind a Docker socket proxy                         | Done         |
+| Documentation generated from code: the `stack.yaml` and CLI references, app facts | Done         |
+| Wire the apps together (download clients, indexers, root folders, media server)   | Planned      |
+| Detect manual changes and offer Re-apply or "Keep mine"                           | Planned      |
+| Web panel with a setup wizard                                                     | Planned (M2) |
 
 ## The stack
 
@@ -335,10 +336,28 @@ runs the stack without Mediaplane.
 
 M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it stands.
 
-## Design
+## Documentation
 
-- [M1 design: engine and CLI](docs/design/m1-engine-cli.md)
-- [Architecture decision records](docs/adr/)
+- **[Running in a container](deploy/README.md):** install, update, and run without the
+  socket proxy.
+- **[Architecture](docs/architecture.md):** how the pieces fit, as built so far.
+- **[`stack.yaml` reference](docs/reference/stack-yaml.md):** every field, generated from
+  the schema, with its [JSON Schema](docs/reference/stack.schema.json).
+- **[CLI reference](docs/reference/cli.md):** every command, option and exit code,
+  generated from the CLI.
+- **The apps:** one README each, with what Mediaplane sets, how to change it, and known
+  issues. See [Sonarr](catalog/sonarr/README.md), [Radarr](catalog/radarr/README.md),
+  [Prowlarr](catalog/prowlarr/README.md), [qBittorrent](catalog/qbittorrent/README.md),
+  [Gluetun](catalog/gluetun/README.md), [Jellyfin](catalog/jellyfin/README.md),
+  [Plex](catalog/plex/README.md), [Seerr](catalog/seerr/README.md),
+  [Byparr](catalog/byparr/README.md) and [FlareSolverr](catalog/flaresolverr/README.md).
+- **[Runbook: an app won't start](docs/runbooks/app-wont-start.md):** symptoms, checks,
+  fix and prevention.
+- **[Threat model](docs/security/threat-model.md):** what is protected, how, and what
+  isn't.
+- **[Architecture decision records](docs/adr/):** why things are the way they are.
+- **[M1 design](docs/design/m1-engine-cli.md) and [roadmap](docs/plans/m1-roadmap.md):**
+  the plan for all of M1, and where it stands.
 
 ## Contributing
 
