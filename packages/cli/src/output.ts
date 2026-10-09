@@ -74,10 +74,13 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
   }
   const generate = result.secrets.generate;
   if (generate.length > 0) io.stdout(`Secrets to generate: ${generate.join(', ')}\n`);
+  const unhealthy = result.unhealthy;
+  if (unhealthy.length > 0) io.stdout(`Not healthy yet: ${unhealthy.join(', ')}\n`);
   const parts = [
     count(files.length, 'file', 'to write'),
     count(containers.length, 'container', 'to change'),
     count(generate.length, 'secret', 'to generate'),
+    count(unhealthy.length, 'app', 'to wait for'),
   ].filter((part): part is string => part !== undefined);
   io.stdout(parts.length === 0 ? 'No changes.\n' : `Plan: ${parts.join(', ')}.\n`);
 }
@@ -118,7 +121,7 @@ export function printApply(
   io: Io,
 ): void {
   if (options.json) {
-    const { files, containers, secrets } = result.plan;
+    const { files, containers, secrets, unhealthy } = result.plan;
     io.stdout(
       `${JSON.stringify(
         {
@@ -126,7 +129,12 @@ export function printApply(
           ok: result.outcome === 'success' || result.outcome === 'no-changes',
           changed: result.actions.some((a) => a.result === 'done' && a.step !== 'verify'),
           outcome: result.outcome,
-          plan: { files: files.map(({ content, ...file }) => file), containers, secrets },
+          plan: {
+            files: files.map(({ content, ...file }) => file),
+            containers,
+            secrets,
+            unhealthy,
+          },
           actions: result.actions,
           recordId: result.recordId ?? null,
           diagnostics: result.diagnostics,

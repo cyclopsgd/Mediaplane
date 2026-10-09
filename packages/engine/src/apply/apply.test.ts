@@ -124,6 +124,88 @@ describe('apply', () => {
     expect((await listRecords(home)).records).toHaveLength(1);
   });
 
+  it('waits again for an app that is still unhealthy, rather than reporting no changes', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    expect((await apply(options(home, docker))).outcome).toBe('success');
+    // The state `up --wait` leaves behind when an app fails its health check: running,
+    // with the config hash Compose would give it now.
+    const stillSick: Runtime = {
+      ...docker,
+      containers: async () =>
+        (await docker.containers()).map((c) =>
+          c.service === 'sonarr' ? { ...c, health: 'unhealthy' } : c,
+        ),
+      up: () => Promise.resolve({ ok: false, error: 'container sonarr is unhealthy' }),
+    };
+    const confirm = vi.fn(() => Promise.resolve(true));
+    const result = await apply(options(home, stillSick, { confirm }));
+    expect(result.outcome).toBe('failed');
+    expect(result.plan).toMatchObject({
+      changed: true,
+      unhealthy: ['sonarr (unhealthy)'],
+    });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(result.actions.find((a) => a.step === 'start')).toMatchObject({
+      result: 'failed',
+      error:
+        'these apps did not start healthy: sonarr (unhealthy). Compose said: container sonarr is unhealthy',
+    });
+    expect((await listRecords(home)).records[0]?.outcome).toBe('failed');
+  });
+
+  it('succeeds once an app that was still starting becomes healthy', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    await apply(options(home, docker));
+    let waited = false;
+    const starting: Runtime = {
+      ...docker,
+      containers: async () =>
+        (await docker.containers()).map((c) =>
+          !waited && c.service === 'sonarr' ? { ...c, health: 'starting' } : c,
+        ),
+      up: (seconds, values) => {
+        waited = true;
+        return docker.up(seconds, values);
+      },
+    };
+    const result = await apply(options(home, starting));
+    expect(result.outcome).toBe('success');
+    expect(result.plan.unhealthy).toEqual(['sonarr (starting)']);
+    expect(result.actions.map((a) => [a.step, a.result])).toEqual([
+      ['keys', 'done'],
+      ['files', 'done'],
+      ['pull', 'done'],
+      ['ownership', 'done'],
+      ['start', 'done'],
+      ['verify', 'done'],
+    ]);
+  });
+
+  it('fails verification while an app is still not healthy after starting', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    let started = false;
+    const relapsing: Runtime = {
+      ...docker,
+      containers: async () =>
+        (await docker.containers()).map((c) =>
+          started && c.service === 'sonarr' ? { ...c, health: 'unhealthy' } : c,
+        ),
+      up: async (seconds, values) => {
+        const result = await docker.up(seconds, values);
+        started = true;
+        return result;
+      },
+    };
+    const result = await apply(options(home, relapsing));
+    expect(result.outcome).toBe('failed');
+    expect(
+      result.diagnostics.find((d) => d.code === 'apply.verify-failed')?.message,
+    ).toBe('changes remain after apply: sonarr (unhealthy)');
+  });
+
   it('changes nothing when the plan is declined', async () => {
     const home = await makeHome();
     const result = await apply(

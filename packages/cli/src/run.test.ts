@@ -40,6 +40,43 @@ async function makeHome(stack = STACK): Promise<string> {
   return home;
 }
 
+/** A home whose generated files and stored keys are what plan expects, as of `runtime`. */
+async function currentHome(runtime: Runtime): Promise<string> {
+  const home = await makeHome();
+  await mkdir(join(home, 'state'));
+  await writeFile(
+    join(home, 'state', 'secrets.json'),
+    JSON.stringify({
+      version: 1,
+      apps: {
+        sonarr: { apiKey: '0'.repeat(32) },
+        qbittorrent: { apiKey: `qbt_${'0'.repeat(28)}` },
+      },
+    }),
+  );
+  const current = await plan({
+    home,
+    catalog,
+    host: FIXTURE_HOST,
+    env: {},
+    runtime,
+    probe: fakeProbe(),
+  });
+  await mkdir(join(home, 'generated'));
+  await writeFile(
+    join(home, 'generated', 'compose.yaml'),
+    current.files[0]?.content ?? '',
+  );
+  await writeFile(
+    join(home, 'generated', '.env'),
+    renderEnvFile({
+      MP_GLUETUN_WIREGUARD_KEY: 'fake-wireguard-key-for-tests',
+      MP_SONARR_API_KEY: '0'.repeat(32),
+    }),
+  );
+  return home;
+}
+
 function deps(runtime: Runtime = fakeRuntime()): Partial<CliDeps> {
   return { host: () => FIXTURE_HOST, runtime: () => runtime, probe: fakeProbe() };
 }
@@ -114,45 +151,35 @@ describe('mediaplane plan', () => {
   });
 
   it('exits 0 when nothing would change', async () => {
-    const home = await makeHome();
-    await mkdir(join(home, 'state'));
-    await writeFile(
-      join(home, 'state', 'secrets.json'),
-      JSON.stringify({
-        version: 1,
-        apps: {
-          sonarr: { apiKey: '0'.repeat(32) },
-          qbittorrent: { apiKey: `qbt_${'0'.repeat(28)}` },
-        },
-      }),
-    );
     const runtime = fakeRuntime({
       hashes: { ok: true, hashes: HASHES },
       containers: running(HASHES),
     });
-    const current = await plan({
-      home,
-      catalog,
-      host: FIXTURE_HOST,
-      env: {},
-      runtime,
-      probe: fakeProbe(),
-    });
-    await mkdir(join(home, 'generated'));
-    await writeFile(
-      join(home, 'generated', 'compose.yaml'),
-      current.files[0]?.content ?? '',
-    );
-    await writeFile(
-      join(home, 'generated', '.env'),
-      renderEnvFile({
-        MP_GLUETUN_WIREGUARD_KEY: 'fake-wireguard-key-for-tests',
-        MP_SONARR_API_KEY: '0'.repeat(32),
-      }),
-    );
+    const home = await currentHome(runtime);
     const term = capture();
     expect(await run(['plan', '--home', home], term.io, deps(runtime))).toBe(0);
     expect(term.stdout()).toBe('No changes.\n');
+  });
+
+  it('exits 2 and names the apps it would wait for when only their health is left', async () => {
+    const runtime = fakeRuntime({
+      hashes: { ok: true, hashes: HASHES },
+      containers: running(HASHES).map((c) =>
+        c.service === 'sonarr' ? { ...c, health: 'unhealthy' } : c,
+      ),
+    });
+    const home = await currentHome(runtime);
+    const term = capture();
+    expect(await run(['plan', '--home', home], term.io, deps(runtime))).toBe(2);
+    expect(term.stdout()).toBe(
+      'Not healthy yet: sonarr (unhealthy)\nPlan: 1 app to wait for.\n',
+    );
+    const json = capture();
+    expect(await run(['plan', '--home', home, '--json'], json.io, deps(runtime))).toBe(2);
+    expect(JSON.parse(json.stdout())).toMatchObject({
+      changed: true,
+      unhealthy: ['sonarr (unhealthy)'],
+    });
   });
 
   it('exits 1 with actionable errors on stderr', async () => {

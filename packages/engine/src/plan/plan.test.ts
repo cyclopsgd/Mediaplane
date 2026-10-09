@@ -6,7 +6,7 @@ import { COMPOSE_PATH, ENV_PATH, SECRETS_PATH } from '../paths';
 import { portKey } from '../preflight/checks';
 import type { HostProbe } from '../preflight/probe';
 import { renderEnvFile } from '../render/env';
-import { RuntimeError, type Runtime } from '../runtime/types';
+import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { fakeHash, fakeProbe, fakeRuntime, running } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureCatalog } from '../testing/fixtures';
 import { plan, planStack } from './plan';
@@ -56,6 +56,16 @@ async function writeCurrentEnv(home: string): Promise<void> {
   );
 }
 
+/** A home whose generated files are what plan writes, with Docker answering `runtime`. */
+async function makeCurrentHome(runtime: Runtime): Promise<string> {
+  const home = await makeHome({ withStore: true });
+  const first = await planFor(home, { runtime });
+  await mkdir(join(home, 'generated'));
+  await writeFile(join(home, COMPOSE_PATH), first.files[0]?.content ?? '');
+  await writeCurrentEnv(home);
+  return home;
+}
+
 function planFor(
   home: string,
   {
@@ -89,22 +99,88 @@ describe('plan', () => {
   });
 
   it('reports no changes when files, containers and secrets are current', async () => {
-    const home = await makeHome({ withStore: true });
     const runtime = fakeRuntime({
       hashes: { ok: true, hashes: HASHES },
       containers: running(HASHES),
     });
-    const first = await planFor(home, { runtime });
-    await mkdir(join(home, 'generated'));
-    await writeFile(join(home, COMPOSE_PATH), first.files[0]?.content ?? '');
-    await writeCurrentEnv(home);
-    const result = await planFor(home, { runtime });
-    expect(result).toMatchObject({ ok: true, changed: false, secrets: { generate: [] } });
+    const result = await planFor(await makeCurrentHome(runtime), { runtime });
+    expect(result).toMatchObject({
+      ok: true,
+      changed: false,
+      secrets: { generate: [] },
+      unhealthy: [],
+    });
     expect(result.files).toEqual([
       expect.objectContaining({ path: COMPOSE_PATH, status: 'unchanged' }),
       expect.objectContaining({ path: ENV_PATH, status: 'unchanged', sensitive: true }),
     ]);
     expect(result.containers.every((c) => c.action === 'unchanged')).toBe(true);
+  });
+
+  it('plans apps whose health check has not passed yet as something to wait for', async () => {
+    const health: Record<string, string> = { sonarr: 'unhealthy', jellyfin: 'starting' };
+    const runtime = fakeRuntime({
+      hashes: { ok: true, hashes: HASHES },
+      containers: running(HASHES).map((c) => ({ ...c, health: health[c.service] ?? '' })),
+    });
+    const result = await planFor(await makeCurrentHome(runtime), { runtime });
+    expect(result).toMatchObject({
+      ok: true,
+      changed: true,
+      unhealthy: ['jellyfin (starting)', 'sonarr (unhealthy)'],
+    });
+    expect(result.files.every((f) => f.status === 'unchanged')).toBe(true);
+    expect(result.containers.every((c) => c.action === 'unchanged')).toBe(true);
+  });
+
+  it('does not wait for apps the plan already starts, recreates or removes', async () => {
+    const sick = (
+      service: string,
+      extra: Partial<ContainerState> = {},
+    ): ContainerState => ({
+      service,
+      id: `fake-${service}`,
+      state: 'running',
+      health: 'unhealthy',
+      configHash: HASHES[service] ?? 'e'.repeat(64),
+      published: [],
+      ...extra,
+    });
+    const runtime = fakeRuntime({
+      hashes: { ok: true, hashes: HASHES },
+      containers: [
+        sick('gluetun', { configHash: 'f'.repeat(64) }),
+        sick('qbittorrent'),
+        sick('jellyfin', { health: 'healthy' }),
+        sick('sonarr'),
+        sick('sonarr', { id: 'fake-sonarr-2', state: 'exited' }),
+        sick('bazarr'),
+      ],
+    });
+    const result = await planFor(await makeCurrentHome(runtime), { runtime });
+    expect(result.containers).toEqual([
+      { service: 'gluetun', action: 'recreate' },
+      { service: 'jellyfin', action: 'unchanged' },
+      { service: 'qbittorrent', action: 'recreate' },
+      { service: 'sonarr', action: 'start' },
+      { service: 'bazarr', action: 'remove' },
+    ]);
+    expect(result.unhealthy).toEqual([]);
+  });
+
+  it('lists an app once when several of its containers are not healthy', async () => {
+    const sick = running(HASHES).map((c) => ({ ...c, health: 'unhealthy' }));
+    const runtime = fakeRuntime({
+      hashes: { ok: true, hashes: HASHES },
+      containers: [...sick, ...sick.filter((c) => c.service === 'sonarr')],
+    });
+    const result = await planFor(await makeCurrentHome(runtime), { runtime });
+    expect(result.unhealthy).toEqual([
+      'gluetun (unhealthy)',
+      'jellyfin (unhealthy)',
+      'qbittorrent (unhealthy)',
+      'sonarr (unhealthy)',
+    ]);
   });
 
   it('keeps the VPN guest unchanged when it and its host are current', async () => {
@@ -223,6 +299,7 @@ describe('plan', () => {
       ok: false,
       changed: false,
       files: [],
+      unhealthy: [],
       diagnostics: [{ code: 'config.missing' }],
     });
   });

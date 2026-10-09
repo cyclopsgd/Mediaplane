@@ -14,7 +14,7 @@ import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { readSecretStore, type SecretStore } from '../secrets/store';
 import { secretsToGenerate, secretValues } from '../secrets/values';
-import { ownPorts, type ContainerChange } from './containers';
+import { notYetHealthy, ownPorts, type ContainerChange } from './containers';
 import { diffFiles, type FileChange } from './files';
 import { predictContainers, type PredictResult } from './predict';
 
@@ -35,6 +35,11 @@ export interface PlanResult {
   containers: ContainerChange[];
   /** Names ("sonarr.apiKey"), never values. */
   secrets: { generate: string[] };
+  /**
+   * Running apps whose health check has not passed yet, as "sonarr (unhealthy)": apply
+   * waits for them again, so they make the plan changed.
+   */
+  unhealthy: string[];
   diagnostics: Diagnostic[];
 }
 
@@ -117,16 +122,19 @@ export async function planStack(
     ]);
   }
   const containers = predicted.changes;
+  const unhealthy = notYetHealthy(current, containers);
   return {
     result: {
       ok: true,
       changed:
         files.some((file) => file.status !== 'unchanged') ||
         containers.some((change) => change.action !== 'unchanged') ||
-        generate.length > 0,
+        generate.length > 0 ||
+        unhealthy.length > 0,
       files,
       containers,
       secrets: { generate },
+      unhealthy,
       diagnostics,
     },
     context: { stack, compose, store, current },
@@ -141,6 +149,7 @@ function failed(diagnostics: Diagnostic[]): { result: PlanResult; context: undef
       files: [],
       containers: [],
       secrets: { generate: [] },
+      unhealthy: [],
       diagnostics,
     },
     context: undefined,

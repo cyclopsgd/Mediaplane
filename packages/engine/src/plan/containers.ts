@@ -51,6 +51,26 @@ export function planContainers(
   return [...changes, ...removed];
 }
 
+/**
+ * Apps whose health check has not passed yet ("starting" or "unhealthy"), as
+ * "<service> (<health>)", sorted. `up --wait` waits for them again, so they are part of
+ * the plan (ADR 0004). Only services the plan leaves unchanged are listed, so all their
+ * containers are running: one that is stopped, out of date or unwanted is already in
+ * `changes` as a start, recreate or remove.
+ */
+export function notYetHealthy(
+  current: readonly ContainerState[],
+  changes: readonly ContainerChange[],
+): string[] {
+  const unchanged = new Set(
+    changes.filter((change) => change.action === 'unchanged').map((c) => c.service),
+  );
+  const waiting = current
+    .filter((c) => unchanged.has(c.service) && c.health !== '' && c.health !== 'healthy')
+    .map((c) => `${c.service} (${c.health})`);
+  return [...new Set(waiting)].sort(compare);
+}
+
 /** ownPortKey()s the project's containers publish now, at any address. */
 export function ownPorts(containers: readonly ContainerState[]): Set<string> {
   return new Set(
