@@ -15,6 +15,7 @@ import {
   type Runtime,
 } from '@mediaplane/engine';
 import { Command, CommanderError } from 'commander';
+import { init, type InitOptions } from './init';
 import {
   printApply,
   printError,
@@ -189,6 +190,27 @@ export async function run(
         return;
       }
       printRecord(record, { json: asJson }, io);
+    });
+
+  program
+    .command('init')
+    .description('Write a starter stack.yaml and a secrets/ folder (never overwrites)')
+    .option('--home <dir>', 'Mediaplane home directory', defaultHome)
+    .option('--media-server <name>', 'jellyfin or plex')
+    .option('--data <path>', 'the data folder for downloads and media (absolute)')
+    .option(
+      '--vpn-provider <name>',
+      'Gluetun VPN provider, e.g. mullvad; leave out for no VPN',
+    )
+    .option('--no-login-on-lan', "don't ask for a login from your own network")
+    .option(
+      '--timezone <zone>',
+      'timezone, e.g. Europe/London',
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+    )
+    .option('--json', 'print machine-readable JSON')
+    .action(async (options: InitOptions) => {
+      exitCode = await init(options, io, deps.host());
     });
 
   try {
