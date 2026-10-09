@@ -9,8 +9,10 @@ vertical slices. Each slice:
 - gets its **own detailed plan**, written when the previous slice has landed, so
   the plan builds on the real code rather than guesses.
 
-Only Slice 1 has a detailed plan so far:
-[`m1-s1-pure-core.md`](m1-s1-pure-core.md).
+Detailed plans so far:
+
+- Slice 1: [`m1-s1-pure-core.md`](m1-s1-pure-core.md) (done).
+- Slice 2a: [`m1-s2a-plan-against-docker.md`](m1-s2a-plan-against-docker.md).
 
 ## Slices
 
@@ -25,11 +27,22 @@ Only Slice 1 has a detailed plan so far:
 | S7 | **Requests** | The Seerr first sign-in (through the Jellyfin admin or the Plex token), libraries, the Sonarr/Radarr servers, initialize, and the full-stack end-to-end test | §6.1 (Seerr), §6.2 (Seerr row) | Success criteria 1 and 2 |
 | S8 | **Release and public readiness** | Trivy, SBOM and provenance, release-please, Renovate (a custom manager for catalog pins plus SHA-pinned Actions), a multi-arch release workflow, generated reference docs and a freshness check, `migrate`, the full README, the add-an-app guide, the code of conduct, templates and CODEOWNERS | §8.2, §9 | Success criterion 7. Everything is green on both architectures |
 
+### S2 is delivered in three parts (decided 2026-10-09)
+
+S2 is too large for one plan, so it ships as three sub-slices. Each one ends green,
+just like a full slice.
+
+| # | Delivers | Proves |
+|---|---|---|
+| S2a | **Plan against a real host.** The S2 items from the Slice 1 reviews, plus: cloud detection, the Docker runtime (versions, `config --hash`, `ps`), the secrets store (read-only), secret values, preflight checks, the container diff from Compose's own config hash (ADR 0010), the CLI showing containers and secrets, and the end-to-end harness with a CI job | `mediaplane plan` reports exactly what `apply` would do to files, containers and secrets, and still writes nothing |
+| S2b | **Apply.** Key generation and persistence, `.env` rendering, atomic writes and the lock, the appdata ownership helper (Seerr runs as uid 1000), the apply stages (write, pull, `up --wait`, verify, record), change history, the `apply`, `status`, `history` and `init` commands, verified health checks, and ADR 0004 | Containers come up healthy on amd64 and arm64. A second apply reports no changes |
+| S2c | **Packaging.** The Mediaplane image, `deploy/mediaplane.compose.yaml` with the socket proxy (`mediaplane-system`), host detection from inside the container (the host-address helper), the threat model, and ADR 0008 | Success criterion 6 |
+
 Every slice writes its own docs as it goes:
 
 - **ADRs**, when a slice implements the decision:
   - 0001, 0002, 0005 and 0009 in S1;
-  - 0004 and 0008 in S2;
+  - 0010 in S2a, 0004 in S2b and 0008 in S2c;
   - 0003 in S4;
   - 0006 in S7.
   - 0007 (books) belongs to M4.
@@ -57,8 +70,8 @@ each one, or corrects it in the catalog:
 
 | Value | Verified in |
 |---|---|
-| Health-check commands for each image (`curl` in linuxserver images, `wget` in Seerr) | S2 |
-| Gluetun's built-in health check with `depends_on: service_healthy` | S2 |
+| Health-check commands for each image (`curl` in linuxserver images, `wget` in Seerr). The tools were confirmed present in every pinned image on 2026-10-09; S2b confirms the checks pass | S2b |
+| Gluetun's built-in health check with `depends_on: service_healthy` | S2b |
 | `FIREWALL_OUTBOUND_SUBNETS` accepting a comma-separated list | S3 |
 | qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace | S3 |
 | The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs) | S3 |
@@ -70,7 +83,7 @@ The Slice 1 final review approved the merge. It also raised the design gaps
 below, which only matter once Mediaplane writes files or deploys. Each slice
 plan must address the items for that slice.
 
-**S2 (must land with `apply`):**
+**S2 (must land with `apply`):** all of these are in the S2a plan.
 
 - **Cloud hosts and `bind: lan`.** On AWS, GCP, Azure and OCI the main
   network card has a private 10.x address that is NATed to a public IP, so it
