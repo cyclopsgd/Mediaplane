@@ -13,34 +13,9 @@ import {
   type ApplyOptions,
 } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
-import { BUSYBOX, composeDown, makeHome, removeHome } from './helpers';
+import { BUSYBOX, composeDown, ejectArguments, makeHome, removeHome } from './helpers';
 
 const PROJECT = `mediaplane-e2e-${process.pid}-apply`;
-
-/**
- * The command from the "To run this stack without Mediaplane" comment in compose.yaml's
- * header, as arguments for `docker`, with the project name swapped for `project` so the
- * test stays isolated. The home's path has no spaces, so splitting on whitespace is enough.
- */
-function ejectArguments(compose: string, project: string): string[] {
-  const lines = compose
-    .split('\n')
-    .filter((line) => line.startsWith('#'))
-    .map((line) => line.slice(1).trim());
-  const first = lines.findIndex((line) => line.startsWith('docker compose '));
-  const last = lines.findIndex((line) => line.endsWith(' up -d'));
-  if (first < 0 || last < first) throw new Error('compose.yaml has no eject command');
-  const command = lines
-    .slice(first, last + 1)
-    .map((line) => line.replace(/\\$/, '').trim())
-    .join(' ');
-  const [docker, ...args] = command.split(/\s+/);
-  expect(docker).toBe('docker');
-  const name = args.indexOf('-p') + 1;
-  expect(args[name]).toBe('mediaplane');
-  args[name] = project;
-  return args;
-}
 
 describe('apply against real Docker', () => {
   it('starts the video stack healthy, then has nothing left to do', async () => {
