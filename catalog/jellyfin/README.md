@@ -60,5 +60,5 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 ## Known issues
 
 - **The setup wizard is open.** Until Slice 6, Jellyfin's first-run wizard is open to
-  whoever reaches its port first. Keep `network.bind: localhost`, and finish the wizard
-  yourself.
+  whoever reaches its port first. Finish it yourself as soon as `apply` is done, or keep
+  `network.bind: localhost` until you have.

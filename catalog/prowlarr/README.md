@@ -87,4 +87,5 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
     (a private network such as your LAN) gets in without a login.
   - To get in today, set `security.login_on_lan: false`, run `apply`, and set a user name
     and password under Settings, General, Security. Then set `login_on_lan` back to
-    `true` and run `apply` again. Until you have, keep `network.bind: localhost`.
+    `true` and run `apply` again. While `login_on_lan` is `false`, anyone on your network
+    gets in, so do this straight away, or keep `network.bind: localhost` while you do.

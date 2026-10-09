@@ -55,6 +55,7 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 ## Known issues
 
 - **Setup is open.** Until Slice 7, Seerr's setup page is open to whoever reaches it
-  first. Keep `network.bind: localhost`.
+  first. Finish it yourself as soon as `apply` is done, or keep `network.bind: localhost`
+  until you have.
 - **Removing it needs `sudo`.** `appdata/seerr` belongs to uid 1000, so unless you are
   that user, deleting it needs `sudo`.
