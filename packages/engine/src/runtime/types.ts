@@ -24,7 +24,11 @@ export type HashesResult =
 export interface Runtime {
   /** Docker Engine and Compose versions; throws RuntimeError when Docker can't be reached. */
   versions(): Promise<{ engine: string; compose: string }>;
-  /** Compose's per-service config hashes for an unwritten compose.yaml (+ the user's override). */
+  /**
+   * Compose's per-service config hashes for an unwritten compose.yaml (+ the user's override).
+   * `values` are secret values, passed to Compose in its environment; any of them that
+   * appear in a returned `error` are replaced with `***`.
+   */
   configHashes(compose: string, values: Record<string, string>): Promise<HashesResult>;
   /** Every container in the project, running or not. */
   containers(): Promise<ContainerState[]>;

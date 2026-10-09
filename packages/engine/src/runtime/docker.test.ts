@@ -146,6 +146,30 @@ describe('createDockerRuntime', () => {
     ).toEqual({ ok: false, error: 'yaml: line 3: bad' });
   });
 
+  it('replaces secret values in the error Compose returns with ***', async () => {
+    const { exec } = recorder(() => ({
+      code: 15,
+      stdout: '',
+      stderr:
+        'invalid value "fake-secret-value" for MP_A; MP_B is fake.secret+x ' +
+        '(not fakeXsecretx); again fake-secret-value; short fake-secret; empty: none\n',
+    }));
+    const result = await createDockerRuntime({ home, project: 'p', exec }).configHashes(
+      'x',
+      {
+        MP_SHORT: 'fake-secret',
+        MP_A: 'fake-secret-value',
+        MP_B: 'fake.secret+x',
+        MP_EMPTY: '',
+      },
+    );
+    expect(result).toEqual({
+      ok: false,
+      error:
+        'invalid value "***" for MP_A; MP_B is *** (not fakeXsecretx); again ***; short ***; empty: none',
+    });
+  });
+
   it("lists the project's containers by name only", async () => {
     const { exec, calls } = recorder(() => ok(`${PS_SONARR}\n${PS_BYPARR}\n`));
     const containers = await createDockerRuntime({

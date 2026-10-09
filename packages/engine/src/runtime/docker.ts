@@ -79,7 +79,8 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
         ],
         { input: compose, env: values },
       );
-      if (result.code !== 0) return { ok: false, error: result.stderr.trim() };
+      if (result.code !== 0)
+        return { ok: false, error: redact(result.stderr.trim(), values) };
       return { ok: true, hashes: parseHashes(result.stdout) };
     },
 
@@ -163,6 +164,17 @@ export function parseContainers(stdout: string): ContainerState[] {
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+/**
+ * Replace every secret value in `text` with "***". Longest first, so a value that contains
+ * another is replaced whole; plain-string matching, so regex characters in a value are safe.
+ */
+function redact(text: string, values: Record<string, string>): string {
+  return Object.values(values)
+    .filter((value) => value !== '')
+    .sort((a, b) => b.length - a.length)
+    .reduce((redacted, value) => redacted.replaceAll(value, '***'), text);
 }
 
 function firstLine(value: string): string {
