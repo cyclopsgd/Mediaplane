@@ -13,10 +13,13 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "mediaplane": "tsx packages/cli/src/main.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@mediaplane/catalog": "workspace:*",
+    "@mediaplane/engine": "workspace:*",
     "@types/node": "^24.19.1",
     "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^10.12.0",

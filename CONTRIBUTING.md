@@ -12,13 +12,18 @@ pnpm install        # also points git at the repo's hooks in .githooks/
 
 ## Everyday commands
 
-| Command              | What it does                        |
-| -------------------- | ----------------------------------- |
-| `pnpm test`          | Unit tests (Vitest)                 |
-| `pnpm test:coverage` | Unit tests with coverage thresholds |
-| `pnpm lint`          | ESLint and the Prettier check       |
-| `pnpm format`        | Rewrite files with Prettier         |
-| `pnpm typecheck`     | Type-check the whole repo           |
+| Command              | What it does                         |
+| -------------------- | ------------------------------------ |
+| `pnpm test`          | Unit tests (Vitest)                  |
+| `pnpm test:coverage` | Unit tests with coverage thresholds  |
+| `pnpm test:e2e`      | End-to-end tests against real Docker |
+| `pnpm lint`          | ESLint and the Prettier check        |
+| `pnpm format`        | Rewrite files with Prettier          |
+| `pnpm typecheck`     | Type-check the whole repo            |
+
+The unit tests use in-memory fakes for Docker and the host. The spawned-CLI tests in
+`packages/cli/src/main.test.ts` and `pnpm test:e2e` use the real Docker, under their own
+Compose project names (`MEDIAPLANE_COMPOSE_PROJECT`), so they never touch a real stack.
 
 Before committing, run `pnpm format && pnpm lint && pnpm typecheck && pnpm test`.
 

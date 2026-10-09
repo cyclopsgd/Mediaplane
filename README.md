@@ -17,16 +17,23 @@ Plex as the media server.
 
 ## Try it (from source)
 
-Slice 1 can already validate a stack and show the Compose project it would write. Nothing
-is deployed yet.
+`mediaplane plan` already checks a real host and shows exactly what `apply` would do:
+
+- the Compose file it would write;
+- the containers it would create, recreate, start or remove;
+- the secrets it would generate.
+
+It changes nothing; `apply` comes in the next release. You need Docker (Engine 24 or
+newer, with the Compose plugin 2.24 or newer).
 
 ```bash
 corepack enable && pnpm install
-mkdir -p .mediaplane-dev/secrets
+mkdir -p .mediaplane-dev/data .mediaplane-dev/secrets
 printf 'fake-wireguard-key\n' > .mediaplane-dev/secrets/wg.key
-cat > .mediaplane-dev/stack.yaml <<'EOF'
+cat > .mediaplane-dev/stack.yaml <<EOF
 version: 1
-paths: { data: /srv/data }
+user: { uid: $(id -u), gid: $(id -g) }
+paths: { data: $PWD/.mediaplane-dev/data }
 network: { bind: localhost }
 media_server: jellyfin
 vpn: { provider: mullvad, private_key: { file: secrets/wg.key } }
@@ -40,8 +47,9 @@ EOF
 pnpm --silent mediaplane plan --home .mediaplane-dev
 ```
 
-`plan` exits with `0` when nothing would change, `2` when it would write files, and `1`
-on errors. Add `--json` for machine-readable output.
+The `user:` line makes the apps run as you, so they can write to the data folder you
+just created. `plan` exits with `0` when nothing would change, `2` when it would change
+something, and `1` on errors. Add `--json` for machine-readable output.
 
 ## Design
 
