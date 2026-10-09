@@ -92,19 +92,26 @@ Mediaplane works like `terraform plan` and `apply`. `plan` validates `stack.yaml
 the host, renders the Compose project and diffs it against what is running. It shows you
 the changes and touches nothing. `apply` does the same, then makes those changes.
 
-```mermaid
-flowchart LR
-  S["stack.yaml<br/>+ secrets/"] --> P["mediaplane plan"]
-  P -.->|checks| H["the host: Docker, disk,<br/>ports, data folder"]
-  P -.->|compares with| R["the running containers"]
-  P --> A["mediaplane apply"]
-  A --> K["generate keys<br/>(kept, never rotated)"]
-  K --> F["write compose.yaml<br/>and a private .env"]
-  F --> U["pull, then start and<br/>wait until healthy"]
-  U --> V["verify: plan again,<br/>nothing left to do"]
-  V --> L["record the change<br/>in state/history"]
-  U -.->|"next: wire the apps<br/>through their APIs"| W["download clients, indexers,<br/>root folders, media server"]
+```text
+stack.yaml + secrets/
+  │
+  ▼
+mediaplane plan
+  │  checks the host: Docker, disk,
+  │  ports, the data folder
+  │  compares with what is running
+  │  changes nothing
+  ▼
+mediaplane apply
+  ├─ generates keys (kept for good)
+  ├─ writes compose.yaml and .env
+  ├─ pulls images, starts the apps
+  ├─ waits until every app is healthy
+  ├─ plans again: nothing left to do
+  └─ records the change in history
 ```
+
+Next, `apply` will also wire the apps together through their own APIs.
 
 A few principles hold throughout:
 
