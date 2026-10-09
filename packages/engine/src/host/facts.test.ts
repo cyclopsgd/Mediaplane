@@ -1,6 +1,18 @@
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import type { NetworkInterfaceInfo } from 'node:os';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { isPrivateIPv4, networkOf, privateAddresses, toArch } from './facts';
+import {
+  detectCloud,
+  detectHostFacts,
+  inSubnet,
+  isPrivateIPv4,
+  networkOf,
+  privateAddresses,
+  readDmi,
+  toArch,
+} from './facts';
 
 function nic(
   address: string,
@@ -74,5 +86,103 @@ describe('privateAddresses', () => {
       { address: '10.0.0.5', cidr: '10.0.0.5/24' },
       { address: '192.168.1.10', cidr: '192.168.1.10/24' },
     ]);
+  });
+
+  it('skips VM, VPN and container-network interfaces', () => {
+    expect(
+      privateAddresses({
+        vboxnet0: [nic('192.168.56.1', '192.168.56.1/24')],
+        vmnet8: [nic('172.16.94.1', '172.16.94.1/24')],
+        zt5u4b3c2d: [nic('10.147.20.5', '10.147.20.5/24')],
+        cali1234abcd: [nic('10.244.0.1', '10.244.0.1/32')],
+        tap0: [nic('10.10.10.1', '10.10.10.1/24')],
+        nordlynx: [nic('10.5.0.2', '10.5.0.2/16')],
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe('detectCloud', () => {
+  it.each([
+    [
+      {
+        sys_vendor: 'QEMU',
+        product_name: 'KVM Virtual Machine',
+        chassis_asset_tag: 'OracleCloud.com',
+      },
+      'Oracle Cloud',
+    ],
+    [{ sys_vendor: 'Amazon EC2', product_name: 't3.micro' }, 'Amazon Web Services'],
+    [{ sys_vendor: 'Xen', product_version: '4.11.amazon' }, 'Amazon Web Services'],
+    [{ sys_vendor: 'Google', product_name: 'Google Compute Engine' }, 'Google Cloud'],
+    [
+      {
+        sys_vendor: 'Microsoft Corporation',
+        product_name: 'Virtual Machine',
+        chassis_asset_tag: '7783-7084-3265-9085-8269-3286-77',
+      },
+      'Microsoft Azure',
+    ],
+    [{ sys_vendor: 'Hetzner', product_name: 'vServer' }, 'Hetzner Cloud'],
+    [{ sys_vendor: 'DigitalOcean', product_name: 'Droplet' }, 'DigitalOcean'],
+  ])('%o is %s', (dmi, name) => {
+    expect(detectCloud(dmi)).toBe(name);
+  });
+
+  it.each([
+    [{}],
+    [{ sys_vendor: 'QEMU', product_name: 'Standard PC (Q35 + ICH9, 2009)' }],
+    [
+      {
+        sys_vendor: 'Microsoft Corporation',
+        product_name: 'Virtual Machine',
+        chassis_asset_tag: '0000-0000-0000',
+      },
+    ],
+    [{ sys_vendor: 'Dell Inc.', product_name: 'OptiPlex 7070' }],
+  ])('%o is not a cloud', (dmi) => {
+    expect(detectCloud(dmi)).toBeUndefined();
+  });
+});
+
+describe('readDmi', () => {
+  it('reads the identifying fields and skips missing or empty ones', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-dmi-'));
+    await writeFile(join(dir, 'sys_vendor'), 'QEMU\n');
+    await writeFile(join(dir, 'chassis_asset_tag'), 'OracleCloud.com\n');
+    await writeFile(join(dir, 'product_name'), '\n');
+    expect(readDmi(dir)).toEqual({
+      sys_vendor: 'QEMU',
+      chassis_asset_tag: 'OracleCloud.com',
+    });
+  });
+
+  it('returns nothing for a directory that does not exist', () => {
+    expect(readDmi('/nonexistent/mediaplane/dmi')).toEqual({});
+  });
+});
+
+describe('inSubnet', () => {
+  it.each([
+    ['192.168.1.10', '192.168.1.0/24', true],
+    ['192.168.2.10', '192.168.1.0/24', false],
+    ['10.0.0.208', '10.0.0.0/8', true],
+    ['10.0.0.208', '10.0.0.0/32', false],
+  ])('%s in %s is %s', (address, cidr, expected) => {
+    expect(inSubnet(address, cidr)).toBe(expected);
+  });
+});
+
+describe('detectHostFacts', () => {
+  it('reports the cloud named by the firmware', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-dmi-'));
+    await writeFile(join(dir, 'chassis_asset_tag'), 'OracleCloud.com\n');
+    expect(detectHostFacts(dir).cloud).toBe('Oracle Cloud');
+  });
+
+  it('reports no cloud when the firmware is not a known cloud', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-dmi-'));
+    await writeFile(join(dir, 'sys_vendor'), 'QEMU\n');
+    expect(detectHostFacts(dir)).not.toHaveProperty('cloud');
   });
 });
