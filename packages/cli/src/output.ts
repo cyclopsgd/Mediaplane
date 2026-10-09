@@ -137,7 +137,17 @@ export function printApply(
     );
     return;
   }
-  for (const diagnostic of result.diagnostics) io.stderr(formatDiagnostic(diagnostic));
+  // The plan was already printed (with its warnings) when the user was asked to confirm,
+  // so only invalid and no-changes, which stop before asking, show its diagnostics here.
+  const shownBefore = result.outcome !== 'invalid' && result.outcome !== 'no-changes';
+  for (const diagnostic of result.diagnostics) {
+    const repeated =
+      shownBefore &&
+      result.plan.diagnostics.some(
+        (d) => d.code === diagnostic.code && d.message === diagnostic.message,
+      );
+    if (!repeated) io.stderr(formatDiagnostic(diagnostic));
+  }
   // No id when the record could not be saved: say nothing rather than print an empty one.
   const recordNote =
     result.recordId === undefined ? '' : ` Change record: ${result.recordId}`;
@@ -157,10 +167,15 @@ export function printApply(
       io.stdout(`\nApply complete.${recordNote}\n`);
       return;
     case 'failed': {
-      const count = (outcome: ActionResult['result']) =>
-        String(result.actions.filter((a) => a.result === outcome).length);
+      const tally = (outcome: ActionResult['result']) =>
+        result.actions.filter((a) => a.result === outcome).length;
+      if (result.recordId === undefined && tally('failed') === 0) {
+        // Every step worked, so "run apply again" would only say "No changes."
+        io.stderr('\nApply finished, but its change record could not be saved.\n');
+        return;
+      }
       io.stderr(
-        `\nApply failed: ${count('done')} done, ${count('failed')} failed, ${count('skipped')} skipped. Run apply again to retry.${recordNote}\n`,
+        `\nApply failed: ${tally('done')} done, ${tally('failed')} failed, ${tally('skipped')} skipped. Run apply again to retry.${recordNote}\n`,
       );
     }
   }
@@ -213,10 +228,13 @@ export function printStatus(
       'No containers are running for this stack. Run "mediaplane apply" to start it.\n',
     );
   } else {
-    io.stdout(`${'APP'.padEnd(14)}${'STATE'.padEnd(10)}HEALTH\n`);
+    // Each column is as wide as its longest value plus two spaces, so values never run together.
+    const appWidth = Math.max(3, ...result.containers.map((c) => c.service.length)) + 2;
+    const stateWidth = Math.max(5, ...result.containers.map((c) => c.state.length)) + 2;
+    io.stdout(`${'APP'.padEnd(appWidth)}${'STATE'.padEnd(stateWidth)}HEALTH\n`);
     for (const c of result.containers) {
       io.stdout(
-        `${c.service.padEnd(14)}${c.state.padEnd(10)}${c.health === '' ? '-' : c.health}\n`,
+        `${c.service.padEnd(appWidth)}${c.state.padEnd(stateWidth)}${c.health === '' ? '-' : c.health}\n`,
       );
     }
   }

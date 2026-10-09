@@ -2,7 +2,12 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
-import { plan, renderEnvFile, type Runtime } from '@mediaplane/engine';
+import {
+  plan,
+  renderEnvFile,
+  type ContainerState,
+  type Runtime,
+} from '@mediaplane/engine';
 import {
   FIXTURE_HOST,
   fakeDocker,
@@ -346,9 +351,11 @@ describe('mediaplane apply', () => {
       await run(['apply', '--home', home, '--yes'], term.io, deps(fakeDocker(home))),
     ).toBe(1);
     expect(term.stderr()).toContain('error: the change record could not be saved:');
+    // Every step worked, so it does not say "failed" or tell the user to run apply again.
     expect(term.stderr()).toMatch(
-      /\nApply failed: 6 done, 0 failed, 0 skipped\. Run apply again to retry\.\n$/,
+      /\nApply finished, but its change record could not be saved\.\n$/,
     );
+    expect(term.stderr()).not.toContain('Apply failed');
     expect(term.stdout()).not.toContain('Change record');
     const json = capture();
     expect(
@@ -362,6 +369,50 @@ describe('mediaplane apply', () => {
       outcome: 'failed',
       recordId: null,
     });
+  });
+
+  it('still reports a failed step when the record could not be saved either', async () => {
+    const home = await makeHome();
+    await mkdir(join(home, 'state'));
+    await writeFile(join(home, 'state', 'history'), 'not a folder');
+    const docker = fakeDocker(home, {
+      pull: { ok: false, error: 'fake registry unreachable' },
+    });
+    const term = capture();
+    expect(await run(['apply', '--home', home, '--yes'], term.io, deps(docker))).toBe(1);
+    expect(term.stderr()).toContain('error: fake registry unreachable');
+    expect(term.stderr()).toContain('error: the change record could not be saved:');
+    expect(term.stderr()).toMatch(
+      /\nApply failed: 2 done, 1 failed, 3 skipped\. Run apply again to retry\.\n$/,
+    );
+  });
+
+  it('prints the plan warnings once, whether the apply goes ahead or not', async () => {
+    const home = await makeHome();
+    const lowDisk = {
+      ...deps(fakeDocker(home)),
+      probe: fakeProbe({ freeBytes: 5 * 1024 ** 3 }),
+    };
+    const warnings = [
+      `warning: only 5.0 GiB free at ${home}`,
+      'warning: only 5.0 GiB free at /srv/data',
+    ];
+    const warningLines = (stderr: string) =>
+      stderr.split('\n').filter((line) => line.startsWith('warning:'));
+
+    const declined = capture({}, ['n']);
+    expect(await run(['apply', '--home', home], declined.io, lowDisk)).toBe(1);
+    expect(warningLines(declined.stderr())).toEqual(warnings);
+
+    const applied = capture();
+    expect(await run(['apply', '--home', home, '--yes'], applied.io, lowDisk)).toBe(0);
+    expect(warningLines(applied.stderr())).toEqual(warnings);
+
+    // Nothing to apply any more: the plan is not shown, so apply prints the warnings itself.
+    const unchanged = capture();
+    expect(await run(['apply', '--home', home, '--yes'], unchanged.io, lowDisk)).toBe(0);
+    expect(unchanged.stdout()).toBe('No changes.\n');
+    expect(warningLines(unchanged.stderr())).toEqual(warnings);
   });
 
   it('refuses a Compose project it must not manage', async () => {
@@ -390,10 +441,37 @@ describe('mediaplane status', () => {
     const { home, docker } = await appliedHome();
     const term = capture();
     expect(await run(['status', '--home', home], term.io, deps(docker))).toBe(0);
-    expect(term.stdout()).toContain('APP           STATE     HEALTH\n');
-    expect(term.stdout()).toContain('sonarr        running   healthy\n');
+    expect(term.stdout()).toContain('APP          STATE    HEALTH\n');
+    expect(term.stdout()).toContain('sonarr       running  healthy\n');
     expect(term.stdout()).toMatch(
       /Last apply: \S+, success \(\d{8}T\d{6}Z-[0-9a-f]{8}\)\n/,
+    );
+  });
+
+  it('keeps the columns apart for a long state and a long app name', async () => {
+    const restarting: ContainerState = {
+      service: 'flaresolverr',
+      id: 'fake-flaresolverr',
+      state: 'restarting',
+      health: '',
+      configHash: 'b',
+      published: [],
+    };
+    const runtime = fakeRuntime({
+      containers: [...running({ sonarr: 'a' }), restarting],
+    });
+    const term = capture();
+    expect(
+      await run(['status', '--home', await makeHome()], term.io, deps(runtime)),
+    ).toBe(0);
+    expect(term.stdout()).toBe(
+      [
+        'APP           STATE       HEALTH',
+        'flaresolverr  restarting  -',
+        'sonarr        running     healthy',
+        'No apply has run yet.',
+        '',
+      ].join('\n'),
     );
   });
 
