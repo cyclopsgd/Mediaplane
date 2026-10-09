@@ -2,7 +2,12 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createDockerRuntime, parseContainers, parseHashes } from './docker';
+import {
+  createDockerRuntime,
+  isManagedProject,
+  parseContainers,
+  parseHashes,
+} from './docker';
 import type { Exec, ExecOptions, ExecResult } from './exec';
 import { RuntimeError } from './types';
 
@@ -81,6 +86,20 @@ describe('createDockerRuntime', () => {
     ).rejects.toThrow('docker was not found on PATH');
   });
 
+  it('gives up on a docker call that hangs', async () => {
+    const seen: (ExecOptions | undefined)[] = [];
+    const exec: Exec = (_command, _args, options) => {
+      seen.push(options);
+      return Promise.reject(Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }));
+    };
+    await expect(
+      createDockerRuntime({ home, project: 'mediaplane', exec }).versions(),
+    ).rejects.toThrow(
+      'docker version did not finish within 60s; check that the Docker daemon is responding',
+    );
+    expect(seen[0]?.timeoutMs).toBe(60_000);
+  });
+
   it('hashes an unwritten compose file from stdin, with secret values in the environment', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'mediaplane-runtime-'));
     const { exec, calls } = recorder(() =>
@@ -120,11 +139,15 @@ describe('createDockerRuntime', () => {
     const dir = await mkdtemp(join(tmpdir(), 'mediaplane-runtime-'));
     await writeFile(join(dir, 'compose.override.yaml'), 'services: {}\n');
     const { exec, calls } = recorder(() => ok(''));
-    await createDockerRuntime({ home: dir, project: 'p', exec }).configHashes('x', {});
+    await createDockerRuntime({
+      home: dir,
+      project: 'mediaplane-test',
+      exec,
+    }).configHashes('x', {});
     expect(calls[0]?.args).toEqual([
       'compose',
       '-p',
-      'p',
+      'mediaplane-test',
       '--project-directory',
       dir,
       '-f',
@@ -144,7 +167,10 @@ describe('createDockerRuntime', () => {
       stderr: 'yaml: line 3: bad\n',
     }));
     expect(
-      await createDockerRuntime({ home, project: 'p', exec }).configHashes('x', {}),
+      await createDockerRuntime({ home, project: 'mediaplane-test', exec }).configHashes(
+        'x',
+        {},
+      ),
     ).toEqual({ ok: false, error: 'yaml: line 3: bad' });
   });
 
@@ -156,15 +182,16 @@ describe('createDockerRuntime', () => {
         'invalid value "fake-secret-value" for MP_A; MP_B is fake.secret+x ' +
         '(not fakeXsecretx); again fake-secret-value; short fake-secret; empty: none\n',
     }));
-    const result = await createDockerRuntime({ home, project: 'p', exec }).configHashes(
-      'x',
-      {
-        MP_SHORT: 'fake-secret',
-        MP_A: 'fake-secret-value',
-        MP_B: 'fake.secret+x',
-        MP_EMPTY: '',
-      },
-    );
+    const result = await createDockerRuntime({
+      home,
+      project: 'mediaplane-test',
+      exec,
+    }).configHashes('x', {
+      MP_SHORT: 'fake-secret',
+      MP_A: 'fake-secret-value',
+      MP_B: 'fake.secret+x',
+      MP_EMPTY: '',
+    });
     expect(result).toEqual({
       ok: false,
       error:
@@ -176,13 +203,13 @@ describe('createDockerRuntime', () => {
     const { exec, calls } = recorder(() => ok(`${PS_SONARR}\n${PS_BYPARR}\n`));
     const containers = await createDockerRuntime({
       home,
-      project: 'p',
+      project: 'mediaplane-test',
       exec,
     }).containers();
     expect(calls[0]?.args).toEqual([
       'compose',
       '-p',
-      'p',
+      'mediaplane-test',
       'ps',
       '--all',
       '--no-trunc',
@@ -190,6 +217,32 @@ describe('createDockerRuntime', () => {
       'json',
     ]);
     expect(containers.map((c) => c.service)).toEqual(['sonarr', 'byparr']);
+  });
+});
+
+describe('isManagedProject', () => {
+  it.each(['mediaplane', 'mediaplane-test', 'mediaplane-e2e-1234-hash'])(
+    'manages %s',
+    (project) => {
+      expect(isManagedProject(project)).toBe(true);
+    },
+  );
+
+  it.each([
+    'mediaplane-system',
+    'other',
+    'mediaplane_x',
+    'Mediaplane',
+    'mediaplane-',
+    '',
+  ])('refuses %j', (project) => {
+    expect(isManagedProject(project)).toBe(false);
+  });
+
+  it('is enforced when the runtime is created', () => {
+    expect(() =>
+      createDockerRuntime({ home: '/opt/mediaplane', project: 'mediaplane-system' }),
+    ).toThrow('refusing to manage the Compose project "mediaplane-system"');
   });
 });
 
@@ -219,5 +272,15 @@ describe('parseContainers', () => {
 
   it('is empty for no output', () => {
     expect(parseContainers('')).toEqual([]);
+  });
+
+  it('reports output that is not JSON as a RuntimeError', () => {
+    expect(() => parseContainers('Error: something unexpected\n')).toThrow(RuntimeError);
+  });
+
+  it('skips JSON lines that are not objects', () => {
+    expect(
+      parseContainers(`[]\nnull\n"text"\n${PS_SONARR}\n`).map((c) => c.service),
+    ).toEqual(['sonarr']);
   });
 });

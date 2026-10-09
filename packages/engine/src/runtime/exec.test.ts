@@ -37,4 +37,12 @@ describe('nodeExec', () => {
       code: 'ENOENT',
     });
   });
+
+  it('stops a command that runs past its timeout', async () => {
+    const started = Date.now();
+    await expect(
+      nodeExec(node, ['-e', 'setTimeout(() => {}, 10_000)'], { timeoutMs: 200 }),
+    ).rejects.toMatchObject({ code: 'ETIMEDOUT' });
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
 });

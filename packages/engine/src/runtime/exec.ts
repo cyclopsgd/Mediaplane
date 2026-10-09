@@ -4,6 +4,8 @@ export interface ExecOptions {
   input?: string | undefined;
   env?: NodeJS.ProcessEnv;
   cwd?: string;
+  /** Stop the command (SIGTERM) and reject with code "ETIMEDOUT" after this many ms. */
+  timeoutMs?: number;
 }
 
 export interface ExecResult {
@@ -27,6 +29,19 @@ export const nodeExec: Exec = (command, args, options = {}) =>
     });
     let stdout = '';
     let stderr = '';
+    const timeoutMs = options.timeoutMs;
+    const timer =
+      timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            child.kill('SIGTERM');
+            reject(
+              Object.assign(
+                new Error(`${command} timed out after ${String(timeoutMs / 1000)}s`),
+                { code: 'ETIMEDOUT' },
+              ),
+            );
+          }, timeoutMs);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
@@ -35,8 +50,12 @@ export const nodeExec: Exec = (command, args, options = {}) =>
     child.stderr.on('data', (chunk: string) => {
       stderr += chunk;
     });
-    child.on('error', reject);
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
     child.on('close', (code) => {
+      clearTimeout(timer);
       resolvePromise({ code: code ?? 1, stdout, stderr });
     });
     child.stdin.on('error', () => {
