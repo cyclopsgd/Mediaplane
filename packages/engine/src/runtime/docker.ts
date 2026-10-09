@@ -182,7 +182,8 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
           'run',
           '--rm',
           '--no-deps',
-          '--no-tty',
+          // -T, not --no-tty: Compose v2 spells the long form --no-TTY, v5 --no-tty.
+          '-T',
           '--user',
           '0:0',
           '--entrypoint',

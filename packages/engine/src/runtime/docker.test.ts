@@ -329,7 +329,7 @@ describe('createDockerRuntime', () => {
       'run',
       '--rm',
       '--no-deps',
-      '--no-tty',
+      '-T',
       '--user',
       '0:0',
       '--entrypoint',

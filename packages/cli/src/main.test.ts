@@ -81,7 +81,9 @@ function freshHome(): string {
   return home;
 }
 
-describe('main', () => {
+// These tests spawn the real CLI through tsx, and the plan ones call Docker: a cold CI
+// runner needs well over the default 5 s.
+describe('main', { timeout: 60_000 }, () => {
   it('runs as a real process and exits with the command status', () => {
     const result = spawnMain('--version');
     expect(result.status).toBe(0);
