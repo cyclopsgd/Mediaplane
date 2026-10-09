@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
-import { plan, type Runtime } from '@mediaplane/engine';
+import { plan, renderEnvFile, type Runtime } from '@mediaplane/engine';
 import {
   FIXTURE_HOST,
   fakeProbe,
@@ -64,8 +64,9 @@ describe('mediaplane plan', () => {
       'Secrets to generate: qbittorrent.apiKey, sonarr.apiKey\n',
     );
     expect(term.stdout()).toContain(
-      'Plan: 1 file to write, 4 containers to change, 2 secrets to generate.',
+      'Plan: 2 files to write, 4 containers to change, 2 secrets to generate.',
     );
+    expect(term.stdout()).toContain('+ generated/.env (secret values, not shown)\n');
   });
 
   it('prints versioned JSON without file contents', async () => {
@@ -87,6 +88,12 @@ describe('mediaplane plan', () => {
       status: 'create',
     });
     expect(json.files[0]).not.toHaveProperty('content');
+    expect(json.files[1]).toEqual({
+      path: 'generated/.env',
+      status: 'create',
+      diff: '',
+      sensitive: true,
+    });
     expect(json.containers).toContainEqual({ service: 'sonarr', action: 'create' });
     expect(json.secrets.generate).toEqual(['qbittorrent.apiKey', 'sonarr.apiKey']);
   });
@@ -120,6 +127,13 @@ describe('mediaplane plan', () => {
     await writeFile(
       join(home, 'generated', 'compose.yaml'),
       current.files[0]?.content ?? '',
+    );
+    await writeFile(
+      join(home, 'generated', '.env'),
+      renderEnvFile({
+        MP_GLUETUN_WIREGUARD_KEY: 'fake-wireguard-key-for-tests',
+        MP_SONARR_API_KEY: '0'.repeat(32),
+      }),
     );
     const term = capture();
     expect(await run(['plan', '--home', home], term.io, deps(runtime))).toBe(0);

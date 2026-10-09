@@ -42,7 +42,12 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
   }
   const files = result.files.filter((file) => file.status !== 'unchanged');
   for (const file of files) {
-    io.stdout(`${file.status === 'create' ? '+' : '~'} ${file.path}\n${file.diff}\n`);
+    const mark = file.status === 'create' ? '+' : '~';
+    io.stdout(
+      file.sensitive === true
+        ? `${mark} ${file.path} (secret values, not shown)\n\n`
+        : `${mark} ${file.path}\n${file.diff}\n`,
+    );
   }
   const containers = result.containers.filter((change) => change.action !== 'unchanged');
   if (containers.length > 0) {

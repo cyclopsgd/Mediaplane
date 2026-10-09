@@ -4,14 +4,15 @@ import { loadConfigFile } from '../config/load';
 import { checkSecretRefs } from '../config/secrets';
 import { error, hasErrors, type Diagnostic } from '../diagnostics';
 import type { HostFacts } from '../host/facts';
-import { COMPOSE_PATH, STACK_PATH } from '../paths';
+import { COMPOSE_PATH, ENV_PATH, STACK_PATH } from '../paths';
 import { runPreflight } from '../preflight/checks';
 import type { HostProbe } from '../preflight/probe';
-import { renderCompose } from '../render/compose';
+import { renderCompose, type ComposeFile } from '../render/compose';
+import { renderEnvFile } from '../render/env';
 import { composeToYaml } from '../render/yaml';
-import { resolveStack } from '../resolver/resolve';
+import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
-import { readSecretStore } from '../secrets/store';
+import { readSecretStore, type SecretStore } from '../secrets/store';
 import { secretsToGenerate, secretValues } from '../secrets/values';
 import { ownPorts, type ContainerChange } from './containers';
 import { diffFiles, type FileChange } from './files';
@@ -37,8 +38,23 @@ export interface PlanResult {
   diagnostics: Diagnostic[];
 }
 
+/** What apply builds on after a successful plan, so it never works it out differently. */
+export interface PlanContext {
+  stack: ResolvedStack;
+  compose: ComposeFile;
+  store: SecretStore;
+  current: ContainerState[];
+}
+
 /** Everything apply would do, without doing it. Writes nothing. */
 export async function plan(options: PlanOptions): Promise<PlanResult> {
+  return (await planStack(options)).result;
+}
+
+/** plan(), plus the context apply builds on (undefined whenever the plan failed). */
+export async function planStack(
+  options: PlanOptions,
+): Promise<{ result: PlanResult; context: PlanContext | undefined }> {
   const home = resolve(options.home);
   if (home.includes(':')) {
     return failed([
@@ -75,19 +91,17 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
   if (hasErrors(diagnostics)) return failed(diagnostics);
 
   const compose = renderCompose(stack);
+  const store = await readSecretStore(home);
+  const values = await secretValues(stack, store, options.env);
   const files = await diffFiles(home, [
     { path: COMPOSE_PATH, content: composeToYaml(compose, home) },
+    // The secret values: compared with what is on disk, never shown or kept.
+    { path: ENV_PATH, content: renderEnvFile(values), sensitive: true },
   ]);
-  const store = await readSecretStore(home);
   const generate = secretsToGenerate(stack, store);
   let predicted: PredictResult;
   try {
-    predicted = await predictContainers(
-      compose,
-      await secretValues(stack, store, options.env),
-      options.runtime,
-      current,
-    );
+    predicted = await predictContainers(compose, values, options.runtime, current);
   } catch (cause) {
     if (!(cause instanceof RuntimeError)) throw cause;
     return failed([...diagnostics, dockerUnavailable(cause)]);
@@ -98,34 +112,38 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
       error(
         'compose.invalid',
         `docker compose rejected the configuration: ${predicted.error}`,
-        {
-          hint: 'if you have a compose.override.yaml next to stack.yaml, check it',
-        },
+        { hint: 'if you have a compose.override.yaml next to stack.yaml, check it' },
       ),
     ]);
   }
   const containers = predicted.changes;
   return {
-    ok: true,
-    changed:
-      files.some((file) => file.status !== 'unchanged') ||
-      containers.some((change) => change.action !== 'unchanged') ||
-      generate.length > 0,
-    files,
-    containers,
-    secrets: { generate },
-    diagnostics,
+    result: {
+      ok: true,
+      changed:
+        files.some((file) => file.status !== 'unchanged') ||
+        containers.some((change) => change.action !== 'unchanged') ||
+        generate.length > 0,
+      files,
+      containers,
+      secrets: { generate },
+      diagnostics,
+    },
+    context: { stack, compose, store, current },
   };
 }
 
-function failed(diagnostics: Diagnostic[]): PlanResult {
+function failed(diagnostics: Diagnostic[]): { result: PlanResult; context: undefined } {
   return {
-    ok: false,
-    changed: false,
-    files: [],
-    containers: [],
-    secrets: { generate: [] },
-    diagnostics,
+    result: {
+      ok: false,
+      changed: false,
+      files: [],
+      containers: [],
+      secrets: { generate: [] },
+      diagnostics,
+    },
+    context: undefined,
   };
 }
 

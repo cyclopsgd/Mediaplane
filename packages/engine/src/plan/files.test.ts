@@ -28,4 +28,34 @@ describe('diffFiles', () => {
     expect(changes[2]?.diff).toBe('');
     expect(changes[1]?.content).toBe('a: 2\n');
   });
+
+  it('compares a sensitive file without ever diffing or keeping its content', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mediaplane-files-'));
+    await mkdir(join(home, 'generated'));
+    const file = {
+      path: 'generated/.env',
+      content: "MP_X='fake-new'\n",
+      sensitive: true,
+    };
+    expect(await diffFiles(home, [file])).toEqual([
+      {
+        path: 'generated/.env',
+        status: 'create',
+        diff: '',
+        content: '',
+        sensitive: true,
+      },
+    ]);
+    await writeFile(join(home, 'generated/.env'), "MP_X='fake-old'\n");
+    expect((await diffFiles(home, [file]))[0]).toMatchObject({
+      status: 'update',
+      diff: '',
+      content: '',
+    });
+    await writeFile(join(home, 'generated/.env'), file.content);
+    expect((await diffFiles(home, [file]))[0]).toMatchObject({
+      status: 'unchanged',
+      content: '',
+    });
+  });
 });

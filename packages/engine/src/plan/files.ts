@@ -6,15 +6,19 @@ export interface RenderedFile {
   /** Relative to the Mediaplane home, e.g. "generated/compose.yaml". */
   path: string;
   content: string;
+  /** Holds secret values: compared with what is on disk, never diffed or kept. */
+  sensitive?: boolean;
 }
 
 export interface FileChange {
   path: string;
   status: 'create' | 'update' | 'unchanged';
-  /** Unified diff from the current file; empty when unchanged. */
+  /** Unified diff from the current file; empty when unchanged. Empty for a sensitive file. */
   diff: string;
-  /** The content apply will write. */
+  /** The content apply will write. Empty for a sensitive file. */
   content: string;
+  /** Holds secret values: compared with what is on disk, never diffed or kept. */
+  sensitive?: boolean;
 }
 
 export async function diffFiles(
@@ -24,6 +28,15 @@ export async function diffFiles(
   return Promise.all(
     files.map(async (file): Promise<FileChange> => {
       const current = await readIfExists(join(home, file.path));
+      if (file.sensitive === true) {
+        const status =
+          current === undefined
+            ? 'create'
+            : current === file.content
+              ? 'unchanged'
+              : 'update';
+        return { path: file.path, status, diff: '', content: '', sensitive: true };
+      }
       if (current === file.content) {
         return { path: file.path, status: 'unchanged', diff: '', content: file.content };
       }
