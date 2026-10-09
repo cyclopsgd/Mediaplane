@@ -17,11 +17,18 @@ apps:
   sonarr: { env: { TOKEN: { env: FAKE_TOKEN_VAR } } }
 `;
 
-async function stackIn(): Promise<ResolvedStack> {
+/**
+ * Gluetun's credential variable (MP_GLUETUN_WIREGUARD_KEY) is inserted before its env
+ * reference (MP_GLUETUN_ENV_FAKE_EXTRA) but sorts after it, so insertion order differs
+ * from sorted order.
+ */
+const STACK_WITH_GLUETUN_ENV = `${STACK}  gluetun: { env: { FAKE_EXTRA: { env: FAKE_EXTRA_VAR } } }\n`;
+
+async function stackIn(source = STACK): Promise<ResolvedStack> {
   const home = await mkdtemp(join(tmpdir(), 'mediaplane-values-'));
   await mkdir(join(home, 'secrets'));
   await writeFile(join(home, 'secrets', 'wg.key'), 'fake-wireguard-key-for-tests\n');
-  const result = resolveStack(fixtureConfig(STACK), fixtureCatalog, FIXTURE_HOST, home);
+  const result = resolveStack(fixtureConfig(source), fixtureCatalog, FIXTURE_HOST, home);
   if (result.stack === undefined) throw new Error(JSON.stringify(result.diagnostics));
   return result.stack;
 }
@@ -58,5 +65,18 @@ describe('secretValues', () => {
       MP_SONARR_ENV_TOKEN: 'fake-token-value',
     });
     expect(Object.keys(values)).toEqual([...Object.keys(values)].sort());
+  });
+
+  it('sorts keys even when they were collected out of order', async () => {
+    const values = await secretValues(await stackIn(STACK_WITH_GLUETUN_ENV), stored, {
+      FAKE_EXTRA_VAR: 'fake-extra-value',
+    });
+    expect(Object.keys(values)).toEqual([
+      'MP_GLUETUN_ENV_FAKE_EXTRA',
+      'MP_GLUETUN_WIREGUARD_KEY',
+      'MP_SONARR_API_KEY',
+      'MP_SONARR_ENV_TOKEN',
+    ]);
+    expect(values.MP_GLUETUN_ENV_FAKE_EXTRA).toBe('fake-extra-value');
   });
 });
