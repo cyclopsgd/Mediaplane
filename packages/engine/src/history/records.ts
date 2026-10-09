@@ -65,16 +65,30 @@ export function stackSha256(source: string): string {
   return createHash('sha256').update(source).digest('hex');
 }
 
+/**
+ * Write one record. It is checked against the schema first, so a record that could not be
+ * read back (or whose id is not a safe file name) is refused before anything is written.
+ */
 export async function writeRecord(home: string, record: ChangeRecord): Promise<void> {
+  const checked = changeRecordSchema.safeParse(record);
+  if (!checked.success) {
+    const problems = checked.error.issues
+      .map((issue) => `${issue.path.join('.') || '(record)'}: ${issue.message}`)
+      .join('; ');
+    throw new Error(`invalid change record: ${problems}`);
+  }
   await ensureDir(join(home, HISTORY_DIR), 0o700);
   await writeFileAtomic(
-    join(home, HISTORY_DIR, `${record.id}.json`),
-    `${JSON.stringify(record, null, 2)}\n`,
+    join(home, HISTORY_DIR, `${checked.data.id}.json`),
+    `${JSON.stringify(checked.data, null, 2)}\n`,
     0o600,
   );
 }
 
-/** Every record, newest first. Files that don't validate are listed, not thrown. */
+/**
+ * Every record, newest first. An entry that can't be read or doesn't validate is listed
+ * in `unreadable`, not thrown; only a failure to read the folder itself throws.
+ */
 export async function listRecords(
   home: string,
 ): Promise<{ records: ChangeRecord[]; unreadable: string[] }> {
@@ -93,7 +107,7 @@ export async function listRecords(
     .filter((n) => n.endsWith('.json'))
     .sort(compare)
     .reverse()) {
-    const record = parseRecord(await readFile(join(home, HISTORY_DIR, name), 'utf8'));
+    const record = await readRecordFile(join(home, HISTORY_DIR, name));
     if (record === undefined) unreadable.push(name);
     else records.push(record);
   }
@@ -108,6 +122,15 @@ export async function readRecord(
   if (!RECORD_ID.test(id)) return undefined;
   const text = await readIfExists(join(home, HISTORY_DIR, `${id}.json`));
   return text === undefined ? undefined : parseRecord(text);
+}
+
+/** The record in this file, or undefined if it can't be read (EACCES, EISDIR, gone) or parsed. */
+async function readRecordFile(path: string): Promise<ChangeRecord | undefined> {
+  try {
+    return parseRecord(await readFile(path, 'utf8'));
+  } catch {
+    return undefined;
+  }
 }
 
 function parseRecord(text: string): ChangeRecord | undefined {
