@@ -164,13 +164,32 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     },
     actions: steps.actions,
   };
-  await writeRecord(home, record);
+  const diagnostics = [...shown.diagnostics, ...steps.diagnostics];
+  try {
+    await writeRecord(home, record);
+  } catch (cause) {
+    // The stack has changed by now: keep what ran and why a step failed, and add this.
+    // Whatever went wrong, the caller still gets the steps' results (spec §5.2: exit 1).
+    const message = cause instanceof Error ? cause.message : String(cause);
+    return {
+      outcome: 'failed',
+      plan: shown,
+      actions: steps.actions,
+      recordId: undefined,
+      diagnostics: [
+        ...diagnostics,
+        error('apply.record-failed', `the change record could not be saved: ${message}`, {
+          hint: 'the stack was changed, but this apply was not recorded; free up disk space or check that this user can write to state/history',
+        }),
+      ],
+    };
+  }
   return {
     outcome: record.outcome,
     plan: shown,
     actions: steps.actions,
     recordId: record.id,
-    diagnostics: [...shown.diagnostics, ...steps.diagnostics],
+    diagnostics,
   };
 }
 

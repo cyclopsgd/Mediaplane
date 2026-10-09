@@ -234,6 +234,55 @@ describe('apply', () => {
     await expect(stat(join(home, LOCK_PATH))).rejects.toThrow();
   });
 
+  it("keeps apply's result when the change record cannot be saved", async () => {
+    const home = await makeHome();
+    // A file where the history folder should be: the record write cannot succeed.
+    await mkdir(join(home, 'state'));
+    await writeFile(join(home, 'state', 'history'), 'not a folder');
+    const result = await apply(options(home, fakeDocker(home)));
+    expect(result.outcome).toBe('failed');
+    expect(result.recordId).toBeUndefined();
+    expect(result.actions.map((a) => [a.step, a.result])).toEqual([
+      ['keys', 'done'],
+      ['files', 'done'],
+      ['pull', 'done'],
+      ['ownership', 'done'],
+      ['start', 'done'],
+      ['verify', 'done'],
+    ]);
+    const failure = result.diagnostics.find((d) => d.code === 'apply.record-failed');
+    expect(failure).toMatchObject({
+      severity: 'error',
+      hint: 'the stack was changed, but this apply was not recorded; free up disk space or check that this user can write to state/history',
+    });
+    expect(failure?.message).toMatch(/^the change record could not be saved: \S/);
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([failure]);
+    await expect(stat(join(home, LOCK_PATH))).rejects.toThrow();
+  });
+
+  it('reports the failed step as well as the unsaved record', async () => {
+    const home = await makeHome();
+    await mkdir(join(home, 'state'));
+    await writeFile(join(home, 'state', 'history'), 'not a folder');
+    const docker = fakeDocker(home, { pull: { ok: false, error: 'fake disk full' } });
+    const result = await apply(options(home, docker));
+    expect(result.outcome).toBe('failed');
+    expect(result.recordId).toBeUndefined();
+    expect(result.actions.map((a) => [a.step, a.result])).toEqual([
+      ['keys', 'done'],
+      ['files', 'done'],
+      ['pull', 'failed'],
+      ['ownership', 'skipped'],
+      ['start', 'skipped'],
+      ['verify', 'skipped'],
+    ]);
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      'apply.pull-failed',
+      'apply.record-failed',
+    ]);
+    expect(result.diagnostics[0]?.message).toBe('fake disk full');
+  });
+
   it('names the apps that did not become healthy', async () => {
     const home = await makeHome();
     const unhealthy: ContainerState = {
