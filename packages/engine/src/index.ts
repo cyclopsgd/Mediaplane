@@ -24,3 +24,5 @@ export * from './runtime/docker';
 export * from './preflight/probe';
 export * from './preflight/checks';
 export * from './history/records';
+export * from './apply/ownership';
+export * from './apply/apply';
