@@ -54,6 +54,10 @@ failure, and worse: see [A leak](#a-leak).
 - **qBittorrent** finds no peers, and its downloads stall. Its web UI still answers.
 - **`mediaplane apply`** fails at the containers step, naming `gluetun` as unhealthy, and
   qBittorrent doesn't start. See [an app won't start](app-wont-start.md).
+- **`mediaplane apply`** fails at verify, saying `the VPN check found the VPN down` or
+  `the VPN check found a leak`, with the failing line and its hint. With qBittorrent
+  behind Gluetun, verify runs `vpn-check`'s checks after every apply that changes
+  something, without the address comparison. Go by that line, as below.
 
 ## Checks
 
@@ -93,8 +97,9 @@ and `unpause` from inside Mediaplane's container.
 
 - **`network`: qBittorrent started before Gluetun last did.** Gluetun was restarted on
   its own, by hand or after a crash, so it has a new network, and qBittorrent kept the
-  old one, which has nothing but loopback. `mediaplane apply` doesn't fix this: Compose
-  restarts qBittorrent only when it recreates Gluetun. Restart qBittorrent, on the host:
+  old one, which has nothing but loopback. Compose restarts qBittorrent only when it
+  recreates Gluetun, so run `mediaplane apply`: `plan` lists qBittorrent as `restart`,
+  and apply restarts it. Or restart it yourself, on the host:
 
   ```bash
   docker restart mediaplane-qbittorrent-1
@@ -111,8 +116,9 @@ and `unpause` from inside Mediaplane's container.
   with the output of `mediaplane vpn-check --json`. That output holds your addresses:
   take them out first if you'd rather not share them.
 - **`gluetun`: Gluetun is exited, dead or created, or has no container.** Run
-  `mediaplane apply`, which starts or recreates it. Then run `mediaplane vpn-check` again,
-  and follow the `network` line if it now finds qBittorrent stranded.
+  `mediaplane apply`, which starts or recreates it, and restarts qBittorrent into its new
+  network. Its verify step runs these checks again, without the address comparison.
+  Then run `mediaplane vpn-check` to compare the addresses too.
 - **`gluetun`: Gluetun is paused or restarting.** A restart usually ends by itself: wait
   a minute, and run `mediaplane vpn-check` again. A restart loop doesn't end: if it stays,
   read Gluetun's log. A pause is a `docker pause` by hand: undo it with
@@ -205,7 +211,8 @@ Run `mediaplane vpn-check` again before you start qBittorrent.
 
 - **Run `mediaplane vpn-check`** after an `apply` that changes Gluetun, and from time to
   time. It exits 1 on a leak or a VPN that is down, so a cron job can alert on it.
-- **Restart qBittorrent whenever you restart Gluetun** by hand.
+- **Restart qBittorrent whenever you restart Gluetun** by hand, or run
+  `mediaplane apply`, which does.
 - **Leave qBittorrent's network alone** in `compose.override.yaml`: anything about its
   network goes on `gluetun`.
 - **Keep your VPN key current** with your provider.
