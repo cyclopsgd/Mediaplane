@@ -17,12 +17,13 @@ Detailed plans so far:
 - Slice 2c: [`m1-s2c-packaging.md`](m1-s2c-packaging.md) (done).
 - Slice 3a: [`m1-s3a-admin-and-seed-files.md`](m1-s3a-admin-and-seed-files.md) (done).
 - Slice 3d: [`m1-s3d-vpn-check.md`](m1-s3d-vpn-check.md) (done).
+- Slice 3b: [`m1-s3b-wiring.md`](m1-s3b-wiring.md) (done).
 
 Where M1 stands (the README shows the same):
 
-- **Merged:** S1, S2a, S2b, S2c, S3a and S3d.
-- **Next:** S3b.
-- **After that:** S3c, then S4 to S8.
+- **Merged:** S1, S2a, S2b, S2c, S3a, S3d and S3b.
+- **Next:** S3c.
+- **After that:** S4 to S8.
 
 ## Slices
 
@@ -127,8 +128,14 @@ each one, or corrects it in the catalog:
 | Gluetun's built-in health check with `depends_on: service_healthy`. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`, against a local WireGuard server: `apply` waits for Gluetun to be healthy, then starts qBittorrent, and both end healthy. It runs in CI from Slice 3d | S3d (done) |
 | `FIREWALL_OUTBOUND_SUBNETS` accepting a comma-separated list. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`: two subnets, given through `apps.gluetun.env`, are both routed in Gluetun's namespace. It runs in CI from Slice 3d | S3d (done) |
 | qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`: with `apps.qbittorrent.port: 8090` and `bind: localhost`, the web UI answers on `127.0.0.1:8090`. It runs in CI from Slice 3d | S3d (done) |
-| The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs) | S3b |
+| The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs). Verified in S3b: see below | S3b (done) |
 | Seerr running as uid 1000 with `init: true`. **Verified on 2026-10-09** by `test/e2e/apply.e2e.test.ts` and `test/e2e/deploy.e2e.test.ts`: Seerr, rendered with `init: true`, runs healthy after apply's ownership step gives its appdata to uid 1000 | S2b (done) |
+
+Verified in S3b (2026-10-10):
+
+- **`SERVER__TRUSTEDNETWORKS`**: `test/e2e/apply.e2e.test.ts` gives two subnets through
+  `apps.sonarr.env`, and Sonarr's own settings show them back as the same
+  comma-separated list. It runs in CI from Slice 3b.
 
 ## Inputs for later slices from the reviews
 
@@ -139,8 +146,9 @@ The Slice 2b final review (2026-10-09) added the S2c list, two S4 items and an
 M2 item. Slice 2c (2026-10-09) added the last S3 item, the S6 list and the last
 four S8 items. Slice 3a (2026-10-10) added three S3 items, the S3d list, three
 S4 items, two S6 items, an S8 item and an M2 item. Slice 3d (2026-10-10) added the last
-S3 item, the unscheduled list and extended two S8 items. Each slice plan must address the
-items for that slice.
+S3 item, the unscheduled list and extended two S8 items. Slice 3b (2026-10-10) added the
+S3c list, two S4 items and one unscheduled item. Each slice plan must address the items
+for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -221,7 +229,8 @@ items for that slice.
   another home already manages a project with this name.
 
 **S3:** S3a handles the first five, except Mediaplane's network in TRUSTEDNETWORKS,
-which moved to M2. The rest are for S3b and S3c.
+which moved to M2. S3b handles the rest, except qBittorrent's settings and admin
+password, which are S3c's (and listed again below).
 
 - Gluetun's `FIREWALL_OUTBOUND_SUBNETS` and Servarr's `TRUSTEDNETWORKS` should
   only be filled when ports are actually published on the LAN. Today they are
@@ -248,25 +257,43 @@ which moved to M2. The rest are for S3b and S3c.
   - This is defence in depth, not a wall, because the proxy still lets Mediaplane
     create containers.
   - S3b writes ADR 0011 on it.
+  - **Done in S3b:** as decided, with the end-to-end tests proving the login from source
+    and from the image behind the real proxy, Gluetun letting the wiring network reach
+    qBittorrent's port, and Mediaplane's container having no default route.
 - **qBittorrent's settings after its first start.** `admin.username`,
   `admin.password`, `login_on_lan` and the LAN subnet reach qBittorrent only through
   its pre-start file (S3a). S3c manages them through its API.
 - **The shared admin password, through each app's API.** Apply it through every app's
   API, qBittorrent included, so that a change to `admin.password` reaches every app
   (S3b for Sonarr, Radarr and Prowlarr, S3c for qBittorrent). Today `credentials` shows
-  the new password while qBittorrent keeps the one from its first start.
+  the new password while qBittorrent keeps the one from its first start. **Done in S3b
+  for Sonarr, Radarr and Prowlarr:** the `<app>.admin` resource.
 - **Keys an app creates must fit the secrets store (S3b).** `state/secrets.json` takes
   only letters, digits and `_` in an app's key (`^[A-Za-z0-9_]+$`), because the keys go
   into the apps' files unescaped. A secret with `createdBy: 'app'` is kept in the same
   store, so its value must fit too, or the check must apply only to the keys Mediaplane
-  generates. Otherwise the next `plan` can't read the store.
+  generates. Otherwise the next `plan` can't read the store. **Done in S3b:** the rule
+  stays for every key, and the store refuses to save one it couldn't read back, naming
+  the key. Jellyfin's (S6) is 32 hex characters, which fits.
 - **qBittorrent stranded by a Gluetun started again on its own (S3b).** When Gluetun
   restarts alone, by hand or after a crash, qBittorrent keeps the old, empty network
   namespace. Compose restarts qBittorrent only when it recreates Gluetun, not when it
   starts a stopped one (Compose 5.5.1), so `apply` leaves it stranded and its health
   check still passes on loopback. `vpn-check` reports it (S3d). Make the verify stage's
   VPN topology check (spec §6.4) catch it too, by reusing `vpnCheck` without the egress
-  check, and have `apply` restart qBittorrent then.
+  check, and have `apply` restart qBittorrent then. **Done in S3b:** `plan` lists such a
+  qBittorrent as `restart`, also when apply starts a stopped Gluetun (the owner's trial),
+  and verify runs vpn-check's checks without egress.
+
+**S3c:**
+
+- **qBittorrent through its API.** S3b reaches qBittorrent's API already, through Gluetun
+  on the wiring network, and checks its key. Add its integration: the categories, the
+  preferences, and `qbittorrent.admin`, whose password goes through `setPreferences`.
+- **Download clients need their category.** Sonarr's and Radarr's `download_client`
+  should `require` the qBittorrent category, so that a failed category skips it (S3b's
+  contract has `requires`).
+- **`after` for the arrs.** Sonarr and Radarr come after qBittorrent once they link to it.
 
 **S3d:** all of these are in the S3d plan.
 
@@ -310,6 +337,12 @@ which moved to M2. The rest are for S3b and S3c.
   remove them with `down -v` since S3a.)
 - **Rotating the admin password.** There is no way to replace the generated password
   yet. Add one, which reaches every app through its API.
+- **A wiring network whose settings change.** Compose must make it anew then, and
+  through the socket proxy it can't delete a network (S3b). The wiring failed runbook
+  gives the steps by hand. Decide whether Mediaplane should do them.
+- **The `partial` outcome.** Spec §5 step 12 names `success`, `partial` and `failed`.
+  Apply records `failed` when part of the wiring failed (S3b). Decide whether drift's
+  re-apply needs `partial`.
 
 **S6:**
 
@@ -373,6 +406,16 @@ which moved to M2. The rest are for S3b and S3c.
   `X-Forwarded-For` header it sends (spec §11, Slice 3a).
 
 **Not scheduled yet:**
+
+- **Restrict what the proxy lets Mediaplane create.** The wiring network keeps
+  Mediaplane's container offline, but the proxy still lets it create containers with any
+  network, so that is defence in depth, not a wall (ADR 0011).
+
+- **Windows and macOS through Docker Desktop or WSL2** (spec §1.5, later). A trial from
+  source on WSL with Docker Desktop worked end to end, but the port check binds
+  inside WSL's network, so a container already on the Windows side's `localhost:8080`
+  is not seen. Check the published ports through Docker as well, read-only (the port
+  bindings of every container).
 
 - **An IPv6 egress check.** `vpn-check` measures IPv4 only (S3d): its route target is
   `1.1.1.1`, and its default URL is reached by an IPv4 address. When Docker's IPv6 is

@@ -539,8 +539,8 @@ in `compose.override.yaml` is therefore wired automatically.
 
 | Command | Purpose |
 |---|---|
-| `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt, including the format of `--vpn-addresses` (on a terminal, only the refusal of `--vpn-addresses` without `--vpn-provider`, and whether `--lan-subnet` fits this host, wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file |
-| `plan` | Show what `apply` would change, including drift. Makes no changes |
+| `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt, including the format of `--vpn-addresses` (on a terminal, only the refusal of `--vpn-addresses` without `--vpn-provider`, and whether `--lan-subnet` fits this host, wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file. It also checks the home first, creates the data folder, adds a note before each question, and takes the WireGuard key on a hidden prompt (§11, Slice 3b) |
+| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack; in the image it joins the wiring network, its only change to Docker (§11, Slice 3b) |
 | `apply` | Converge on `stack.yaml` (§5) |
 | `status [app]` | Container health, VPN state, and the last apply's outcome |
 | `drift` | Report drift only (§6.3) |
@@ -700,7 +700,8 @@ Rules:
   together with
   `depends_on: { gluetun: { condition: service_healthy, restart: true } }`.
   Recreating Gluetun therefore restarts qBittorrent, which would otherwise be
-  left without a network. Verify asserts both.
+  left without a network. Verify asserts both. Starting a stopped Gluetun again does not
+  restart qBittorrent, so apply does (§11, Slice 3b).
 - **Settings that need a restart.** Port, URL base, bind address, trusted
   networks and allowed hosts are set through env vars. Changing one makes
   Compose recreate the container; Mediaplane never changes these through the
@@ -753,7 +754,8 @@ full threat model goes in `docs/security/threat-model.md`.
    - This is documented honestly as **defence in depth, not a boundary**, since
      container creation alone permits host escape.
    - Mediaplane refuses to act on resources outside the managed `mediaplane`
-     Compose project (its own `mediaplane-system` project is read-only to it).
+     Compose project (its own `mediaplane-system` project is read-only to it, but for
+     its own container's membership of the stack's wiring network: §11, Slice 3b).
      That is enforced in code.
    - The proxy can be disabled, with a warning.
 3. **Mediaplane container hardening.** It runs as a non-root user with a
@@ -1108,8 +1110,8 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   own image, as nobody. It reaches Gluetun's control server on `127.0.0.1:8000` there,
   and gets the key on its standard input, never on a command line. It uses only Docker
   API calls that `apply` already makes. So it doesn't depend on how the Mediaplane
-  container will reach the apps (Slice 3b), and the socket proxy allows nothing new. In
-  the image, the host helper asks for the host's own address.
+  container will reach the apps (Slice 3b, below), and the socket proxy allows nothing new.
+  In the image, the host helper asks for the host's own address.
 - **The runtime runs one-off commands and inspects containers (§3.2).** `run` is the
   `compose run` that the ownership helper's `chown` now uses too. `inspect` reads a
   container's network mode, start time and Compose project (`GET containers/{id}/json`),
@@ -1117,8 +1119,106 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 - **Gluetun started again on its own strands qBittorrent.** qBittorrent keeps the network
   namespace Gluetun had when qBittorrent started. Compose restarts qBittorrent when it
   recreates Gluetun (§6.4), but not when it only starts it again (verified with Compose
-  5.5.1), so `apply` doesn't fix it. `vpn-check` reports it from the two start times, and
-  the "VPN down" runbook gives the fix. Having `apply` restart qBittorrent is a Slice 3b
-  input.
+  5.5.1), so `apply` did not fix it in Slice 3d. `vpn-check` reports it from the two start
+  times, and the "VPN down" runbook gives the fix by hand. Slice 3b has `apply` restart
+  qBittorrent (below).
 - **`vpn.addresses` (§4.2)** is one or more IPv4 or IPv6 addresses with a prefix length,
   separated by commas without spaces, as Gluetun's `WIREGUARD_ADDRESSES` takes them.
+
+### Slice 3b: the wiring framework (2026-10-10)
+
+- **Mediaplane reaches the apps over a private wiring network** (§3.2, §7.2; the owner's
+  decision of 2026-10-10, [ADR 0011](../adr/0011-a-private-wiring-network.md)).
+  - `compose.yaml` declares a network `wiring` with `internal: true`. Every app whose API
+    Mediaplane calls joins it, beside its default network. An app in another app's
+    network namespace is reached through that app, which joins for it: Gluetun, for
+    qBittorrent, whose firewall counts the network as local.
+  - Mediaplane's container joins it during `plan` and `apply`, and stays, so it is on two
+    internal networks and has no route out. Apply steps off it before `up`, and back on
+    in the wire step. The runtime joins only its own container, and only to its
+    project's wiring network. It reads the network first, strictly (it must be internal,
+    a bridge, and carry the project's Compose labels for `wiring`), and joins and leaves
+    by the ID it read. That is the one change Mediaplane makes to `mediaplane-system`
+    (§7.2(2)). The socket proxy allows nothing new.
+  - Mediaplane's container sets `net.ipv4.ip_forward: 0`, so it cannot route between the
+    proxy's network and the wiring network. Only the IPv4 key is set: the networks have
+    no IPv6, and the IPv6 key fails on hosts without IPv6.
+  - Run from source, nothing joins: the host reaches the apps' addresses on the network.
+  - The apps are reached at their container's address there, with
+    `Host: <service>:<port>`, as the other apps reach them.
+- **An app's API is in the catalog** (§4.3): its port, a path that answers without the
+  key once the app is ready, its key and how a request carries it (`X-Api-Key`, or a
+  Bearer token for qBittorrent), and a path that answers only with the key. `plan` and
+  `apply` check that path for every app with an API, before its resources.
+- **The integration contract** (§3.2) is `catalog/<app>/integration.ts`: the apps it
+  comes `after`, and its resources. Each resource has a one-segment name, so its address
+  is `<app>.<resource>` and a field's is `<app>.<resource>.<field>`, as override keys are
+  (§4.2). It lists its managed fields and its secrets, and says how to read it from the
+  app, check its secrets, create it and update it. A resource may `require` others: one
+  that failed skips it (§5.1).
+- **The shared admin in Sonarr, Radarr and Prowlarr is a resource,** `<app>.admin`, not a
+  `bootstrap-api` step (§4.3, §6.1): its user name is a managed field, and its password a
+  secret, checked by signing in at `/login`. Apply sets it with the app's host settings
+  (`PUT /api/v3/config/host/<id>`, `/api/v1` for Prowlarr), sending the rest back as it
+  came; no restart is needed.
+- **Without a login for local addresses, the Servarr apps take only listed Host names**
+  (§6.1, §6.4). With `security.login_on_lan: false`, Mediaplane sets
+  `<APP>__SERVER__ALLOWEDHOSTS` to the app's service name and the addresses its web UI is
+  published on. The apps refuse to save their settings without it in that mode; it also
+  stops DNS rebinding. `localhost` and `127.0.0.1` always pass. A name of your own goes in
+  `apps.<app>.env`.
+- **`state/resources.json`** (§4.1, §6.3) is `mediaplane.resources/v1`: for each resource,
+  its id in the app (null for a singleton), its name, its managed fields as applied, the
+  names of its secrets, and when it was applied. It never holds a secret's value or hash:
+  secrets are checked by using them. It is written, 0600, after each resource that
+  changes.
+- **`plan` plans the wiring** (§5 step 5). For each app that is running, healthy and left
+  as it is, in order, it checks readiness and the key, then each resource: `create`,
+  `update` (naming what differs), `adopt` (the app holds it as wanted, but
+  `resources.json` doesn't say so: re-adoption by name, §6.3), or `unchanged`. A resource
+  of any other app is checked `after-start`. One Mediaplane couldn't ask is `unknown`,
+  with a warning, and makes the plan changed. `plan` waits up to 15 seconds for an app;
+  it changes nothing in the apps. In the image, when an app is running and left as it is,
+  it joins the wiring network to ask it: the one change `plan` makes, to Docker and not
+  to the stack (the §5.2 row).
+- **The wire step** (§5 step 10) runs after `start`. It waits up to two minutes for each
+  app, checks its key, and makes each resource what the stack wants, in the order of
+  `after`. A resource that fails doesn't stop the others; one that requires it is
+  skipped, and the step fails (outcome `failed`: `partial` is not used yet).
+- **The typed HTTP client** (§3.2, §5.1) uses Node's `http` with an agent of its own, so a
+  proxy from the environment never sees a key. It tries again a refused connection, a
+  timeout, a cut connection, or a 502, 503 or 504, with exponential backoff and jitter, until the deadline;
+  a POST only when nothing reached the app. A 4xx or a 500 fails at once, with the app's
+  own message: Servarr's validation list, ASP.NET's problem details, or plain text, cut
+  to 200 characters, and never an `attemptedValue`. It reads at most 5 MiB of an answer,
+  and checks its shape with Zod, naming only the paths that don't fit. Every message has
+  each key and password replaced with `***`, before an answer is collapsed or cut, and
+  again after.
+- **The runtime** (§3.2) gains, as `compose run` and `inspect` were added before:
+  `docker network inspect`, `connect` and `disconnect` for Mediaplane's own container
+  and the wiring network, each container's address on that network (from
+  `docker container inspect`), and `compose stop`.
+- **An integration's ports** (§5) come from the resolver's container ports, after
+  `apps.<id>.port`, not from Compose's effective config: an override that changes a
+  wired app's port is not followed yet.
+- **Verify** (§5 step 11, §6.4, §7.2(6)) also runs vpn-check's checks, without the
+  address comparison, when qBittorrent is behind Gluetun.
+- **A stranded qBittorrent is restarted** (§6.4). `plan` lists it as `restart` when it
+  started before Gluetun last did, or when Gluetun is stopped and apply will start it:
+  Compose restarts it only when it recreates Gluetun. Apply stops it before `up`, which
+  starts it in Gluetun's new network.
+- **Change records** (§5 step 12) gain, within `mediaplane.change/v1`: the step `wire`,
+  each action's `resource`, the plan's `wiring`, and the container action `restart`.
+- **Housekeeping.**
+  - The secrets store refuses to save a key it couldn't read back, such as one an app
+    made with other characters, naming the key and never its value.
+  - Apply writes `generated/.env` only when it changed, as `plan` says.
+  - A hint that points to a runbook gives its address on GitHub, with the first thing to
+    do before it where that is plain: from the image there is no copy of the repo.
+  - `init` (§5.2) checks that it can create the home, or write into it, before its first
+    question. It creates the data folder when it can, as the user it runs as, and never
+    changes an owner or a mode; when it can't, its next steps give the `sudo` commands,
+    and in the image a folder outside the home is left to you. On a terminal, a line or
+    two before each question says what it is for, and with a VPN provider it takes the
+    WireGuard private key on a hidden prompt, checks its shape, and writes it to
+    `secrets/wg.key` (0600), never over an existing one.
