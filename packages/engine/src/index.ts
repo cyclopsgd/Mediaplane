@@ -33,6 +33,7 @@ export * from './preflight/probe';
 export * from './preflight/checks';
 export * from './history/records';
 export * from './apply/ownership';
+export * from './apply/prestart';
 export * from './apply/pull';
 export * from './apply/apply';
 export * from './status';

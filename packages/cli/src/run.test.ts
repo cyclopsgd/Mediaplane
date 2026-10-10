@@ -9,10 +9,12 @@ import {
   invokingUser,
   nodeProbe,
   planStack,
+  prestartFilesFor,
   readSecretStore,
   renderEnvFile,
   secretValues,
   withGeneratedSecrets,
+  writePrestartFiles,
   writeSecretStore,
   type ContainerState,
   type HostRequest,
@@ -55,7 +57,10 @@ async function makeHome(stack = STACK): Promise<string> {
 const zeros = (size: number) => Buffer.alloc(size, 0);
 
 /** A home whose generated files and stored keys are what plan expects, as of `runtime`. */
-async function currentHome(runtime: Runtime): Promise<string> {
+async function currentHome(
+  runtime: Runtime,
+  { prestart = true }: { prestart?: boolean } = {},
+): Promise<string> {
   const home = await makeHome();
   const { context } = await planStack({
     home,
@@ -74,6 +79,10 @@ async function currentHome(runtime: Runtime): Promise<string> {
     join(home, ENV_PATH),
     renderEnvFile(await secretValues(context.stack, store, {})),
   );
+  if (prestart) {
+    const files = await prestartFilesFor(context.stack, store, {}, zeros);
+    await writePrestartFiles(home, files);
+  }
   return home;
 }
 
@@ -493,8 +502,9 @@ describe('mediaplane apply', () => {
   });
 
   it('counts only the steps that changed something as "changed" in JSON', async () => {
-    // Every key is stored already, so the keys step has nothing to do.
-    const home = await currentHome(fakeRuntime());
+    // Every key is stored already, so the keys step has nothing to do. No pre-start file
+    // is written, so the appdata folder is free to be replaced by a file.
+    const home = await currentHome(fakeRuntime(), { prestart: false });
     // A file where the appdata folder should be: the files step fails.
     await writeFile(join(home, 'appdata'), 'not a folder');
     const term = capture();

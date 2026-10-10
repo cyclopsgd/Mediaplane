@@ -12,6 +12,7 @@ import {
 import { COMPOSE_PATH, COMPOSE_PREV_PATH, ENV_PATH, STACK_PATH } from '../paths';
 import { plan, planStack, type PlanOptions, type PlanResult } from '../plan/plan';
 import { renderEnvFile } from '../render/env';
+import { prestartFilesFor } from '../render/prestart';
 import { composeToYaml } from '../render/yaml';
 import type { CommandResult, ContainerState, Runtime } from '../runtime/types';
 import { withGeneratedSecrets, type RandomBytes } from '../secrets/generate';
@@ -22,6 +23,7 @@ import { writeFileAtomic } from '../util/atomic';
 import { readIfExists } from '../util/fs';
 import { compare } from '../util/sort';
 import { ensureAppdataDirs, ownershipFixes } from './ownership';
+import { writePrestartFiles } from './prestart';
 import { pullImages } from './pull';
 
 export const DEFAULT_WAIT_SECONDS = 600;
@@ -124,7 +126,15 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       renderEnvFile(values),
     );
     await ensureAppdataDirs(stack);
-    return `wrote ${written.join(' and ')}`;
+    // Before any app starts, and only where the app has no file of its own (spec §6.4).
+    const created = await writePrestartFiles(
+      home,
+      await prestartFilesFor(stack, store, options.env, options.random),
+    );
+    return [
+      `wrote ${written.join(' and ')}`,
+      ...(created.length === 0 ? [] : [`created ${created.join(', ')}`]),
+    ].join('; ');
   });
   await steps.run('pull', () => pullImages(runtime, values, options.sleep));
   await steps.run('ownership', async () => {

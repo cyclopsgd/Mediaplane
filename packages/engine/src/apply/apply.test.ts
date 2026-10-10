@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { Catalog } from '../catalog/types';
+import type { AppDefinition, Catalog } from '../catalog/types';
 import { listRecords } from '../history/records';
 import {
   COMPOSE_PATH,
@@ -31,6 +31,18 @@ apps:
 const random = (size: number) => Buffer.alloc(size, 0xab);
 const now = () => new Date('2026-10-09T09:43:12.000Z');
 const modeOf = async (path: string) => (await stat(path)).mode & 0o777;
+
+/** Sonarr with one pre-start file, from its key and the admin login. */
+const configFiles: AppDefinition['configFiles'] = (ctx) => [
+  {
+    path: 'config/app.ini',
+    content: `key=${ctx.secret('apiKey')}\nuser=${ctx.admin.username}\n`,
+    seeded: /^key=/m,
+  },
+];
+const WITH_FILES: Catalog = fixtureCatalog.map((app) =>
+  app.id === 'sonarr' ? { ...app, configFiles } : app,
+);
 
 async function makeHome(stack = STACK): Promise<string> {
   const home = await tempDir('mediaplane-apply-');
@@ -634,6 +646,90 @@ describe('apply', () => {
     expect(result.actions.find((a) => a.step === 'ownership')?.detail).toBe(
       'requests → 2000:2000',
     );
+  });
+
+  it('writes pre-start files before the first start, private, and never again', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    const path = join(home, 'appdata', 'sonarr', 'config', 'app.ini');
+    let presentAtStart = false;
+    const watching: Runtime = {
+      ...docker,
+      up: async (seconds, values) => {
+        presentAtStart = (await readFile(path, 'utf8').catch(() => '')) !== '';
+        return docker.up(seconds, values);
+      },
+    };
+    const first = await apply(options(home, watching, { catalog: WITH_FILES }));
+    expect(first.outcome).toBe('success');
+    expect(presentAtStart).toBe(true);
+    expect(first.actions[1]?.detail).toBe(
+      'wrote generated/compose.yaml and generated/.env; created appdata/sonarr/config/app.ini',
+    );
+    expect(first.plan.files).toContainEqual({
+      path: 'appdata/sonarr/config/app.ini',
+      status: 'create',
+      diff: '',
+      content: '',
+      sensitive: true,
+      prestart: true,
+    });
+    expect(await readFile(path, 'utf8')).toBe(`key=${'ab'.repeat(16)}\nuser=admin\n`);
+    expect(await modeOf(path)).toBe(0o600);
+    // No temporary copy of the file is left in its folder.
+    expect(await readdir(join(home, 'appdata', 'sonarr', 'config'))).toEqual(['app.ini']);
+
+    // The app rewrites its own file; apply leaves it alone from now on.
+    await writeFile(path, 'key=rewritten-by-the-app\n');
+    const second = await apply(options(home, docker, { catalog: WITH_FILES }));
+    expect(second.outcome).toBe('no-changes');
+    expect(await readFile(path, 'utf8')).toBe('key=rewritten-by-the-app\n');
+  });
+
+  it('changes nothing when a pre-start file is from before Mediaplane seeded the app', async () => {
+    const home = await makeHome();
+    const path = join(home, 'appdata', 'sonarr', 'config', 'app.ini');
+    await mkdir(join(home, 'appdata', 'sonarr', 'config'), { recursive: true });
+    await writeFile(path, 'user=someone\n');
+    const confirm = vi.fn(() => Promise.resolve(true));
+    const result = await apply(
+      options(home, fakeDocker(home), { catalog: WITH_FILES, confirm }),
+    );
+    expect(result.outcome).toBe('invalid');
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'sonarr.not-seeded', severity: 'error' }),
+    );
+    expect(confirm).not.toHaveBeenCalled();
+    await expect(stat(join(home, 'generated'))).rejects.toThrow();
+    expect(await readFile(path, 'utf8')).toBe('user=someone\n');
+  });
+
+  it('stops at a pre-start file whose folder is a file, naming the path and not the content', async () => {
+    const home = await makeHome();
+    const blocker = join(home, 'appdata', 'sonarr', 'config');
+    await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+    // A file where the pre-start file's folder should be: plan counts the file as absent
+    // (ENOTDIR), and apply can't create it.
+    await writeFile(blocker, 'not a folder');
+    const docker = fakeDocker(home);
+    const result = await apply(options(home, docker, { catalog: WITH_FILES }));
+    expect(result.outcome).toBe('failed');
+    expect(result.actions.map((a) => [a.step, a.result])).toEqual([
+      ['keys', 'done'],
+      ['files', 'failed'],
+      ['pull', 'skipped'],
+      ['ownership', 'skipped'],
+      ['start', 'skipped'],
+      ['verify', 'skipped'],
+    ]);
+    const failed = result.diagnostics.find((d) => d.code === 'apply.files-failed');
+    expect(failed?.message).toContain(blocker);
+    const shown = JSON.stringify([result.actions, result.diagnostics]);
+    expect(shown).not.toContain('ab'.repeat(16));
+    expect(shown).not.toContain('user=admin');
+    expect(docker.calls).not.toContain('pull');
+    expect(await readdir(join(home, 'appdata', 'sonarr'))).toEqual(['config']);
+    expect(await readFile(blocker, 'utf8')).toBe('not a folder');
   });
 });
 
