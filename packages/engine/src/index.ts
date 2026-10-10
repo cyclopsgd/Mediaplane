@@ -30,6 +30,8 @@ export * from './secrets/generate';
 export * from './secrets/values';
 export * from './secrets/admin';
 export * from './http/client';
+export * from './integrations/types';
+export * from './integrations/resources';
 export * from './runtime/types';
 export * from './runtime/exec';
 export * from './runtime/docker';

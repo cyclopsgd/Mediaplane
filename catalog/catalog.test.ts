@@ -43,6 +43,46 @@ describe('catalog', () => {
     });
   });
 
+  it('orders the integrations with no loop in their "after"', () => {
+    const after = new Map(catalog.map((app) => [app.id, app.integration?.after ?? []]));
+    const visit = (id: string, path: readonly string[]): void => {
+      expect(path, `a loop: ${[...path, id].join(' → ')}`).not.toContain(id);
+      for (const next of after.get(id) ?? []) visit(next, [...path, id]);
+    };
+    for (const app of catalog) visit(app.id, []);
+  });
+
+  it('gives an integration to the apps Mediaplane wires so far', () => {
+    expect(
+      catalog.filter((app) => app.integration !== undefined).map((app) => app.id),
+    ).toEqual([]);
+  });
+
+  describe.each(
+    catalog.flatMap((app) =>
+      app.integration === undefined ? [] : [[app.id, app, app.integration] as const],
+    ),
+  )("%s's integration", (_id, app, integration) => {
+    it('wires itself only through an API, with resources named and checked as the contract says', () => {
+      expect(app.api).toBeDefined();
+      for (const other of integration.after) {
+        expect(catalog.map((def) => def.id)).toContain(other);
+      }
+      const addresses = catalog.flatMap((def) =>
+        (def.integration?.resources ?? []).map((r) => `${def.id}.${r.name}`),
+      );
+      for (const resource of integration.resources) {
+        expect(resource.name).toMatch(/^[a-z][a-z0-9_]*$/);
+        for (const field of resource.fields) expect(field).toMatch(/^[a-z][A-Za-z0-9]*$/);
+        // A secret is applied and checked, never compared: something must check it.
+        if (resource.secrets.length > 0) expect(typeof resource.verify).toBe('function');
+        for (const needed of resource.requires ?? []) expect(addresses).toContain(needed);
+      }
+      const names = integration.resources.map((r) => r.name);
+      expect(new Set(names).size).toBe(names.length);
+    });
+  });
+
   describe.each(catalog.map((app) => [app.id, app] as const))('%s', (_id, app) => {
     it('is pinned by exact tag and multi-arch digest', () => {
       expect(app.image.tag).not.toBe('latest');

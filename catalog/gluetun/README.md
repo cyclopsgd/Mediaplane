@@ -17,6 +17,7 @@ upstream image, unmodified. It is turned on whenever qBittorrent runs behind the
 - **Health check:** the image's own
 - **Secrets:** `controlApiKey`: 32 random hex characters, generated once and kept in `state/secrets.json`; `wireguardKey`: yours, from `vpn.private_key` in `stack.yaml`
 - **API:** none that Mediaplane calls
+- **Managed in the app:** nothing yet
 - **Needs:** nothing
 - **Provides:** `vpn`
 - **Also turns on:** nothing

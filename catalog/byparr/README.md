@@ -16,6 +16,7 @@ image, unmodified. Listing Prowlarr turns it on.
 - **Health check:** `curl -fsS -o /dev/null http://127.0.0.1:8191/health`, every 30s (timeout 10s, 5 retries, 60s to start)
 - **Secrets:** none
 - **API:** none that Mediaplane calls
+- **Managed in the app:** nothing yet
 - **Needs:** nothing
 - **Provides:** `cloudflare-solver`
 - **Also turns on:** nothing

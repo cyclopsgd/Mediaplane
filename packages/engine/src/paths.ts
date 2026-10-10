@@ -6,6 +6,7 @@ export const COMPOSE_PREV_PATH = 'generated/compose.prev.yaml';
 export const ENV_PATH = 'generated/.env';
 export const STATE_DIR = 'state';
 export const SECRETS_PATH = 'state/secrets.json';
+export const RESOURCES_PATH = 'state/resources.json';
 export const LOCK_PATH = 'state/lock';
 export const HISTORY_DIR = 'state/history';
 export const APPDATA_DIR = 'appdata';

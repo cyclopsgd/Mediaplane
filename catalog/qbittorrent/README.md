@@ -16,6 +16,7 @@ unmodified, and by default puts it behind Gluetun's VPN.
 - **Health check:** `curl -fsS "http://localhost:${WEBUI_PORT}/" > /dev/null`, every 30s (timeout 10s, 5 retries, 60s to start)
 - **Secrets:** `apiKey`: `qbt_` and 28 random letters and digits, generated once and kept in `state/secrets.json`
 - **API:** on its `web` port, which Mediaplane reaches over the stack's wiring network, with `apiKey` as a Bearer token
+- **Managed in the app:** nothing yet
 - **Needs:** nothing
 - **Provides:** `download-client:torrent`
 - **Also turns on:** `gluetun`, with the default settings

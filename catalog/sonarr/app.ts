@@ -17,10 +17,7 @@ export default defineApp({
   provides: ['pvr:tv'],
   requires: [{ capability: 'download-client', min: 1 }],
   secrets: { apiKey: { generate: 'hex32' } },
-  credentials: [
-    { step: 'env', var: 'SONARR__AUTH__APIKEY', secret: 'apiKey' },
-    { step: 'bootstrap-api', action: 'create-admin' },
-  ],
+  credentials: [{ step: 'env', var: 'SONARR__AUTH__APIKEY', secret: 'apiKey' }],
   health: { test: ['CMD', 'curl', '-fsS', 'http://localhost:8989/ping'] },
   api: servarrApi('v3'),
   env: (ctx) => servarrEnv('SONARR', ctx),

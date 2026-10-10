@@ -17,6 +17,7 @@ Radarr. Mediaplane runs the upstream image, unmodified (see
 - **Health check:** `wget -qO- http://localhost:5055/api/v1/status > /dev/null || exit 1`, every 30s (timeout 10s, 5 retries, 60s to start)
 - **Secrets:** `apiKey`: 32 random hex characters, generated once and kept in `state/secrets.json`
 - **API:** none that Mediaplane calls
+- **Managed in the app:** nothing yet
 - **Needs:** `media-server`, `pvr`
 - **Provides:** `requests`
 - **Also turns on:** nothing

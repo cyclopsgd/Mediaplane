@@ -1,6 +1,7 @@
 import { catalog } from '@mediaplane/catalog';
 import type { AppDefinition } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
+import { servarrIntegration } from '../../catalog/_shared/servarr';
 import { FACTS_END, FACTS_START, renderFacts, withFacts } from './catalog-facts';
 
 function app(id: string): AppDefinition {
@@ -53,6 +54,16 @@ describe('renderFacts', () => {
     );
     expect(renderFacts(app('jellyfin'))).toContain(
       '- **API:** none that Mediaplane calls\n',
+    );
+  });
+
+  it('lists what Mediaplane manages in an app, by override key', () => {
+    const wired = { ...app('prowlarr'), integration: servarrIntegration('v1') };
+    expect(renderFacts(wired)).toContain(
+      '- **Managed in the app:** `prowlarr.admin`: fields `prowlarr.admin.username`; the secret `password`, checked and never shown\n',
+    );
+    expect(renderFacts(app('qbittorrent'))).toContain(
+      '- **Managed in the app:** nothing yet\n',
     );
   });
 

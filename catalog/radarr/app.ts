@@ -17,10 +17,7 @@ export default defineApp({
   provides: ['pvr:movies'],
   requires: [{ capability: 'download-client', min: 1 }],
   secrets: { apiKey: { generate: 'hex32' } },
-  credentials: [
-    { step: 'env', var: 'RADARR__AUTH__APIKEY', secret: 'apiKey' },
-    { step: 'bootstrap-api', action: 'create-admin' },
-  ],
+  credentials: [{ step: 'env', var: 'RADARR__AUTH__APIKEY', secret: 'apiKey' }],
   health: { test: ['CMD', 'curl', '-fsS', 'http://localhost:7878/ping'] },
   api: servarrApi('v3'),
   env: (ctx) => servarrEnv('RADARR', ctx),

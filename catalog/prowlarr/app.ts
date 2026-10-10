@@ -17,10 +17,7 @@ export default defineApp({
   provides: ['indexer-manager'],
   requires: [],
   secrets: { apiKey: { generate: 'hex32' } },
-  credentials: [
-    { step: 'env', var: 'PROWLARR__AUTH__APIKEY', secret: 'apiKey' },
-    { step: 'bootstrap-api', action: 'create-admin' },
-  ],
+  credentials: [{ step: 'env', var: 'PROWLARR__AUTH__APIKEY', secret: 'apiKey' }],
   health: { test: ['CMD', 'curl', '-fsS', 'http://localhost:9696/ping'] },
   api: servarrApi('v1'),
   implies: () => ['byparr'],

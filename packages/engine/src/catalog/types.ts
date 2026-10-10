@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type { AppSettings, StackConfig } from '../config/schema';
 import type { Diagnostic } from '../diagnostics';
+import type { Integration } from '../integrations/types';
 
 export type Arch = 'amd64' | 'arm64';
 export type Category =
@@ -140,6 +141,8 @@ export interface AppDefinition<Options = Record<string, unknown>> {
   health: HealthCheck | 'image' | 'none';
   /** Its HTTP API, when Mediaplane calls it. */
   api?: ApiSpec;
+  /** What Mediaplane wires in it, through `api` (catalog/<app>/integration.ts). */
+  integration?: Integration;
   /** App-specific settings under apps.<id> in stack.yaml. */
   options?: z.ZodType<Options>;
   /** Apps this one needs, given its options (e.g. qBittorrent with a VPN needs Gluetun). */

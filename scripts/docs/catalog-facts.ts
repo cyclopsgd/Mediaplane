@@ -72,6 +72,26 @@ function api(def: AppDefinition): string {
   return `on its ${code(port)} port, which Mediaplane reaches over the stack's wiring network, with ${code(key.secret)} ${carried}`;
 }
 
+/** What Mediaplane manages in the app, as override keys name it (spec §4.2, §6.3). */
+function managed(def: AppDefinition): string {
+  const resources = def.integration?.resources ?? [];
+  if (resources.length === 0) return 'nothing yet';
+  return resources
+    .map((resource) => {
+      const fields = resource.fields.map((field) =>
+        code(`${def.id}.${resource.name}.${field}`),
+      );
+      const secrets = resource.secrets.map(code);
+      return `${code(`${def.id}.${resource.name}`)}: ${[
+        ...(fields.length === 0 ? [] : [`fields ${fields.join(', ')}`]),
+        ...(secrets.length === 0
+          ? []
+          : [`the secret ${secrets.join(', ')}, checked and never shown`]),
+      ].join('; ')}`;
+    })
+    .join('. ');
+}
+
 function secret(source: SecretSource): string {
   if ('generate' in source) {
     return source.generate === 'hex32'
@@ -109,6 +129,7 @@ export function renderFacts(def: AppDefinition): string {
     ['Health check', health(def)],
     ['Secrets', secrets(def)],
     ['API', api(def)],
+    ['Managed in the app', managed(def)],
     ['Needs', list(def.requires.map((r) => r.capability))],
     ['Provides', list(def.provides)],
     ['Also turns on', turnsOn(def)],
