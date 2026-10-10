@@ -188,11 +188,9 @@ describe('mediaplane.compose.yaml', () => {
 
   it('does not forward packets: on two networks, it must not route between them', () => {
     // Joined to the stack's wiring network as well as docker-api, Mediaplane would
-    // otherwise be a router for a container on wiring that has NET_ADMIN.
-    expect(mediaplane.sysctls).toEqual({
-      'net.ipv4.ip_forward': '0',
-      'net.ipv6.conf.all.forwarding': '0',
-    });
+    // otherwise be a router for a container on wiring that has NET_ADMIN. IPv4 only:
+    // neither network has IPv6, and the IPv6 key fails on a host with IPv6 turned off.
+    expect(mediaplane.sysctls).toEqual({ 'net.ipv4.ip_forward': '0' });
   });
 
   it('gives only the proxy the Docker socket, read-only, and publishes nothing', () => {

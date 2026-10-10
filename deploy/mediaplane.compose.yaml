@@ -68,10 +68,10 @@ services:
     security_opt: ['no-new-privileges:true']
     # Mediaplane is on docker-api and, to wire the apps, on the stack's wiring network too.
     # It must never route between them: a container on wiring with NET_ADMIN could
-    # otherwise reach the socket proxy through it.
+    # otherwise reach the socket proxy through it. IPv4 only: both networks have no IPv6,
+    # and the IPv6 setting would stop the container starting on a host without IPv6.
     sysctls:
       net.ipv4.ip_forward: '0'
-      net.ipv6.conf.all.forwarding: '0'
     environment:
       MEDIAPLANE_HOME: '${MEDIAPLANE_HOME:-/opt/mediaplane}'
       MEDIAPLANE_IMAGE: *mediaplane-image
