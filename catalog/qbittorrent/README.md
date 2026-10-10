@@ -99,8 +99,8 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
   ```bash
   docker stop mediaplane-qbittorrent-1
-  cd /opt/mediaplane/appdata/qbittorrent/qBittorrent
-  mv qBittorrent.conf qBittorrent.conf.before-3a
+  file=/opt/mediaplane/appdata/qbittorrent/qBittorrent/qBittorrent.conf
+  mv "$file" "$file.before-3a"
   mediaplane apply
   ```
 

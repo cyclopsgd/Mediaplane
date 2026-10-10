@@ -92,7 +92,7 @@ function notSeeded(file: PrestartFile): Diagnostic {
     `${file.app}.not-seeded`,
     `${file.path} was not written by Mediaplane, so it lacks the key Mediaplane gave ${name}`,
     {
-      hint: `stop ${name}, delete ${file.path} in the Mediaplane home, then run apply again: it writes a new one before ${name} starts. The settings in that file are lost; ${name}'s other data is kept. See "Set up before Slice 3a" in catalog/${file.app}/README.md`,
+      hint: `stop ${name}, move ${file.path} in the Mediaplane home aside (to ${file.path}.before-3a, say), then run apply again: it writes a new one before ${name} starts. The old file keeps its settings, to enter again in ${name}; ${name}'s other data is kept. See "Set up before Slice 3a" in catalog/${file.app}/README.md`,
     },
   );
 }

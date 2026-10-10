@@ -1,4 +1,4 @@
-import { chmod, mkdir, readdir, stat } from 'node:fs/promises';
+import { chmod, mkdir, readdir, stat, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Catalog } from '../catalog/types';
@@ -11,7 +11,12 @@ import {
   fixtureCatalog,
   fixtureConfig,
 } from '../testing/fixtures';
-import { ensureAppdataDirs, ownershipFixes, requiredOwner } from './ownership';
+import {
+  ensureAppdataDirs,
+  keepAppdataPrivate,
+  ownershipFixes,
+  requiredOwner,
+} from './ownership';
 import { tempDir } from '../testing/temp';
 
 const CATALOG: Catalog = [
@@ -133,5 +138,20 @@ describe('ensureAppdataDirs', () => {
     await ensureAppdataDirs(stackIn(home));
     expect(await modeOf(join(home, 'appdata'))).toBe(0o700);
     expect(await modeOf(join(home, 'appdata', 'jellyfin'))).toBe(0o755);
+  });
+});
+
+describe('keepAppdataPrivate', () => {
+  it('leaves a missing appdata/ missing', async () => {
+    const home = await tempDir('mediaplane-ownership-');
+    await keepAppdataPrivate(home);
+    expect(await readdir(home)).toEqual([]);
+  });
+
+  it('passes on an error that is not about the owner', async () => {
+    const home = await tempDir('mediaplane-ownership-');
+    // A link to itself: chmod can't reach a folder at all.
+    await symlink('appdata', join(home, 'appdata'));
+    await expect(keepAppdataPrivate(home)).rejects.toThrow('ELOOP');
   });
 });

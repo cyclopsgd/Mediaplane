@@ -32,6 +32,8 @@ export function terminalAsk(
       const cancel = () => {
         if (answered) return;
         answered = true;
+        // Closing twice does nothing, so this is safe whichever way the input ended.
+        prompt.close();
         // The cursor is still after the question: what comes next starts a line.
         output.write('\n');
         reject(new PromptCancelled());

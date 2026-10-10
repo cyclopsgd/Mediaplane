@@ -258,14 +258,16 @@ Each item is a message you may see, then what to do.
 
 - `EACCES` on a file in the home
 
-  Give `state/` and `generated/` to `MEDIAPLANE_UID`, using the ids in `deploy/.env`.
-  Don't change the owner of all of `appdata/`: some apps need their own. For example:
+  Give `state/` and `generated/` to `MEDIAPLANE_UID`, with all they hold, and
+  `appdata/` itself, but not what is in it: some apps need their own owner. Use the
+  ids in `deploy/.env`. For example:
 
   ```bash
   sudo chown -R 1000:1000 /opt/mediaplane/state /opt/mediaplane/generated
+  sudo chown 1000:1000 /opt/mediaplane/appdata
   ```
 
-  For `cannot create …/appdata/… (EACCES)`, see that item below: it names the one
+  For `cannot create …/appdata/… (EACCES)`, see that item below: it names the one app
   folder to give back.
 
 - `file … is missing, empty or unreadable`, for a secret file outside the home
@@ -303,10 +305,10 @@ Each item is a message you may see, then what to do.
   stack's `user:`, so apply can't write the app's settings file there. Its README, under
   "Set up before Slice 3a", says what to do.
 
-- `EPERM: operation not permitted, chmod '…/appdata'`
+- `cannot make …/appdata private (EPERM): it belongs to another user`
 
-  `appdata/` belongs to another user, so Mediaplane can't keep it private (0700). Give
-  the folder itself, not what is in it, to `MEDIAPLANE_UID`:
+  Mediaplane keeps `appdata/` private (0700) on every apply, so it must own the folder.
+  Give the folder itself, not what is in it, to `MEDIAPLANE_UID`:
 
   ```bash
   sudo chown 1000:1000 /opt/mediaplane/appdata

@@ -22,7 +22,12 @@ import { acquireLock, LockedError, type Lock } from '../state/lock';
 import { writeFileAtomic } from '../util/atomic';
 import { readIfExists } from '../util/fs';
 import { compare } from '../util/sort';
-import { ensureAppdataDirs, ownershipFixes } from './ownership';
+import {
+  AppdataNotPrivateError,
+  ensureAppdataDirs,
+  keepAppdataPrivate,
+  ownershipFixes,
+} from './ownership';
 import { writePrestartFiles } from './prestart';
 import { pullImages } from './pull';
 
@@ -101,7 +106,18 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
   const stackSource = (await readIfExists(join(options.home, STACK_PATH))) ?? '';
   const { result: shown, context } = await planStack(options);
   if (!shown.ok || context === undefined) return stopped('invalid', shown);
-  if (!shown.changed) return stopped('no-changes', shown);
+  if (!shown.changed) {
+    // Nothing else to change, but appdata/ may have been opened up since the last apply.
+    try {
+      await keepAppdataPrivate(options.home);
+    } catch (cause) {
+      if (!(cause instanceof AppdataNotPrivateError)) throw cause;
+      return stopped('invalid', shown, [
+        error('apply.appdata-not-private', cause.message, { hint: cause.hint }),
+      ]);
+    }
+    return stopped('no-changes', shown);
+  }
   if (!(await options.confirm(shown))) return stopped('cancelled', shown);
 
   const { home, runtime } = options;
@@ -234,9 +250,10 @@ class Steps {
       this.#finish({ step, result: 'done', detail: await work() });
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      this.diagnostics.push(
-        error(`apply.${step}-failed`, message, { hint: STEP_HINTS[step] }),
-      );
+      // An error that knows its own cause says what to do better than the step's hint.
+      const hint =
+        cause instanceof AppdataNotPrivateError ? cause.hint : STEP_HINTS[step];
+      this.diagnostics.push(error(`apply.${step}-failed`, message, { hint }));
       this.#finish({ step, result: 'failed', error: message });
     }
   }

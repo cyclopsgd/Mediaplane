@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { arch, networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
 import { join } from 'node:path';
 import type { Arch } from '../catalog/types';
-import { compare } from '../util/sort';
+import { compare, unique } from '../util/sort';
 
 export interface HostFacts {
   arch: Arch;
@@ -93,7 +93,7 @@ export function isPrivateSubnet(cidr: string): boolean {
  * than its private range, so such a network is left out rather than trusted.
  */
 export function privateNetworks(host: Pick<HostFacts, 'privateAddresses'>): string[] {
-  return [...new Set(host.privateAddresses.map((a) => networkOf(a.cidr)))].filter(
+  return unique(host.privateAddresses.map((a) => networkOf(a.cidr))).filter(
     isPrivateSubnet,
   );
 }

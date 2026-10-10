@@ -102,8 +102,8 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
   ```bash
   docker stop mediaplane-prowlarr-1
-  cd /opt/mediaplane/appdata/prowlarr
-  mv config.xml config.xml.before-3a
+  file=/opt/mediaplane/appdata/prowlarr/config.xml
+  mv "$file" "$file.before-3a"
   mediaplane apply
   ```
 

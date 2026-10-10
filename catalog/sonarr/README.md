@@ -90,8 +90,8 @@ The wiring arrives in Slices 3b to 7 (see the [roadmap](../../docs/plans/m1-road
 
   ```bash
   docker stop mediaplane-sonarr-1
-  cd /opt/mediaplane/appdata/sonarr
-  mv config.xml config.xml.before-3a
+  file=/opt/mediaplane/appdata/sonarr/config.xml
+  mv "$file" "$file.before-3a"
   mediaplane apply
   ```
 

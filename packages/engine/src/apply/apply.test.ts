@@ -8,9 +8,10 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
+import type * as FsPromises from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppDefinition, Catalog } from '../catalog/types';
 import { listRecords } from '../history/records';
 import {
@@ -25,6 +26,38 @@ import { fakeDocker, fakeProbe } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureApp, fixtureCatalog } from '../testing/fixtures';
 import { apply, unhealthyServices, type ApplyOptions } from './apply';
 import { tempDir } from '../testing/temp';
+
+// chmod() passes straight through, except where a test refuses it for one path, as the
+// system does for a folder another user owns (which a test can't make without root).
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof FsPromises>();
+  return { ...actual, chmod: vi.fn(actual.chmod) };
+});
+const real = await vi.importActual<typeof FsPromises>('node:fs/promises');
+
+beforeEach(() => {
+  vi.mocked(chmod).mockReset();
+});
+
+/** chmod() fails on `path` with EPERM, as for a folder another user owns. */
+function refuseChmodOf(path: string): void {
+  vi.mocked(chmod).mockImplementation((target, mode) => {
+    if (target === path) {
+      return Promise.reject(
+        Object.assign(new Error(`EPERM: operation not permitted, chmod '${path}'`), {
+          code: 'EPERM',
+        }),
+      );
+    }
+    return real.chmod(target, mode);
+  });
+}
+
+/** What apply says when appdata/ belongs to another user. */
+const NOT_PRIVATE = (home: string) => ({
+  message: `cannot make ${join(home, 'appdata')} private (EPERM): it belongs to another user`,
+  hint: 'give appdata/ itself, not what is in it, to the user Mediaplane runs as (MEDIAPLANE_UID in its container), then run apply again',
+});
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -695,6 +728,56 @@ describe('apply', () => {
     const second = await apply(options(home, docker, { catalog: WITH_FILES }));
     expect(second.outcome).toBe('no-changes');
     expect(await readFile(path, 'utf8')).toBe('key=rewritten-by-the-app\n');
+  });
+
+  it('keeps appdata/ private on every apply, even one with nothing to change', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    expect((await apply(options(home, docker))).outcome).toBe('success');
+    // Opened up by hand, or by an old backup tool, since the last apply.
+    await chmod(join(home, 'appdata'), 0o755);
+    const again = await apply(options(home, docker));
+    expect(again.outcome).toBe('no-changes');
+    expect(await modeOf(join(home, 'appdata'))).toBe(0o700);
+  });
+
+  it('leaves a missing appdata/ to the files step when nothing else would change', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    expect((await apply(options(home, docker))).outcome).toBe('success');
+    await rm(join(home, 'appdata'), { recursive: true });
+    // Plan still finds nothing to change (appdata/ holds no file it checks).
+    const again = await apply(options(home, docker));
+    expect(again.outcome).toBe('no-changes');
+    await expect(stat(join(home, 'appdata'))).rejects.toThrow('ENOENT');
+  });
+
+  it('says appdata/ belongs to another user when the files step cannot make it private', async () => {
+    const home = await makeHome();
+    refuseChmodOf(join(home, 'appdata'));
+    const result = await apply(options(home, fakeDocker(home)));
+    expect(result.outcome).toBe('failed');
+    expect(result.actions[1]).toMatchObject({ step: 'files', result: 'failed' });
+    expect(result.diagnostics).toContainEqual({
+      severity: 'error',
+      code: 'apply.files-failed',
+      ...NOT_PRIVATE(home),
+    });
+  });
+
+  it('says so too on an apply with nothing else to change, and changes nothing', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    expect((await apply(options(home, docker))).outcome).toBe('success');
+    refuseChmodOf(join(home, 'appdata'));
+    const again = await apply(options(home, docker));
+    expect(again.outcome).toBe('invalid');
+    expect(again.actions).toEqual([]);
+    expect(again.diagnostics).toContainEqual({
+      severity: 'error',
+      code: 'apply.appdata-not-private',
+      ...NOT_PRIVATE(home),
+    });
   });
 
   it('changes nothing when a pre-start file is from before Mediaplane seeded the app', async () => {

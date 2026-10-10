@@ -53,7 +53,7 @@ describe('planPrestartFiles', () => {
           code: 'sonarr.not-seeded',
           message:
             'appdata/sonarr/config.xml was not written by Mediaplane, so it lacks the key Mediaplane gave Sonarr',
-          hint: 'stop Sonarr, delete appdata/sonarr/config.xml in the Mediaplane home, then run apply again: it writes a new one before Sonarr starts. The settings in that file are lost; Sonarr\'s other data is kept. See "Set up before Slice 3a" in catalog/sonarr/README.md',
+          hint: 'stop Sonarr, move appdata/sonarr/config.xml in the Mediaplane home aside (to appdata/sonarr/config.xml.before-3a, say), then run apply again: it writes a new one before Sonarr starts. The old file keeps its settings, to enter again in Sonarr; Sonarr\'s other data is kept. See "Set up before Slice 3a" in catalog/sonarr/README.md',
         },
       ],
     });
