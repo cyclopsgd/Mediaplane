@@ -66,9 +66,14 @@ export function resolveStack(
   const byId = new Map(catalog.map((def) => [def.id, def]));
   const diagnostics = checkListedApps(config, byId);
   const lanSubnets =
-    config.network.lan_subnet === undefined
-      ? unique(host.privateAddresses.map((a) => networkOf(a.cidr)))
-      : [config.network.lan_subnet];
+    config.network.lan_subnet !== undefined
+      ? [config.network.lan_subnet]
+      : host.cloud !== undefined
+        ? []
+        : unique(host.privateAddresses.map((a) => networkOf(a.cidr)));
+  const publishesOnLan = config.network.bind !== 'localhost';
+  // Only LAN clients need trusting, and only while the web UIs are on the LAN.
+  const lanClientSubnets = publishesOnLan ? lanSubnets : [];
 
   const { enabled, unparsed } = enableApps(
     requestedApps(config, byId),
@@ -78,7 +83,14 @@ export function resolveStack(
   );
   const apps = enabled.map(({ def, options }): ResolvedApp => {
     const settings = config.apps[def.id] ?? DEFAULT_SETTINGS;
-    const context: AppContext = { config, settings, options, lanSubnets };
+    const context: AppContext = {
+      config,
+      settings,
+      options,
+      lanSubnets,
+      publishesOnLan,
+      lanClientSubnets,
+    };
     diagnostics.push(...checkApp(def, settings, context, host));
     return {
       def,

@@ -323,6 +323,35 @@ describe('resolveStack: binding', () => {
     ]);
   });
 
+  it('knows no LAN subnet on a cloud VM, unless lan_subnet names one', () => {
+    const cloud: HostFacts = { ...FIXTURE_HOST, cloud: 'Oracle Cloud' };
+    expect(resolve('  qbittorrent: {}\n', { host: cloud }).stack?.lanSubnets).toEqual([]);
+    const base = BASE.replace(
+      'bind: localhost',
+      'bind: localhost, lan_subnet: 10.0.0.0/24',
+    );
+    expect(
+      resolve('  qbittorrent: {}\n', { base, host: cloud }).stack?.lanSubnets,
+    ).toEqual(['10.0.0.0/24']);
+  });
+
+  it('tells the apps whether their web UIs are on the LAN, and which clients to trust', () => {
+    const contextFor = (base: string) =>
+      app(resolve('  sonarr: {}\n  qbittorrent: {}\n', { base }), 'sonarr')?.context;
+    expect(contextFor(BASE)).toMatchObject({
+      lanSubnets: ['192.168.1.0/24'],
+      publishesOnLan: false,
+      lanClientSubnets: [],
+    });
+    for (const base of [lan, BASE.replace('bind: localhost', 'bind: all')]) {
+      expect(contextFor(base)).toMatchObject({
+        lanSubnets: ['192.168.1.0/24'],
+        publishesOnLan: true,
+        lanClientSubnets: ['192.168.1.0/24'],
+      });
+    }
+  });
+
   it('refuses "lan" on a host with no private address', () => {
     const result = resolve('  qbittorrent: {}\n', {
       base: lan,

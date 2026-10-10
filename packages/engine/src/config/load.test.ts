@@ -264,6 +264,27 @@ describe('parseConfig', () => {
     expect(parseConfig(`${MINIMAL}network: { lan_subnet: 10.1.1.0/24 }\n`).ok).toBe(true);
   });
 
+  it('rejects a lan_subnet outside the private (RFC 1918) ranges, and says why', () => {
+    for (const subnet of ['0.0.0.0/0', '203.0.113.0/24', '172.32.0.0/16']) {
+      const diagnostics = diagnosticsOf(`${MINIMAL}network: { lan_subnet: ${subnet} }\n`);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        code: 'config.invalid',
+        path: 'network.lan_subnet',
+      });
+      expect(diagnostics[0]?.message).toContain('a private (RFC 1918) subnet');
+    }
+    expect(parseConfig(`${MINIMAL}network: { lan_subnet: 172.20.0.0/16 }\n`).ok).toBe(
+      true,
+    );
+  });
+
+  it('reports a lan_subnet that is not a subnet once, not also as public', () => {
+    expect(
+      diagnosticsOf(`${MINIMAL}network: { lan_subnet: 999.168.1.0/24 }\n`),
+    ).toHaveLength(1);
+  });
+
   it('rejects data paths containing ":"', () => {
     const [diagnostic] = diagnosticsOf(MINIMAL.replace('/srv/data', '/srv/data:/x'));
     expect(diagnostic).toMatchObject({ code: 'config.invalid', path: 'paths.data' });

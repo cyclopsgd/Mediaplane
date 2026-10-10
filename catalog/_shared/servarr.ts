@@ -10,8 +10,9 @@ export function servarrEnv(prefix: string, ctx: AppContext): Record<string, stri
     [`${prefix}__AUTH__METHOD`]: 'Forms',
     [`${prefix}__AUTH__REQUIRED`]: loginOnLan ? 'Enabled' : 'DisabledForLocalAddresses',
   };
-  if (!loginOnLan && ctx.lanSubnets.length > 0) {
-    env[`${prefix}__SERVER__TRUSTEDNETWORKS`] = ctx.lanSubnets.join(',');
+  // Empty unless the web UI is on the LAN: only LAN clients need trusting.
+  if (!loginOnLan && ctx.lanClientSubnets.length > 0) {
+    env[`${prefix}__SERVER__TRUSTEDNETWORKS`] = ctx.lanClientSubnets.join(',');
   }
   return env;
 }

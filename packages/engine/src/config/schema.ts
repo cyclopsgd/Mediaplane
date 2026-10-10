@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isPrivateSubnet } from '../host/facts';
 import { compare } from '../util/sort';
 
 export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -151,10 +152,17 @@ const stackShape = {
         ),
       lan_subnet: z
         .string()
-        .refine(isIpv4Cidr, 'must be an IPv4 CIDR such as 192.168.1.0/24')
+        .refine(isIpv4Cidr, {
+          message: 'must be an IPv4 CIDR such as 192.168.1.0/24',
+          abort: true,
+        })
+        .refine(
+          isPrivateSubnet,
+          'must be a private (RFC 1918) subnet, inside 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16: addresses in it may skip logins and get through the VPN firewall',
+        )
         .optional()
         .describe(
-          "Your LAN as an IPv4 CIDR, such as 192.168.1.0/24. Detected from this host's private addresses when left out; on a cloud VM, bind: lan needs it set.",
+          "Your LAN, as a private (RFC 1918) IPv4 CIDR such as 192.168.1.0/24. Left out, it is detected from this host's private addresses, except on a cloud VM, where bind: lan needs it set. Mediaplane trusts it only while the web UIs are published on the LAN.",
         ),
     })
     .default({ bind: 'lan' })

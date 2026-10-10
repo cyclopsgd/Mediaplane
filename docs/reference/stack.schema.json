@@ -67,7 +67,7 @@
           "enum": ["lan", "localhost", "all"]
         },
         "lan_subnet": {
-          "description": "Your LAN as an IPv4 CIDR, such as 192.168.1.0/24. Detected from this host's private addresses when left out; on a cloud VM, bind: lan needs it set.",
+          "description": "Your LAN, as a private (RFC 1918) IPv4 CIDR such as 192.168.1.0/24. Left out, it is detected from this host's private addresses, except on a cloud VM, where bind: lan needs it set. Mediaplane trusts it only while the web UIs are published on the LAN.",
           "type": "string"
         }
       },

@@ -47,8 +47,18 @@ export interface AppContext<Options = Record<string, unknown>> {
   config: StackConfig;
   settings: AppSettings;
   options: Options;
-  /** LAN subnets from stack.yaml or host detection. May be empty. */
+  /**
+   * LAN subnets: network.lan_subnet, or those of the host's private addresses. Empty on a
+   * cloud VM without lan_subnet, whose private network is not a LAN.
+   */
   lanSubnets: string[];
+  /** Whether the web UIs are published on the LAN: network.bind is lan or all. */
+  publishesOnLan: boolean;
+  /**
+   * The LAN subnets whose clients may be trusted: lanSubnets while publishesOnLan,
+   * otherwise none. Use it, not lanSubnets, to skip a login or open a firewall.
+   */
+  lanClientSubnets: string[];
 }
 
 export interface ServiceExtras {

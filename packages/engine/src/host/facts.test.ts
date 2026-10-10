@@ -7,6 +7,7 @@ import {
   detectHostFacts,
   inSubnet,
   isPrivateIPv4,
+  isPrivateSubnet,
   networkOf,
   privateAddresses,
   readDmi,
@@ -63,6 +64,36 @@ describe('networkOf', () => {
     ['1.2.3.4/0', '0.0.0.0/0'],
   ])('%s → %s', (cidr, expected) => {
     expect(networkOf(cidr)).toBe(expected);
+  });
+});
+
+describe('isPrivateSubnet', () => {
+  it('accepts subnets that lie wholly inside 10/8, 172.16/12 or 192.168/16', () => {
+    for (const cidr of [
+      '10.0.0.0/8',
+      '10.1.2.0/24',
+      '172.16.0.0/12',
+      '172.31.255.0/24',
+      '192.168.0.0/16',
+      '192.168.1.0/24',
+      '192.168.1.10/32',
+    ]) {
+      expect(isPrivateSubnet(cidr)).toBe(true);
+    }
+  });
+
+  it('refuses public subnets, and private ones that spill out of their range', () => {
+    for (const cidr of [
+      '0.0.0.0/0',
+      '8.8.8.0/24',
+      '100.64.0.0/10',
+      '172.32.0.0/16',
+      '172.16.0.0/11',
+      '192.168.0.0/15',
+      '10.0.0.0/7',
+    ]) {
+      expect(isPrivateSubnet(cidr)).toBe(false);
+    }
   });
 });
 

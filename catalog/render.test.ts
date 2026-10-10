@@ -154,6 +154,44 @@ describe('the real catalog', () => {
     });
   });
 
+  it('trusts no subnet, and lets nothing in through Gluetun, with bind: localhost', () => {
+    const source = SPEC_EXAMPLE.replace(
+      'network: { bind: lan }',
+      'network: { bind: localhost }\nsecurity: { login_on_lan: false }',
+    );
+    const { compose, diagnostics } = render(source);
+    expect(diagnostics).toEqual([]);
+    expect(compose.services.radarr?.environment).toMatchObject({
+      RADARR__AUTH__REQUIRED: 'DisabledForLocalAddresses',
+    });
+    expect(compose.services.radarr?.environment).not.toHaveProperty(
+      'RADARR__SERVER__TRUSTEDNETWORKS',
+    );
+    expect(compose.services.gluetun?.environment).not.toHaveProperty(
+      'FIREWALL_OUTBOUND_SUBNETS',
+    );
+  });
+
+  it('warns when the web UIs are on the LAN but Mediaplane knows no LAN subnet', () => {
+    const source = SPEC_EXAMPLE.replace(
+      'network: { bind: lan }',
+      'network: { bind: all }',
+    );
+    const { compose, diagnostics } = render(source, { ...HOST, cloud: 'Oracle Cloud' });
+    expect(codes(diagnostics)).toEqual(['network.no-lan-subnet', 'network.bind-all']);
+    expect(diagnostics[0]).toEqual({
+      severity: 'warning',
+      code: 'network.no-lan-subnet',
+      message:
+        "the web UIs are published on the LAN, but Mediaplane knows no LAN subnet, so Gluetun's firewall keeps your LAN out of qBittorrent's web UI",
+      path: 'network.lan_subnet',
+      hint: 'set network.lan_subnet to your LAN, such as 192.168.1.0/24',
+    });
+    expect(compose.services.gluetun?.environment).not.toHaveProperty(
+      'FIREWALL_OUTBOUND_SUBNETS',
+    );
+  });
+
   it('runs Seerr with init and its own fixed user', () => {
     const seerr = render(SPEC_EXAMPLE).compose.services.seerr;
     expect(seerr?.init).toBe(true);

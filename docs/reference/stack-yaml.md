@@ -25,7 +25,7 @@ Each field shows its type, then `required` or its default, if it has one.
 - `paths.data` (string; required): The data folder for downloads and media, mounted in the apps as /data. Keep both on one filesystem inside it, so moves are instant hardlinks. An absolute path, without ":".
 - `network` (object; default `{ bind: lan }`): Where the web UIs are published.
 - `network.bind` (`lan`, `localhost` or `all`; default `lan`): lan: on this host's private (RFC 1918) addresses. localhost: on 127.0.0.1 only. all: on every interface, and plan warns every time. On a cloud VM, lan needs lan_subnet.
-- `network.lan_subnet` (string): Your LAN as an IPv4 CIDR, such as 192.168.1.0/24. Detected from this host's private addresses when left out; on a cloud VM, bind: lan needs it set.
+- `network.lan_subnet` (string): Your LAN, as a private (RFC 1918) IPv4 CIDR such as 192.168.1.0/24. Left out, it is detected from this host's private addresses, except on a cloud VM, where bind: lan needs it set. Mediaplane trusts it only while the web UIs are published on the LAN.
 - `security` (object; default `{ login_on_lan: true }`): Login settings.
 - `security.login_on_lan` (boolean; default `true`): Ask for a login from your own network too. false lets Sonarr, Radarr and Prowlarr skip it for addresses in the LAN subnet.
 - `admin` (object; default `{ username: admin }`): The shared admin login for the apps that have one. Not used yet: the apps' logins are set up from Slice 3.

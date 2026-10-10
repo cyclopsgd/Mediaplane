@@ -1,4 +1,4 @@
-import { defineApp, error } from '@mediaplane/engine';
+import { defineApp, error, warning } from '@mediaplane/engine';
 
 export default defineApp({
   id: 'gluetun',
@@ -25,19 +25,33 @@ export default defineApp({
     ...(ctx.config.vpn?.addresses === undefined
       ? {}
       : { WIREGUARD_ADDRESSES: ctx.config.vpn.addresses }),
-    ...(ctx.lanSubnets.length === 0
-      ? {}
-      : { FIREWALL_OUTBOUND_SUBNETS: ctx.lanSubnets.join(',') }),
+    // Only LAN clients need a way back out: empty unless the web UIs are on the LAN.
+    ...(ctx.lanClientSubnets.length > 0
+      ? { FIREWALL_OUTBOUND_SUBNETS: ctx.lanClientSubnets.join(',') }
+      : {}),
   }),
   extras: () => ({ cap_add: ['NET_ADMIN'], devices: ['/dev/net/tun:/dev/net/tun'] }),
-  validate: (ctx) =>
-    ctx.config.vpn
+  validate: (ctx) => [
+    ...(ctx.config.vpn
       ? []
       : [
           error('vpn.missing', 'Gluetun is enabled but stack.yaml has no vpn: block', {
             path: 'vpn',
             hint: 'add vpn: { provider: …, private_key: { file: secrets/wg.key } }, or set apps.qbittorrent.vpn: false',
           }),
-        ],
+        ]),
+    ...(ctx.publishesOnLan && ctx.lanClientSubnets.length === 0
+      ? [
+          warning(
+            'network.no-lan-subnet',
+            "the web UIs are published on the LAN, but Mediaplane knows no LAN subnet, so Gluetun's firewall keeps your LAN out of qBittorrent's web UI",
+            {
+              path: 'network.lan_subnet',
+              hint: 'set network.lan_subnet to your LAN, such as 192.168.1.0/24',
+            },
+          ),
+        ]
+      : []),
+  ],
   experimental: false,
 });

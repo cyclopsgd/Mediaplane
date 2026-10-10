@@ -72,6 +72,21 @@ export function inSubnet(address: string, cidr: string): boolean {
   return networkOf(`${address}/${prefix}`) === networkOf(cidr);
 }
 
+/** The RFC 1918 ranges, with their prefix lengths. */
+const PRIVATE_RANGES = [
+  ['10.0.0.0/8', 8],
+  ['172.16.0.0/12', 12],
+  ['192.168.0.0/16', 16],
+] as const;
+
+/** Whether all of `cidr` lies inside one RFC 1918 range. */
+export function isPrivateSubnet(cidr: string): boolean {
+  const [address = '', prefix = '32'] = cidr.split('/');
+  return PRIVATE_RANGES.some(
+    ([range, size]) => Number(prefix) >= size && inSubnet(address, range),
+  );
+}
+
 export type DmiField =
   'sys_vendor' | 'product_name' | 'product_version' | 'bios_vendor' | 'chassis_asset_tag';
 export type DmiInfo = Partial<Record<DmiField, string>>;
