@@ -76,7 +76,7 @@ host (Docker)
   unset. There is no container and no host helper: the CLI runs under Node on the host,
   and looks at the host itself. It reaches the apps on the wiring network from the host,
   which reaches every container on a Docker bridge network. That is checked on Docker
-  29.8; CI confirms it on Docker 28.
+  29.8; CI checks it on Docker 28.
 
 ## The engine
 

@@ -57,7 +57,7 @@ network with containers that have one. The owner chose how to reach the apps on
 - **Run from source, nothing joins.** The host reaches every container on a bridge
   network at its address, internal ones too, as long as the bridge has an address on
   the host, which Docker gives it by default. The end-to-end tests check it on Docker
-  29.8; CI confirms it on Docker 28 (the slice PR's first run).
+  29.8; CI checks it on Docker 28, from the slice PR's first run.
 - **The apps are reached at their container's address on the wiring network,** found
   with `docker container inspect`, from source and from the image alike. Each request
   carries `Host: <service>:<port>`, as the other apps' requests do, which the allowed

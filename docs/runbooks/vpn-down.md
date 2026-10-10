@@ -58,6 +58,9 @@ failure, and worse: see [A leak](#a-leak).
   `the VPN check found a leak`, with the failing line and its hint. With qBittorrent
   behind Gluetun, verify runs `vpn-check`'s checks after every apply that changes
   something, without the address comparison. Go by that line, as below.
+- **`mediaplane apply`** succeeds, but its verify line says
+  `the VPN check has a warning` (or more), and a `warning:` line with its hint follows
+  for each. Go by each line, as below.
 
 ## Checks
 

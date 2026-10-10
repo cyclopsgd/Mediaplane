@@ -40,13 +40,16 @@ opens qBittorrent. Later slices add the links between the apps.
 
 - **`apply` fails at verify** with `changes remain after apply: sonarr.admin (update)`:
   the app took the change, then kept something else.
-- **`apply` stops at the containers step** with `could not leave the wiring network …`:
-  it couldn't take Mediaplane off the wiring network before starting the apps, so it
-  started nothing.
+- **`apply` stops at the containers step** with `could not leave the wiring network …`,
+  `docker network inspect failed: …`, or
+  `docker network inspect printed a line that is not …`. Before starting the apps, it
+  couldn't read the wiring network, or couldn't take Mediaplane off it, so it started
+  nothing.
 - **`plan` or `apply` stops** with `wire.network` (Mediaplane won't join the wiring
-  network, or can't tell which container it runs in), or with `resources.invalid` (it
-  can't read `state/resources.json`). `apply` can also say that the stack has no wiring
-  network, or that `state/resources.json` could not be read.
+  network, Docker refused the join, or Mediaplane can't tell which container it runs
+  in), or with `resources.invalid` (it can't read `state/resources.json`). `apply` can
+  also say that the stack has no wiring network, or that `state/resources.json` could
+  not be read.
 
 In `--json` output, each `diagnostics` entry has a `code`:
 
@@ -57,11 +60,11 @@ In `--json` output, each `diagnostics` entry has a `code`:
 - `wire.protocol`: the app answered something Mediaplane doesn't understand.
 - `wire.not-on-network`: the app's container is not on the wiring network.
 - `wire.secret-field`: a managed field holds one of the stack's secrets.
-- `wire.network`: Mediaplane won't join the wiring network.
+- `wire.network`: Mediaplane won't join the wiring network, or Docker refused the join.
 - `resources.invalid`: `state/resources.json` can't be read.
 - `apply.wire-failed`: the wiring step itself failed.
 - `apply.start-failed`: the containers step failed. For this runbook, that is a failure
-  to leave the wiring network, or Compose refusing to change it (see Fix).
+  to read or leave the wiring network, or Compose refusing to change it (see Fix).
 
 `plan --json` lists each resource under `wiring`, with its `action`, the `changes` that
 differ, and a `reason` when it is `unknown`.
@@ -120,8 +123,8 @@ differ, and a `reason` when it is `unknown`.
   that uses another name, such as your host's, needs it listed there too.
 - **A resource the app refused** (`refused the request`, with another HTTP status). The
   message after the status is the app's own, cut to 200 characters. Messages from Sonarr,
-  Radarr and Prowlarr start with the name of the setting they didn't take. Fix that value in `stack.yaml`, then
-  run `apply` again.
+  Radarr and Prowlarr start with the name of the setting they didn't take. Fix that
+  value in `stack.yaml`, then run `apply` again.
 - **`failed (HTTP 500)`, or another 5xx.** The app failed. Read its log (check 3).
 - **`answered something Mediaplane doesn't understand`.** The app answered in a shape the
   tested version doesn't. Usually that is a `version:` of your own in `apps.<app>`:
@@ -144,14 +147,28 @@ differ, and a `reason` when it is `unknown`.
   it isn't labelled as this project's `wiring` network (another project made it, or it
   was made by hand). Look for a `networks:` entry in `compose.override.yaml` that changes
   it, and take it out. Then remove the network on the host, as below.
-- **`could not leave the wiring network …`** (under `apply.start-failed`). Before
-  `docker compose up`, `apply` takes Mediaplane's container off the wiring network, so
-  that Compose can change it if it must. When that fails, nothing is started. The
-  message after the colon is Docker's. Then:
+- **`wire.network`: `could not join the wiring network …`.** Mediaplane checked the
+  network, and Docker then refused to put Mediaplane's container on it. The message
+  after the colon is Docker's. Then:
+  1. If it says the network was not found, the network was removed or made anew in the
+     meantime. Run `mediaplane apply` again.
+  2. If the socket proxy refused the call, see the `Forbidden` item in the
+     [deploy guide's troubleshooting](../../deploy/README.md#troubleshooting).
+  3. Otherwise, see who is on the network (check 4), and run `mediaplane apply` again.
+     If it still fails, make the network anew, as below.
+- **`could not leave the wiring network …`, `docker network inspect failed: …`, or
+  `docker network inspect printed a line that is not …`** (under `apply.start-failed`).
+  Before `docker compose up`, `apply` reads the wiring network and takes Mediaplane's
+  container off it, so that Compose can change it if it must. When either fails,
+  nothing is started. In the first two, Docker's own message follows the colon. The
+  third means Docker answered, but not in the shape Mediaplane reads. Then:
   1. On the host, run `docker network disconnect mediaplane_wiring mediaplane`.
   2. Run `mediaplane apply` again.
   3. If the socket proxy refused the call, see the `Forbidden` item in the
      [deploy guide's troubleshooting](../../deploy/README.md#troubleshooting).
+  4. If Docker's answer couldn't be read, look at the network on the host with
+     `docker network inspect mediaplane_wiring`. If it isn't the one `compose.yaml`
+     makes, make it anew, as below.
 - **The wiring network must be made anew,** when its settings changed, or when
   Mediaplane refused it (`wire.network`, above). When its settings changed, Compose has
   to delete the network, and through the socket proxy it can't: `apply` then stops at

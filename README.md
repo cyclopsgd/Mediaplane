@@ -148,10 +148,11 @@ A few principles hold throughout:
 
 ## What it looks like
 
-Most of this is real output from a run on an arm64 VM, trimmed where marked. The
-wiring lines came with Slice 3b: `plan`'s are from a later `plan` on the same stack, and
-`apply`'s follow the format the CLI's tests check, so they are not a capture. The stack is the example above without the VPN, which
-is why `plan` warns about qBittorrent, and with `network.bind: localhost`.
+Most of this is real output from a run on an arm64 VM, trimmed where marked. The wiring
+lines came later, with Slice 3b. `plan`'s are from a fresh plan of the same stack.
+`apply`'s are not a capture: they follow the format the CLI's tests check. The stack is
+the example above without the VPN, which is why `plan` warns about qBittorrent, and with
+`network.bind: localhost`.
 
 ```console
 $ mediaplane plan
