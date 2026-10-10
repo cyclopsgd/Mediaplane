@@ -1,0 +1,550 @@
+import { isIP } from 'node:net';
+import { join, resolve } from 'node:path';
+import type { Catalog } from '../catalog/types';
+import { loadConfigFile } from '../config/load';
+import { error, withHint, type Diagnostic } from '../diagnostics';
+import type { HostFacts } from '../host/facts';
+import { dockerUnavailable, hostFactsOrFailure } from '../host/failure';
+import { STACK_PATH } from '../paths';
+import { resolveStack, type ResolvedApp } from '../resolver/resolve';
+import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
+import { readSecretStore } from '../secrets/store';
+import { secretValues } from '../secrets/values';
+import { egressAddress, isEgressUrl, type EgressResult } from './egress';
+import {
+  httpAnswer,
+  parseProbe,
+  probeCommand,
+  routeDevice,
+  type ProbeCheck,
+  type ProbeLine,
+  type ProbeOutput,
+} from './probe';
+
+/** Where a failed check sends you. */
+export const VPN_RUNBOOK = 'docs/runbooks/vpn-down.md';
+
+/** The checks the probe always runs; it runs `egress` only when it is given a URL. */
+const PROBE_CHECKS: readonly ProbeCheck[] = ['route', 'anonymous', 'status', 'publicip'];
+
+export interface VpnCheckOptions {
+  home: string;
+  catalog: Catalog;
+  /** Facts about the host, or how to get them (the host helper, in the image). */
+  host: HostFacts | (() => Promise<HostFacts>);
+  env: NodeJS.ProcessEnv;
+  runtime: Runtime;
+  /**
+   * Compare the addresses qBittorrent and this host come from, as the IP-echo service at
+   * `url` sees them. `fromHost` asks it from the host. Leave it out to check the
+   * structure only (`--no-egress`).
+   */
+  egress?: { url: string; fromHost: (url: string) => Promise<EgressResult> };
+}
+
+/** pass: qBittorrent gets out only through the tunnel. down: the VPN doesn't work. */
+export type VpnVerdict = 'pass' | 'leak' | 'down';
+
+/** What one check found. `down` and `leak` fail the check, and say how. */
+export interface VpnCheckItem {
+  id: 'network' | 'gluetun' | 'control' | 'control-key' | 'route' | 'egress';
+  status: 'ok' | 'warning' | 'down' | 'leak';
+  message: string;
+  hint?: string;
+}
+
+/** The addresses the IP-echo service at `url` saw; null where there was none. */
+export interface VpnEgress {
+  url: string;
+  vpn: string | null;
+  host: string | null;
+}
+
+export type VpnCheckResult =
+  | {
+      ok: true;
+      verdict: VpnVerdict;
+      checks: VpnCheckItem[];
+      /** The addresses compared; null with --no-egress. */
+      egress: VpnEgress | null;
+      /** The address Gluetun reports for itself, when its public-IP lookup is on. */
+      gluetunPublicIp: string | null;
+      /**
+       * Whether nothing can get out at all: Gluetun isn't running, or nothing answered
+       * through the tunnel. Only then may a `down` verdict say that nothing leaks.
+       */
+      failClosed: boolean;
+    }
+  | { ok: false; diagnostics: Diagnostic[] };
+
+/**
+ * `mediaplane vpn-check` (spec §5.2, §7.2(6)): whether qBittorrent can reach the internet
+ * only through Gluetun's tunnel. It looks at the containers, then runs a probe inside
+ * qBittorrent's network namespace (a throwaway container of qBittorrent's image, through
+ * the runtime), and with `egress` compares where qBittorrent's traffic and the host's
+ * come from. It changes nothing.
+ */
+export async function vpnCheck(options: VpnCheckOptions): Promise<VpnCheckResult> {
+  try {
+    return await check(options);
+  } catch (cause) {
+    if (cause instanceof RuntimeError) {
+      return { ok: false, diagnostics: [dockerUnavailable(cause, options.env)] };
+    }
+    throw cause;
+  }
+}
+
+async function check(options: VpnCheckOptions): Promise<VpnCheckResult> {
+  const { egress, runtime } = options;
+  // The URL isn't repeated: one with a password in it would show the password.
+  if (egress !== undefined && !isEgressUrl(egress.url)) {
+    return failure(
+      'vpn-check.bad-url',
+      "the egress check's URL must be an http or https URL with no user name or password",
+      'set MEDIAPLANE_VPN_CHECK_URL to an IP-echo service such as https://1.1.1.1/cdn-cgi/trace, or unset it',
+    );
+  }
+  const home = resolve(options.home);
+  const loaded = await loadConfigFile(join(home, STACK_PATH));
+  if (!loaded.ok) return { ok: false, diagnostics: loaded.diagnostics };
+  const facts = await hostFactsOrFailure(options.host, options);
+  if (!facts.ok) return { ok: false, diagnostics: [facts.diagnostic] };
+  const resolved = resolveStack(loaded.config, options.catalog, facts.host, home);
+  const stack = resolved.stack;
+  if (stack === undefined) {
+    return {
+      ok: false,
+      diagnostics: resolved.diagnostics.filter((d) => d.severity === 'error'),
+    };
+  }
+  const app = (id: string) => stack.apps.find((a) => a.def.id === id);
+  const qbittorrentApp = app('qbittorrent');
+  const gluetunApp = app('gluetun');
+  if (qbittorrentApp === undefined) {
+    return failure(
+      'vpn-check.no-qbittorrent',
+      'this stack has no qBittorrent, so there is no VPN to check',
+    );
+  }
+  if (qbittorrentApp.networkVia !== 'gluetun' || gluetunApp === undefined) {
+    return verdictOf(
+      [
+        {
+          id: 'network',
+          status: 'leak',
+          message:
+            "qBittorrent runs without the VPN (apps.qbittorrent.vpn: false): peers see this host's own address",
+          hint: 'add a vpn: block to stack.yaml, remove apps.qbittorrent.vpn: false, and run mediaplane apply',
+        },
+      ],
+      null,
+      null,
+      false,
+    );
+  }
+  const store = await readSecretStore(home);
+  const key = store.apps.gluetun?.controlApiKey;
+  if (key === undefined) {
+    return failure(
+      'vpn-check.no-key',
+      "Mediaplane has no key to Gluetun's control server yet",
+      'run "mediaplane apply": it generates the key before Gluetun first starts',
+    );
+  }
+
+  const containers = await runtime.containers();
+  const qbittorrent = containers.find((c) => c.service === 'qbittorrent');
+  const gluetun = containers.find((c) => c.service === 'gluetun');
+  if (qbittorrent === undefined) {
+    return failure(
+      'vpn-check.not-applied',
+      'qBittorrent has no container in this stack yet',
+      'run "mediaplane apply" first',
+    );
+  }
+  const checks: VpnCheckItem[] = [
+    await networkCheck(runtime, containers, qbittorrent, gluetun),
+    gluetunCheck(gluetun),
+  ];
+  // A stopped Gluetun leaves qBittorrent with loopback only, and nothing to probe.
+  if (gluetun === undefined || gluetun.state !== 'running') {
+    const unmeasured =
+      egress === undefined ? null : { url: egress.url, vpn: null, host: null };
+    return verdictOf(checks, unmeasured, null, true);
+  }
+
+  // compose run loads generated/.env, so every secret in it is replaced in the output.
+  const values = await secretValues(stack, store, options.env);
+  const command = probeCommand(
+    key,
+    gluetunApp.containerPorts.control ?? 8000,
+    egress?.url,
+    values,
+  );
+  const result = await runtime.run('qbittorrent', command);
+  // The script prints a line for every check it runs, whatever the check found. One that
+  // is missing was never run, and a check can't be judged on what it never asked.
+  const probe = parseProbe(result.stdout, command.values);
+  const expected: readonly ProbeCheck[] =
+    egress === undefined ? PROBE_CHECKS : [...PROBE_CHECKS, 'egress'];
+  const missing = expected.find((name) => probe[name] === undefined);
+  if (missing !== undefined) {
+    const why = lastLine(result.stderr);
+    return failure(
+      'vpn-check.probe-failed',
+      Object.keys(probe).length === 0
+        ? `the probe in qBittorrent's network could not run: ${why}`
+        : `the probe in qBittorrent's network stopped before its ${missing} check: ${why}`,
+      'check that the qBittorrent image is present ("docker image ls"), then run vpn-check again',
+    );
+  }
+  checks.push(...controlChecks(probe), routeCheck(probe, tunnelInterface(gluetunApp)));
+  const publicIp = gluetunPublicIp(probe);
+  if (egress === undefined || probe.egress === undefined) {
+    return verdictOf(checks, null, publicIp, false);
+  }
+  const compared = await egressCheck(probe.egress, egress);
+  checks.push(compared.item);
+  return verdictOf(checks, compared.egress, publicIp, compared.item.status === 'down');
+}
+
+async function networkCheck(
+  runtime: Runtime,
+  containers: readonly ContainerState[],
+  qbittorrent: ContainerState,
+  gluetun: ContainerState | undefined,
+): Promise<VpnCheckItem> {
+  const ids = gluetun === undefined ? [qbittorrent.id] : [qbittorrent.id, gluetun.id];
+  const details = await runtime.inspect(ids);
+  const of = (id: string) => details.find((d) => d.id === id);
+  const mode = of(qbittorrent.id)?.networkMode ?? '';
+  if (gluetun !== undefined && mode === `container:${gluetun.id}`) {
+    if (qbittorrent.state !== 'running') {
+      return {
+        id: 'network',
+        status: 'warning',
+        message: `qBittorrent is ${qbittorrent.state}: it uses Gluetun's network, but sends nothing until it runs`,
+        hint: 'run "mediaplane apply" to start it, then run vpn-check again',
+      };
+    }
+    // A container joins another's namespace when it starts. Gluetun started again on its
+    // own, after qBittorrent, has a new one; qBittorrent keeps the old, which is gone.
+    const started = (id: string) => Date.parse(of(id)?.startedAt ?? '');
+    if (gluetun.state === 'running' && started(qbittorrent.id) < started(gluetun.id)) {
+      return {
+        id: 'network',
+        status: 'down',
+        message:
+          'qBittorrent started before Gluetun last did, so it still holds the network Gluetun had then, which is gone: it has none',
+        hint: 'restart qBittorrent: "docker restart mediaplane-qbittorrent-1"',
+      };
+    }
+    return {
+      id: 'network',
+      status: 'ok',
+      message: "qBittorrent uses Gluetun's network, and has none of its own",
+    };
+  }
+  const joined = /^container:(.+)$/.exec(mode)?.[1];
+  if (joined !== undefined) {
+    // Another running app of the stack has a way out of its own.
+    const other = containers.find((c) => c.id === joined && c.state === 'running');
+    if (other !== undefined) {
+      return {
+        id: 'network',
+        status: 'leak',
+        message: `qBittorrent uses ${other.service}'s network, not Gluetun's: its traffic does not go through the VPN`,
+        hint: 'look for a network_mode under qbittorrent in compose.override.yaml, take it out, and run "mediaplane apply"',
+      };
+    }
+    // Anything else is a Gluetun that has gone.
+    return {
+      id: 'network',
+      status: 'down',
+      message:
+        'qBittorrent uses the network of a Gluetun that no longer runs, so it has none',
+      hint: 'run "mediaplane apply" to start Gluetun and qBittorrent again',
+    };
+  }
+  return {
+    id: 'network',
+    status: 'leak',
+    message: `qBittorrent has a network of its own ("${mode}"), not Gluetun's: its traffic does not go through the VPN`,
+    hint: 'run "mediaplane apply" to recreate it behind Gluetun, and check compose.override.yaml for a network_mode of its own',
+  };
+}
+
+function gluetunCheck(gluetun: ContainerState | undefined): VpnCheckItem {
+  if (gluetun === undefined || gluetun.state !== 'running') {
+    const state = gluetun === undefined ? 'has no container' : `is ${gluetun.state}`;
+    return {
+      id: 'gluetun',
+      status: 'down',
+      message: `Gluetun ${state}, so qBittorrent has no network: nothing gets out`,
+      hint: `see ${VPN_RUNBOOK}`,
+    };
+  }
+  if (gluetun.health !== 'healthy') {
+    return {
+      id: 'gluetun',
+      status: 'down',
+      message: `Gluetun is running, but ${gluetun.health === '' ? 'has no health status' : gluetun.health}: its health check needs a working tunnel`,
+      hint: `see ${VPN_RUNBOOK}`,
+    };
+  }
+  return { id: 'gluetun', status: 'ok', message: 'Gluetun is running and healthy' };
+}
+
+/** What Gluetun's control server says with Mediaplane's key, and without it. */
+function controlChecks(probe: ProbeOutput): VpnCheckItem[] {
+  const checks: VpnCheckItem[] = [];
+  const status = httpAnswer(probe.status);
+  const exit = probe.status?.exit ?? 0;
+  const vpn =
+    exit === 0 && status.status === 200 ? jsonField(status.body, 'status') : undefined;
+  if (vpn === 'running') {
+    checks.push({
+      id: 'control',
+      status: 'ok',
+      message: "Gluetun's control server says the VPN is running",
+    });
+  } else if (vpn !== undefined) {
+    checks.push({
+      id: 'control',
+      status: 'down',
+      message: `Gluetun's control server says the VPN is ${vpn}`,
+      hint: `see ${VPN_RUNBOOK}`,
+    });
+  } else {
+    checks.push(controlWarning(status.status, exit));
+  }
+  const anonymous = httpAnswer(probe.anonymous).status;
+  if (anonymous === 401) {
+    checks.push({
+      id: 'control-key',
+      status: 'ok',
+      message: "Gluetun's control server refuses requests without Mediaplane's key",
+    });
+  } else if (anonymous >= 200 && anonymous < 300) {
+    checks.push({
+      id: 'control-key',
+      status: 'warning',
+      message:
+        "Gluetun's control server answers anyone on the stack's network, without a key: Gluetun has not read its key file since Mediaplane wrote it",
+      hint: 'restart Gluetun, then qBittorrent: "docker restart mediaplane-gluetun-1", then "docker restart mediaplane-qbittorrent-1" (Gluetun\'s README, "Set up before Slice 3a")',
+    });
+  }
+  return checks;
+}
+
+/**
+ * The control server gave no status to read. curl exits non-zero when it could not
+ * finish, such as for a body over the cap (63), even after it saw an HTTP status: what it
+ * printed then is no answer.
+ */
+function controlWarning(status: number, exit: number): VpnCheckItem {
+  const refused = exit === 0 && (status === 401 || status === 403);
+  return {
+    id: 'control',
+    status: 'warning',
+    message:
+      status === 0
+        ? "Gluetun's control server did not answer"
+        : exit !== 0
+          ? `Gluetun's control server's answer could not be read (curl exited ${String(exit)})`
+          : refused
+            ? "Gluetun's control server refused Mediaplane's key"
+            : `Gluetun's control server answered HTTP ${String(status)}`,
+    hint: refused
+      ? 'appdata/gluetun/auth/config.toml holds another key than state/secrets.json: see Gluetun\'s README, "Set up before Slice 3a"'
+      : `see ${VPN_RUNBOOK}`,
+  };
+}
+
+function routeCheck(probe: ProbeOutput, tunnel: string): VpnCheckItem {
+  const device = routeDevice(probe.route);
+  if (device === tunnel) {
+    return {
+      id: 'route',
+      status: 'ok',
+      message: `qBittorrent's traffic is routed into the tunnel (${tunnel})`,
+    };
+  }
+  const where =
+    device === undefined
+      ? `not routed into the tunnel (${tunnel})`
+      : `routed to ${device}, not into the tunnel (${tunnel})`;
+  // An answer from outside, with no route into the tunnel, came the other way.
+  if (probe.egress?.exit === 0) {
+    return {
+      id: 'route',
+      status: 'leak',
+      message: `qBittorrent's traffic is ${where}, and it still got an answer from outside: it leaves outside the VPN`,
+      hint: `stop qBittorrent, then see ${VPN_RUNBOOK}`,
+    };
+  }
+  return {
+    id: 'route',
+    status: 'down',
+    message:
+      device === undefined
+        ? "qBittorrent's network has no route out"
+        : `qBittorrent's traffic is ${where}`,
+    hint: `see ${VPN_RUNBOOK}`,
+  };
+}
+
+/** What the probe's egress check (`tunnel`) and the host saw, compared. */
+async function egressCheck(
+  tunnel: ProbeLine,
+  egress: NonNullable<VpnCheckOptions['egress']>,
+): Promise<{ item: VpnCheckItem; egress: VpnEgress }> {
+  const { url } = egress;
+  if (tunnel.exit !== 0) {
+    return {
+      item: {
+        id: 'egress',
+        status: 'down',
+        message: `qBittorrent's traffic got no answer from ${url}: ${lastLine(tunnel.output)}`,
+        hint: `the VPN is down, and nothing gets out (fail-closed); see ${VPN_RUNBOOK}`,
+      },
+      egress: { url, vpn: null, host: null },
+    };
+  }
+  const vpn = egressAddress(tunnel.output) ?? null;
+  if (vpn === null) {
+    return {
+      item: {
+        id: 'egress',
+        status: 'warning',
+        message: `${url} answered qBittorrent without an address, so the addresses were not compared`,
+        hint: 'set MEDIAPLANE_VPN_CHECK_URL to an IP-echo service, or unset it',
+      },
+      egress: { url, vpn, host: null },
+    };
+  }
+  const host = await egress.fromHost(url);
+  if (!host.ok) {
+    return {
+      item: {
+        id: 'egress',
+        status: 'warning',
+        message: `qBittorrent's traffic leaves from ${vpn}, but this host could not ask ${url} for its own address (${host.error}), so the two were not compared`,
+      },
+      egress: { url, vpn, host: null },
+    };
+  }
+  const [ours, theirs] = [canonicalAddress(vpn), canonicalAddress(host.address)];
+  // An IPv4 and an IPv6 address always differ, and prove nothing.
+  if (isIP(ours) !== isIP(theirs)) {
+    return {
+      item: {
+        id: 'egress',
+        status: 'warning',
+        message: `qBittorrent's traffic leaves from ${vpn}, and this host's from ${host.address}: one IPv4 and one IPv6 address, so the two were not compared`,
+        hint: 'set MEDIAPLANE_VPN_CHECK_URL to a service named by its IP address, such as https://1.1.1.1/cdn-cgi/trace, or unset it',
+      },
+      egress: { url, vpn, host: host.address },
+    };
+  }
+  if (ours === theirs) {
+    return {
+      item: {
+        id: 'egress',
+        status: 'leak',
+        message: `qBittorrent's traffic leaves from ${vpn}, which is this host's own address: it does not go through the VPN`,
+        hint: `see ${VPN_RUNBOOK}`,
+      },
+      egress: { url, vpn, host: host.address },
+    };
+  }
+  return {
+    item: {
+      id: 'egress',
+      status: 'ok',
+      message: `qBittorrent's traffic leaves from ${vpn}, and this host's from ${host.address}`,
+    },
+    egress: { url, vpn, host: host.address },
+  };
+}
+
+/**
+ * A leak beats down, and down beats a pass. `closed` says whether the VPN's way out is shut
+ * (Gluetun stopped, or no answer through the tunnel); with a leak elsewhere, such as a
+ * network of qBittorrent's own, something still gets out, so it is never fail-closed.
+ */
+function verdictOf(
+  checks: VpnCheckItem[],
+  egress: VpnEgress | null,
+  gluetunPublicIp: string | null,
+  closed: boolean,
+): VpnCheckResult {
+  const verdict: VpnVerdict = checks.some((c) => c.status === 'leak')
+    ? 'leak'
+    : checks.some((c) => c.status === 'down')
+      ? 'down'
+      : 'pass';
+  const failClosed = closed && verdict === 'down';
+  return { ok: true, verdict, checks, egress, gluetunPublicIp, failClosed };
+}
+
+/** Gluetun's tunnel interface: tun0, unless apps.gluetun.env sets VPN_INTERFACE. */
+function tunnelInterface(gluetun: ResolvedApp): string {
+  const set = gluetun.settings.env.VPN_INTERFACE;
+  return typeof set === 'string' && set !== '' ? set : 'tun0';
+}
+
+/**
+ * An address in one spelling: IPv6 as the URL standard writes it (lower case, the longest
+ * run of zeros shortened), and an IPv4 address mapped into IPv6 as plain IPv4. So the two
+ * sides compare equal for one address, whichever way each was written.
+ */
+function canonicalAddress(address: string): string {
+  if (isIP(address) !== 6) return address;
+  let text: string;
+  try {
+    text = new URL(`http://[${address}]/`).hostname.slice(1, -1);
+  } catch {
+    // A zone ("fe80::1%eth0") is valid to isIP, but not in a URL.
+    return address.toLowerCase();
+  }
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(text);
+  if (mapped?.[1] === undefined || mapped[2] === undefined) return text;
+  const [high, low] = [parseInt(mapped[1], 16), parseInt(mapped[2], 16)];
+  return [high >> 8, high & 255, low >> 8, low & 255].join('.');
+}
+
+function gluetunPublicIp(probe: ProbeOutput): string | null {
+  const answer = httpAnswer(probe.publicip);
+  // As with the status: after a non-zero exit, what curl printed is no answer.
+  if (probe.publicip?.exit !== 0 || answer.status !== 200) return null;
+  const address = jsonField(answer.body, 'public_ip');
+  return address === undefined || address === '' ? null : address;
+}
+
+/** A string field of a JSON object, or undefined. */
+function jsonField(body: string, field: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (typeof parsed !== 'object' || parsed === null) return undefined;
+    const value = (parsed as Record<string, unknown>)[field];
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function lastLine(text: string): string {
+  return (
+    text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '')
+      .at(-1) ?? 'no output'
+  );
+}
+
+function failure(code: string, message: string, hint?: string): VpnCheckResult {
+  return { ok: false, diagnostics: [error(code, message, withHint(hint))] };
+}

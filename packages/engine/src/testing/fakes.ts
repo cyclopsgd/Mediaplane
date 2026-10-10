@@ -265,3 +265,51 @@ export function probeOutput(answers: ProbeAnswers): string {
   );
   return ['Container mediaplane-qbittorrent-run-0 Creating', ...lines, ''].join('\n');
 }
+
+/** The container IDs fakeProbeRuntime gives Gluetun and qBittorrent. */
+export const FAKE_GLUETUN_ID = 'a'.repeat(64);
+export const FAKE_QBITTORRENT_ID = 'b'.repeat(64);
+
+/** A running, healthy container of the stack, unless `extra` says otherwise. */
+export function fakeContainer(
+  service: string,
+  id: string,
+  extra: Partial<ContainerState> = {},
+): ContainerState {
+  return {
+    service,
+    id,
+    state: 'running',
+    health: 'healthy',
+    configHash: undefined,
+    published: [],
+    ...extra,
+  };
+}
+
+/**
+ * A Docker running qBittorrent in a healthy Gluetun's network, whose vpn-check probe
+ * prints `answers`, as the script would: no egress line when it is asked no URL. Each
+ * probe's command is pushed to `sent`. `options` replace these defaults, and anything
+ * else a fakeRuntime takes.
+ */
+export function fakeProbeRuntime(
+  answers: ProbeAnswers,
+  sent: OneOffCommand[] = [],
+  options: FakeRuntimeOptions = {},
+): Runtime {
+  return fakeRuntime({
+    containers: [
+      fakeContainer('gluetun', FAKE_GLUETUN_ID),
+      fakeContainer('qbittorrent', FAKE_QBITTORRENT_ID),
+    ],
+    details: { [FAKE_QBITTORRENT_ID]: { networkMode: `container:${FAKE_GLUETUN_ID}` } },
+    run: (_service, command) => {
+      sent.push(command);
+      const shown: ProbeAnswers = { ...answers };
+      if (command.args.at(-1) === '') delete shown.egress;
+      return { code: 0, stdout: probeOutput(shown), stderr: '' };
+    },
+    ...options,
+  });
+}

@@ -1,0 +1,642 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { SECRETS_PATH } from '../paths';
+import {
+  RuntimeError,
+  type ContainerState,
+  type OneOffCommand,
+  type Runtime,
+} from '../runtime/types';
+import {
+  FAKE_GLUETUN_ID as GLUETUN_ID,
+  FAKE_QBITTORRENT_ID as QBITTORRENT_ID,
+  fakeContainer as container,
+  fakeProbeRuntime,
+  probeOutput,
+  type FakeRuntimeOptions,
+  type ProbeAnswers as Answers,
+} from '../testing/fakes';
+import { FIXTURE_HOST, fixtureCatalog } from '../testing/fixtures';
+import { tempDir } from '../testing/temp';
+import { vpnCheck, type VpnCheckOptions } from './check';
+import type { EgressResult } from './egress';
+
+const KEY = '0'.repeat(32);
+const TRACE = 'https://1.1.1.1/cdn-cgi/trace';
+const SONARR_ID = 'c'.repeat(64);
+
+const STACK = `version: 1
+paths: { data: /srv/data }
+network: { bind: localhost }
+media_server: jellyfin
+vpn: { provider: custom, private_key: { file: secrets/wg.key } }
+apps:
+  qbittorrent: {}
+`;
+
+async function homeWith({ stack = STACK, key = true } = {}): Promise<string> {
+  const home = await tempDir('mediaplane-vpn-check-');
+  await writeFile(join(home, 'stack.yaml'), stack);
+  await mkdir(join(home, 'state'));
+  const apps = key ? { gluetun: { controlApiKey: KEY } } : {};
+  await writeFile(join(home, SECRETS_PATH), JSON.stringify({ version: 1, apps }));
+  return home;
+}
+
+const HEALTHY: Answers = {
+  route: [0, '1.1.1.1 dev tun0  src 10.66.0.2 '],
+  anonymous: [0, '401'],
+  status: [0, '{"status":"running"}\n200'],
+  publicip: [0, '{"public_ip":""}\n200'],
+  egress: [0, 'fl=1\nip=203.0.113.7\n'],
+};
+
+interface Setup {
+  answers?: Answers;
+  host?: EgressResult;
+  egress?: boolean;
+  url?: string;
+  /** For the fake Docker: containers, details, a run of its own… */
+  runtime?: FakeRuntimeOptions;
+  /** Methods that replace the fake's own. */
+  replace?: Partial<Runtime>;
+}
+
+/** vpnCheck against a fake Docker; the probe answers `answers` (or HEALTHY). */
+async function checkWith(home: string, setup: Setup = {}) {
+  const calls: string[] = [];
+  const sent: OneOffCommand[] = [];
+  const asked: string[] = [];
+  const fake = fakeProbeRuntime(setup.answers ?? HEALTHY, sent, {
+    calls,
+    ...setup.runtime,
+  });
+  const runtime: Runtime = { ...fake, ...setup.replace };
+  const options: VpnCheckOptions = {
+    home,
+    catalog: fixtureCatalog,
+    host: FIXTURE_HOST,
+    env: {},
+    runtime,
+    ...((setup.egress ?? true)
+      ? {
+          egress: {
+            url: setup.url ?? TRACE,
+            fromHost: (url) => {
+              asked.push(url);
+              return Promise.resolve(setup.host ?? { ok: true, address: '198.51.100.2' });
+            },
+          },
+        }
+      : {}),
+  };
+  return { result: await vpnCheck(options), calls, sent, asked };
+}
+
+const statuses = (result: Awaited<ReturnType<typeof vpnCheck>>) =>
+  result.ok ? result.checks.map((c) => `${c.id} ${c.status}`) : [];
+
+/** Gluetun and qBittorrent, as `fakeProbeRuntime` has them, changed by `qbittorrent`. */
+const withQbittorrent = (qbittorrent: Partial<ContainerState>): ContainerState[] => [
+  container('gluetun', GLUETUN_ID),
+  container('qbittorrent', QBITTORRENT_ID, qbittorrent),
+];
+
+describe('vpnCheck', () => {
+  it('passes when qBittorrent gets out only through the tunnel, from another address', async () => {
+    const { result, calls, sent, asked } = await checkWith(await homeWith());
+    expect(result).toMatchObject({
+      ok: true,
+      verdict: 'pass',
+      egress: { url: TRACE, vpn: '203.0.113.7', host: '198.51.100.2' },
+      gluetunPublicIp: null,
+      failClosed: false,
+    });
+    expect(statuses(result)).toEqual([
+      'network ok',
+      'gluetun ok',
+      'control ok',
+      'control-key ok',
+      'route ok',
+      'egress ok',
+    ]);
+    expect(calls).toEqual([
+      'containers',
+      `inspect ${QBITTORRENT_ID} ${GLUETUN_ID}`,
+      'run qbittorrent sh as 65534:65534',
+    ]);
+    // The key goes in on stdin, and the probe asks the control port and the URL.
+    expect(sent[0]?.input).toBe(`${KEY}\n`);
+    expect(sent[0]?.args.slice(2)).toEqual(['vpn-check', '8000', TRACE]);
+    expect(sent[0]?.args.join(' ')).not.toContain(KEY);
+    expect(asked).toEqual([TRACE]);
+  });
+
+  it('hides every secret of the stack in what the probe prints, not just the key', async () => {
+    const home = await homeWith();
+    await mkdir(join(home, 'secrets'));
+    await writeFile(join(home, 'secrets', 'wg.key'), 'fake-wireguard-key\n');
+    const { sent } = await checkWith(home);
+    expect(sent[0]?.values).toEqual({
+      MP_GLUETUN_WIREGUARD_KEY: 'fake-wireguard-key',
+      controlApiKey: KEY,
+    });
+  });
+
+  it('hides the secrets in what the probe printed in base64, too', async () => {
+    // run() can't see into the probe's base64, so vpnCheck has parseProbe replace them.
+    const home = await homeWith();
+    await mkdir(join(home, 'secrets'));
+    await writeFile(join(home, 'secrets', 'wg.key'), 'fake-wireguard-key\n');
+    const answers: Answers = {
+      ...HEALTHY,
+      egress: [7, `curl: (7) ${KEY} fake-wireguard-key`],
+    };
+    const { result } = await checkWith(home, { answers });
+    expect(result.ok && result.checks.at(-1)?.message).toBe(
+      `qBittorrent's traffic got no answer from ${TRACE}: curl: (7) *** ***`,
+    );
+  });
+
+  it('checks the structure only with --no-egress, and asks no one for an address', async () => {
+    const answers: Answers = {
+      ...HEALTHY,
+      publicip: [0, '{"public_ip":"203.0.113.7"}\n200'],
+    };
+    const { result, sent, asked } = await checkWith(await homeWith(), {
+      egress: false,
+      answers,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      verdict: 'pass',
+      egress: null,
+      gluetunPublicIp: '203.0.113.7',
+    });
+    expect(statuses(result)).toEqual([
+      'network ok',
+      'gluetun ok',
+      'control ok',
+      'control-key ok',
+      'route ok',
+    ]);
+    expect(sent[0]?.args.at(-1)).toBe('');
+    expect(asked).toEqual([]);
+  });
+
+  it("finds a leak when qBittorrent leaves from the host's own address", async () => {
+    const { result } = await checkWith(await homeWith(), {
+      host: { ok: true, address: '203.0.113.7' },
+    });
+    expect(result).toMatchObject({ ok: true, verdict: 'leak' });
+    expect(result.ok && result.checks.at(-1)).toMatchObject({
+      id: 'egress',
+      status: 'leak',
+      message:
+        "qBittorrent's traffic leaves from 203.0.113.7, which is this host's own address: it does not go through the VPN",
+      hint: 'see docs/runbooks/vpn-down.md',
+    });
+  });
+
+  it('finds a leak when the two sides spell the same address differently', async () => {
+    for (const [vpn, host] of [
+      ['2001:db8::7', '2001:DB8::7'],
+      ['2001:db8::7', '2001:db8:0:0::7'],
+      ['203.0.113.7', '::ffff:203.0.113.7'],
+      ['::FFFF:CB00:7107', '203.0.113.7'],
+      // A zone can't go in a URL, so it is compared in lower case.
+      ['fe80::1%eth0', 'FE80::1%eth0'],
+    ] as const) {
+      const { result } = await checkWith(await homeWith(), {
+        answers: { ...HEALTHY, egress: [0, `ip=${vpn}\n`] },
+        host: { ok: true, address: host },
+      });
+      expect(result).toMatchObject({ ok: true, verdict: 'leak', egress: { vpn, host } });
+      expect(statuses(result).at(-1)).toBe('egress leak');
+    }
+  });
+
+  it('passes when two IPv6 addresses differ', async () => {
+    const { result } = await checkWith(await homeWith(), {
+      answers: { ...HEALTHY, egress: [0, 'ip=2001:db8::7\n'] },
+      host: { ok: true, address: '2001:db8::2' },
+    });
+    expect(result).toMatchObject({ ok: true, verdict: 'pass' });
+    expect(statuses(result).at(-1)).toBe('egress ok');
+  });
+
+  it('finds the VPN down, and closed, when nothing answers through the tunnel; the host is not asked', async () => {
+    const answers: Answers = {
+      ...HEALTHY,
+      egress: [28, 'curl: (28) Connection timed out after 10002 milliseconds'],
+    };
+    const { result, asked } = await checkWith(await homeWith(), { answers });
+    expect(result).toMatchObject({
+      ok: true,
+      verdict: 'down',
+      egress: { url: TRACE, vpn: null, host: null },
+      failClosed: true,
+    });
+    expect(result.ok && result.checks.at(-1)).toMatchObject({
+      id: 'egress',
+      status: 'down',
+      message: `qBittorrent's traffic got no answer from ${TRACE}: curl: (28) Connection timed out after 10002 milliseconds`,
+    });
+    expect(asked).toEqual([]);
+  });
+
+  it('passes on the structure, with a warning, when the host gets no answer', async () => {
+    for (const error of [
+      `no answer from ${TRACE}: nothing within 10 s`,
+      "the request would go through a proxy (NODE_USE_ENV_PROXY), so it can't see this host's own address",
+    ]) {
+      const { result } = await checkWith(await homeWith(), {
+        host: { ok: false, error },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        verdict: 'pass',
+        egress: { url: TRACE, vpn: '203.0.113.7', host: null },
+        failClosed: false,
+      });
+      expect(result.ok && result.checks.at(-1)).toMatchObject({
+        id: 'egress',
+        status: 'warning',
+        message: `qBittorrent's traffic leaves from 203.0.113.7, but this host could not ask ${TRACE} for its own address (${error}), so the two were not compared`,
+      });
+    }
+  });
+
+  it('warns, without comparing, when the tunnel side answers without an address', async () => {
+    // An empty answer is still an answer: something got out, so it is not fail-closed.
+    for (const output of ['<html>blocked</html>', '']) {
+      const answers: Answers = { ...HEALTHY, egress: [0, output] };
+      const { result, asked } = await checkWith(await homeWith(), { answers });
+      expect(result).toMatchObject({
+        ok: true,
+        verdict: 'pass',
+        egress: { url: TRACE, vpn: null, host: null },
+        failClosed: false,
+      });
+      expect(result.ok && result.checks.at(-1)).toMatchObject({
+        id: 'egress',
+        status: 'warning',
+        message: `${TRACE} answered qBittorrent without an address, so the addresses were not compared`,
+      });
+      expect(asked).toEqual([]);
+    }
+  });
+
+  it('warns, without comparing, when one side answered over IPv4 and the other over IPv6', async () => {
+    const { result } = await checkWith(await homeWith(), {
+      host: { ok: true, address: '2001:db8::2' },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      verdict: 'pass',
+      egress: { url: TRACE, vpn: '203.0.113.7', host: '2001:db8::2' },
+    });
+    expect(result.ok && result.checks.at(-1)).toMatchObject({
+      id: 'egress',
+      status: 'warning',
+      message:
+        "qBittorrent's traffic leaves from 203.0.113.7, and this host's from 2001:db8::2: one IPv4 and one IPv6 address, so the two were not compared",
+    });
+  });
+
+  it('finds a leak when qBittorrent has a network of its own', async () => {
+    const { result } = await checkWith(await homeWith(), {
+      runtime: { details: { [QBITTORRENT_ID]: { networkMode: 'mediaplane_default' } } },
+    });
+    expect(result).toMatchObject({ ok: true, verdict: 'leak' });
+    expect(statuses(result)[0]).toBe('network leak');
+  });
+
+  it("finds a leak when qBittorrent uses another app's network, even with --no-egress", async () => {
+    const { result } = await checkWith(await homeWith(), {
+      egress: false,
+      runtime: {
+        containers: [...withQbittorrent({}), container('sonarr', SONARR_ID)],
+        details: { [QBITTORRENT_ID]: { networkMode: `container:${SONARR_ID}` } },
+      },
+    });
+    expect(result).toMatchObject({ ok: true, verdict: 'leak', failClosed: false });
+    expect(result.ok && result.checks[0]).toMatchObject({
+      status: 'leak',
+      message:
+        "qBittorrent uses sonarr's network, not Gluetun's: its traffic does not go through the VPN",
+    });
+  });
+
+  it('finds the VPN down when qBittorrent holds the network of an earlier Gluetun', async () => {
+    // Gluetun restarted on its own, after qBittorrent: the probe would join Gluetun's new
+    // network and pass, while qBittorrent itself has none.
+    const { result } = await checkWith(await homeWith(), {
+      runtime: {
+        details: {
+          [QBITTORRENT_ID]: { networkMode: `container:${GLUETUN_ID}` },
+          [GLUETUN_ID]: { startedAt: '2026-10-10T10:05:00Z' },
+        },
+      },
+    });
+    expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
+    expect(result.ok && result.checks[0]).toMatchObject({
+      status: 'down',
+      hint: 'restart qBittorrent: "docker restart mediaplane-qbittorrent-1"',
+    });
+  });
+
+  it('matches what Docker says to each container by its ID, not by its place', async () => {
+    const reversed: Runtime['inspect'] = (ids) =>
+      Promise.resolve(
+        [...ids].reverse().map((id) => ({
+          id,
+          networkMode: id === QBITTORRENT_ID ? `container:${GLUETUN_ID}` : 'bridge',
+          startedAt: '2026-10-10T10:00:00Z',
+        })),
+      );
+    const { result } = await checkWith(await homeWith(), {
+      replace: { inspect: reversed },
+    });
+    expect(result).toMatchObject({ ok: true, verdict: 'pass' });
+  });
+
+  it('warns, and passes, when qBittorrent is not running: it sends nothing', async () => {
+    for (const state of ['exited', 'created']) {
+      const { result } = await checkWith(await homeWith(), {
+        runtime: {
+          containers: withQbittorrent({ state, health: '' }),
+          details: {
+            [QBITTORRENT_ID]: {
+              networkMode: `container:${GLUETUN_ID}`,
+              startedAt: '0001-01-01T00:00:00Z',
+            },
+          },
+        },
+      });
+      expect(result).toMatchObject({ ok: true, verdict: 'pass' });
+      expect(result.ok && result.checks[0]).toMatchObject({
+        status: 'warning',
+        message: `qBittorrent is ${state}: it uses Gluetun's network, but sends nothing until it runs`,
+      });
+    }
+  });
+
+  it('finds the VPN down, closed and without probing, when Gluetun is not running', async () => {
+    const containers = [
+      container('gluetun', GLUETUN_ID, { state: 'exited', health: '' }),
+      container('qbittorrent', QBITTORRENT_ID),
+    ];
+    const { result, calls } = await checkWith(await homeWith(), {
+      runtime: { containers },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      verdict: 'down',
+      egress: { url: TRACE, vpn: null, host: null },
+      failClosed: true,
+    });
+    expect(statuses(result)).toEqual(['network ok', 'gluetun down']);
+    expect(result.ok && result.checks[1]?.message).toBe(
+      'Gluetun is exited, so qBittorrent has no network: nothing gets out',
+    );
+    expect(calls).not.toContain('run qbittorrent sh as 65534:65534');
+  });
+
+  it('finds the VPN down when Gluetun has no container, or one that has gone', async () => {
+    const containers = [container('qbittorrent', QBITTORRENT_ID)];
+    const { result } = await checkWith(await homeWith(), { runtime: { containers } });
+    expect(statuses(result)).toEqual(['network down', 'gluetun down']);
+    expect(result).toMatchObject({ ok: true, verdict: 'down' });
+  });
+
+  it('never calls a leak closed: qBittorrent with a network of its own gets out without Gluetun', async () => {
+    const { result } = await checkWith(await homeWith(), {
+      runtime: {
+        containers: [
+          container('gluetun', GLUETUN_ID, { state: 'exited', health: '' }),
+          container('qbittorrent', QBITTORRENT_ID),
+        ],
+        details: { [QBITTORRENT_ID]: { networkMode: 'mediaplane_default' } },
+      },
+    });
+    expect(result).toMatchObject({ ok: true, verdict: 'leak', failClosed: false });
+    expect(statuses(result)).toEqual(['network leak', 'gluetun down']);
+  });
+
+  it('finds the VPN down, but not closed, when Gluetun is unhealthy; it still probes', async () => {
+    for (const health of ['unhealthy', '']) {
+      const containers = [
+        container('gluetun', GLUETUN_ID, { health }),
+        container('qbittorrent', QBITTORRENT_ID),
+      ];
+      const { result, calls } = await checkWith(await homeWith(), {
+        runtime: { containers },
+      });
+      expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
+      expect(statuses(result)[1]).toBe('gluetun down');
+      expect(calls).toContain('run qbittorrent sh as 65534:65534');
+    }
+  });
+
+  it('warns when the control server answers without the key: Gluetun has not been restarted', async () => {
+    const answers: Answers = { ...HEALTHY, anonymous: [0, '200'] };
+    const { result } = await checkWith(await homeWith(), { answers });
+    expect(result).toMatchObject({ ok: true, verdict: 'pass' });
+    expect(result.ok && result.checks.find((c) => c.id === 'control-key')).toMatchObject({
+      status: 'warning',
+      hint: expect.stringContaining('docker restart mediaplane-gluetun-1') as unknown,
+    });
+  });
+
+  it('leaves the keyless check out when the control server does not answer at all', async () => {
+    const answers: Answers = { ...HEALTHY, anonymous: [7, '000'] };
+    const { result } = await checkWith(await homeWith(), { answers });
+    expect(statuses(result)).not.toContain('control-key ok');
+    expect(statuses(result)).not.toContain('control-key warning');
+  });
+
+  it('warns when the control server refuses the key or does not answer', async () => {
+    for (const [status, message] of [
+      ['\n401', "Gluetun's control server refused Mediaplane's key"],
+      ['\n000', "Gluetun's control server did not answer"],
+      ['oops\n500', "Gluetun's control server answered HTTP 500"],
+      ['<html>not json</html>\n200', "Gluetun's control server answered HTTP 200"],
+      ['{"state":"running"}\n200', "Gluetun's control server answered HTTP 200"],
+    ]) {
+      const answers: Answers = { ...HEALTHY, status: [0, status ?? ''] };
+      const { result } = await checkWith(await homeWith(), { answers });
+      expect(result).toMatchObject({ ok: true, verdict: 'pass' });
+      expect(result.ok && result.checks.find((c) => c.id === 'control')).toMatchObject({
+        status: 'warning',
+        message,
+      });
+    }
+  });
+
+  it("does not read a keyed answer that curl couldn't finish, such as one over the cap", async () => {
+    // curl exits 63 when the body is over --max-filesize, and still writes the status.
+    const answers: Answers = {
+      ...HEALTHY,
+      status: [63, '{"status":"stopped"}\n200'],
+      publicip: [63, '{"public_ip":"203.0.113.9"}\n200'],
+    };
+    const { result } = await checkWith(await homeWith(), { answers });
+    expect(result).toMatchObject({ ok: true, verdict: 'pass', gluetunPublicIp: null });
+    expect(result.ok && result.checks.find((c) => c.id === 'control')).toMatchObject({
+      status: 'warning',
+      message: "Gluetun's control server's answer could not be read (curl exited 63)",
+    });
+  });
+
+  it('finds the VPN down when the control server says it is stopped', async () => {
+    const answers: Answers = { ...HEALTHY, status: [0, '{"status":"stopped"}\n200'] };
+    const { result } = await checkWith(await homeWith(), { answers });
+    expect(result).toMatchObject({ ok: true, verdict: 'down' });
+    expect(statuses(result)).toContain('control down');
+  });
+
+  it('finds the VPN down when the route does not go into the tunnel and nothing answers', async () => {
+    for (const route of [
+      [0, '1.1.1.1 via 172.20.0.1 dev eth0  src 172.20.0.2'],
+      [2, 'RTNETLINK answers: Network is unreachable'],
+    ] as [number, string][]) {
+      const { result } = await checkWith(await homeWith(), {
+        egress: false,
+        answers: { ...HEALTHY, route },
+      });
+      expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
+      expect(statuses(result)).toContain('route down');
+    }
+  });
+
+  it('finds a leak when the route does not go into the tunnel, yet an answer came back', async () => {
+    const answers: Answers = {
+      ...HEALTHY,
+      route: [0, '1.1.1.1 via 172.20.0.1 dev eth0  src 172.20.0.2'],
+    };
+    const { result } = await checkWith(await homeWith(), { answers });
+    expect(result).toMatchObject({ ok: true, verdict: 'leak' });
+    expect(result.ok && result.checks.find((c) => c.id === 'route')).toMatchObject({
+      status: 'leak',
+      message:
+        "qBittorrent's traffic is routed to eth0, not into the tunnel (tun0), and it still got an answer from outside: it leaves outside the VPN",
+    });
+  });
+
+  it('counts an empty answer from outside as an answer, when the route leaves the tunnel', async () => {
+    const answers: Answers = {
+      ...HEALTHY,
+      route: [0, '1.1.1.1 via 172.20.0.1 dev eth0  src 172.20.0.2'],
+      egress: [0, ''],
+    };
+    const { result } = await checkWith(await homeWith(), { answers });
+    expect(result).toMatchObject({ ok: true, verdict: 'leak', failClosed: false });
+    expect(statuses(result)).toContain('route leak');
+  });
+
+  it("takes Gluetun's tunnel from VPN_INTERFACE when apps.gluetun.env sets it", async () => {
+    const stack = `${STACK}  gluetun: { env: { VPN_INTERFACE: wg0 } }\n`;
+    const answers: Answers = { ...HEALTHY, route: [0, '1.1.1.1 dev wg0  src 10.66.0.2'] };
+    const { result } = await checkWith(await homeWith({ stack }), { answers });
+    expect(result).toMatchObject({ ok: true, verdict: 'pass' });
+  });
+
+  it('finds a leak, without asking Docker, when qBittorrent runs without the VPN', async () => {
+    const stack = STACK.replace('qbittorrent: {}', 'qbittorrent: { vpn: false }');
+    const { result, calls } = await checkWith(await homeWith({ stack }));
+    expect(result).toMatchObject({ ok: true, verdict: 'leak', egress: null });
+    expect(statuses(result)).toEqual(['network leak']);
+    expect(calls).toEqual([]);
+  });
+
+  it('never repeats an egress URL it refuses: it could hold a password', async () => {
+    for (const url of ['file:///etc/passwd', 'https://user:fake-pass-0123@192.0.2.1/']) {
+      const { result, calls } = await checkWith(await homeWith(), { url });
+      expect(result).toEqual({
+        ok: false,
+        diagnostics: [
+          {
+            severity: 'error',
+            code: 'vpn-check.bad-url',
+            message:
+              "the egress check's URL must be an http or https URL with no user name or password",
+            hint: 'set MEDIAPLANE_VPN_CHECK_URL to an IP-echo service such as https://1.1.1.1/cdn-cgi/trace, or unset it',
+          },
+        ],
+      });
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it('fails the probe, rather than guess, when it stopped before its last check', async () => {
+    const partial: Answers = { ...HEALTHY };
+    delete partial.egress;
+    const { result } = await checkWith(await homeWith(), {
+      runtime: {
+        run: () => ({
+          code: 137,
+          stdout: probeOutput(partial),
+          stderr: 'fake: killed\n',
+        }),
+      },
+    });
+    expect(result.ok ? 'passed' : result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'vpn-check.probe-failed',
+        message:
+          "the probe in qBittorrent's network stopped before its egress check: fake: killed",
+      }) as unknown,
+    ]);
+  });
+
+  it('explains what it cannot check', async () => {
+    const noQbittorrent = STACK.replace('apps:\n  qbittorrent: {}\n', 'apps: {}\n');
+    const cases: [Promise<{ result: Awaited<ReturnType<typeof vpnCheck>> }>, string][] = [
+      [checkWith(await tempDir('mediaplane-vpn-check-')), 'config.missing'],
+      [checkWith(await homeWith({ stack: `${STACK}  sonar: {}\n` })), 'app.unknown'],
+      [checkWith(await homeWith({ stack: noQbittorrent })), 'vpn-check.no-qbittorrent'],
+      [checkWith(await homeWith(), { url: 'file:///etc/passwd' }), 'vpn-check.bad-url'],
+      [checkWith(await homeWith({ key: false })), 'vpn-check.no-key'],
+      [
+        checkWith(await homeWith(), { runtime: { containers: [] } }),
+        'vpn-check.not-applied',
+      ],
+      [
+        checkWith(await homeWith(), {
+          runtime: {
+            run: () => ({
+              code: 1,
+              stdout: '',
+              stderr: 'Error response from daemon: cannot join network namespace\n',
+            }),
+          },
+        }),
+        'vpn-check.probe-failed',
+      ],
+      [
+        checkWith(await homeWith(), {
+          replace: {
+            containers: () => Promise.reject(new RuntimeError('fake: no Docker')),
+          },
+        }),
+        'docker.unavailable',
+      ],
+    ];
+    for (const [pending, code] of cases) {
+      const { result } = await pending;
+      expect(result.ok ? 'passed' : result.diagnostics.map((d) => d.code)).toEqual([
+        code,
+      ]);
+    }
+  });
+
+  it('throws what is not a Docker failure: that is a bug, not a result', async () => {
+    await expect(
+      checkWith(await homeWith(), {
+        replace: { containers: () => Promise.reject(new Error('fake bug')) },
+      }),
+    ).rejects.toThrow('fake bug');
+  });
+});
