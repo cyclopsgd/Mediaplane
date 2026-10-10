@@ -29,6 +29,19 @@ export const DOCKER_TIMEOUTS = { query: 60_000, pull: 1_800_000, run: 300_000 } 
 export const HELPER_LABEL = 'io.mediaplane.helper';
 
 /**
+ * The stack's wiring network is not the one compose.yaml makes (another project's, one
+ * that isn't internal, or another driver's): Mediaplane refuses to join it.
+ */
+export class WiringRefused extends RuntimeError {
+  override readonly name: string = 'WiringRefused';
+}
+
+/** Run from its image, Mediaplane can't tell which container it runs in. */
+export class OwnContainerUnknown extends RuntimeError {
+  override readonly name: string = 'OwnContainerUnknown';
+}
+
+/**
  * Whether Mediaplane may act on a Compose project: "mediaplane" or "mediaplane-<name>",
  * never its own "mediaplane-system" (spec §7.2(2)).
  */
@@ -169,7 +182,7 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
   async function requireOwnId(): Promise<string> {
     const id = await findOwnId();
     if (id === undefined) {
-      throw new RuntimeError(
+      throw new OwnContainerUnknown(
         "Mediaplane can't tell which container it runs in (no container ID in /proc/self/mountinfo), so it can't join the stack's wiring network",
       );
     }
@@ -401,7 +414,7 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
             ? `its driver is ${JSON.stringify(network.driver)}, not "bridge"`
             : undefined;
       if (refusal !== undefined) {
-        throw new RuntimeError(`refusing to join ${wiringNetwork}: ${refusal}`);
+        throw new WiringRefused(`refusing to join ${wiringNetwork}: ${refusal}`);
       }
       const self = await requireOwnId();
       if (network.members.includes(self)) return 'already';

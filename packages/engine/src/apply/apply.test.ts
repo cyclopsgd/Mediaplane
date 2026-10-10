@@ -24,6 +24,7 @@ import {
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { fakeDocker, fakeProbe } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureApp, fixtureCatalog } from '../testing/fixtures';
+import { WIRED_CATALOG } from '../testing/wiring';
 import { apply, unhealthyServices, type ApplyOptions } from './apply';
 import { tempDir } from '../testing/temp';
 
@@ -303,6 +304,41 @@ describe('apply', () => {
     expect(
       result.diagnostics.find((d) => d.code === 'apply.verify-failed')?.message,
     ).toBe('changes remain after apply: sonarr (unhealthy)');
+  });
+
+  it('names the wiring left after the start, and why what could not be checked was not', async () => {
+    const verifyFailure = async (runtime: (home: string) => Runtime) => {
+      const home = await makeHome();
+      const result = await apply(
+        options(home, runtime(home), { catalog: WIRED_CATALOG }),
+      );
+      expect(result.outcome).toBe('failed');
+      return result.diagnostics.find((d) => d.code === 'apply.verify-failed')?.message;
+    };
+    // Sonarr runs, but no container is on the wiring network: nothing can ask it.
+    expect(await verifyFailure((home) => fakeDocker(home))).toBe(
+      "changes remain after apply: sonarr.login (unknown: sonarr's container is not on the stack's wiring network, so Mediaplane can't reach it)",
+    );
+    // Sonarr isn't healthy after the start: its wiring waits for it.
+    const relapsing = (home: string): Runtime => {
+      const docker = fakeDocker(home);
+      let started = false;
+      return {
+        ...docker,
+        containers: async () =>
+          (await docker.containers()).map((c) =>
+            started && c.service === 'sonarr' ? { ...c, health: 'unhealthy' } : c,
+          ),
+        up: async (seconds, values) => {
+          const result = await docker.up(seconds, values);
+          started = true;
+          return result;
+        },
+      };
+    };
+    expect(await verifyFailure(relapsing)).toBe(
+      'changes remain after apply: sonarr (unhealthy), sonarr.login (after-start)',
+    );
   });
 
   it('changes nothing when the plan is declined', async () => {

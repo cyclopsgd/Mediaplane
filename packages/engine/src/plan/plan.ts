@@ -19,20 +19,17 @@ import { composeToYaml } from '../render/yaml';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { readResources, type KnownResources } from '../integrations/resources';
 import {
+  joinFailure,
   knownSecrets,
   planWiring,
+  settled,
   WIRING_RUNBOOK,
   wiringOrder,
   type WiringChange,
   type WiringSeams,
 } from '../integrations/wiring';
 import { dockerAccessWarnings } from '../runtime/docker';
-import {
-  RuntimeError,
-  type ContainerState,
-  type Runtime,
-  type WiringJoin,
-} from '../runtime/types';
+import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { adminLogin } from '../secrets/admin';
 import { withGeneratedSecrets } from '../secrets/generate';
 import { readSecretStore, type SecretStore } from '../secrets/store';
@@ -193,7 +190,8 @@ export async function planStack(
 
   let wiring: WiringChange[] = [];
   let known: KnownResources = {};
-  if (wiringOrder(stack).length > 0) {
+  const order = wiringOrder(stack);
+  if (order.length > 0) {
     try {
       known = await readResources(home);
     } catch (cause) {
@@ -208,33 +206,34 @@ export async function planStack(
         ),
       ]);
     }
-    let joined: WiringJoin;
-    try {
-      joined = await options.runtime.joinWiring();
-    } catch (cause) {
-      if (!(cause instanceof RuntimeError)) throw cause;
-      return failed([
-        ...diagnostics,
-        error('wire.network', cause.message, {
-          hint: `look for a networks: entry in compose.override.yaml that changes the wiring network, take it out, and run apply; see ${WIRING_RUNBOOK}`,
-        }),
-      ]);
-    }
     // In memory: the secrets apply would generate, so that a first plan can say what it
-    // would set. Apply sets the ones it saves.
+    // would set. Apply sets the ones it saves. Read before the join, so that no failure
+    // of plan's comes after it has changed Docker.
     const admin = await adminLogin(stack.config, home, preview, options.env);
+    const changing = new Set(
+      containers.filter((c) => c.action !== 'unchanged').map((c) => c.service),
+    );
+    // The join is plan's one change to Docker, and only an app that is settled is asked:
+    // with none, every resource is checked after the start, and nothing joins.
+    let onNetwork = false;
+    if (order.some((app) => settled(app, current, changing))) {
+      try {
+        onNetwork = (await options.runtime.joinWiring()) !== 'no-network';
+      } catch (cause) {
+        if (!(cause instanceof RuntimeError)) throw cause;
+        return failed([...diagnostics, joinFailure(cause, options.env)]);
+      }
+    }
     try {
       const planned = await planWiring({
         stack,
         current,
-        changing: new Set(
-          containers.filter((c) => c.action !== 'unchanged').map((c) => c.service),
-        ),
-        onNetwork: joined !== 'no-network',
+        changing,
+        onNetwork,
         runtime: options.runtime,
         keys: preview.apps,
         admin,
-        secrets: knownSecrets(values, preview.apps, admin),
+        secrets: knownSecrets(values, preview, admin),
         known,
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });

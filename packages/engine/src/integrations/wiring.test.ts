@@ -1,17 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import type { Catalog } from '../catalog/types';
+import { OwnContainerUnknown, WiringRefused } from '../runtime/docker';
+import { RuntimeError } from '../runtime/types';
+import type { SecretStore } from '../secrets/store';
 import { fakeRuntime } from '../testing/fakes';
 import { FIXTURE_API, fixtureCatalog } from '../testing/fixtures';
 import { fakeHttpApp } from '../testing/http';
 import {
+  FAKE_LOGIN,
   fakeSonarr,
   WIRING_RUNNING as RUNNING,
   wiringStack as stackOf,
 } from '../testing/wiring';
 import type { KnownResources } from './resources';
+import type { ResourceSpec } from './types';
 import {
+  joinFailure,
+  knownSecrets,
   planWiring,
   settled,
+  WIRING_RUNBOOK,
   wiringOrder,
   type PlanWiringOptions,
   type WiringSeams,
@@ -192,6 +200,131 @@ describe('planWiring', () => {
         reason: expect.stringContaining('failed (HTTP 503)') as string,
       },
     ]);
+  });
+
+  it('lists only the resources the stack wants, whatever it finds', async () => {
+    const unwanted: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'unwanted',
+      desired: () => undefined,
+    };
+    const stackWith = (resources: ResourceSpec[]) =>
+      stackOf(
+        fixtureCatalog.map((def) =>
+          def.id === 'sonarr'
+            ? { ...def, api: FIXTURE_API, integration: { after: [], resources } }
+            : def,
+        ),
+      );
+    const stack = stackWith([unwanted, FAKE_LOGIN]);
+    const sonarr = await fakeSonarr({ key: KEY });
+    expect((await planWiring(options(sonarr, { stack }))).changes).toEqual([
+      { resource: 'sonarr.login', action: 'create' },
+    ]);
+    expect(
+      (await planWiring(options(sonarr, { stack, onNetwork: false }))).changes,
+    ).toEqual([{ resource: 'sonarr.login', action: 'after-start' }]);
+    // A refused key: what is left unasked is what the stack wants, not the rest.
+    sonarr.state.key = 'f'.repeat(32);
+    expect((await planWiring(options(sonarr, { stack }))).changes).toEqual([
+      {
+        resource: 'sonarr.login',
+        action: 'unknown',
+        reason: expect.stringContaining("refused Mediaplane's API key") as string,
+      },
+    ]);
+    // Wanting none of its resources, Mediaplane only checks the app.
+    sonarr.state.key = KEY;
+    const none = stackWith([unwanted]);
+    expect((await planWiring(options(sonarr, { stack: none }))).changes).toEqual([
+      { resource: 'sonarr', action: 'unchanged' },
+    ]);
+  });
+
+  it("gives an app that is still starting plan's 15 s, and no more", async () => {
+    const sonarr = await fakeSonarr({ key: KEY, up: false });
+    // A clock that moves only while the client waits; each wait is a tenth of its cap.
+    let clock = 0;
+    const seams: WiringSeams = {
+      ...sonarr.seams,
+      retry: {
+        now: () => clock,
+        sleep: (ms) => {
+          clock += ms;
+          return Promise.resolve();
+        },
+        random: () => 0.1,
+      },
+    };
+    const planned = await planWiring(options({ seams, addresses: sonarr.addresses }));
+    expect(planned.changes).toEqual([
+      {
+        resource: 'sonarr.login',
+        action: 'unknown',
+        reason: expect.stringContaining(
+          'failed (HTTP 503) (GET /ping), and still did after 15 s',
+        ) as string,
+      },
+    ]);
+  });
+});
+
+describe('knownSecrets', () => {
+  it("holds every secret the stack knows, and the stored admin password when it isn't in use", () => {
+    const store: SecretStore = {
+      version: 1,
+      apps: { sonarr: { apiKey: KEY } },
+      shared: { adminPassword: 'fake-stored-password' },
+    };
+    const values = {
+      MP_GLUETUN_WIREGUARD_KEY: 'fake-wireguard-key',
+      MP_SONARR_API_KEY: KEY,
+      MP_UNSET: '',
+    };
+    // admin.password is a file of yours: the stored one may still be in an app.
+    expect(knownSecrets(values, store, { password: 'fake-own-password' })).toEqual([
+      'fake-wireguard-key',
+      KEY,
+      'fake-stored-password',
+      'fake-own-password',
+    ]);
+  });
+});
+
+describe('joinFailure', () => {
+  it('says how to put back the network compose.yaml makes, for one Mediaplane refuses', () => {
+    const cause = new WiringRefused(
+      'refusing to join mediaplane_wiring: it is not the wiring network of the Compose project "mediaplane"',
+    );
+    expect(joinFailure(cause, {})).toEqual({
+      severity: 'error',
+      code: 'wire.network',
+      message: cause.message,
+      hint: `the wiring network must be the one compose.yaml makes: take out any networks: entry that changes it in compose.override.yaml (or a network of that name made by hand), then remove the network on the host, as the runbook shows, and run apply: ${WIRING_RUNBOOK}`,
+    });
+  });
+
+  it("says how to run Mediaplane when it can't tell which container it runs in", () => {
+    const cause = new OwnContainerUnknown(
+      "Mediaplane can't tell which container it runs in (no container ID in /proc/self/mountinfo), so it can't join the stack's wiring network",
+    );
+    expect(joinFailure(cause, {})).toEqual({
+      severity: 'error',
+      code: 'wire.network',
+      message: cause.message,
+      hint: `run Mediaplane with Docker, as deploy/mediaplane.compose.yaml does, or from source on the host, where it joins nothing; see ${WIRING_RUNBOOK}`,
+    });
+  });
+
+  it("is Docker's failure for anything else", () => {
+    const cause = new RuntimeError('docker network inspect failed: permission denied');
+    expect(joinFailure(cause, {})).toEqual(
+      expect.objectContaining({
+        severity: 'error',
+        code: 'docker.unavailable',
+        message: cause.message,
+      }),
+    );
   });
 });
 

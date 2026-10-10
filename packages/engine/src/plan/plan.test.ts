@@ -7,6 +7,7 @@ import { COMPOSE_PATH, ENV_PATH, SECRETS_PATH } from '../paths';
 import { portKey } from '../preflight/checks';
 import type { HostProbe } from '../preflight/probe';
 import { renderEnvFile } from '../render/env';
+import { WiringRefused } from '../runtime/docker';
 import {
   HelperError,
   RuntimeError,
@@ -882,10 +883,13 @@ describe('plan: the wiring', () => {
   });
 
   it('fails on a wiring network it must not join, or a resources.json it cannot read', async () => {
+    // Its apps are running and settled, so plan joins to ask them.
     const refused = fakeRuntime({
+      hashes: { ok: true, hashes: HASHES },
+      containers: running(HASHES),
       join: () => {
-        throw new RuntimeError(
-          'refusing to join mediaplane_wiring: it is not internal, so Mediaplane would get a route out',
+        throw new WiringRefused(
+          "refusing to join mediaplane_wiring: it is not internal, so Mediaplane's container would get a route out",
         );
       },
     });
@@ -895,7 +899,11 @@ describe('plan: the wiring', () => {
     });
     expect(network.ok).toBe(false);
     expect(network.diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'wire.network', severity: 'error' }),
+      expect.objectContaining({
+        code: 'wire.network',
+        severity: 'error',
+        hint: expect.stringContaining('the wiring network must be the one') as string,
+      }),
     );
     const home = await makeHome();
     await mkdir(join(home, 'state'));
@@ -907,6 +915,28 @@ describe('plan: the wiring', () => {
     expect(unreadable.ok).toBe(false);
     expect(unreadable.diagnostics).toContainEqual(
       expect.objectContaining({ code: 'resources.invalid', severity: 'error' }),
+    );
+  });
+
+  it("fails when Docker can't say where the apps are on the wiring network", async () => {
+    const runtime: Runtime = {
+      ...fakeRuntime({
+        hashes: { ok: true, hashes: HASHES },
+        containers: running(HASHES),
+      }),
+      wiringAddresses: () =>
+        Promise.reject(
+          new RuntimeError('docker container inspect failed: fake daemon error'),
+        ),
+    };
+    const result = await planFor(await makeHome(), { runtime, catalog: WIRED_CATALOG });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'docker.unavailable',
+        severity: 'error',
+        message: 'docker container inspect failed: fake daemon error',
+      }),
     );
   });
 
@@ -972,12 +1002,37 @@ describe('plan: the wiring', () => {
         }),
       );
     };
+    const reads = /^(versions|containers|configHashes|inspect|wiring-addresses)\b/;
     const before = await files();
     calls.length = 0;
     await planFor(home, { runtime, catalog: WIRED_CATALOG, wiring: sonarr.seams });
     expect(await files()).toEqual(before);
-    const reads = /^(versions|containers|configHashes|inspect|wiring-addresses)\b/;
     expect(calls).toContain('wiring-addresses fake-sonarr');
     expect(calls.filter((call) => !reads.test(call))).toEqual(['join-wiring']);
+
+    // With no app to ask, plan changes nothing in Docker: a first plan, and one that
+    // recreates Sonarr.
+    const recreating = { ...HASHES, sonarr: 'f'.repeat(64) };
+    for (const docker of [
+      fakeRuntime({ calls }),
+      fakeRuntime({
+        hashes: { ok: true, hashes: recreating },
+        containers: running(HASHES),
+        addresses: sonarr.addresses,
+        calls,
+      }),
+    ]) {
+      calls.length = 0;
+      const result = await planFor(home, {
+        runtime: docker,
+        catalog: WIRED_CATALOG,
+        wiring: sonarr.seams,
+      });
+      expect(result.wiring).toEqual([
+        { resource: 'sonarr.login', action: 'after-start' },
+      ]);
+      expect(await files()).toEqual(before);
+      expect(calls.filter((call) => !reads.test(call))).toEqual([]);
+    }
   });
 });

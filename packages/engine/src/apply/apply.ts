@@ -344,9 +344,14 @@ function remaining(result: PlanResult): string {
       .map((c) => `${c.service} (${c.action})`),
     ...result.secrets.generate,
     ...result.unhealthy,
+    // An unknown one says why: its reason names the app and what failed, redacted.
     ...result.wiring
       .filter((w) => w.action !== 'unchanged')
-      .map((w) => `${w.resource} (${w.action})`),
+      .map((w) =>
+        w.action === 'unknown' && w.reason !== undefined
+          ? `${w.resource} (unknown: ${w.reason})`
+          : `${w.resource} (${w.action})`,
+      ),
   ].join(', ');
 }
 

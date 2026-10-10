@@ -69,7 +69,7 @@ async function currentHome(
     catalog,
     host: FIXTURE_HOST,
     env: {},
-    runtime: onWiring(runtime),
+    runtime: reachingFakeApis(runtime),
     probe: fakeProbe(),
     wiring: apis.seams,
   });
@@ -112,7 +112,7 @@ beforeEach(async () => {
 });
 
 /** `runtime`, with the stack's containers on the wiring network, where `apis` are. */
-function onWiring(runtime: Runtime): Runtime {
+function reachingFakeApis(runtime: Runtime): Runtime {
   return {
     ...runtime,
     wiringAddresses: (ids) =>
@@ -130,7 +130,7 @@ function onWiring(runtime: Runtime): Runtime {
 function deps(runtime: Runtime = fakeRuntime()): Partial<CliDeps> {
   return {
     host: () => Promise.resolve(FIXTURE_HOST),
-    runtime: () => onWiring(runtime),
+    runtime: () => reachingFakeApis(runtime),
     probe: () => fakeProbe(),
     wiring: apis.seams,
   };

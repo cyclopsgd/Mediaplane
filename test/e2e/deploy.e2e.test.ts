@@ -146,9 +146,15 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
   }, 1_200_000);
 
   afterAll(async () => {
-    const stackDown = await composeDown(STACK);
+    // The deployment first: while Mediaplane's container is on the stack's wiring
+    // network, the stack's down can't remove that network, and leaves it behind.
     const systemDown =
       override === '' ? undefined : await system('down', '--remove-orphans');
+    const stackDown = await composeDown(STACK);
+    // Compose still exits 0 when it can't remove a network: look for it.
+    const wiring = await nodeExec('docker', ['network', 'inspect', `${STACK}_wiring`], {
+      cwd: '/',
+    });
     // Each removal runs even if one before it throws, and so do the image removal (last,
     // once no container uses the image) and the checks.
     try {
@@ -162,6 +168,8 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
         expect(stackDown.code, stackDown.stderr).toBe(0);
         if (systemDown !== undefined) expect(systemDown.code, systemDown.stderr).toBe(0);
         expect(image.code, image.stderr).toBe(0);
+        expect(wiring.code, `${STACK}_wiring was left behind`).not.toBe(0);
+        expect(wiring.stderr).toMatch(/not found/);
       }
     }
   }, 300_000);

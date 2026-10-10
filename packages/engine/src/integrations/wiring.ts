@@ -1,4 +1,5 @@
-import { warning, type Diagnostic } from '../diagnostics';
+import { error, warning, type Diagnostic } from '../diagnostics';
+import { dockerUnavailable } from '../host/failure';
 import {
   AppApiError,
   createAppApi,
@@ -8,7 +9,9 @@ import {
 } from '../http/client';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { runbookUrl } from '../runbooks';
-import type { ContainerState, Runtime } from '../runtime/types';
+import { OwnContainerUnknown, WiringRefused } from '../runtime/docker';
+import type { ContainerState, RuntimeError, Runtime } from '../runtime/types';
+import type { SecretStore } from '../secrets/store';
 import { compare } from '../util/sort';
 import type { KnownResource, KnownResources } from './resources';
 import type {
@@ -92,12 +95,22 @@ export function resourceAddress(app: ResolvedApp, spec: ResourceSpec): string {
   return `${app.def.id}.${spec.name}`;
 }
 
-/** Every resource of `app`, or the app itself when it has none: what a change names. */
-export function wiringTargets(app: ResolvedApp): string[] {
-  const resources = app.def.integration?.resources ?? [];
-  return resources.length === 0
-    ? [app.def.id]
-    : resources.map((spec) => resourceAddress(app, spec));
+/** The app's resources that the stack wants: each one whose `desired` gives one. */
+export function wantedResources(ctx: WiringContext): ResourceSpec[] {
+  return (ctx.app.def.integration?.resources ?? []).filter(
+    (spec) => spec.desired(ctx) !== undefined,
+  );
+}
+
+/**
+ * What a change names for the app: each resource the stack wants, or the app itself
+ * when it wants none of them, and Mediaplane only checks the app.
+ */
+export function wiringTargets(ctx: WiringContext): string[] {
+  const wanted = wantedResources(ctx);
+  return wanted.length === 0
+    ? [ctx.app.def.id]
+    : wanted.map((spec) => resourceAddress(ctx.app, spec));
 }
 
 /** Why Mediaplane can't ask `app`: its container isn't on the stack's wiring network. */
@@ -186,19 +199,23 @@ export async function reachApps(
 }
 
 /**
- * Every secret an app's answer could repeat: the .env values, every key in the store, and
- * the admin password. The client replaces each with *** in what it says.
+ * Every secret an app's answer could repeat: the .env values, every key in the store, the
+ * admin password in use, and the one the store keeps. That one stays stored when you set
+ * admin.password to a file of your own, and an app may still hold it. The client
+ * replaces each with *** in what it says.
  */
 export function knownSecrets(
   values: Readonly<Record<string, string>>,
-  keys: Readonly<Record<string, Readonly<Record<string, string>>>>,
+  store: SecretStore,
   admin: { password: string },
 ): string[] {
-  return [
+  const all = [
     ...Object.values(values),
-    ...Object.values(keys).flatMap((secrets) => Object.values(secrets)),
+    ...Object.values(store.apps).flatMap((secrets) => Object.values(secrets)),
+    ...(store.shared?.adminPassword === undefined ? [] : [store.shared.adminPassword]),
     admin.password,
-  ].filter((value) => value !== '');
+  ];
+  return [...new Set(all)].filter((value) => value !== '');
 }
 
 /** The app is up, and still takes Mediaplane's key (spec §6.3, "the source"). */
@@ -255,6 +272,24 @@ export function unreachableWarning(app: ResolvedApp, cause: AppApiError): Diagno
   });
 }
 
+/**
+ * The error for a join of the wiring network that failed (plan, and apply's wire step):
+ * a network Mediaplane refuses, a container it can't find itself in, or Docker itself.
+ */
+export function joinFailure(cause: RuntimeError, env: NodeJS.ProcessEnv): Diagnostic {
+  if (cause instanceof WiringRefused) {
+    return error('wire.network', cause.message, {
+      hint: `the wiring network must be the one compose.yaml makes: take out any networks: entry that changes it in compose.override.yaml (or a network of that name made by hand), then remove the network on the host, as the runbook shows, and run apply: ${WIRING_RUNBOOK}`,
+    });
+  }
+  if (cause instanceof OwnContainerUnknown) {
+    return error('wire.network', cause.message, {
+      hint: `run Mediaplane with Docker, as deploy/mediaplane.compose.yaml does, or from source on the host, where it joins nothing; see ${WIRING_RUNBOOK}`,
+    });
+  }
+  return dockerUnavailable(cause, env);
+}
+
 export interface PlanWiringOptions {
   stack: ResolvedStack;
   current: readonly ContainerState[];
@@ -286,6 +321,9 @@ export async function planWiring(
   const changes: WiringChange[] = [];
   const diagnostics: Diagnostic[] = [];
   for (const app of order) {
+    const ctx: WiringContext = { stack: options.stack, app, admin: options.admin };
+    // Only what the stack wants is listed: a resource it doesn't want isn't wiring.
+    const targets = wiringTargets(ctx);
     const client = reached.get(app.def.id);
     if (client === undefined && ready.includes(app)) {
       // Running, and apply leaves it as it is, but it isn't on the network.
@@ -296,7 +334,7 @@ export async function planWiring(
         }),
       );
       changes.push(
-        ...wiringTargets(app).map((resource) => ({
+        ...targets.map((resource) => ({
           resource,
           action: 'unknown' as const,
           reason,
@@ -306,24 +344,24 @@ export async function planWiring(
     }
     if (client === undefined) {
       changes.push(
-        ...wiringTargets(app).map((resource) => ({
+        ...targets.map((resource) => ({
           resource,
           action: 'after-start' as const,
         })),
       );
       continue;
     }
-    const ctx: WiringContext = { stack: options.stack, app, admin: options.admin };
-    const resources = app.def.integration?.resources ?? [];
+    const wanted = wantedResources(ctx);
     let looked = 0;
     try {
       await checkApp(client);
-      if (resources.length === 0)
+      if (wanted.length === 0)
         changes.push({ resource: app.def.id, action: 'unchanged' });
-      for (const spec of resources) {
+      for (const spec of wanted) {
         const address = resourceAddress(app, spec);
         const result = await examine(spec, client.api, ctx, options.known[address]);
         looked++;
+        // Wanted, and desired() is pure: only a guard.
         if (result === undefined) continue;
         changes.push({
           resource: address,
@@ -335,7 +373,7 @@ export async function planWiring(
       if (!(cause instanceof AppApiError)) throw cause;
       diagnostics.push(unreachableWarning(app, cause));
       // What is left of the app could not be looked at.
-      const left = wiringTargets(app).slice(resources.length === 0 ? 0 : looked);
+      const left = targets.slice(wanted.length === 0 ? 0 : looked);
       changes.push(
         ...left.map((resource) => ({
           resource,

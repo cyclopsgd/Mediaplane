@@ -7,9 +7,11 @@ import {
   dockerAccessWarnings,
   isManagedProject,
   ownContainerId,
+  OwnContainerUnknown,
   parseContainers,
   parseHashes,
   usesSocketProxy,
+  WiringRefused,
 } from './docker';
 import type { Exec, ExecOptions, ExecResult } from './exec';
 import { HelperError, RuntimeError } from './types';
@@ -927,9 +929,12 @@ describe('the wiring network', () => {
       [networkLine({ driver: 'overlay' }), 'its driver is "overlay", not "bridge"'],
     ] as const) {
       const { runtime, calls } = runtimeWith(() => ok(`${answer}\n`));
-      await expect(runtime.joinWiring()).rejects.toThrow(
+      const refused = runtime.joinWiring();
+      await expect(refused).rejects.toThrow(
         `refusing to join mediaplane_wiring: ${message}`,
       );
+      // Typed, so plan and apply can say what to do about it.
+      await expect(refused).rejects.toBeInstanceOf(WiringRefused);
       expect(calls.map((call) => call.args[1])).toEqual(['inspect']);
       expect(calls.some((call) => call.args[1] === 'connect')).toBe(false);
     }
@@ -983,9 +988,11 @@ describe('the wiring network', () => {
       env: IN_IMAGE,
       ownId: () => Promise.resolve(undefined),
     });
-    await expect(runtime.joinWiring()).rejects.toThrow(
+    const joined = runtime.joinWiring();
+    await expect(joined).rejects.toThrow(
       "Mediaplane can't tell which container it runs in",
     );
+    await expect(joined).rejects.toBeInstanceOf(OwnContainerUnknown);
   });
 
   it('leaves quietly when it cannot tell which container it is: it cannot have joined', async () => {
@@ -1007,9 +1014,12 @@ describe('the wiring network', () => {
         ? network('true', 'mediaplane')
         : { code: 1, stdout: '', stderr: 'Error response from daemon: denied\n' };
     const { runtime } = runtimeWith(refused);
-    await expect(runtime.joinWiring()).rejects.toThrow(
+    const joined = runtime.joinWiring();
+    await expect(joined).rejects.toThrow(
       'could not join the wiring network mediaplane_wiring: Error response from daemon: denied',
     );
+    // Docker's failure, not a network Mediaplane refused.
+    await expect(joined).rejects.not.toBeInstanceOf(WiringRefused);
     const member = runtimeWith((args) =>
       args[1] === 'inspect'
         ? network('true', 'mediaplane', SELF)
