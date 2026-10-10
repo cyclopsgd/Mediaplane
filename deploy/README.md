@@ -109,7 +109,7 @@ mediaplane credentials  # the admin login, and where each app is
 ```
 
 `init` checks the flags it can before its first question, and asks again when an answer
-won't do.
+won't do. Ctrl-D or Ctrl-C at a question stops it, writing nothing.
 Without a terminal it asks nothing: pass the flags in the
 [CLI reference](../docs/reference/cli.md#mediaplane-init) instead.
 
@@ -126,7 +126,7 @@ Without a terminal it asks nothing: pass the flags in the
   - With `lan`, it offers the LAN subnet it sees, when it sees just one, or asks you to
     type one: a private range that holds one of this host's addresses. It writes it as
     `network.lan_subnet` (`--lan-subnet`). Left empty, `plan` detects it each time. On a
-    cloud VM it offers none, and you must type it.
+    cloud VM it offers none, and asks until you type one.
   - With `lan`, it also asks whether your own network must sign in too
     (`security.login_on_lan`; `--no-login-on-lan` says no).
 

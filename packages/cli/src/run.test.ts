@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
@@ -29,6 +29,7 @@ import {
   tempDir,
 } from '@mediaplane/engine/testing';
 import { describe, expect, it, vi } from 'vitest';
+import { PromptCancelled } from './prompt';
 import { EXIT_CODES, run, type CliDeps, type Io } from './run';
 import { VERSION } from './version';
 
@@ -463,6 +464,18 @@ describe('mediaplane apply', () => {
     expect(
       await run(['apply', '--home', home], accepted.io, deps(fakeDocker(home))),
     ).toBe(0);
+  });
+
+  it('takes Ctrl-D at the confirmation as no', async () => {
+    const home = await makeHome();
+    const term = capture();
+    const io: Io = {
+      ...term.io,
+      ask: () => Promise.reject(new PromptCancelled()),
+    };
+    expect(await run(['apply', '--home', home], io, deps(fakeDocker(home)))).toBe(1);
+    expect(term.stderr()).toBe('Apply cancelled; nothing was changed.\n');
+    await expect(readFile(join(home, COMPOSE_PATH), 'utf8')).rejects.toThrow('ENOENT');
   });
 
   it('needs --yes when it cannot ask', async () => {

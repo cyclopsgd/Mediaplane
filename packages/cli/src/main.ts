@@ -1,4 +1,4 @@
-import { createInterface } from 'node:readline/promises';
+import { terminalAsk } from './prompt';
 import { run } from './run';
 
 // A reader that exits early (`mediaplane plan | head -1`) closes the pipe. That is not
@@ -17,19 +17,5 @@ process.exitCode = await run(process.argv.slice(2), {
     process.stderr.write(text);
   },
   env: process.env,
-  ...(interactive
-    ? {
-        ask: async (question: string) => {
-          const prompt = createInterface({
-            input: process.stdin,
-            output: process.stdout,
-          });
-          try {
-            return await prompt.question(question);
-          } finally {
-            prompt.close();
-          }
-        },
-      }
-    : {}),
+  ...(interactive ? { ask: terminalAsk(process.stdin, process.stdout) } : {}),
 });

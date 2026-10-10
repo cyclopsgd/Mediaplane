@@ -550,8 +550,9 @@ in `compose.override.yaml` is therefore wired automatically.
 - **`plan`.** Exit 0 means no changes, 2 means changes are pending, 1 means an
   error (`--detailed-exitcode` semantics by default).
 - **`apply`.** Interactive by default: it shows the plan and asks for
-  confirmation. `--yes` skips the prompt. Exit 0 means success; the `--json`
-  output includes `"changed": true|false`. Exit 1 means failed or partial.
+  confirmation. `--yes` skips the prompt. Ctrl-D or Ctrl-C at the prompt answers
+  no. Exit 0 means success; the `--json` output includes `"changed": true|false`.
+  Exit 1 means failed or partial.
 - **`--json`.** Every command supports it. The JSON shapes are versioned and
   documented, because external automation depends on them.
 
@@ -996,9 +997,10 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   (`localhost` on a cloud VM), the LAN subnet with `lan`, and the WireGuard address
   with a VPN provider.
   - It checks every flag it can before the first question, and on a terminal it asks
-    again after a bad answer.
+    again after a bad answer. Ctrl-D or Ctrl-C at a question stops it, writing nothing.
   - The LAN subnet must hold one of the host's private addresses. On a cloud VM, it is
-    never offered, and `--bind lan` without `--lan-subnet` is refused.
+    never offered, an empty answer is asked again, and `--bind lan` without
+    `--lan-subnet` is refused.
   - "Ask for a login from your own network too?" is asked only with `lan`.
   - `--admin-password-file` must name a file inside the home, and
     `--vpn-addresses` needs `--vpn-provider`.

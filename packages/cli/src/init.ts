@@ -13,6 +13,7 @@ import {
   type StarterAnswers,
 } from '@mediaplane/engine';
 import { printDiagnostics, printError } from './output';
+import { PromptCancelled } from './prompt';
 import type { Io } from './run';
 
 export const INIT_JSON_SCHEMA = 'mediaplane.init/v1';
@@ -44,7 +45,12 @@ export async function init(
   const asJson = options.json === true;
   const home = resolve(options.home);
   const stackPath = join(home, STACK_PATH);
-  const answers = await gatherAnswers(options, io, host);
+  const answers = await gatherAnswers(options, io, host).catch((cause: unknown) => {
+    if (cause instanceof PromptCancelled) {
+      return 'init stopped at a question; nothing was written';
+    }
+    throw cause;
+  });
   if (typeof answers === 'string') {
     printError(answers, { json: asJson }, io);
     return 1;
@@ -371,8 +377,10 @@ function lanSubnetFlagRefusal(subnet: string, host: HostFacts): string | undefin
 /**
  * The LAN subnet: the one this host is on, if there is exactly one and you agree, or one
  * you type that holds an address of this host (or nothing, to have plan detect it). A
- * cloud VM's private network is not a LAN, so there it is never offered, and the question
- * asks for the private network to publish on, as plan's hint says.
+ * cloud VM's private network is not a LAN, so there it is never offered, the question
+ * asks for the private network to publish on, as plan's hint says, and an answer is
+ * needed. A host with no private address can't publish on a LAN at all, so no answer
+ * works there: the problem says how to stop.
  */
 async function askLanSubnet(
   ask: Ask,
@@ -392,7 +400,23 @@ async function askLanSubnet(
       ? 'Your LAN subnet, e.g. 192.168.1.0/24: '
       : 'The private network to publish on, e.g. 10.0.0.0/24: ',
     (typed) => {
-      if (typed === '') return { value: undefined };
+      // An empty answer leaves the subnet to plan, except on a cloud VM.
+      if (
+        host.privateAddresses.length === 0 &&
+        (typed !== '' || host.cloud !== undefined)
+      ) {
+        return {
+          problem:
+            "This host has no private (RFC 1918) IPv4 address, so lan can't work here. Press Ctrl-C, then run init again and answer localhost.",
+        };
+      }
+      if (typed === '') {
+        return host.cloud === undefined
+          ? { value: undefined }
+          : {
+              problem: `This looks like a VM on ${host.cloud}, where lan needs the private network to publish on. Type a subnet this host is on.`,
+            };
+      }
       const checked = schemaCheck({ lanSubnet: typed }, typed);
       if ('problem' in checked) return checked;
       const miss = lanSubnetMiss(typed, host);

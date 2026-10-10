@@ -34,13 +34,17 @@ import {
   printStatus,
   printStep,
 } from './output';
+import { PromptCancelled } from './prompt';
 import { VERSION } from './version';
 
 export interface Io {
   stdout(text: string): void;
   stderr(text: string): void;
   env: NodeJS.ProcessEnv;
-  /** Ask the user something and return the answer; absent when not on a terminal. */
+  /**
+   * Ask the user something and return the answer; absent when not on a terminal. Rejects
+   * with PromptCancelled when the user ends the input instead (Ctrl-D, Ctrl-C).
+   */
   ask?: (question: string) => Promise<string>;
 }
 
@@ -214,8 +218,14 @@ export function createProgram(
         confirm: async (shown) => {
           if (!asJson) printPlan(shown, { json: false }, io);
           if (yes || ask === undefined) return true;
-          const answer = await ask('\nApply these changes? [y/N] ');
-          return /^y(es)?$/i.test(answer.trim());
+          try {
+            const answer = await ask('\nApply these changes? [y/N] ');
+            return /^y(es)?$/i.test(answer.trim());
+          } catch (cause) {
+            // Ending the input is no answer, so the default: no.
+            if (cause instanceof PromptCancelled) return false;
+            throw cause;
+          }
         },
         onStep: asJson
           ? undefined

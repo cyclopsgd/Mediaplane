@@ -9,6 +9,7 @@ import {
   tempDir,
 } from '@mediaplane/engine/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { PromptCancelled } from './prompt';
 import { run, type CliDeps, type Io } from './run';
 
 // writeFile() and open() pass straight through, except where a test fills the disk
@@ -323,6 +324,26 @@ describe('mediaplane init', () => {
     expect((await stackIn(home)).network.lan_subnet).toBe('10.0.0.0/8');
   });
 
+  it('stops at Ctrl-D, writing nothing', async () => {
+    const home = await newHome();
+    const term = capture();
+    const answers = ['jellyfin'];
+    const io: Io = {
+      ...term.io,
+      ask: () => {
+        const answer = answers.shift();
+        return answer === undefined
+          ? Promise.reject(new PromptCancelled())
+          : Promise.resolve(answer);
+      },
+    };
+    expect(await run(['init', '--home', home], io, deps())).toBe(1);
+    expect(term.stderr()).toBe(
+      'error: init stopped at a question; nothing was written\n',
+    );
+    expect(await readdir(home)).toEqual([]);
+  });
+
   it('leaves the subnet to plan when you type nothing for it', async () => {
     const home = await newHome();
     const term = capture(['jellyfin', '/srv/data', '', 'lan', 'n', '']);
@@ -360,6 +381,62 @@ describe('mediaplane init', () => {
       "None of this host's private addresses (192.168.1.10) is inside 10.10.0.0/16. Type a subnet this host is on.\n",
     );
   });
+
+  it('asks a cloud VM again at once for an empty subnet, saying why', async () => {
+    const home = await newHome();
+    const term = capture(['jellyfin', '/srv/data', '', 'lan', '', '192.168.1.0/24']);
+    expect(await run(['init', '--home', home], term.io, deps('Oracle Cloud'))).toBe(0);
+    expect(
+      term.questions.filter((q) => q.startsWith('The private network to publish on')),
+    ).toHaveLength(2);
+    expect(term.stderr()).toBe(
+      'This looks like a VM on Oracle Cloud, where lan needs the private network to publish on. Type a subnet this host is on.\n',
+    );
+    expect((await stackIn(home)).network).toEqual({
+      bind: 'lan',
+      lan_subnet: '192.168.1.0/24',
+    });
+  });
+
+  it.each([
+    ['a home server', undefined],
+    ['a cloud VM', 'Oracle Cloud'],
+  ])(
+    'tells %s with no private address that lan cannot work, not to leave it to plan',
+    async (_, cloud) => {
+      const home = await newHome();
+      const noAddress: Partial<CliDeps> = {
+        host: () =>
+          Promise.resolve({
+            arch: 'amd64',
+            privateAddresses: [],
+            ...(cloud === undefined ? {} : { cloud }),
+          }),
+      };
+      const answers = ['jellyfin', '/srv/data', '', 'lan', '192.168.1.0/24'];
+      const term = capture();
+      const io: Io = {
+        ...term.io,
+        ask: () => {
+          const answer = answers.shift();
+          return answer === undefined
+            ? Promise.reject(new PromptCancelled())
+            : Promise.resolve(answer);
+        },
+      };
+      expect(await run(['init', '--home', home], io, { ...deps(), ...noAddress })).toBe(
+        1,
+      );
+      expect(term.stderr()).toBe(
+        [
+          "This host has no private (RFC 1918) IPv4 address, so lan can't work here. Press Ctrl-C, then run init again and answer localhost.",
+          'error: init stopped at a question; nothing was written',
+          '',
+        ].join('\n'),
+      );
+      expect(await readdir(home)).toEqual([]);
+    },
+  );
 
   it('takes every answer as a flag when it cannot ask', async () => {
     const home = await newHome();
