@@ -32,15 +32,18 @@ bug in Mediaplane itself, or in something it runs, such as Compose.
   - pings and the Docker version;
   - containers: list, inspect, create, start, stop, rename, attach, wait, kill and delete;
   - images: inspect and pull;
-  - networks: list, inspect and create;
+  - networks: list, inspect, create, connect and disconnect;
   - volumes: list.
 
   Kill is there because `docker run` passes a signal it receives on to its container as a
-  kill. That is how a host helper that times out is stopped.
+  kill. That is how a host helper that times out is stopped. Connect and disconnect are
+  how Mediaplane's own container joins the stack's wiring network, and steps off it for
+  `up` (Slice 3b, [ADR 0011](0011-a-private-wiring-network.md)). They were allowed
+  before that, because Compose can call them when an override adds a network: the
+  wiring network needed no new permission.
 
   It also allows volume create and inspect, which Compose calls when a
-  `compose.override.yaml` adds a named volume, and network connect and disconnect, which
-  Compose can call when an override adds a network.
+  `compose.override.yaml` adds a named volume.
 
   Everything else is refused with `403 Forbidden`, including:
   - `exec`, logs, file copy, export, commit, build and `/session`;
@@ -76,7 +79,10 @@ bug in Mediaplane itself, or in something it runs, such as Compose.
 - **The code keeps its own limit.** The runtime refuses any Compose project except
   `mediaplane` and `mediaplane-<name>`, and never manages `mediaplane-system` (spec
   §7.2(2)). The one container created outside the managed project is the unnamed, `--rm`
-  host helper, labelled `io.mediaplane.helper`.
+  host helper, labelled `io.mediaplane.helper`. The one change to a `mediaplane-system`
+  container is Mediaplane's own membership of its project's wiring network: the runtime
+  connects only its own container, and only to an internal bridge network that the
+  managed project's Compose made as its wiring network.
 
 ## Consequences
 
@@ -94,6 +100,8 @@ bug in Mediaplane itself, or in something it runs, such as Compose.
     that the Docker daemon fetches, with the host's network.
   - An allowed call works on every container on the host, not just the stack's. The
     runtime's project check is what keeps Mediaplane to its own project.
+  - Network connect takes any container and any network. The runtime is what keeps it
+    to Mediaplane's own container and its project's internal wiring network.
 - **`-allowfrom` checks a name, not a container.** A container that joins the proxy's
   network with the alias `mediaplane` passes. Joining needs Docker access already, so
   this gives nothing to anyone who doesn't have it.

@@ -1,7 +1,7 @@
 # Threat model
 
 This is the threat model for Mediaplane as built today: M1, up to and including Slice 3a,
-and Slice 3d.
+and Slices 3d and 3b.
 It makes spec §7 concrete. To report a vulnerability, see [SECURITY.md](../../SECURITY.md).
 
 ## The one thing to know
@@ -16,7 +16,7 @@ that power. None of them removes it.
 | -------------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
 | The host                                     | Everything                                                            | Docker access is root on the host                          |
 | Generated API keys                           | `state/secrets.json`, `generated/.env` (both 0600) and `appdata/`     | They open the apps' APIs                                   |
-| The shared admin password                    | `state/secrets.json` (0600) or `admin.password`; a hash in `appdata/` | It opens qBittorrent today, and more apps from Slice 3b    |
+| The shared admin password                    | `state/secrets.json` (0600) or `admin.password`; a hash in `appdata/` | It opens qBittorrent, Sonarr, Radarr and Prowlarr          |
 | Your secrets: VPN key, Plex token, passwords | `secrets/` (0700), or environment variables                           | They are your accounts                                     |
 | App data                                     | `appdata/<app>/`                                                      | The apps' databases and settings, some holding credentials |
 | Your media                                   | The data folder                                                       | Your library                                               |
@@ -31,7 +31,10 @@ LAN or internet
 mediaplane project: the apps
   (qBittorrent inside Gluetun,
   with a VPN)
-
+  ▲
+  │ wiring network:
+  │ internal, no route out
+  │
 mediaplane-system project
   mediaplane
     │ internal network
@@ -45,8 +48,11 @@ host network, read-only mounts
 - **The Mediaplane container.**
   - It runs as a non-root user (`MEDIAPLANE_UID`), with a read-only root filesystem, no
     capabilities and `no-new-privileges`.
-  - Its only mount is the home. Its only network is internal, and reaches the proxy and
-    nothing else. It listens on nothing.
+  - Its only mount is the home. It listens on nothing.
+  - It is on two networks, both internal, so it has no route out: the proxy's, and the
+    stack's wiring network, which it joins to call the apps' APIs (see T14 and
+    [ADR 0011](../adr/0011-a-private-wiring-network.md)). It sets
+    `net.ipv4.ip_forward: 0`, so it cannot route between them.
   - You reach it with `docker exec`, which already needs Docker access on the host.
 - **The socket proxy.** It is the only container with the Docker socket. It forwards only
   the API calls Mediaplane makes, and only from the address the name `mediaplane` has on
@@ -75,6 +81,12 @@ host network, read-only mounts
   `compose.yaml` and `compose.override.yaml`, running `chown` as root on the appdata
   folder where the app mounts it. It belongs to the stack's project, and is removed when
   `chown` exits. Today only Seerr, which runs as uid 1000, needs it.
+- **The wiring.** `plan` and `apply` call the apps' APIs over the wiring network: from
+  the Mediaplane container, or run from source, from the host. Each request goes
+  straight to the app's container, through an HTTP agent of Mediaplane's own, so a proxy
+  in the environment (`NODE_USE_ENV_PROXY`) never sees a key. It carries the app's key in
+  a header (`X-Api-Key`, or a Bearer token for qBittorrent), never in the URL. Mediaplane
+  signs in to Sonarr, Radarr and Prowlarr with the shared login, to check it.
 - **vpn-check's probe.** `mediaplane vpn-check` runs
   `docker compose run --rm --no-deps -T --user 65534:65534 --entrypoint sh qbittorrent`
   with a short script: a throwaway container of qBittorrent's own image, as nobody, in
@@ -93,6 +105,9 @@ host network, read-only mounts
     socket.
   - Only their web UIs are published, bound as `network.bind` says. Everything else stays
     on the stack's own Docker network.
+  - The apps whose API Mediaplane calls (Sonarr, Radarr, Prowlarr, and qBittorrent,
+    through Gluetun with a VPN) are on the stack's wiring network too. It is internal:
+    it gives them no way out, which they have on their own network.
   - Before an app's first start, Mediaplane writes the files it reads when it starts:
     Sonarr's, Radarr's and Prowlarr's `config.xml`, qBittorrent's `qBittorrent.conf` and
     Gluetun's `auth/config.toml`. Each is written 0600, and only if absent.
@@ -110,7 +125,9 @@ Controls today:
 - No listener in M1, and the input is your own `stack.yaml`.
 - The proxy refuses `exec`, file copy, builds, prunes, every delete except of containers,
   and the system, swarm, secret, config and plugin APIs.
-- The runtime refuses any project but `mediaplane` or `mediaplane-<name>`.
+- The runtime refuses any project but `mediaplane` or `mediaplane-<name>`. It connects
+  only Mediaplane's own container, and only to its project's wiring network, which must
+  be internal.
 
 What remains:
 
@@ -127,13 +144,16 @@ Controls today:
 - qBittorrent asks for the shared admin login from its first start. Mediaplane writes
   the login into `qBittorrent.conf` before qBittorrent runs, so the image never starts
   with its temporary password. It asks on localhost too.
-- Sonarr, Radarr and Prowlarr ask for a login from the LAN too, by default
+- Sonarr, Radarr and Prowlarr ask for the shared admin login, which `apply` sets through
+  their API once they first start. They ask from the LAN too, by default
   (`security.login_on_lan`).
 - With `login_on_lan: false`, qBittorrent lets only your LAN subnet skip its login, and
   only while the web UIs are on the LAN. That subnet is `network.lan_subnet`, or else the
   subnets of the host's private addresses. Sonarr, Radarr and Prowlarr let any local
-  address in (see What remains). `network.lan_subnet` must be private (RFC 1918): a
-  public range, or `0.0.0.0/0`, is refused.
+  address in (see What remains), and take only the Host names Mediaplane lists: their
+  own name, and the addresses their web UI is published on. That stops a web page from
+  reaching them through a name it controls (DNS rebinding). `network.lan_subnet` must be
+  private (RFC 1918): a public range, or `0.0.0.0/0`, is refused.
 
 What remains:
 
@@ -141,10 +161,12 @@ What remains:
 - Until the wiring lands (Slices 6 and 7), Jellyfin's wizard and Seerr's setup are open
   to whoever reaches them first. Complete them right after the first `apply`, or keep
   `bind: localhost` until you have.
-- Sonarr, Radarr and Prowlarr have no user until Slice 3b creates the shared admin
-  there, or you do. Until then, with `login_on_lan: true` nobody can sign in, and with
-  `false` anyone on a local address gets in without a login. For them, "local" means
-  any private address, not just your LAN subnet.
+- With `login_on_lan: false`, anyone on a local address gets into Sonarr, Radarr and
+  Prowlarr without a login. For them, "local" means any private address, not just your
+  LAN subnet.
+- Between an app's first start and the wiring step a moment later, Sonarr, Radarr and
+  Prowlarr have no user: with `login_on_lan: true` nobody can sign in, and with `false`
+  a local address gets in anyway.
 
 ### T3. A cloud VM's private address is reachable from the internet
 
@@ -175,10 +197,22 @@ Controls today:
 - Mediaplane writes an app's pre-start files only inside its `appdata/<app>` folder. It
   refuses a path that leaves the folder, and a link on the way that leads outside it.
 
+- An app's answers to Mediaplane are read at most 5 MiB at a time, checked against what
+  Mediaplane expects, and never run or shown whole: only the app's own message about a
+  refusal is shown, cut to 200 characters, with every secret replaced.
+
 What remains:
 
 - vpn-check measures qBittorrent's side with qBittorrent's own image, so a compromised
   image, or files it writes in its own appdata, could make the check pass.
+- A compromised app on the wiring network can reach Mediaplane's container's address
+  there. Mediaplane listens on nothing in M1. The proxy is on another network, and
+  answers only the address the name `mediaplane` has there.
+- A compromised app can answer Mediaplane's calls with anything it likes, such as a
+  setting that looks right but isn't.
+- The apps' calls to each other, and Mediaplane's to them, are plain HTTP on Docker's own
+  networks, with keys in them. An app with Docker's default capabilities could try to
+  intercept another's traffic on a network they share.
 - The apps that handle media share the data folder, which hardlinks need, so a
   compromised one can change your media.
 - A running app could swap one of its folders for a link between Mediaplane's check and
@@ -194,6 +228,11 @@ Controls today:
 - Kept in 0600 files: `state/secrets.json`, inside a 0700 `state/`, and `generated/.env`.
 - Never in `stack.yaml` or `compose.yaml`.
 - Replaced with `***` in errors. Change records hold names, never values.
+- `state/resources.json` (0600) holds, for each resource Mediaplane manages in an app,
+  its id, name and managed fields, and the names of its secrets: never a value or a
+  hash. Secrets are checked by using them, such as signing in, so none needs keeping.
+- An app's error message, as Mediaplane shows it, has every key and password replaced
+  with `***`, and never includes what was sent: a request body is never shown or kept.
 - Given to Compose in its environment or in the 0600 `generated/.env`, never on its
   command line.
 - Gluetun's control key reaches vpn-check's probe on its standard input, and the probe
@@ -289,10 +328,10 @@ Controls today:
 
 What remains:
 
-- One password opens every app that uses it: qBittorrent today, Sonarr, Radarr and
-  Prowlarr from Slice 3b, and Jellyfin from Slice 6. A leak from one is a leak for all.
-- From Slice 3b, Sonarr, Radarr and Prowlarr give their password hash to anyone who
-  holds their API key. Prowlarr holds Sonarr's and Radarr's keys from Slice 5.
+- One password opens every app that uses it: qBittorrent, Sonarr, Radarr and Prowlarr
+  today, and Jellyfin from Slice 6. A leak from one is a leak for all.
+- Sonarr, Radarr and Prowlarr give their password hash to anyone who holds their API
+  key. Prowlarr holds Sonarr's and Radarr's keys from Slice 5.
 - Changing `admin.username`, `admin.password`, `login_on_lan`, `network.bind` or
   `network.lan_subnet` after qBittorrent's first start doesn't reach qBittorrent, whose
   file is written only once. `mediaplane credentials` shows the new login all the same.
@@ -335,12 +374,16 @@ Controls today:
   exits 1 on a leak or a VPN that is down.
 - `plan` warns every time qBittorrent runs without the VPN
   (`apps.qbittorrent.vpn: false`).
+- `apply`'s verify step runs vpn-check's checks, without the address comparison, after
+  every apply that changes something: qBittorrent's network, Gluetun's health and its
+  own report, and the route into the tunnel.
+- When Gluetun starts again on its own, qBittorrent keeps the old, empty network until it
+  restarts too. That fails closed, and vpn-check reports it. `apply` restarts
+  qBittorrent then, and when it starts a stopped Gluetun.
 
 What remains:
 
-- vpn-check runs only when you run it. Alerts come in M3.
-- When Gluetun restarts on its own, qBittorrent keeps the old, empty network until it
-  restarts too. That fails closed, and vpn-check reports it, but `apply` doesn't.
+- vpn-check runs only when you run it, or `apply` does. Alerts come in M3.
 - The address comparison asks one IP-echo service; one that answers wrongly could hide a
   leak. The checks before it don't depend on that service.
 - vpn-check measures IPv4 only. An IPv6 egress check waits for Docker's IPv6 to be turned
@@ -392,6 +435,44 @@ What remains:
   (`docker context use`, `DOCKER_CONTEXT`) that points at another host isn't noticed,
   and the host side is then this machine's.
 
+### T14. Mediaplane's container gets a way out, or a way in
+
+Controls today:
+
+- The apps' APIs are reached over the stack's wiring network, which is internal
+  ([ADR 0011](../adr/0011-a-private-wiring-network.md)). Mediaplane's container is on it
+  and on the proxy's network, and on nothing else, so it has no route out: the
+  end-to-end test checks that it has no default route.
+- The runtime connects only Mediaplane's own container, only to the internal wiring
+  network the managed project's Compose made, and never takes it off any other network.
+  It reads the network first, strictly: it must be internal, a bridge, and carry this
+  project's Compose labels for `wiring`. Joining and leaving then act on the ID it read,
+  not on the name.
+- Mediaplane's container has `net.ipv4.ip_forward: 0`, so it cannot pass packets between
+  the proxy's network and the wiring network. Without it, a container on the wiring
+  network that holds `NET_ADMIN` could route through Mediaplane's to the proxy. Only the
+  IPv4 key is set: neither network has IPv6, and the IPv6 key stops a container starting
+  on a host without IPv6.
+- The apps keep their own network for their own traffic. Gluetun counts the wiring
+  network as local, so its firewall lets Mediaplane reach qBittorrent's port, and its
+  tunnel is unchanged: the kill-switch test checks both.
+- Joining needs no Docker API call that the proxy didn't already allow.
+
+What remains:
+
+- The proxy still lets Mediaplane create containers with any network, so this is
+  defence in depth, not a wall: a compromised Mediaplane can still reach anything the
+  host can.
+- Like any Docker network, the wiring network reaches the host at its gateway address,
+  where the host's own services listen.
+- "Offline" means no route of its own. Mediaplane holds the apps' keys, and the apps on
+  the wiring network can fetch for it: qBittorrent's add-by-URL, the Servarr apps' test
+  endpoints, and Gluetun's HTTP proxy or Shadowsocks, if `apps.gluetun.env` turns them
+  on (they listen on every Gluetun interface).
+- Docker answers a name from every network a container is on. Only your
+  `compose.override.yaml` could put a container called `socket-proxy` on the wiring
+  network; it would then compete with the proxy for that name.
+
 ## What the proxy does not stop
 
 The proxy's allow-list matches the HTTP method and the path, never the request body or
@@ -408,8 +489,9 @@ exception: it reads bind mounts, and nothing else. So:
 - **`images/create` can fetch a URL.** It is the pull endpoint, and with `fromSrc` it
   imports an image from a URL that the Docker daemon fetches, with the host's network.
 - **An allowed call works on any container.** Stop and delete reach every container on
-  the host, not just the stack's. The runtime's project check is what keeps Mediaplane to
-  its own project.
+  the host, not just the stack's, and network connect takes any container and any
+  network. The runtime's checks are what keep Mediaplane to its own project, and to its
+  own container on the wiring network.
 - **`-allowfrom=mediaplane` checks a DNS name,** not a container identity.
 - **The socket's `:ro` restricts nothing.** A read-only bind of a socket still lets the
   holder send any request. It is a habit that costs nothing.
