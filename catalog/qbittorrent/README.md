@@ -81,6 +81,10 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   `network.bind` or `network.lan_subnet`.
   - `mediaplane credentials` shows the new login all the same, so it and qBittorrent's
     differ. Change the login in qBittorrent's web UI too, under Tools, Options, Web UI.
+  - The same goes for who may skip the login. After changing `security.login_on_lan`,
+    `network.bind` or `network.lan_subnet`, set "Bypass authentication for clients in
+    whitelisted IP subnets" there too. Mediaplane fills it with your LAN subnet only
+    while `login_on_lan` is `false` and the web UIs are on your LAN.
   - Switching between a password of your own and the generated one is such a change too.
     Removing `admin.password` brings back the password Mediaplane generated before, if
     it generated one: it keeps it, and never generates another.
@@ -89,19 +93,21 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 - **Set up before Slice 3a.** If qBittorrent first started before Mediaplane wrote its
   `qBittorrent.conf`, it runs with the image's own file. That file has no API key, and
   until you set a password, qBittorrent makes a new temporary one at every start. `plan`
-  stops with `qbittorrent.not-seeded`. To fix it, stop qBittorrent, delete the file, and
-  apply again: Mediaplane writes a new one before qBittorrent starts. You lose the
-  settings kept in that file, such as speed limits. Your torrents stay.
+  stops with `qbittorrent.not-seeded`. To fix it, stop qBittorrent, move the file
+  aside, and apply again: Mediaplane writes a new one before qBittorrent starts. You
+  lose the settings kept in that file, such as speed limits. Your torrents stay.
 
   ```bash
   docker stop mediaplane-qbittorrent-1
-  rm /opt/mediaplane/appdata/qbittorrent/qBittorrent/qBittorrent.conf
+  cd /opt/mediaplane/appdata/qbittorrent/qBittorrent
+  mv qBittorrent.conf qBittorrent.conf.before-3a
   mediaplane apply
   ```
 
-  Stop it first: qBittorrent writes the file again when it stops. Use your own home, and
-  the container name `docker ps` shows. If `rm` is refused, use `sudo rm`. Slice 4 does
-  this for you.
+  Stop it first: qBittorrent writes the file again when it stops. Use your own home,
+  and the container name `docker ps` shows. If `mv` is refused, use `sudo mv`. Then
+  sign in with what `mediaplane credentials` shows. The old file keeps your settings,
+  to enter again in qBittorrent. Slice 4 does this for you.
 
   If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the
   stack's `user:`, not to the user Mediaplane runs as (`MEDIAPLANE_UID` in its

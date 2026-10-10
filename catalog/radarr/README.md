@@ -93,23 +93,25 @@ The wiring arrives in Slices 3b to 7 (see the [roadmap](../../docs/plans/m1-road
     From Slice 3b, `apply` sets the shared admin login instead.
 - **Set up before Slice 3a.** If Radarr first started before Mediaplane wrote its
   `config.xml`, the file has no API key, and `plan` stops with `radarr.not-seeded`. To
-  fix it, stop Radarr, delete the file, and apply again: Mediaplane writes a new one
-  before Radarr starts. You lose the settings kept in that file, such as a URL base you
-  set in Radarr. Your library and history stay.
+  fix it, stop Radarr, move the file aside, and apply again: Mediaplane writes a new
+  one before Radarr starts. You lose the settings kept in that file, such as a URL
+  base you set in Radarr. Your library and history stay.
 
   ```bash
   docker stop mediaplane-radarr-1
-  rm /opt/mediaplane/appdata/radarr/config.xml
+  cd /opt/mediaplane/appdata/radarr
+  mv config.xml config.xml.before-3a
   mediaplane apply
   ```
 
-  Use your own home, and the container name `docker ps` shows. If `rm` is refused, use
-  `sudo rm`. Slice 4 does this for you.
+  Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
+  `sudo mv`. The old file keeps your settings, to enter again in Radarr. Slice 4 does
+  this for you.
 
   If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the
   stack's `user:`, not to the user Mediaplane runs as (`MEDIAPLANE_UID` in its
   container). Give the folder to Mediaplane's user, with
   `sudo chown <uid>:<gid> /opt/mediaplane/appdata/radarr` and the ids from
   `deploy/.env`, then apply again. Radarr takes the folder back when it starts. Or
-  delete the whole folder to start Radarr afresh: it loses its database and settings,
+  delete `appdata/radarr` to start Radarr afresh: it loses its database and settings,
   but not your media.

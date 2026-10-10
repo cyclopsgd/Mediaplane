@@ -120,7 +120,7 @@ each one, or corrects it in the catalog:
 | Gluetun's built-in health check with `depends_on: service_healthy`. It needs a working tunnel, so it is verified with S3d's local WireGuard server | S3d |
 | `FIREWALL_OUTBOUND_SUBNETS` accepting a comma-separated list | S3d |
 | qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace | S3d |
-| The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs) | S3d |
+| The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs) | S3b |
 | Seerr running as uid 1000 with `init: true`. **Verified on 2026-10-09** by `test/e2e/apply.e2e.test.ts` and `test/e2e/deploy.e2e.test.ts`: Seerr, rendered with `init: true`, runs healthy after apply's ownership step gives its appdata to uid 1000 | S2b (done) |
 
 ## Inputs for later slices from the reviews

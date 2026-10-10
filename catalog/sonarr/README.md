@@ -84,23 +84,25 @@ The wiring arrives in Slices 3b to 7 (see the [roadmap](../../docs/plans/m1-road
     From Slice 3b, `apply` sets the shared admin login instead.
 - **Set up before Slice 3a.** If Sonarr first started before Mediaplane wrote its
   `config.xml`, the file has no API key, and `plan` stops with `sonarr.not-seeded`. To
-  fix it, stop Sonarr, delete the file, and apply again: Mediaplane writes a new one
-  before Sonarr starts. You lose the settings kept in that file, such as a URL base you
-  set in Sonarr. Your library and history stay.
+  fix it, stop Sonarr, move the file aside, and apply again: Mediaplane writes a new
+  one before Sonarr starts. You lose the settings kept in that file, such as a URL
+  base you set in Sonarr. Your library and history stay.
 
   ```bash
   docker stop mediaplane-sonarr-1
-  rm /opt/mediaplane/appdata/sonarr/config.xml
+  cd /opt/mediaplane/appdata/sonarr
+  mv config.xml config.xml.before-3a
   mediaplane apply
   ```
 
-  Use your own home, and the container name `docker ps` shows. If `rm` is refused, use
-  `sudo rm`. Slice 4 does this for you.
+  Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
+  `sudo mv`. The old file keeps your settings, to enter again in Sonarr. Slice 4 does
+  this for you.
 
   If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the
   stack's `user:`, not to the user Mediaplane runs as (`MEDIAPLANE_UID` in its
   container). Give the folder to Mediaplane's user, with
   `sudo chown <uid>:<gid> /opt/mediaplane/appdata/sonarr` and the ids from
   `deploy/.env`, then apply again. Sonarr takes the folder back when it starts. Or
-  delete the whole folder to start Sonarr afresh: it loses its database and settings,
+  delete `appdata/sonarr` to start Sonarr afresh: it loses its database and settings,
   but not your media.

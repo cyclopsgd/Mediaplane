@@ -68,8 +68,13 @@ describe('apply against real Docker', () => {
         ],
       );
       expect((await stat(join(home, 'appdata', 'seerr'))).uid).toBe(1000);
+      // The apps rewrite their files readable by all, so appdata/ itself is private.
+      // Every app above started healthy all the same: Docker mounts their folders as root.
+      expect((await stat(join(home, 'appdata'))).mode & 0o777).toBe(0o700);
 
-      // Slice 3a: the files Mediaplane wrote before the apps first started.
+      // Slice 3a: the files Mediaplane wrote before the apps first started. Each
+      // assertion that sees a key, the password or a log only says whether it passed,
+      // so a failure prints none of them into the public CI log.
       expect(
         first.plan.files
           .filter((f) => f.prestart === true)
@@ -78,9 +83,12 @@ describe('apply against real Docker', () => {
       const store = await readSecretStore(home);
       for (const app of ['prowlarr', 'radarr', 'sonarr']) {
         const xml = await readFile(join(home, 'appdata', app, 'config.xml'), 'utf8');
-        expect(xml).toContain(
-          `<ApiKey>${store.apps[app]?.apiKey ?? 'none stored'}</ApiKey>`,
-        );
+        const key = store.apps[app]?.apiKey;
+        expect(key !== undefined, `no ${app} key stored`).toBe(true);
+        expect(
+          xml.includes(`<ApiKey>${key ?? ''}</ApiKey>`),
+          `${app} config.xml lacks the stored key`,
+        ).toBe(true);
       }
 
       // qBittorrent takes the shared login that credentials shows, and its own key.
@@ -98,18 +106,34 @@ describe('apply against real Docker', () => {
       const signIn = await fetch('http://127.0.0.1:8080/api/v2/auth/login', {
         method: 'POST',
         body: new URLSearchParams({ username: login.username, password: login.password }),
+        signal: AbortSignal.timeout(10_000),
       });
       expect(signIn.status).toBe(204);
       const version = await fetch('http://127.0.0.1:8080/api/v2/app/version', {
         headers: { authorization: `Bearer ${store.apps.qbittorrent?.apiKey ?? ''}` },
+        signal: AbortSignal.timeout(10_000),
       });
       expect(version.status).toBe(200);
+      // Without the key, the same request is refused: the 200 above is the key's doing.
+      const anonymous = await fetch('http://127.0.0.1:8080/api/v2/app/version', {
+        signal: AbortSignal.timeout(10_000),
+      });
+      expect(anonymous.status).toBe(403);
       const qbittorrent = containers.find((c) => c.service === 'qbittorrent');
       const log = await nodeExec('docker', ['logs', qbittorrent?.id ?? 'missing'], {
         cwd: '/',
       });
-      expect(log.code, log.stderr).toBe(0);
-      expect(log.stdout + log.stderr).not.toMatch(/temporary password/i);
+      expect(log.code, 'docker logs failed for qbittorrent').toBe(0);
+      const text = log.stdout + log.stderr;
+      // The log has qBittorrent's start-up lines, so the check below reads something.
+      expect(
+        text.includes('To control qBittorrent'),
+        "qBittorrent's log lacks its start-up lines",
+      ).toBe(true);
+      expect(
+        /temporary password/i.test(text),
+        'qBittorrent logged a temporary password',
+      ).toBe(false);
 
       const second = await apply({
         ...options,

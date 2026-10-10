@@ -259,11 +259,14 @@ Each item is a message you may see, then what to do.
 - `EACCES` on a file in the home
 
   Give `state/` and `generated/` to `MEDIAPLANE_UID`, using the ids in `deploy/.env`.
-  Leave `appdata/` alone: some apps need their own owner. For example:
+  Don't change the owner of all of `appdata/`: some apps need their own. For example:
 
   ```bash
   sudo chown -R 1000:1000 /opt/mediaplane/state /opt/mediaplane/generated
   ```
+
+  For `cannot create …/appdata/… (EACCES)`, see that item below: it names the one
+  folder to give back.
 
 - `file … is missing, empty or unreadable`, for a secret file outside the home
 
@@ -299,6 +302,15 @@ Each item is a message you may see, then what to do.
   Mediaplane's user can't write in the app's folder, usually because it belongs to the
   stack's `user:`, so apply can't write the app's settings file there. Its README, under
   "Set up before Slice 3a", says what to do.
+
+- `EPERM: operation not permitted, chmod '…/appdata'`
+
+  `appdata/` belongs to another user, so Mediaplane can't keep it private (0700). Give
+  the folder itself, not what is in it, to `MEDIAPLANE_UID`:
+
+  ```bash
+  sudo chown 1000:1000 /opt/mediaplane/appdata
+  ```
 
 - `the admin password has not been generated yet`
 

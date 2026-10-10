@@ -180,13 +180,15 @@ Controls today:
 - The files apps read at their first start are written 0600, never half-written, and
   never over an existing file. `plan` lists them without their content, and change
   records hold only their paths.
+- `appdata/` holds credentials too: the apps' keys, and qBittorrent's password hash.
+  The apps rewrite their own files readable by every user on the host (0644), so
+  Mediaplane keeps `appdata/` itself private (0700), as it does `state/`.
 
 What remains:
 
 - Not encrypted at rest, so use full-disk encryption.
-- `appdata/` holds credentials too: the apps' keys, and qBittorrent's password hash.
-  qBittorrent rewrites its file readable by every user on the host (0644). Treat
-  `appdata/` as sensitive, and keep other users out of the home.
+- Root, and anyone with Docker access, can still read `appdata/`. Treat it as
+  sensitive in backups.
 
 ### T6. Another user on the host uses Mediaplane's Docker access
 
@@ -270,8 +272,9 @@ What remains:
   holds their API key. Prowlarr holds Sonarr's and Radarr's keys from Slice 5.
 - Changing `admin.username`, `admin.password`, `login_on_lan`, `network.bind` or
   `network.lan_subnet` after qBittorrent's first start doesn't reach qBittorrent, whose
-  file is written only once. `mediaplane credentials` shows the new login all the same. Change it in
-  qBittorrent's web UI too, until Slice 3c manages those settings through its API.
+  file is written only once. `mediaplane credentials` shows the new login all the same.
+  Change it in qBittorrent's web UI too, until Slice 3c manages those settings through
+  its API.
 - There is no way yet to rotate the generated password (Slice 4).
 
 ### T11. Something on the stack's network uses Gluetun's control server

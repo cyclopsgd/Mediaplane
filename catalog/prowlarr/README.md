@@ -96,23 +96,25 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
     From Slice 3b, `apply` sets the shared admin login instead.
 - **Set up before Slice 3a.** If Prowlarr first started before Mediaplane wrote its
   `config.xml`, the file has no API key, and `plan` stops with `prowlarr.not-seeded`. To
-  fix it, stop Prowlarr, delete the file, and apply again: Mediaplane writes a new one
-  before Prowlarr starts. You lose the settings kept in that file, such as a URL base you
-  set in Prowlarr. Your indexers stay.
+  fix it, stop Prowlarr, move the file aside, and apply again: Mediaplane writes a new
+  one before Prowlarr starts. You lose the settings kept in that file, such as a URL
+  base you set in Prowlarr. Your indexers stay.
 
   ```bash
   docker stop mediaplane-prowlarr-1
-  rm /opt/mediaplane/appdata/prowlarr/config.xml
+  cd /opt/mediaplane/appdata/prowlarr
+  mv config.xml config.xml.before-3a
   mediaplane apply
   ```
 
-  Use your own home, and the container name `docker ps` shows. If `rm` is refused, use
-  `sudo rm`. Slice 4 does this for you.
+  Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
+  `sudo mv`. The old file keeps your settings, to enter again in Prowlarr. Slice 4 does
+  this for you.
 
   If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the
   stack's `user:`, not to the user Mediaplane runs as (`MEDIAPLANE_UID` in its
   container). Give the folder to Mediaplane's user, with
   `sudo chown <uid>:<gid> /opt/mediaplane/appdata/prowlarr` and the ids from
   `deploy/.env`, then apply again. Prowlarr takes the folder back when it starts. Or
-  delete the whole folder to start Prowlarr afresh: it loses its database and settings,
+  delete `appdata/prowlarr` to start Prowlarr afresh: it loses its database and settings,
   your indexers included.

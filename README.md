@@ -16,8 +16,8 @@ Compose and wires the apps together for you.**
 >   setting up by hand. Jellyfin's wizard and Seerr's setup are open to anyone who
 >   can reach them until you complete them, so complete them first. qBittorrent has
 >   the shared admin login from its first start (`mediaplane credentials` shows it).
->   Sonarr, Radarr and Prowlarr ask for a login that doesn't exist yet; their READMEs
->   say how to set one.
+>   Sonarr, Radarr and Prowlarr ask for a login that doesn't exist yet (Slice 3b
+>   creates it); their READMEs say how to set one.
 > - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
 >   your LAN (`network.bind: lan`) or keep them on this machine (`localhost`).
 >
@@ -177,7 +177,7 @@ Plan: 6 files to write, 7 containers to change, 6 secrets to generate.
 $ mediaplane apply --yes
   … the same plan …
   done    secrets: generated admin.password, prowlarr.apiKey, qbittorrent.apiKey, radarr.apiKey, seerr.apiKey, sonarr.apiKey
-  done    files: wrote generated/compose.yaml and generated/.env; created appdata/prowlarr/config.xml, appdata/qbittorrent/qBittorrent/qBittorrent.conf, appdata/radarr/config.xml, appdata/sonarr/config.xml
+  done    files: wrote generated/compose.yaml and generated/.env; created …
 Pulling images (the first time can take several minutes)…
   done    images: images present
   done    appdata ownership: seerr → 1000:1000

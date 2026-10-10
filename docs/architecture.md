@@ -207,7 +207,8 @@ lock
 │  ├─ secrets.json   0600
 │  ├─ history/
 │  └─ lock
-└─ appdata/<app>/    the apps'
+└─ appdata/          0700
+   └─ <app>/         the apps'
 ```
 
 - **`stack.yaml`** is the only file you normally edit
@@ -225,7 +226,9 @@ lock
 - **`appdata/<app>/`** is each app's. Mediaplane creates the folder, gives it to the
   app's user where the app needs that (Seerr), and writes its pre-start files once. The
   rest is the app's. It holds keys and qBittorrent's password hash, so treat it as
-  sensitive.
+  sensitive. The apps rewrite their own files readable by all, so Mediaplane keeps
+  `appdata/` itself private (0700). Docker mounts each app's folder as root, so the apps
+  don't need to pass through it.
 - **The home's filesystem must support hard links,** because the lock, `init`'s
   `stack.yaml` and the pre-start files are created with one.
 

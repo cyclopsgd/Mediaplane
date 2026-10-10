@@ -535,7 +535,7 @@ in `compose.override.yaml` is therefore wired automatically.
 
 | Command | Purpose |
 |---|---|
-| `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks the flags before the first prompt, and asks again after a bad answer. It never overwrites an existing file |
+| `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt (on a terminal, `--vpn-addresses` and `--lan-subnet` wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file |
 | `plan` | Show what `apply` would change, including drift. Makes no changes |
 | `apply` | Converge on `stack.yaml` (§5) |
 | `status [app]` | Container health, VPN state, and the last apply's outcome |
@@ -701,9 +701,11 @@ Rules:
   networks and allowed hosts are set through env vars. Changing one makes
   Compose recreate the container; Mediaplane never changes these through the
   API.
-- **Pre-start files.** `config.xml` and `qBittorrent.conf` are written only
-  when they do not exist yet. After first start the API is the only write path,
-  because the apps rewrite their own files.
+- **Pre-start files.** `config.xml` (Sonarr, Radarr and Prowlarr),
+  `qBittorrent.conf` and Gluetun's `auth/config.toml` are written only when they
+  do not exist yet. After first start the API is the only write path, because
+  the apps rewrite their own files. Gluetun doesn't rewrite its file, and reads
+  it only when it starts.
 
 ### 6.5 Upstream version floor
 
