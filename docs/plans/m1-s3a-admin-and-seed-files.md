@@ -28,16 +28,19 @@ themselves.
     `<app>.not-seeded` and the steps to fix it.
   - `apply` writes the absent ones in its `files` step, before any pull or start: all at
     once, 0600, never over an existing file, with their folders created
-    (`apply/prestart.ts`).
+    (`apply/prestart.ts`). It looks first (`lstat`) and writes only where nothing is, so
+    it never touches a folder the app has taken over.
 - **`mediaplane credentials [app]` (spec §5.2).** The engine's `credentials()` loads the
   stack, the store and the host facts, and returns the login and each web UI's address.
   Each catalog app says whether its login is the shared one today or which slice brings
   it (`login`).
 - **The network inputs (roadmap, S3).** Apps learn whether their web UIs are on the LAN
-  (`AppContext.publishesOnLan`). Gluetun's outbound subnets, Servarr's trusted networks and
-  qBittorrent's login whitelist are set only then. `lan_subnet` must be private, a cloud VM
-  trusts no subnet unless you name one, and `plan` warns when the UIs are on the LAN but
-  no subnet is known.
+  (`AppContext.publishesOnLan`), and which LAN subnets to trust
+  (`AppContext.lanClientSubnets`: the LAN subnets while the UIs are on the LAN, otherwise
+  none). Gluetun's outbound subnets, Servarr's trusted networks and qBittorrent's login
+  whitelist all read `lanClientSubnets`. `lan_subnet` must be private, a cloud VM trusts no
+  subnet unless you name one, and `plan` warns when the UIs are on the LAN but no subnet
+  is known.
 
 **Tech Stack:** as Slice 2c (Node 24, pnpm 10.15.0, TypeScript 6.0, Zod 4, `yaml` 2,
 Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no new image:
@@ -128,7 +131,8 @@ These are added or restated for this slice:
   `mediaplane-e2e-<pid>[-<suffix>]`, temporary folders `mediaplane-e2e-…`.
 - **Temporary folders in unit tests** come from `tempDir()` or `tempDirSync()` in
   `@mediaplane/engine/testing` (from Task 1 on), so they are removed when the test ends.
-  Never call `mkdtemp` in a unit test.
+  No new `mkdtemp` in a unit test; the existing ones in `scripts/` and `deploy/` clean up
+  after themselves.
 - **Coverage thresholds are never lowered.** `vitest.config.ts` keeps 90% lines,
   functions, branches and statements on `packages/engine/src`.
 - **Commits** use Conventional Commits. Each message ends with exactly one trailer line,
@@ -165,17 +169,23 @@ The spec and the rulings leave these open. Each is marked `Decision:` where it i
    before an app uses it, so it exists before any app needs it (Task 4).
 6. `plan` renders the pre-start files from a preview of the secrets apply would generate,
    in memory, to learn their paths. It shows and keeps no content; apply renders them
-   again with the keys it saves (Task 5).
+   again with the keys it saves. Both call one helper, `prestartFilesFor` (Task 5).
 7. An existing pre-start file that Mediaplane can't read (the app owns it after its first
    start) counts as seeded: there is no way to tell, and installs from before S3a are the
-   owner's own dev installs only (Task 5).
+   owner's own dev installs only (Task 5). Apply leaves it alone the same way (Task 6).
 8. Pre-start files are written with the existing `writeFileExclusive` (exclusive creation
    through a hard link: never over an existing file, and never half-written), which the
-   home already needs for its lock (Task 6).
+   home already needs for its lock. It makes a temporary file next to the target, so apply
+   first `lstat`s each path and writes only when that says ENOENT. Anything else (a file,
+   EACCES, EPERM) is the app's, and skipped: after the first start the app's folder may
+   be closed to Mediaplane (Task 6).
 9. The `config-file` credential step is removed from the catalog types: `configFiles(ctx)`
    replaces it (Task 8).
 10. qBittorrent's `AuthSubnetWhitelist` follows the same rule as Servarr's trusted
     networks: only with `login_on_lan: false` and the web UI published on the LAN (Task 8).
+    The rule lives in one place: the resolver's `AppContext.lanClientSubnets`, which is
+    `lanSubnets` while the web UIs are on the LAN and `[]` otherwise (Task 3). Gluetun,
+    Servarr and qBittorrent read only that.
 11. `credentials` shows a generated password in its human output, as spec §5.2 and §6.1
     say ("never printed in `--json` unless `--reveal` is given"; "`mediaplane credentials`
     shows them"). Your own password, from `admin.password`, is shown only with `--reveal`.
@@ -190,9 +200,11 @@ The spec and the rulings leave these open. Each is marked `Decision:` where it i
     it works before the stack is up (Task 9).
 14. `init`'s question order is: media server, data folder, VPN provider, WireGuard address
     (with a provider), `lan` or `localhost`, LAN subnet (with `lan`), login on the LAN,
-    admin user name, generate the password or name a file. Without a terminal, `--bind lan`
-    with no `--lan-subnet` writes no subnet (plan detects it), except on a cloud VM, where
-    init refuses, as plan would. `--admin-password-file` must be a path inside the home
+    admin user name, generate the password or name a file. On a cloud VM, init never
+    offers the subnet it sees (a cloud VM's private network is not a LAN): you type it.
+    Without a terminal, `--bind lan` with no `--lan-subnet` writes no subnet (plan detects
+    it), except on a cloud VM, where init refuses, as plan would. `--admin-password-file`
+    must be a path inside the home, and `--vpn-addresses` needs `--vpn-provider`
     (Task 10).
 15. The S3a end-to-end checks extend the existing apply test's stack instead of starting a
     second one, which saves about three minutes on each CI runner (Task 11).
@@ -204,20 +216,23 @@ packages/engine/src/
 ├── testing/temp.ts (+test)          (new) tempDir, tempDirSync
 ├── testing/fakes.ts                 (changed) a pull that answers in sequence
 ├── apply/pull.ts (+test)            (new) pullImages: retries transient errors
-├── apply/prestart.ts (+test)        (new) writePrestartFiles
+├── apply/prestart.ts (+test)        (new) writePrestartFiles, only where lstat
+│                                          finds nothing
 ├── apply/apply.ts                   (changed) pull retry, pre-start files, sleep
 ├── host/facts.ts                    (changed) isPrivateSubnet
 ├── config/schema.ts                 (changed) private lan_subnet, admin rules
 ├── config/secrets.ts                (changed) admin.password-too-short
-├── catalog/types.ts                 (changed) publishesOnLan, ConfigFile,
-│                                             ConfigFileContext, configFiles, login;
+├── catalog/types.ts                 (changed) publishesOnLan, lanClientSubnets,
+│                                             ConfigFile, ConfigFileContext,
+│                                             configFiles, login;
 │                                             no more config-file step
-├── resolver/resolve.ts              (changed) lanSubnets on a cloud VM, publishesOnLan
+├── resolver/resolve.ts              (changed) lanSubnets on a cloud VM,
+│                                             publishesOnLan, lanClientSubnets
 ├── secrets/admin.ts (+test)         (new) adminPasswordToGenerate, adminLogin
 ├── secrets/store.ts                 (changed) shared.adminPassword
 ├── secrets/generate.ts              (changed) the 'password' kind, the admin password
 ├── secrets/values.ts                (changed) secretsToGenerate lists admin.password
-├── render/prestart.ts (+test)       (new) renderPrestartFiles
+├── render/prestart.ts (+test)       (new) renderPrestartFiles, prestartFilesFor
 ├── plan/prestart.ts (+test)         (new) planPrestartFiles, <app>.not-seeded
 ├── plan/files.ts                    (changed) FileChange.prestart
 ├── plan/plan.ts                     (changed) pre-start files in the plan
@@ -311,6 +326,9 @@ so a test only has to bring its project down in its own `finally`, which runs fi
   - `packages/engine/src/testing/fakes.test.ts`;
   - `packages/engine/src/util/atomic.test.ts`, `util/fs.test.ts`.
 - Modify: `test/e2e/helpers.ts`, `test/e2e/apply.e2e.test.ts`, `test/e2e/plan.e2e.test.ts`
+- Leave alone: `scripts/bundle.test.ts`, `scripts/docs.test.ts`, `scripts/root.test.ts`
+  and `deploy/deploy.test.ts` keep their `mkdtemp`: they already clean up after
+  themselves.
 
 **Interfaces:**
 - **Consumes:** Vitest's `onTestFinished`.
@@ -435,10 +453,9 @@ sed -i -E \
   packages/engine/src/secrets/values.test.ts packages/engine/src/state/lock.test.ts \
   packages/engine/src/testing/fakes.test.ts packages/engine/src/util/atomic.test.ts \
   packages/engine/src/util/fs.test.ts
-grep -rn "mkdtemp" packages --include=*.test.ts
 ```
 
-Expected: the `grep` prints nothing.
+The imports still name `mkdtemp` and `tmpdir` until Step 7 removes them.
 
 - [ ] **Step 7: Fix the imports**
 
@@ -522,10 +539,16 @@ last relative (`./` or `../`) import, or, in the CLI files, as shown.
   `import { chmod, writeFile }`; delete the `tmpdir` import; add
   `import { tempDir } from '../testing/temp';`.
 
-Run: `pnpm typecheck && pnpm lint`
+Run:
 
-Expected: both pass. A leftover unused import is reported by ESLint
-(`no-unused-vars`) with its file and line: remove it.
+```bash
+pnpm typecheck && pnpm lint
+grep -rnE "mkdtemp(Sync)?\(" packages --include=*.test.ts
+```
+
+Expected: both checks pass, and the `grep` prints nothing: no unit test in `packages`
+calls `mkdtemp` or `mkdtempSync` any more. A leftover unused import is reported by
+ESLint (`no-unused-vars`) with its file and line: remove it.
 
 - [ ] **Step 8: Clean up in the end-to-end tests**
 
@@ -948,11 +971,18 @@ The fourth item, Mediaplane's own network in `TRUSTEDNETWORKS` (R12), waits for 
 
 A Gluetun port published on localhost works with no outbound subnet, because Docker's
 proxy reaches it from the bridge's own subnet. A LAN client keeps its own address through
-Docker's DNAT, so Gluetun's firewall must let it back out.
+Docker's DNAT, so Gluetun's firewall must let it back out. This was checked by hand on the
+pinned image; Slice 3d's end-to-end test checks it (Task 12 adds that to the roadmap).
 
 Decision: the warning comes from the catalog's `validate` hooks. Here it is Gluetun's: the
 LAN can't reach qBittorrent through its firewall. Task 8 adds qBittorrent's, for its login
 whitelist.
+
+Decision: the trust rule ("only while the web UIs are on the LAN") lives in the resolver,
+as `AppContext.lanClientSubnets`: `lanSubnets` when `publishesOnLan`, otherwise `[]`. Every
+catalog site that trusts LAN clients reads that field, never `lanSubnets` with its own
+`publishesOnLan` check: Servarr's trusted networks and Gluetun's outbound subnets here,
+qBittorrent's login whitelist in Task 8.
 
 **Files:**
 - Modify: `packages/engine/src/host/facts.ts`, `packages/engine/src/config/schema.ts`,
@@ -968,6 +998,8 @@ whitelist.
 - **Produces:**
   - `isPrivateSubnet(cidr: string): boolean` in `host/facts.ts`;
   - `AppContext.publishesOnLan: boolean`: `network.bind` is `lan` or `all`;
+  - `AppContext.lanClientSubnets: string[]`: `publishesOnLan ? lanSubnets : []`, the
+    subnets whose clients may be trusted (login skipped, let through Gluetun's firewall);
   - `ResolvedStack.lanSubnets` (and `AppContext.lanSubnets`) is `[]` on a cloud VM
     without `network.lan_subnet`;
   - the warning `network.no-lan-subnet` (path `network.lan_subnet`).
@@ -1048,13 +1080,21 @@ Add to `describe('resolveStack: binding', …)` in
     );
   });
 
-  it('tells the apps whether their web UIs are published on the LAN', () => {
-    const onLan = (base: string) =>
-      app(resolve('  sonarr: {}\n  qbittorrent: {}\n', { base }), 'sonarr')?.context
-        .publishesOnLan;
-    expect(onLan(BASE)).toBe(false);
-    expect(onLan(lan)).toBe(true);
-    expect(onLan(BASE.replace('bind: localhost', 'bind: all'))).toBe(true);
+  it('tells the apps whether their web UIs are on the LAN, and which clients to trust', () => {
+    const contextFor = (base: string) =>
+      app(resolve('  sonarr: {}\n  qbittorrent: {}\n', { base }), 'sonarr')?.context;
+    expect(contextFor(BASE)).toMatchObject({
+      lanSubnets: ['192.168.1.0/24'],
+      publishesOnLan: false,
+      lanClientSubnets: [],
+    });
+    for (const base of [lan, BASE.replace('bind: localhost', 'bind: all')]) {
+      expect(contextFor(base)).toMatchObject({
+        lanSubnets: ['192.168.1.0/24'],
+        publishesOnLan: true,
+        lanClientSubnets: ['192.168.1.0/24'],
+      });
+    }
   });
 ```
 
@@ -1105,8 +1145,8 @@ Run: `pnpm vitest run packages/engine/src/host packages/engine/src/config packag
 Expected: FAIL.
 - **facts:** `isPrivateSubnet` is not exported.
 - **load:** `0.0.0.0/0` and the others parse.
-- **resolve:** on a cloud VM, `lanSubnets` is `['192.168.1.0/24']`, and `publishesOnLan`
-  is `undefined`.
+- **resolve:** on a cloud VM, `lanSubnets` is `['192.168.1.0/24']`, and the context has
+  no `publishesOnLan` or `lanClientSubnets`.
 - **render:** with `bind: localhost`, Radarr's environment still has
   `RADARR__SERVER__TRUSTEDNETWORKS`; on the cloud VM, there is no warning.
 
@@ -1165,6 +1205,11 @@ In `packages/engine/src/catalog/types.ts`, replace the `lanSubnets` member of
   lanSubnets: string[];
   /** Whether the web UIs are published on the LAN: network.bind is lan or all. */
   publishesOnLan: boolean;
+  /**
+   * The LAN subnets whose clients may be trusted: lanSubnets while publishesOnLan,
+   * otherwise none. Use it, not lanSubnets, to skip a login or open a firewall.
+   */
+  lanClientSubnets: string[];
 ```
 
 In `packages/engine/src/resolver/resolve.ts`, replace the `lanSubnets` declaration at the
@@ -1178,20 +1223,29 @@ top of `resolveStack` with:
         ? []
         : unique(host.privateAddresses.map((a) => networkOf(a.cidr)));
   const publishesOnLan = config.network.bind !== 'localhost';
+  // Only LAN clients need trusting, and only while the web UIs are on the LAN.
+  const lanClientSubnets = publishesOnLan ? lanSubnets : [];
 ```
 
 and the `context` line in the `apps` map with:
 
 ```ts
-    const context: AppContext = { config, settings, options, lanSubnets, publishesOnLan };
+    const context: AppContext = {
+      config,
+      settings,
+      options,
+      lanSubnets,
+      publishesOnLan,
+      lanClientSubnets,
+    };
 ```
 
 In `catalog/_shared/servarr.ts`, replace the `if` that sets `TRUSTEDNETWORKS` with:
 
 ```ts
-  // Trusted networks matter only to LAN clients, so only when the web UI is on the LAN.
-  if (!loginOnLan && ctx.publishesOnLan && ctx.lanSubnets.length > 0) {
-    env[`${prefix}__SERVER__TRUSTEDNETWORKS`] = ctx.lanSubnets.join(',');
+  // Empty unless the web UI is on the LAN: only LAN clients need trusting.
+  if (!loginOnLan && ctx.lanClientSubnets.length > 0) {
+    env[`${prefix}__SERVER__TRUSTEDNETWORKS`] = ctx.lanClientSubnets.join(',');
   }
 ```
 
@@ -1201,9 +1255,9 @@ In `catalog/gluetun/app.ts`:
 - in `env`, replace the `FIREWALL_OUTBOUND_SUBNETS` spread with:
 
   ```ts
-      // Only LAN clients need a way back out, and only when the web UIs are on the LAN.
-      ...(ctx.publishesOnLan && ctx.lanSubnets.length > 0
-        ? { FIREWALL_OUTBOUND_SUBNETS: ctx.lanSubnets.join(',') }
+      // Only LAN clients need a way back out: empty unless the web UIs are on the LAN.
+      ...(ctx.lanClientSubnets.length > 0
+        ? { FIREWALL_OUTBOUND_SUBNETS: ctx.lanClientSubnets.join(',') }
         : {}),
   ```
 
@@ -1219,7 +1273,7 @@ In `catalog/gluetun/app.ts`:
               hint: 'add vpn: { provider: …, private_key: { file: secrets/wg.key } }, or set apps.qbittorrent.vpn: false',
             }),
           ]),
-      ...(ctx.publishesOnLan && ctx.lanSubnets.length === 0
+      ...(ctx.publishesOnLan && ctx.lanClientSubnets.length === 0
         ? [
             warning(
               'network.no-lan-subnet',
@@ -1942,7 +1996,17 @@ different anyway). The cost is one PBKDF2 hash per plan, about 60 ms.
 Decision: an existing file that Mediaplane can't read counts as seeded. After their first
 start the LinuxServer.io images give `/config` to the stack's user, which may not be
 Mediaplane's; there is then no way to tell, and installs from before S3a are the owner's
-own dev installs only.
+own dev installs only. Task 6's apply leaves such a file alone too.
+
+Decision: `plan` and `apply` get the files from one helper,
+`prestartFilesFor(stack, store, env, random?)` in `render/prestart.ts`, which looks up the
+admin login (`adminLogin`) and calls `renderPrestartFiles`. `run.test.ts` uses it too
+(Task 6).
+
+Decision: the `<app>.not-seeded` hint points to "Set up before Slice 3a" in the app's own
+README (`catalog/<app>/README.md`, written in Task 12), not to `docs/runbooks/`. The
+per-app README is the runbook's natural home: the fix differs per app, and the README
+already holds that app's other known issues.
 
 **Files:**
 - Modify: `packages/engine/src/catalog/types.ts`
@@ -1955,8 +2019,9 @@ own dev installs only.
 - Test: `packages/engine/src/plan/plan.test.ts`
 
 **Interfaces:**
-- **Consumes:** `AppContext` (with `publishesOnLan`, Task 3), `adminLogin` and
-  `withGeneratedSecrets` (Task 4), `RandomBytes`, `APPDATA_DIR`.
+- **Consumes:** `AppContext` (with `publishesOnLan` and `lanClientSubnets`, Task 3),
+  `adminLogin(config: StackConfig, home: string, store: SecretStore, env: NodeJS.ProcessEnv): Promise<{ username: string; password: string }>`
+  and `withGeneratedSecrets` (Task 4), `RandomBytes`, `APPDATA_DIR`.
 - **Produces:**
   - in `catalog/types.ts`:
     - `ConfigFile { path: string; content: string; seeded: RegExp }`, with `path`
@@ -1967,8 +2032,12 @@ own dev installs only.
       `random(size: number): Buffer`;
     - `AppDefinition.configFiles?(ctx: ConfigFileContext<Options>): ConfigFile[]`;
   - in `render/prestart.ts`: `PrestartFile { app: string; appName: string; path: string; content: string; seeded: RegExp }`,
-    with `path` relative to the home (`appdata/<app>/<file>`), and
-    `renderPrestartFiles(stack: ResolvedStack, store: SecretStore, admin: { username: string; password: string }, random: RandomBytes): PrestartFile[]`;
+    with `path` relative to the home (`appdata/<app>/<file>`),
+    `renderPrestartFiles(stack: ResolvedStack, store: SecretStore, admin: { username: string; password: string }, random: RandomBytes): PrestartFile[]`,
+    and
+    `prestartFilesFor(stack: ResolvedStack, store: SecretStore, env: NodeJS.ProcessEnv, random: RandomBytes = randomBytes): Promise<PrestartFile[]>`,
+    which renders them with `adminLogin(stack.config, stack.home, store, env)` and throws
+    as `adminLogin` does when there is no password yet;
   - in `plan/prestart.ts`:
     `planPrestartFiles(home: string, files: readonly PrestartFile[]): Promise<{ changes: FileChange[]; diagnostics: Diagnostic[] }>`,
     and the error code `<app>.not-seeded`;
@@ -1988,7 +2057,7 @@ import type { AppDefinition, Catalog } from '../catalog/types';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import type { SecretStore } from '../secrets/store';
 import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
-import { renderPrestartFiles } from './prestart';
+import { prestartFilesFor, renderPrestartFiles } from './prestart';
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -2052,6 +2121,22 @@ describe('renderPrestartFiles', () => {
     expect(() =>
       renderPrestartFiles(stackWith(WITH_FILES), { version: 1, apps: {} }, ADMIN, sevens),
     ).toThrow('sonarr.apiKey has not been generated yet');
+  });
+});
+
+describe('prestartFilesFor', () => {
+  it('renders the files with the shared admin login from the store', async () => {
+    const store: SecretStore = { ...STORE, shared: { adminPassword: 'fake-generated' } };
+    const [file] = await prestartFilesFor(stackWith(WITH_FILES), store, {}, sevens);
+    expect(file?.content).toBe(
+      'key=fake-sonarr-key\nuser=admin:fake-generated\nsalt=0707\nlan=false\n',
+    );
+  });
+
+  it('throws while there is no admin password yet', async () => {
+    await expect(
+      prestartFilesFor(stackWith(WITH_FILES), STORE, {}, sevens),
+    ).rejects.toThrow('the admin password is not available yet');
   });
 });
 ```
@@ -2355,9 +2440,11 @@ and add to `AppDefinition`, after `validate?(…)`:
 `packages/engine/src/render/prestart.ts`:
 
 ```ts
+import { randomBytes } from 'node:crypto';
 import type { ConfigFileContext } from '../catalog/types';
 import { APPDATA_DIR } from '../paths';
 import type { ResolvedStack } from '../resolver/resolve';
+import { adminLogin } from '../secrets/admin';
 import type { RandomBytes } from '../secrets/generate';
 import type { SecretStore } from '../secrets/store';
 
@@ -2403,6 +2490,20 @@ export function renderPrestartFiles(
       seeded: file.seeded,
     }));
   });
+}
+
+/**
+ * The pre-start files, rendered with the shared admin login from `store` or from your
+ * admin.password. plan and apply both use it. Throws when there is no password yet.
+ */
+export async function prestartFilesFor(
+  stack: ResolvedStack,
+  store: SecretStore,
+  env: NodeJS.ProcessEnv,
+  random: RandomBytes = randomBytes,
+): Promise<PrestartFile[]> {
+  const admin = await adminLogin(stack.config, stack.home, store, env);
+  return renderPrestartFiles(stack, store, admin, random);
 }
 ```
 
@@ -2490,9 +2591,7 @@ In `packages/engine/src/plan/plan.ts`:
 - add these imports, each next to its neighbours in path order:
 
   ```ts
-  import { randomBytes } from 'node:crypto';
-  import { renderPrestartFiles } from '../render/prestart';
-  import { adminLogin } from '../secrets/admin';
+  import { prestartFilesFor } from '../render/prestart';
   import { withGeneratedSecrets } from '../secrets/generate';
   import { planPrestartFiles } from './prestart';
   ```
@@ -2508,12 +2607,7 @@ In `packages/engine/src/plan/plan.ts`:
     const preview = withGeneratedSecrets(stack, store).store;
     const prestart = await planPrestartFiles(
       home,
-      renderPrestartFiles(
-        stack,
-        preview,
-        await adminLogin(stack.config, home, preview, options.env),
-        randomBytes,
-      ),
+      await prestartFilesFor(stack, preview, options.env),
     );
     if (hasErrors(prestart.diagnostics)) {
       return failed([...diagnostics, ...prestart.diagnostics]);
@@ -2529,8 +2623,9 @@ In `packages/engine/src/plan/plan.ts`:
     const generate = secretsToGenerate(stack, store);
   ```
 
-`adminLogin` can't throw here: plan has already returned an error when your
-`admin.password` is missing (`secret.missing`), and the preview holds a generated one.
+`prestartFilesFor` can't throw for want of a password here: plan has already returned an
+error when your `admin.password` is missing (`secret.missing`), and the preview holds a
+generated one. `stack.home` is plan's `home`: plan resolves the stack with it.
 
 In `packages/engine/src/index.ts`, add `export * from './render/prestart';` after
 `export * from './render/yaml';`, and `export * from './plan/prestart';` after
@@ -2583,6 +2678,14 @@ file, flushed, then hard-linked into place. `link()` fails when the file exists,
 never written over, and the file never exists half-written. The home already needs a
 filesystem with hard links for its lock.
 
+Decision: apply looks before it writes. `writeFileExclusive` opens its temporary file in
+the target's folder before `link()` can report that the file exists. After an app's first
+start, that folder belongs to the stack's user, which may not be Mediaplane's: the open
+would fail with EACCES on every later apply, and each apply would write a temporary copy
+of secret content. So `writePrestartFiles` first `lstat`s each target, and writes only
+when that fails with ENOENT. Any other result (the file exists, EACCES, EPERM) means
+skip, as plan's check counts such a file as there (Task 5).
+
 **Files:**
 - Create: `packages/engine/src/apply/prestart.ts`,
   `packages/engine/src/apply/prestart.test.ts`
@@ -2590,11 +2693,16 @@ filesystem with hard links for its lock.
 - Test: `packages/engine/src/apply/apply.test.ts`, `packages/cli/src/run.test.ts`
 
 **Interfaces:**
-- **Consumes:** `PrestartFile` and `renderPrestartFiles` (Task 5), `adminLogin` (Task 4),
-  `writeFileExclusive(path, content, mode): Promise<boolean>`.
+- **Consumes:**
+  - from `render/prestart.ts` (Task 5): `PrestartFile`, and
+    `prestartFilesFor(stack: ResolvedStack, store: SecretStore, env: NodeJS.ProcessEnv, random: RandomBytes = randomBytes): Promise<PrestartFile[]>`,
+    which renders every pre-start file with the shared admin login;
+  - `writeFileExclusive(path, content, mode): Promise<boolean>`.
 - **Produces:**
   - `writePrestartFiles(home: string, files: readonly PrestartFile[]): Promise<string[]>`,
-    the paths it created, relative to the home;
+    the paths it created, relative to the home. It writes a file only when `lstat` finds
+    nothing at its path (ENOENT), and skips it on any other result, EACCES and EPERM
+    included, without throwing;
   - the `files` step's detail, `wrote generated/compose.yaml and generated/.env`,
     followed by `; created <path>, <path>` when it created any.
 
@@ -2603,7 +2711,7 @@ filesystem with hard links for its lock.
 `packages/engine/src/apply/prestart.test.ts`:
 
 ```ts
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { PrestartFile } from '../render/prestart';
@@ -2635,6 +2743,27 @@ describe('writePrestartFiles', () => {
     expect(await writePrestartFiles(home, [file(path, 'key=fake\n')])).toEqual([]);
     expect(await readFile(join(home, path), 'utf8')).toBe('key=the-apps-own\n');
   });
+
+  // root can write anywhere, so there is nothing to test when running as root.
+  it.skipIf(process.getuid?.() === 0)(
+    "leaves alone a file in a folder Mediaplane can't write to, which the app owns",
+    async () => {
+      const home = await tempDir('mediaplane-prestart-');
+      const folder = join(home, 'appdata', 'qbittorrent');
+      await mkdir(folder, { recursive: true });
+      const path = 'appdata/qbittorrent/app.conf';
+      await writeFile(join(home, path), 'key=the-apps-own\n');
+      await chmod(folder, 0o555);
+      try {
+        expect(await writePrestartFiles(home, [file(path, 'key=fake\n')])).toEqual([]);
+        // Not even a temporary file was made next to it.
+        expect(await readdir(folder)).toEqual(['app.conf']);
+      } finally {
+        // So that the temporary folder can be removed.
+        await chmod(folder, 0o755);
+      }
+    },
+  );
 });
 ```
 
@@ -2729,10 +2858,23 @@ because plan refuses it (Task 5).
 `packages/engine/src/apply/prestart.ts`:
 
 ```ts
-import { mkdir } from 'node:fs/promises';
+import { lstat, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { PrestartFile } from '../render/prestart';
 import { writeFileExclusive } from '../util/atomic';
+
+/**
+ * Whether nothing is at `path` yet. Anything else, even a path Mediaplane may not look
+ * at (EACCES, EPERM), is the app's own, as plan's check counts it.
+ */
+async function absent(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return false;
+  } catch (cause) {
+    return cause instanceof Error && 'code' in cause && cause.code === 'ENOENT';
+  }
+}
 
 /**
  * Write each pre-start file that does not exist yet (spec §6.4): all at once, 0600,
@@ -2746,6 +2888,9 @@ export async function writePrestartFiles(
   const created: string[] = [];
   for (const file of files) {
     const path = join(home, file.path);
+    // Look first: writeFileExclusive makes a temporary file next to the target, and
+    // after its first start the app's folder may be closed to Mediaplane.
+    if (!(await absent(path))) continue;
     await mkdir(dirname(path), { recursive: true });
     if (await writeFileExclusive(path, file.content, 0o600)) created.push(file.path);
   }
@@ -2758,9 +2903,7 @@ In `packages/engine/src/apply/apply.ts`:
 - add these imports, next to their neighbours in path order:
 
   ```ts
-  import { randomBytes } from 'node:crypto';
-  import { renderPrestartFiles } from '../render/prestart';
-  import { adminLogin } from '../secrets/admin';
+  import { prestartFilesFor } from '../render/prestart';
   import { writePrestartFiles } from './prestart';
   ```
 
@@ -2778,12 +2921,7 @@ In `packages/engine/src/apply/apply.ts`:
       // Before any app starts, and only where the app has no file of its own (spec §6.4).
       const created = await writePrestartFiles(
         home,
-        renderPrestartFiles(
-          stack,
-          store,
-          await adminLogin(stack.config, home, store, options.env),
-          options.random ?? randomBytes,
-        ),
+        await prestartFilesFor(stack, store, options.env, options.random),
       );
       return [
         `wrote ${written.join(' and ')}`,
@@ -2801,7 +2939,6 @@ In `packages/cli/src/run.test.ts`:
 
   ```ts
   import {
-    adminLogin,
     collectHostReport,
     COMPOSE_PATH,
     composeToYaml,
@@ -2809,9 +2946,9 @@ In `packages/cli/src/run.test.ts`:
     invokingUser,
     nodeProbe,
     planStack,
+    prestartFilesFor,
     readSecretStore,
     renderEnvFile,
-    renderPrestartFiles,
     secretValues,
     withGeneratedSecrets,
     writePrestartFiles,
@@ -2850,8 +2987,8 @@ In `packages/cli/src/run.test.ts`:
       renderEnvFile(await secretValues(context.stack, store, {})),
     );
     if (prestart) {
-      const admin = await adminLogin(context.stack.config, home, store, {});
-      await writePrestartFiles(home, renderPrestartFiles(context.stack, store, admin, zeros));
+      const files = await prestartFilesFor(context.stack, store, {}, zeros);
+      await writePrestartFiles(home, files);
     }
     return home;
   }
@@ -2895,9 +3032,10 @@ Sonarr and Radarr images; Prowlarr runs the same code).
 Gluetun v3.41.3 answers `GET /v1/vpn/status` and `/v1/publicip/ip` on port 8000 to anyone
 on the stack's network, with only a deprecation warning. A role in
 `/gluetun/auth/config.toml` with `auth = "apikey"` makes them answer 401 without the key and
-200 with the `X-API-Key` header (checked on the pinned image). Ruling: Mediaplane writes
-that file before Gluetun first starts, with a generated `controlApiKey` (32 hex), for those
-two routes only. S3d's `vpn-check` uses it.
+200 with the `X-API-Key` header (checked by hand on the pinned image; Slice 3d's
+end-to-end test checks it, and Task 12 adds that to the roadmap). Ruling: Mediaplane
+writes that file before Gluetun first starts, with a generated `controlApiKey` (32 hex),
+for those two routes only. S3d's `vpn-check` uses it.
 
 **Files:**
 - Modify: `catalog/_shared/servarr.ts`, `catalog/sonarr/app.ts`,
@@ -2908,7 +3046,9 @@ two routes only. S3d's `vpn-check` uses it.
 
 **Interfaces:**
 - **Consumes:** `ConfigFile`, `ConfigFileContext` (Task 5), `renderPrestartFiles`
-  (Task 5), `withGeneratedSecrets`, `emptySecretStore`.
+  (Task 5), `withGeneratedSecrets`, `emptySecretStore`, and
+  `AppContext.lanClientSubnets: string[]` (Task 3: the LAN subnets while the web UIs are
+  on the LAN, otherwise `[]`).
 - **Produces:**
   - `servarrConfigFiles(ctx: ConfigFileContext): ConfigFile[]` in
     `catalog/_shared/servarr.ts`: `config.xml`, recognised by `<ApiKey>…</ApiKey>`;
@@ -3085,13 +3225,9 @@ export function servarrEnv(prefix: string, ctx: AppContext): Record<string, stri
     [`${prefix}__AUTH__METHOD`]: 'Forms',
     [`${prefix}__AUTH__REQUIRED`]: authenticationRequired(ctx),
   };
-  // Trusted networks matter only to LAN clients, so only when the web UI is on the LAN.
-  if (
-    !ctx.config.security.login_on_lan &&
-    ctx.publishesOnLan &&
-    ctx.lanSubnets.length > 0
-  ) {
-    env[`${prefix}__SERVER__TRUSTEDNETWORKS`] = ctx.lanSubnets.join(',');
+  // Empty unless the web UI is on the LAN: only LAN clients need trusting.
+  if (!ctx.config.security.login_on_lan && ctx.lanClientSubnets.length > 0) {
+    env[`${prefix}__SERVER__TRUSTEDNETWORKS`] = ctx.lanClientSubnets.join(',');
   }
   return env;
 }
@@ -3209,8 +3345,9 @@ whitelisted subnets. qBittorrent rewrites the file 0644, keeping `WebUI\APIKey`.
   check that stays is the port's (spec §6.1).
 - `WebUI\AuthSubnetWhitelist`: the LAN may skip the login only with `login_on_lan: false`
   (spec §6.1). Decision: and only when the web UI is published on the LAN, as for
-  Servarr's trusted networks (Task 3). Subnets are joined with a comma and no space:
-  qBittorrent keeps a space as part of the next subnet.
+  Servarr's trusted networks (Task 3). Both read `AppContext.lanClientSubnets`, which the
+  resolver leaves empty unless the web UIs are on the LAN. Subnets are joined with a comma
+  and no space: qBittorrent keeps a space as part of the next subnet.
 
 Decision: the `config-file` seeding step leaves the catalog types, now that every file
 comes from `configFiles(ctx)`.
@@ -3218,10 +3355,13 @@ comes from `configFiles(ctx)`.
 **Files:**
 - Create: `catalog/qbittorrent/conf.ts`, `catalog/qbittorrent/conf.test.ts`
 - Modify: `catalog/qbittorrent/app.ts`, `packages/engine/src/catalog/types.ts`
+- Modify, only if gitleaks flags the test hash: `.gitleaks.toml` (Step 5)
 - Test: `catalog/render.test.ts`, `packages/cli/src/run.test.ts`
 
 **Interfaces:**
-- **Consumes:** `ConfigFileContext` (Task 5), `AppContext.publishesOnLan` (Task 3).
+- **Consumes:** `ConfigFileContext` (Task 5); from Task 3,
+  `AppContext.publishesOnLan: boolean` (`network.bind` is `lan` or `all`) and
+  `AppContext.lanClientSubnets: string[]` (`publishesOnLan ? lanSubnets : []`).
 - **Produces:**
   - `passwordHash(password: string, salt: Buffer): string` and
     `qbittorrentConf<Options>(ctx: ConfigFileContext<Options>): string` in
@@ -3431,9 +3571,9 @@ export function passwordHash(password: string, salt: Buffer): string {
  * with a new temporary password every time.
  */
 export function qbittorrentConf<Options>(ctx: ConfigFileContext<Options>): string {
-  // The LAN may skip the login only when you said so, and only if the UI is on the LAN.
-  const whitelist =
-    !ctx.config.security.login_on_lan && ctx.publishesOnLan ? ctx.lanSubnets : [];
+  // The LAN may skip the login only when you said so, and only if the UI is on the LAN
+  // (lanClientSubnets is empty otherwise).
+  const whitelist = ctx.config.security.login_on_lan ? [] : ctx.lanClientSubnets;
   return [
     '[BitTorrent]',
     'Session\\DefaultSavePath=/data/torrents/',
@@ -3485,7 +3625,7 @@ In `catalog/qbittorrent/app.ts`:
           ]),
       ...(!ctx.config.security.login_on_lan &&
       ctx.publishesOnLan &&
-      ctx.lanSubnets.length === 0
+      ctx.lanClientSubnets.length === 0
         ? [
             warning(
               'network.no-lan-subnet',
@@ -3543,7 +3683,14 @@ git commit -m "feat(catalog): seed qBittorrent.conf with the shared login and it
 
 `pnpm docs:generate` writes nothing here. If the pre-commit gitleaks hook flags the test
 hash in `conf.test.ts`, it is a false positive on a fake value: add the exact line's
-pattern to the `.gitleaks.toml` allowlist rather than weakening the test.
+pattern to the `.gitleaks.toml` allowlist rather than weakening the test. Then stage that
+file too, and run the same commit again:
+
+```bash
+git add catalog packages .gitleaks.toml
+git commit -m "feat(catalog): seed qBittorrent.conf with the shared login and its key" \
+  -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
 
 ---
 ### Task 9: `mediaplane credentials`
@@ -4261,11 +4408,15 @@ Decision: the questions come in this order: media server, data folder, VPN provi
 WireGuard address (with a provider), `lan` or `localhost`, LAN subnet (with `lan`), login
 on the LAN, admin user name, then generate the password or name a file. With `lan`, init
 offers the subnet it sees when there is exactly one, and otherwise asks you to type it.
+On a cloud VM it never offers one: the VM's private network is not a LAN (Task 3), and
+one keypress would satisfy `network.cloud-lan`. There it always asks you to type it.
 
 Decision: without a terminal, `--bind lan` with no `--lan-subnet` writes no subnet, so plan
 detects it, except on a cloud VM, where init refuses as plan would (`network.cloud-lan`).
 `--admin-password-file` must be a path inside the home, because the container sees nothing
 else. Init never writes the password file itself: its next steps say where to put it.
+`--vpn-addresses` without a VPN provider is refused, rather than dropped without a word:
+`--vpn-addresses needs --vpn-provider`.
 
 **Files:**
 - Modify: `packages/engine/src/config/starter.ts`, `packages/cli/src/init.ts`,
@@ -4284,7 +4435,9 @@ else. Init never writes the password file itself: its next steps say where to pu
     `adminPasswordFile?` (all `string`);
   - `DEFAULT_PASSWORD_FILE = 'secrets/admin-password'` in `packages/cli/src/init.ts`;
   - the flags `--vpn-addresses <cidr>`, `--bind <where>`, `--lan-subnet <cidr>`,
-    `--admin-user <name>` and `--admin-password-file <path>`.
+    `--admin-user <name>` and `--admin-password-file <path>`;
+  - the error `--vpn-addresses needs --vpn-provider`;
+  - on a cloud VM, `askLanSubnet` never offers the detected subnet: you type it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4461,6 +4614,20 @@ In `packages/cli/src/init.test.ts`:
       });
     });
 
+    it("never offers a cloud VM's own subnet as your LAN: you type it", async () => {
+      const home = await newHome();
+      const term = capture(['jellyfin', '/srv/data', '', 'lan', '10.10.0.0/16']);
+      expect(await run(['init', '--home', home], term.io, deps('Oracle Cloud'))).toBe(0);
+      expect(term.questions.slice(3, 5)).toEqual([
+        'Publish the web UIs on your LAN, or keep them on this machine? lan or localhost [localhost]: ',
+        'Your LAN subnet, e.g. 192.168.1.0/24: ',
+      ]);
+      expect((await stackIn(home)).network).toEqual({
+        bind: 'lan',
+        lan_subnet: '10.10.0.0/16',
+      });
+    });
+
     it('takes every answer as a flag when it cannot ask', async () => {
       const home = await newHome();
       const args = [
@@ -4504,6 +4671,7 @@ In `packages/cli/src/init.test.ts`:
       ],
       [['--admin-user', 'ad'], 'admin.username: must be 3 to 32 letters, digits'],
       [['--bind', 'lan', '--lan-subnet', '203.0.113.0/24'], 'a private (RFC 1918) subnet'],
+      [['--vpn-addresses', '10.64.0.2/32'], '--vpn-addresses needs --vpn-provider'],
     ])('refuses %j, and writes nothing', async (extra, message) => {
       const home = await newHome();
       const term = capture();
@@ -4797,6 +4965,10 @@ async function gatherAnswers(
   if (adminPasswordFile !== undefined && !insideHome(adminPasswordFile)) {
     return `--admin-password-file must be a path inside the Mediaplane home, such as ${DEFAULT_PASSWORD_FILE}`;
   }
+  // The starter writes the address only in a vpn: block, so say so rather than drop it.
+  if (vpnAddresses !== undefined && vpnProvider === undefined) {
+    return '--vpn-addresses needs --vpn-provider';
+  }
   return {
     mediaServer,
     dataPath,
@@ -4812,11 +4984,14 @@ async function gatherAnswers(
   };
 }
 
-/** The LAN subnet: the one this host is on, if there is exactly one and you agree. */
+/**
+ * The LAN subnet: the one this host is on, if there is exactly one and you agree. A cloud
+ * VM's private network is not a LAN, so there you always type it.
+ */
 async function askLanSubnet(ask: Ask, host: HostFacts): Promise<string | undefined> {
   const seen = [...new Set(host.privateAddresses.map((a) => networkOf(a.cidr)))];
   const [only] = seen;
-  if (seen.length === 1 && only !== undefined) {
+  if (host.cloud === undefined && seen.length === 1 && only !== undefined) {
     const answer = (await ask(`Your LAN looks like ${only}. Use it? [Y/n] `)).trim();
     if (!/^n/i.test(answer)) return only;
   }
@@ -5110,7 +5285,7 @@ In `docs/security/threat-model.md`:
      - With a VPN, qBittorrent has no network of its own. It uses Gluetun's, so it has no
        route out when the VPN is down. The automated test for that arrives in Slice 3d.
      - Gluetun's control server (port 8000) is never published, and answers only requests
-       that carry Mediaplane's key (see T11).
+       that carry Mediaplane's key (see T11; Slice 3d's end-to-end test checks this).
    ```
 
 4. In T2, replace everything from `Controls today:` to the end of the section with:
@@ -5125,9 +5300,10 @@ In `docs/security/threat-model.md`:
      with its temporary password. It asks on localhost too.
    - Sonarr, Radarr and Prowlarr ask for a login from the LAN too, by default
      (`security.login_on_lan`).
-   - With `login_on_lan: false`, only `network.lan_subnet` skips the login, and only while
-     the web UIs are published on the LAN. The subnet must be private (RFC 1918): a public
-     range, or `0.0.0.0/0`, is refused.
+   - With `login_on_lan: false`, qBittorrent lets only `network.lan_subnet` skip its
+     login, and only while the web UIs are on the LAN. Sonarr, Radarr and Prowlarr let
+     any local address in (see What remains). The subnet must be private (RFC 1918): a
+     public range, or `0.0.0.0/0`, is refused.
 
    What remains:
 
@@ -5141,9 +5317,14 @@ In `docs/security/threat-model.md`:
      any private address, not just `lan_subnet`.
    ```
 
-5. In T3, add to "Controls today", after the `bind: lan` bullet:
+5. In T3, in "Controls today", replace the bullet that starts
+   `` - On a detected cloud VM, `init` writes `bind: localhost` `` (two lines) with these
+   two:
 
    ```markdown
+   - On a detected cloud VM, `init` suggests `bind: localhost`, and `lan` needs a LAN
+     subnet: `init` asks you to type it, never offering the VM's own, and `plan` refuses
+     `bind: lan` unless `network.lan_subnet` is set.
    - On a cloud VM, Mediaplane trusts no LAN subnet unless `network.lan_subnet` names one:
      no login bypass, and no way in through Gluetun's firewall. `plan` warns
      (`network.no-lan-subnet`) when the web UIs are on the LAN without a known subnet.
@@ -5197,7 +5378,8 @@ In `docs/security/threat-model.md`:
    - Its port, 8000, is never published.
    - Before Gluetun's first start, Mediaplane writes `appdata/gluetun/auth/config.toml`. It
      gives a generated key two read-only routes, `GET /v1/vpn/status` and
-     `GET /v1/publicip/ip`, and nothing else. Without that file, Gluetun v3.41 answers
+     `GET /v1/publicip/ip`, and nothing else. Requests without the key are refused
+     (Slice 3d's end-to-end test checks this). Without that file, Gluetun v3.41 answers
      anyone on the stack's network.
 
    What remains:
@@ -5499,8 +5681,9 @@ up to, not including, `## Changing it` with:
   `all`), `FIREWALL_OUTBOUND_SUBNETS` lists your LAN subnet, so that your own network can
   reach qBittorrent's web UI. With `bind: localhost` it is left out: Docker on this
   machine reaches the web UI from the stack's own network, which Gluetun already lets
-  through. If the web UIs are on your LAN but Mediaplane knows no LAN subnet, such as on a
-  cloud VM without `network.lan_subnet`, `plan` warns (`network.no-lan-subnet`).
+  through (Slice 3d's end-to-end test checks this). If the web UIs are on your LAN but
+  Mediaplane knows no LAN subnet, such as on a cloud VM without `network.lan_subnet`,
+  `plan` warns (`network.no-lan-subnet`).
 - **What it needs from the host.** It gets `NET_ADMIN` and `/dev/net/tun`, and `plan`
   reports an error when `/dev/net/tun` is missing.
 - **Its control server** (port 8000) is never published. Apps in its network must not
@@ -5508,7 +5691,8 @@ up to, not including, `## Changing it` with:
 - **A key for the control server, before its first start.** Mediaplane writes
   `appdata/gluetun/auth/config.toml`, only if it doesn't exist. It lets a generated key
   (`controlApiKey`, kept in `state/secrets.json`) read `GET /v1/vpn/status` and
-  `GET /v1/publicip/ip`, and nothing else. Without the file, Gluetun answers anyone on
+  `GET /v1/publicip/ip`, and nothing else. Requests without the key are refused
+  (Slice 3d's end-to-end test checks this). Without the file, Gluetun answers anyone on
   the stack's network. Slice 3d's `mediaplane vpn-check` uses the key.
 
 ## Not built yet
@@ -5574,9 +5758,9 @@ In `deploy/README.md`:
    - **Who can reach the apps.** `init` asks whether to publish the web UIs on your LAN
      (`network.bind: lan`), so you can open them from your other devices, or to keep them
      on this machine (`localhost`). On a cloud VM it suggests `localhost`. With `lan`, it
-     offers the LAN subnet it sees, and writes it as `network.lan_subnet`, which must be a
-     private range. Without a terminal, pass `--bind` and `--lan-subnet`. Until the wiring
-     lands (Slices 3b to 7):
+     offers the LAN subnet it sees (on a cloud VM, you type it), and writes it as
+     `network.lan_subnet`, which must be a private range. Without a terminal, pass
+     `--bind` and `--lan-subnet`. Until the wiring lands (Slices 3b to 7):
      - Jellyfin's setup wizard and Seerr's setup are open to anyone on your LAN until you
        complete them. Complete them right after the first `apply`.
      - Sonarr, Radarr and Prowlarr ask for a login that has no user yet. Their READMEs,
@@ -5684,6 +5868,14 @@ In `docs/architecture.md`:
      hash, so treat it as sensitive.
    ```
 
+   and replace the bullet that starts `- **The home's filesystem must support hard links,**`
+   (two lines) with:
+
+   ```markdown
+   - **The home's filesystem must support hard links,** because the lock, `init`'s
+     `stack.yaml` and the pre-start files are created with one.
+   ```
+
 7. In "What comes next", replace the first list item with:
 
    ```markdown
@@ -5720,7 +5912,7 @@ In `docs/design/m1-engine-cli.md`:
 
 1. In the §5.2 table, in the `init` row, replace
    `(media server, data path, VPN provider, login on the LAN)` with
-   `(media server, data path, VPN provider and its WireGuard address, LAN or localhost and the LAN subnet, login on the LAN, the admin user name and password)`.
+   `(media server, data path, VPN provider and its WireGuard address, LAN or localhost and the LAN subnet, login on the LAN, the admin user name, and whether to generate its password)`.
 2. Add at the end of §11:
 
    ```markdown
@@ -5760,8 +5952,8 @@ In `docs/design/m1-engine-cli.md`:
      path (§6.2). It applies to torrents you add by hand too.
    - **Gluetun's control server needs a key (§6.1).** Its pre-start `auth/config.toml`
      gives a generated `controlApiKey` the routes `GET /v1/vpn/status` and
-     `GET /v1/publicip/ip`, and no other. Without it, Gluetun v3.41 answers anyone on the
-     stack's network.
+     `GET /v1/publicip/ip`, and no other (Slice 3d's end-to-end test checks this).
+     Without it, Gluetun v3.41 answers anyone on the stack's network.
    - **The LAN is trusted only while the web UIs are on it (§6.1).**
      `FIREWALL_OUTBOUND_SUBNETS`, Servarr's `SERVER__TRUSTEDNETWORKS` and qBittorrent's
      `AuthSubnetWhitelist` are set only for `network.bind: lan` or `all`.
@@ -5795,23 +5987,43 @@ In `docs/plans/m1-roadmap.md`:
    S3 is too large for one plan, so it ships as four sub-slices, in the order below. Each
    one ends green, just like a full slice.
 
-   | # | Delivers | Proves |
-   |---|---|---|
-   | S3a | **Shared admin and pre-start files.** The shared admin login, with a generated password, and `mediaplane credentials`. `init`'s questions for the admin, the LAN and the WireGuard address. Files written before an app's first start, only if absent: `config.xml` for Sonarr, Radarr and Prowlarr, `qBittorrent.conf` with the shared login and its key, and Gluetun's control-server key. The S3 network inputs below. Pull retries, and tests that clean up after themselves | `config.xml` holds the generated key; qBittorrent takes the shared password from `credentials` and its key; it prints no temporary password; a second apply changes nothing |
-   | S3d | **VPN.** The kill-switch test against a local WireGuard server, `vpn-check`, the CI `modprobe wireguard` step, and the "VPN down" runbook | Success criterion 5 |
-   | S3b | **The wiring framework.** How the Mediaplane container reaches the apps (an owner's decision, then ADR 0011), the typed HTTP client, the integration contract, `resources.json`, the wiring steps, and the Servarr admin login as its first resource | The shared login works in Sonarr, Radarr and Prowlarr, from source and from the image |
-   | S3c | **The download path.** qBittorrent's categories and settings through its API, and Sonarr's and Radarr's download clients and root folders, on the VPN topology | Part of success criterion 1 |
+   - **S3a: shared admin and pre-start files.**
+     - Delivers: the shared admin login, with a generated password, and
+       `mediaplane credentials`; `init`'s questions for the admin, the LAN and the
+       WireGuard address; files written before an app's first start, only if absent
+       (`config.xml` for Sonarr, Radarr and Prowlarr, `qBittorrent.conf` with the shared
+       login and its key, and Gluetun's control-server key); the S3 network inputs below;
+       pull retries, and tests that clean up after themselves.
+     - Proves: `config.xml` holds the generated key; qBittorrent takes the shared password
+       from `credentials`, and its key; it prints no temporary password; a second apply
+       changes nothing.
+   - **S3d: VPN.**
+     - Delivers: the kill-switch test against a local WireGuard server, `vpn-check`, the
+       CI `modprobe wireguard` step, and the "VPN down" runbook.
+     - Proves: success criterion 5.
+   - **S3b: the wiring framework.**
+     - Delivers: how the Mediaplane container reaches the apps (an owner's decision, then
+       ADR 0011), the typed HTTP client, the integration contract, `resources.json`, the
+       wiring steps, and the Servarr admin login as its first resource.
+     - Proves: the shared login works in Sonarr, Radarr and Prowlarr, from source and from
+       the image.
+   - **S3c: the download path.**
+     - Delivers: qBittorrent's categories and settings through its API, and Sonarr's and
+       Radarr's download clients and root folders, on the VPN topology.
+     - Proves: part of success criterion 1.
 
    S3d comes second because it is small, it settles early whether GitHub's runners can
    load WireGuard, and it gives S3c a real Gluetun to wire through.
    ```
+
+   It is a list, not a table like the S2 split, so it reads on a phone.
 
 3. **"Every slice writes its own docs as it goes".** In the runbooks list, change
    `"VPN down" and "wiring failed" in S3;` to `"VPN down" in S3d, and "wiring failed" in S3b;`.
 4. **"Things S1 encodes".** In the four rows whose last cell is `S3`, change it to `S3d`.
 5. **"Inputs for later slices from the reviews".**
    - In the intro paragraph, add at the end: `Slice 3a (2026-10-10) added the last S3
-     item, two S4 items and an M2 item.`
+     item, the S3d list, two S4 items, an S6 item and an M2 item.`
    - Change the heading `**S3:**` to `**S3:** S3a handles the first five, except
      Mediaplane's network in TRUSTEDNETWORKS, which moved to M2. The rest are for S3b and
      S3c.`
@@ -5821,6 +6033,33 @@ In `docs/plans/m1-roadmap.md`:
      - **qBittorrent's settings after its first start.** `admin.username`,
        `admin.password`, `login_on_lan` and the LAN subnet reach qBittorrent only through
        its pre-start file (S3a). S3c manages them through its API.
+     ```
+
+   - Add a new list after the S3 list, before `**S4:**`:
+
+     ```markdown
+     **S3d:**
+
+     - **Gluetun's control server refuses requests without the key.** S3a writes
+       `auth/config.toml`, and this was checked only by hand on the pinned image. Check
+       in the end-to-end test that `GET /v1/vpn/status` answers 401 without `X-API-Key`,
+       and 200 with it.
+     - **qBittorrent's web UI on localhost, behind Gluetun.** Since S3a,
+       `FIREWALL_OUTBOUND_SUBNETS` is set only while the web UIs are on the LAN. Check in
+       the end-to-end test that with `bind: localhost` the web UI still answers on
+       `127.0.0.1`, as a hand check found in S3a. If it doesn't, the cloud-VM default has
+       regressed.
+     ```
+
+   - Replace the S4 item that starts `- **An override can move an appdata mount.**` (three
+     lines) with:
+
+     ```markdown
+     - **An override can move an appdata mount.** When `compose.override.yaml`
+       remaps an app's appdata mount, the ownership helper's chown runs on the
+       override's host path, not on `appdata/<app>`. Pre-start files (S3a) are still
+       written to `appdata/<app>`, so the app starts without them, and nothing reports
+       it.
      ```
 
    - Add to the S4 list:
@@ -5834,6 +6073,17 @@ In `docs/plans/m1-roadmap.md`:
        catalog mounts nothing there, so every container it creates leaves an anonymous
        volume behind. Mount a folder there, or document it. (The end-to-end helpers
        remove them with `down -v` since S3a.)
+     ```
+
+   - Add to the S6 list:
+
+     ```markdown
+     - **A login of your own for Plex, and for Seerr on Plex.** Plex's login is always
+       your plex.tv account, never the shared admin (spec §6.1). With Plex, Seerr's
+       first sign-in uses that account too. The catalog's `login` (S3a) is `'shared'`
+       or the slice that brings it, so `credentials` says their login arrives in
+       Slice 6 (Plex) or Slice 7 (Seerr). Give `login` a value for your own account,
+       and use it for both.
      ```
 
    - Replace the **M2** paragraph with:
