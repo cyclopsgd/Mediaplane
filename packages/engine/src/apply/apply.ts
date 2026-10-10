@@ -344,6 +344,9 @@ function remaining(result: PlanResult): string {
       .map((c) => `${c.service} (${c.action})`),
     ...result.secrets.generate,
     ...result.unhealthy,
+    ...result.wiring
+      .filter((w) => w.action !== 'unchanged')
+      .map((w) => `${w.resource} (${w.action})`),
   ].join(', ');
 }
 
@@ -369,6 +372,7 @@ function emptyPlan(): PlanResult {
     containers: [],
     secrets: { generate: [] },
     unhealthy: [],
+    wiring: [],
     diagnostics: [],
   };
 }

@@ -1,4 +1,4 @@
-import { chmod, mkdir, readdir, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppDefinition, Catalog } from '../catalog/types';
@@ -13,8 +13,12 @@ import {
   type ContainerState,
   type Runtime,
 } from '../runtime/types';
+import { writeResources } from '../integrations/resources';
+import type { WiringSeams } from '../integrations/wiring';
 import { fakeHash, fakeProbe, fakeRuntime, running } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureCatalog } from '../testing/fixtures';
+import { fakeHttpApp } from '../testing/http';
+import { fakeSonarr, WIRED_CATALOG } from '../testing/wiring';
 import { plan, planStack } from './plan';
 import { tempDir } from '../testing/temp';
 
@@ -92,14 +96,24 @@ function planFor(
     probe = fakeProbe(),
     env = {},
     catalog = fixtureCatalog,
+    wiring,
   }: {
     runtime?: Runtime;
     probe?: HostProbe;
     env?: NodeJS.ProcessEnv;
     catalog?: Catalog;
+    wiring?: WiringSeams;
   } = {},
 ) {
-  return plan({ home, catalog, host: FIXTURE_HOST, env, runtime, probe });
+  return plan({
+    home,
+    catalog,
+    host: FIXTURE_HOST,
+    env,
+    runtime,
+    probe,
+    ...(wiring === undefined ? {} : { wiring }),
+  });
 }
 
 describe('plan', () => {
@@ -784,5 +798,186 @@ describe('plan', () => {
       probe: fakeProbe(),
     });
     expect(failed).toMatchObject({ result: { ok: false }, context: undefined });
+  });
+});
+
+describe('plan: the wiring', () => {
+  /** A current home for WIRED_CATALOG, its apps running as `runtime` says. */
+  async function wiredHome(runtime: Runtime, seams: WiringSeams): Promise<string> {
+    const home = await makeHome({ withStore: true });
+    const first = await planFor(home, { runtime, catalog: WIRED_CATALOG, wiring: seams });
+    await mkdir(join(home, 'generated'));
+    await writeFile(join(home, COMPOSE_PATH), first.files[0]?.content ?? '');
+    await writeCurrentEnv(home);
+    return home;
+  }
+  const current = (calls: string[], addresses: Record<string, string>) =>
+    fakeRuntime({
+      hashes: { ok: true, hashes: HASHES },
+      containers: running(HASHES),
+      addresses,
+      calls,
+    });
+
+  it('joins the wiring network, then plans each resource of a running app', async () => {
+    const sonarr = await fakeSonarr({ key: '0'.repeat(32) });
+    const calls: string[] = [];
+    const runtime = current(calls, sonarr.addresses);
+    const home = await wiredHome(runtime, sonarr.seams);
+    calls.length = 0;
+    const result = await planFor(home, {
+      runtime,
+      catalog: WIRED_CATALOG,
+      wiring: sonarr.seams,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      changed: true,
+      wiring: [{ resource: 'sonarr.login', action: 'create' }],
+    });
+    expect(result.files.every((f) => f.status === 'unchanged')).toBe(true);
+    expect(result.containers.every((c) => c.action === 'unchanged')).toBe(true);
+    expect(calls.indexOf('join-wiring')).toBeLessThan(
+      calls.findIndex((call) => call.startsWith('wiring-addresses')),
+    );
+  });
+
+  it('has nothing to change once the app holds what resources.json records', async () => {
+    const sonarr = await fakeSonarr({
+      key: '0'.repeat(32),
+      user: 'admin',
+      password: 'fake-admin-password',
+    });
+    const runtime = current([], sonarr.addresses);
+    const home = await wiredHome(runtime, sonarr.seams);
+    await writeResources(home, {
+      'sonarr.login': {
+        id: null,
+        name: 'login',
+        fields: { user: 'admin' },
+        secrets: ['password'],
+        appliedAt: '2026-10-10T12:00:00.000Z',
+      },
+    });
+    const result = await planFor(home, {
+      runtime,
+      catalog: WIRED_CATALOG,
+      wiring: sonarr.seams,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      changed: false,
+      wiring: [{ resource: 'sonarr.login', action: 'unchanged' }],
+    });
+  });
+
+  it('checks the wiring after the start on a first plan, asking no app', async () => {
+    const sonarr = await fakeSonarr();
+    const result = await planFor(await makeHome(), {
+      catalog: WIRED_CATALOG,
+      wiring: sonarr.seams,
+    });
+    expect(result.wiring).toEqual([{ resource: 'sonarr.login', action: 'after-start' }]);
+    expect(sonarr.app.requests).toEqual([]);
+  });
+
+  it('fails on a wiring network it must not join, or a resources.json it cannot read', async () => {
+    const refused = fakeRuntime({
+      join: () => {
+        throw new RuntimeError(
+          'refusing to join mediaplane_wiring: it is not internal, so Mediaplane would get a route out',
+        );
+      },
+    });
+    const network = await planFor(await makeHome(), {
+      runtime: refused,
+      catalog: WIRED_CATALOG,
+    });
+    expect(network.ok).toBe(false);
+    expect(network.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'wire.network', severity: 'error' }),
+    );
+    const home = await makeHome();
+    await mkdir(join(home, 'state'));
+    await writeFile(
+      join(home, 'state', 'resources.json'),
+      '{"schema": "something else"}',
+    );
+    const unreadable = await planFor(home, { catalog: WIRED_CATALOG });
+    expect(unreadable.ok).toBe(false);
+    expect(unreadable.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'resources.invalid', severity: 'error' }),
+    );
+  });
+
+  it('joins nothing and asks no app for a stack with no API', async () => {
+    const calls: string[] = [];
+    const result = await planFor(await makeHome(), { runtime: fakeRuntime({ calls }) });
+    expect(result.wiring).toEqual([]);
+    expect(calls.some((call) => /wiring/.test(call))).toBe(false);
+  });
+
+  it('keeps every secret the stack knows out of what an app says', async () => {
+    // Sonarr repeats the admin password and the VPN key, which no call of plan sends:
+    // only the stack's secrets, handed to the client, take them out (preflight M5).
+    const app = await fakeHttpApp((request) =>
+      request.path === '/api/v3/login'
+        ? {
+            status: 500,
+            body: { message: 'held: fake-admin-password, fake-wireguard-key-for-tests' },
+          }
+        : { status: 200, body: {} },
+    );
+    const seams: WiringSeams = {
+      endpoint: () => ({ host: '127.0.0.1', port: app.port }),
+      retry: { deadlineMs: 0 },
+    };
+    const runtime = current([], { 'fake-sonarr': '127.0.0.1' });
+    const home = await wiredHome(runtime, seams);
+    const result = await planFor(home, {
+      runtime,
+      catalog: WIRED_CATALOG,
+      wiring: seams,
+    });
+    expect(result.wiring).toEqual([
+      {
+        resource: 'sonarr.login',
+        action: 'unknown',
+        reason: expect.stringContaining('failed (HTTP 500): held: ***, ***') as string,
+      },
+    ]);
+    const shown = JSON.stringify(result);
+    expect(shown).not.toContain('fake-admin-password');
+    expect(shown).not.toContain('fake-wireguard-key-for-tests');
+  });
+
+  it('writes no file: joining the wiring network is its one change to Docker', async () => {
+    const sonarr = await fakeSonarr({
+      key: '0'.repeat(32),
+      user: 'admin',
+      password: 'fake-admin-password',
+    });
+    const calls: string[] = [];
+    const runtime = current(calls, sonarr.addresses);
+    const home = await wiredHome(runtime, sonarr.seams);
+    await writeResources(home, {});
+    // Every file in the home, with its content and when it was last written.
+    const files = async () => {
+      const names = (await readdir(home, { recursive: true })).sort();
+      return Promise.all(
+        names.map(async (name) => {
+          const path = join(home, name);
+          const info = await stat(path);
+          return [name, info.mtimeMs, info.isFile() ? await readFile(path, 'utf8') : ''];
+        }),
+      );
+    };
+    const before = await files();
+    calls.length = 0;
+    await planFor(home, { runtime, catalog: WIRED_CATALOG, wiring: sonarr.seams });
+    expect(await files()).toEqual(before);
+    const reads = /^(versions|containers|configHashes|inspect|wiring-addresses)\b/;
+    expect(calls).toContain('wiring-addresses fake-sonarr');
+    expect(calls.filter((call) => !reads.test(call))).toEqual(['join-wiring']);
   });
 });

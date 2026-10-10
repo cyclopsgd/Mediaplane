@@ -32,6 +32,7 @@ export * from './secrets/admin';
 export * from './http/client';
 export * from './integrations/types';
 export * from './integrations/resources';
+export * from './integrations/wiring';
 export * from './runtime/types';
 export * from './runtime/exec';
 export * from './runtime/docker';

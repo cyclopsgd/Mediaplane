@@ -10,6 +10,8 @@ import {
   type PlanResult,
   type StatusResult,
   type StepEvent,
+  type WiringAction,
+  type WiringChange,
 } from '@mediaplane/engine';
 import type { Io } from './run';
 
@@ -26,6 +28,21 @@ const MARKS: Record<ContainerAction, string> = {
   remove: '-',
   unchanged: ' ',
 };
+
+const WIRING_MARKS: Record<WiringAction, string> = {
+  create: '+',
+  update: '~',
+  adopt: '=',
+  'after-start': '>',
+  unknown: '?',
+  unchanged: ' ',
+};
+
+/** One resource's line, as plan and history show it: "  + create      sonarr.admin". */
+function wiringLine(change: WiringChange): string {
+  const what = change.changes === undefined ? '' : ` (${change.changes.join(', ')})`;
+  return `  ${WIRING_MARKS[change.action]} ${change.action.replace('-', ' ').padEnd(11)} ${change.resource}${what}`;
+}
 
 export function formatDiagnostic(diagnostic: Diagnostic): string {
   const hint = diagnostic.hint === undefined ? '' : `\n  hint: ${diagnostic.hint}`;
@@ -95,11 +112,23 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
   if (generate.length > 0) io.stdout(`Secrets to generate: ${generate.join(', ')}\n`);
   const unhealthy = result.unhealthy;
   if (unhealthy.length > 0) io.stdout(`Not healthy yet: ${unhealthy.join(', ')}\n`);
+  const wiring = result.wiring.filter((change) => change.action !== 'unchanged');
+  if (wiring.length > 0) {
+    io.stdout('Wiring:\n');
+    for (const change of wiring) {
+      io.stdout(`${wiringLine(change)}\n`);
+    }
+  }
+  const tally = (...actions: WiringAction[]) =>
+    wiring.filter((change) => actions.includes(change.action)).length;
   const parts = [
     count(files.length, 'file', 'to write'),
     count(containers.length, 'container', 'to change'),
     count(generate.length, 'secret', 'to generate'),
     count(unhealthy.length, 'app', 'to wait for'),
+    count(tally('create', 'update', 'adopt'), 'resource', 'to wire'),
+    count(tally('after-start'), 'wiring check', 'after the start'),
+    count(tally('unknown'), 'wiring check', 'that could not be made'),
   ].filter((part): part is string => part !== undefined);
   io.stdout(parts.length === 0 ? 'No changes.\n' : `Plan: ${parts.join(', ')}.\n`);
 }
@@ -147,7 +176,7 @@ export function printApply(
   io: Io,
 ): void {
   if (options.json) {
-    const { files, containers, secrets, unhealthy } = result.plan;
+    const { files, containers, secrets, unhealthy, wiring } = result.plan;
     io.stdout(
       `${JSON.stringify(
         {
@@ -160,6 +189,7 @@ export function printApply(
             containers,
             secrets,
             unhealthy,
+            wiring,
           },
           actions: result.actions,
           recordId: result.recordId ?? null,

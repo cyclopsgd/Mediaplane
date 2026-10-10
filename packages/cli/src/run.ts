@@ -26,6 +26,7 @@ import {
   type HostFacts,
   type HostProbe,
   type Runtime,
+  type WiringSeams,
 } from '@mediaplane/engine';
 import { Command, CommanderError, Option } from 'commander';
 import { printCredentials } from './credentials';
@@ -67,6 +68,8 @@ export interface CliDeps {
   probe: (runtime: Runtime, home: string) => HostProbe;
   /** Which address the host comes from, as the IP-echo service at a URL sees it. */
   egress: (runtime: Runtime) => (url: string) => Promise<EgressResult>;
+  /** For tests: where plan and apply reach the apps' APIs. */
+  wiring?: WiringSeams;
   /** init's data folder: created where it can be (prepareDataFolder). */
   dataFolder: (
     path: string,
@@ -237,6 +240,7 @@ export function createProgram(
         env: io.env,
         runtime,
         probe: deps.probe(runtime, home),
+        ...(deps.wiring === undefined ? {} : { wiring: deps.wiring }),
       });
       printPlan(result, { json: options.json === true }, io);
       setExitCode(result.ok ? (result.changed ? 2 : 0) : 1);
@@ -271,6 +275,7 @@ export function createProgram(
         env: io.env,
         runtime,
         probe: deps.probe(runtime, home),
+        ...(deps.wiring === undefined ? {} : { wiring: deps.wiring }),
         confirm: async (shown) => {
           if (!asJson) printPlan(shown, { json: false }, io);
           if (yes || ask === undefined) return true;

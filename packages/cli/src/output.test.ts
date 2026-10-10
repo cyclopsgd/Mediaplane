@@ -31,8 +31,47 @@ const PLAN: PlanResult = {
   containers: [],
   secrets: { generate: [] },
   unhealthy: [],
+  wiring: [],
   diagnostics: [],
 };
+
+describe('printPlan: the wiring', () => {
+  const WIRED: PlanResult = {
+    ...PLAN,
+    files: [],
+    wiring: [
+      { resource: 'sonarr.admin', action: 'create' },
+      { resource: 'radarr.admin', action: 'update', changes: ['username', 'password'] },
+      { resource: 'prowlarr.admin', action: 'adopt' },
+      { resource: 'qbittorrent', action: 'unchanged' },
+      { resource: 'seerr.admin', action: 'after-start' },
+      { resource: 'jellyfin.admin', action: 'unknown', reason: 'Jellyfin at … refused' },
+    ],
+  };
+
+  it('lists what it would wire, with the names of what differs, and counts it', () => {
+    const term = capture();
+    printPlan(WIRED, { json: false }, term.io);
+    expect(term.stdout()).toBe(
+      [
+        'Wiring:',
+        '  + create      sonarr.admin',
+        '  ~ update      radarr.admin (username, password)',
+        '  = adopt       prowlarr.admin',
+        '  > after start seerr.admin',
+        '  ? unknown     jellyfin.admin',
+        'Plan: 3 resources to wire, 1 wiring check after the start, 1 wiring check that could not be made.',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('gives every resource in JSON, unchanged ones too', () => {
+    const term = capture();
+    printPlan(WIRED, { json: true }, term.io);
+    expect((JSON.parse(term.stdout()) as PlanResult).wiring).toEqual(WIRED.wiring);
+  });
+});
 
 describe('printPlan', () => {
   it('shows a pre-start file as written before first start, without its content', () => {

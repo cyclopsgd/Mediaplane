@@ -4,3 +4,4 @@ export * from './fakes';
 export * from './http';
 export * from './schema';
 export * from './temp';
+export * from './wiring';

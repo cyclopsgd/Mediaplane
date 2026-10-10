@@ -25,10 +25,11 @@ import {
   fakeDocker,
   fakeProbe,
   fakeRuntime,
+  fakeStackApis,
   running,
   tempDir,
 } from '@mediaplane/engine/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PromptCancelled } from './prompt';
 import { EXIT_CODES, run, type CliDeps, type Io } from './run';
 import { VERSION } from './version';
@@ -68,8 +69,9 @@ async function currentHome(
     catalog,
     host: FIXTURE_HOST,
     env: {},
-    runtime,
+    runtime: onWiring(runtime),
     probe: fakeProbe(),
+    wiring: apis.seams,
   });
   if (context === undefined) throw new Error('the test stack must plan');
   const { store } = withGeneratedSecrets(context.stack, context.store, zeros);
@@ -103,11 +105,34 @@ function expectNoSecrets(output: string, secrets: readonly string[]): void {
   for (const secret of secrets) expect(output).not.toContain(secret);
 }
 
+/** The apps' APIs, faked anew for each test: the test stack's Sonarr and qBittorrent. */
+let apis: Awaited<ReturnType<typeof fakeStackApis>>;
+beforeEach(async () => {
+  apis = await fakeStackApis();
+});
+
+/** `runtime`, with the stack's containers on the wiring network, where `apis` are. */
+function onWiring(runtime: Runtime): Runtime {
+  return {
+    ...runtime,
+    wiringAddresses: (ids) =>
+      Promise.resolve(
+        Object.fromEntries(
+          ids.flatMap((id) => {
+            const address = apis.addresses[id];
+            return address === undefined ? [] : [[id, address]];
+          }),
+        ),
+      ),
+  };
+}
+
 function deps(runtime: Runtime = fakeRuntime()): Partial<CliDeps> {
   return {
     host: () => Promise.resolve(FIXTURE_HOST),
-    runtime: () => runtime,
+    runtime: () => onWiring(runtime),
     probe: () => fakeProbe(),
+    wiring: apis.seams,
   };
 }
 
@@ -180,7 +205,7 @@ describe('mediaplane plan', () => {
       'Secrets to generate: admin.password, gluetun.controlApiKey, qbittorrent.apiKey, sonarr.apiKey\n',
     );
     expect(term.stdout()).toContain(
-      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate.',
+      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 2 wiring checks after the start.',
     );
     expect(term.stdout()).toContain('+ generated/.env (secret values, not shown)\n');
   });
@@ -241,7 +266,7 @@ describe('mediaplane plan', () => {
     const term = capture();
     expect(await run(['plan', '--home', home], term.io, deps(runtime))).toBe(2);
     expect(term.stdout()).toBe(
-      'Not healthy yet: sonarr (unhealthy)\nPlan: 1 app to wait for.\n',
+      'Not healthy yet: sonarr (unhealthy)\nWiring:\n  > after start sonarr\nPlan: 1 app to wait for, 1 wiring check after the start.\n',
     );
     const json = capture();
     expect(await run(['plan', '--home', home, '--json'], json.io, deps(runtime))).toBe(2);
@@ -438,7 +463,7 @@ describe('mediaplane apply', () => {
     const first = capture();
     expect(await run(['apply', '--home', home, '--yes'], first.io, deps(docker))).toBe(0);
     expect(first.stdout()).toContain(
-      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate.',
+      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 2 wiring checks after the start.',
     );
     expect(first.stdout()).toContain('  done    images: images present\n');
     expect(first.stdout()).toMatch(

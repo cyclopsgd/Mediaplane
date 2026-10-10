@@ -17,8 +17,23 @@ import { renderEnvFile } from '../render/env';
 import { prestartFilesFor } from '../render/prestart';
 import { composeToYaml } from '../render/yaml';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
+import { readResources, type KnownResources } from '../integrations/resources';
+import {
+  knownSecrets,
+  planWiring,
+  WIRING_RUNBOOK,
+  wiringOrder,
+  type WiringChange,
+  type WiringSeams,
+} from '../integrations/wiring';
 import { dockerAccessWarnings } from '../runtime/docker';
-import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
+import {
+  RuntimeError,
+  type ContainerState,
+  type Runtime,
+  type WiringJoin,
+} from '../runtime/types';
+import { adminLogin } from '../secrets/admin';
 import { withGeneratedSecrets } from '../secrets/generate';
 import { readSecretStore, type SecretStore } from '../secrets/store';
 import { secretsToGenerate, secretValues } from '../secrets/values';
@@ -40,6 +55,8 @@ export interface PlanOptions {
   env: NodeJS.ProcessEnv;
   runtime: Runtime;
   probe: HostProbe;
+  /** For tests: where the apps' APIs are reached, and how long their calls are tried. */
+  wiring?: WiringSeams;
 }
 
 export interface PlanResult {
@@ -55,6 +72,8 @@ export interface PlanResult {
    * waits for them again, so they make the plan changed.
    */
   unhealthy: string[];
+  /** What apply would do to each managed resource in the apps (spec §5 step 5). */
+  wiring: WiringChange[];
   diagnostics: Diagnostic[];
 }
 
@@ -68,6 +87,8 @@ export interface PlanContext {
   compose: ComposeFile;
   store: SecretStore;
   current: ContainerState[];
+  /** state/resources.json, as plan read it. */
+  known: KnownResources;
 }
 
 /** Everything apply would do, without doing it. Writes nothing. */
@@ -169,6 +190,61 @@ export async function planStack(
   }
   const containers = predicted.changes;
   const unhealthy = notYetHealthy(current, containers);
+
+  let wiring: WiringChange[] = [];
+  let known: KnownResources = {};
+  if (wiringOrder(stack).length > 0) {
+    try {
+      known = await readResources(home);
+    } catch (cause) {
+      return failed([
+        ...diagnostics,
+        error(
+          'resources.invalid',
+          cause instanceof Error ? cause.message : String(cause),
+          {
+            hint: `move it aside and run plan again: Mediaplane finds what it made by name, and adopts it (${WIRING_RUNBOOK})`,
+          },
+        ),
+      ]);
+    }
+    let joined: WiringJoin;
+    try {
+      joined = await options.runtime.joinWiring();
+    } catch (cause) {
+      if (!(cause instanceof RuntimeError)) throw cause;
+      return failed([
+        ...diagnostics,
+        error('wire.network', cause.message, {
+          hint: `look for a networks: entry in compose.override.yaml that changes the wiring network, take it out, and run apply; see ${WIRING_RUNBOOK}`,
+        }),
+      ]);
+    }
+    // In memory: the secrets apply would generate, so that a first plan can say what it
+    // would set. Apply sets the ones it saves.
+    const admin = await adminLogin(stack.config, home, preview, options.env);
+    try {
+      const planned = await planWiring({
+        stack,
+        current,
+        changing: new Set(
+          containers.filter((c) => c.action !== 'unchanged').map((c) => c.service),
+        ),
+        onNetwork: joined !== 'no-network',
+        runtime: options.runtime,
+        keys: preview.apps,
+        admin,
+        secrets: knownSecrets(values, preview.apps, admin),
+        known,
+        ...(options.wiring === undefined ? {} : { seams: options.wiring }),
+      });
+      wiring = planned.changes;
+      diagnostics.push(...planned.diagnostics);
+    } catch (cause) {
+      if (!(cause instanceof RuntimeError)) throw cause;
+      return failed([...diagnostics, dockerUnavailable(cause, options.env)]);
+    }
+  }
   return {
     result: {
       ok: true,
@@ -176,14 +252,16 @@ export async function planStack(
         files.some((file) => file.status !== 'unchanged') ||
         containers.some((change) => change.action !== 'unchanged') ||
         generate.length > 0 ||
-        unhealthy.length > 0,
+        unhealthy.length > 0 ||
+        wiring.some((change) => change.action !== 'unchanged'),
       files,
       containers,
       secrets: { generate },
       unhealthy,
+      wiring,
       diagnostics,
     },
-    context: { stack, compose, store, current },
+    context: { stack, compose, store, current, known },
   };
 }
 
@@ -196,6 +274,7 @@ function failed(diagnostics: Diagnostic[]): { result: PlanResult; context: undef
       containers: [],
       secrets: { generate: [] },
       unhealthy: [],
+      wiring: [],
       diagnostics,
     },
     context: undefined,
