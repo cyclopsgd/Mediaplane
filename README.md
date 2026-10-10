@@ -9,16 +9,15 @@ Compose and wires the apps together for you.**
 > **Status: pre-alpha, not ready for use yet.**
 >
 > - **Works today:** `mediaplane plan` checks a real host and shows exactly what it
->   would do. `mediaplane apply` then starts the stack and confirms that every app
->   is healthy. `mediaplane vpn-check` confirms that qBittorrent reaches the internet
->   only through the VPN. Mediaplane runs in its own hardened container, behind a
->   Docker socket proxy.
-> - **Next:** wiring the apps together. Until that lands, each app still needs
+>   would do. `mediaplane apply` then starts the stack, confirms that every app is
+>   healthy, and sets one admin login in qBittorrent, Sonarr, Radarr and Prowlarr
+>   (`mediaplane credentials` shows it). `mediaplane vpn-check` confirms that
+>   qBittorrent reaches the internet only through the VPN. Mediaplane runs in its own
+>   hardened container, behind a Docker socket proxy, and reaches the apps over a
+>   private network with no route out.
+> - **Next:** wiring the apps to each other. Until that lands, each app still needs
 >   setting up by hand. Jellyfin's wizard and Seerr's setup are open to anyone who
->   can reach them until you complete them, so complete them first. qBittorrent has
->   the shared admin login from its first start (`mediaplane credentials` shows it).
->   Sonarr, Radarr and Prowlarr ask for a login that doesn't exist yet (Slice 3b
->   creates it); their READMEs say how to set one.
+>   can reach them until you complete them, so complete them first.
 > - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
 >   your LAN (`network.bind: lan`) or keep them on this machine (`localhost`).
 >
@@ -44,23 +43,24 @@ Mediaplane does that part for you:
 
 ## What works so far
 
-| Capability                                                                            | Status       |
-| ------------------------------------------------------------------------------------- | ------------ |
-| Validate `stack.yaml`, with errors that say what to change                            | Done         |
-| Render a readable Compose project with images pinned by tag and digest                | Done         |
-| Check the host first: Docker versions, disk, data folder, ports, the VPN device       | Done         |
-| Refuse to publish web UIs on a cloud VM's private address by mistake                  | Done         |
-| Predict exactly which containers will change, using Compose's own config hashes       | Done         |
-| Generate keys and start the stack (`mediaplane apply`)                                | Done         |
-| See each app's health and every past apply (`status`, `history`)                      | Done         |
-| Write a starter `stack.yaml` (`init`)                                                 | Done         |
-| One admin login, generated, set in qBittorrent before it first starts (`credentials`) | Done         |
-| A VPN kill switch, tested against a real WireGuard server, and `vpn-check`            | Done         |
-| Run in a hardened container, behind a Docker socket proxy                             | Done         |
-| Documentation generated from code: the `stack.yaml` and CLI references, app facts     | Done         |
-| Wire the apps together (download clients, indexers, root folders, media server)       | Planned      |
-| Detect manual changes and offer Re-apply or "Keep mine"                               | Planned      |
-| Web panel with a setup wizard                                                         | Planned (M2) |
+| Capability                                                                        | Status       |
+| --------------------------------------------------------------------------------- | ------------ |
+| Validate `stack.yaml`, with errors that say what to change                        | Done         |
+| Render a readable Compose project with images pinned by tag and digest            | Done         |
+| Check the host first: Docker versions, disk, data folder, ports, the VPN device   | Done         |
+| Refuse to publish web UIs on a cloud VM's private address by mistake              | Done         |
+| Predict exactly which containers will change, using Compose's own config hashes   | Done         |
+| Generate keys and start the stack (`mediaplane apply`)                            | Done         |
+| See each app's health and every past apply (`status`, `history`)                  | Done         |
+| Write a starter `stack.yaml` (`init`)                                             | Done         |
+| One admin login, generated, for qBittorrent and the Servarr apps (`credentials`)  | Done         |
+| Reach the apps' APIs over a private network with no route out                     | Done         |
+| A VPN kill switch, tested against a real WireGuard server, and `vpn-check`        | Done         |
+| Run in a hardened container, behind a Docker socket proxy                         | Done         |
+| Documentation generated from code: the `stack.yaml` and CLI references, app facts | Done         |
+| Wire the apps together (download clients, indexers, root folders, media server)   | Planned      |
+| Detect manual changes and offer Re-apply or "Keep mine"                           | Planned      |
+| Web panel with a setup wizard                                                     | Planned (M2) |
 
 ## The stack
 
@@ -99,7 +99,8 @@ Secrets never go in `stack.yaml`: it only points to them, with `{ file: … }` o
 
 Mediaplane works like `terraform plan` and `apply`. `plan` validates `stack.yaml`, checks
 the host, renders the Compose project and diffs it against what is running. It shows you
-the changes and touches nothing. `apply` does the same, then makes those changes.
+the changes and touches nothing in your stack. `apply` does the same, then makes those
+changes.
 
 ```text
 stack.yaml + secrets/
@@ -108,8 +109,9 @@ stack.yaml + secrets/
 mediaplane plan
   │  checks the host: Docker, disk,
   │  ports, the data folder
-  │  compares with what is running
-  │  changes nothing
+  │  compares with what is running,
+  │  and asks the apps
+  │  changes nothing in the stack
   ▼
 mediaplane apply
   ├─ generates keys and the admin
@@ -118,11 +120,13 @@ mediaplane apply
   │  files apps read at first start
   ├─ pulls images, starts the apps
   ├─ waits until every app is healthy
+  ├─ wires the apps through their
+  │  APIs (the shared login, so far)
   ├─ plans again: nothing left to do
   └─ records the change in history
 ```
 
-Next, `apply` will also wire the apps together through their own APIs.
+Next, `apply` will wire the apps to each other through the same APIs (Slices 3c to 7).
 
 A few principles hold throughout:
 
@@ -144,9 +148,9 @@ A few principles hold throughout:
 
 ## What it looks like
 
-This is real output from a run on an arm64 VM, trimmed where marked. The stack is the
-example above without the VPN, which is why `plan` warns about qBittorrent, and with
-`network.bind: localhost`.
+Most of this is real output from a run on an arm64 VM, trimmed where marked, and the
+wiring lines came with Slice 3b. The stack is the example above without the VPN, which
+is why `plan` warns about qBittorrent, and with `network.bind: localhost`.
 
 ```console
 $ mediaplane plan
@@ -174,7 +178,12 @@ Containers:
   + create    seerr
   + create    sonarr
 Secrets to generate: admin.password, prowlarr.apiKey, qbittorrent.apiKey, radarr.apiKey, seerr.apiKey, sonarr.apiKey
-Plan: 6 files to write, 7 containers to change, 6 secrets to generate.
+Wiring:
+  > after start radarr.admin
+  > after start sonarr.admin
+  > after start prowlarr.admin
+  > after start qbittorrent
+Plan: 6 files to write, 7 containers to change, 6 secrets to generate, 4 wiring checks after the start.
 
 $ mediaplane apply --yes
   … the same plan …
@@ -185,6 +194,11 @@ Pulling images (the first time can take several minutes)…
   done    appdata ownership: seerr → 1000:1000
 Starting containers and waiting until every app is healthy…
   done    containers: every app is running and healthy
+Wiring the apps…
+  done    wiring radarr.admin: created
+  done    wiring sonarr.admin: created
+  done    wiring prowlarr.admin: created
+  done    wiring: radarr.admin created; sonarr.admin created; prowlarr.admin created
   done    verify: no changes remain
 
 Apply complete. Change record: 20261010T031836Z-17560c95
@@ -211,11 +225,11 @@ Admin login for the apps:
   password   … 24 letters and digits …
 
 Jellyfin     http://127.0.0.1:8096  (its login arrives in Slice 6)
-Prowlarr     http://127.0.0.1:9696  (its login arrives in Slice 3b)
+Prowlarr     http://127.0.0.1:9696
 qBittorrent  http://127.0.0.1:8080
-Radarr       http://127.0.0.1:7878  (its login arrives in Slice 3b)
+Radarr       http://127.0.0.1:7878
 Seerr        http://127.0.0.1:5055  (its login arrives in Slice 7)
-Sonarr       http://127.0.0.1:8989  (its login arrives in Slice 3b)
+Sonarr       http://127.0.0.1:8989
 ```
 
 ## Run it in a container
@@ -236,8 +250,11 @@ Then follow [`deploy/README.md`](deploy/README.md) to start it and run
 `mediaplane plan` already checks a real host and shows exactly what `apply` would do:
 
 - the Compose file it would write;
-- the containers it would create, recreate, start or remove;
-- the secrets it would generate.
+- the containers it would create, recreate, start, restart or remove (`restart` is for
+  qBittorrent when Gluetun starts again on its own);
+- the secrets it would generate;
+- the wiring it would do in the apps, under `Wiring:`, such as setting the admin login.
+  An app that Mediaplane only checks, such as qBittorrent, is listed by its name.
 
 It changes nothing. You need Docker (Engine 24 or newer, with the Compose plugin 2.24 or
 newer), Node 24 and pnpm.
@@ -268,7 +285,9 @@ just created. `MEDIAPLANE_COMPOSE_PROJECT` gives this trial its own Compose proj
 `mediaplane-dev`, so a real `mediaplane` stack on the same host is never touched.
 `plan` exits with `0` when nothing would change, `2` when it would change something
 (including when an app is still waiting for its health check), and `1` on errors. Add
-`--json` for machine-readable output.
+`--json` for machine-readable output: its `wiring` lists each resource with its `action`
+(`create`, `update`, `adopt`, `unchanged`, `after-start` or `unknown`), the `changes` that
+differ, and a `reason` when it is `unknown`.
 
 To actually start the stack, use a stack without the VPN. A fake WireGuard key can't
 connect, so Gluetun would never become healthy. Change the qBittorrent line to
@@ -281,7 +300,8 @@ pnpm --silent mediaplane credentials --home .mediaplane-dev
 ```
 
 This starts real containers on this machine, with the web UIs on `localhost`. The last
-command shows the admin login, which qBittorrent already uses, and each app's address.
+command shows the admin login, which qBittorrent, Sonarr, Radarr and Prowlarr use, and
+each app's address.
 The first `apply` downloads several GB of images, so it can take a while. To remove the
 containers, run `docker compose -p mediaplane-dev down`, then
 `sudo rm -rf .mediaplane-dev`. Seerr's folder belongs to uid 1000, which is why `sudo`
@@ -317,8 +337,8 @@ So Mediaplane isn't instead of a pipeline. It is built to run inside one:
 - `plan` and `apply` run unattended, with exit codes and `--json` output.
 
 The pipeline decides what the stack is, and Mediaplane does the stateful part. Today
-that covers generating the keys, deploying and checking. The app-to-app wiring and
-change detection are what is being built next.
+that covers generating the keys, deploying, setting the shared login in the apps, and
+checking. The app-to-app wiring and change detection are what is being built next.
 
 ### Why not just write the Compose file myself?
 
@@ -333,6 +353,16 @@ and keep. What it adds is everything around the file:
   an automated test of that and `mediaplane vpn-check` to confirm it on your host;
 - keys that are generated once and kept;
 - next, the wiring between the apps.
+
+### How is this different from Buildarr or Recyclarr?
+
+Those tools configure apps you already run, and they are good at detailed tuning, such
+as quality profiles. Mediaplane deploys the whole stack and makes it safe: generated
+secrets, a socket proxy, a tested VPN kill switch, and a private wiring network. It then
+wires the apps to each other, with `plan` and `apply` and a history of what it did, and
+leaves the rest of each app's settings to you.
+
+They can be used together. Recyclarr is planned for M4.
 
 ### Can it take over my existing setup?
 
@@ -355,8 +385,9 @@ secrets private:
 On a cloud VM it refuses to publish the web UIs on the private address unless you say
 so. In its container, Mediaplane never touches the Docker socket. It goes through a
 proxy that allows only the Docker calls it makes, which is defence in depth rather
-than a boundary. The [threat model](docs/security/threat-model.md) explains what that
-does and doesn't protect, and [SECURITY.md](SECURITY.md) covers what is in scope.
+than a boundary. Its container has no route out: it reaches the apps over a private
+network. The [threat model](docs/security/threat-model.md) explains what that does and
+doesn't protect, and [SECURITY.md](SECURITY.md) covers what is in scope.
 
 ### Do I have to keep using it?
 
@@ -375,10 +406,10 @@ runs the stack without Mediaplane.
 M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it stands:
 
 - **Merged:** S1 (the pure core), S2a (`plan` against a real host), S2b (`apply`), S2c
-  (packaging), S3a (the shared admin and pre-start files) and S3d (the VPN's kill-switch
-  test and `vpn-check`).
-- **Next:** S3b (the wiring framework).
-- **After that:** S3c (the download path), then S4 to S8.
+  (packaging), S3a (the shared admin and pre-start files), S3d (the VPN's kill-switch
+  test and `vpn-check`) and S3b (the wiring framework).
+- **Next:** S3c (the download path).
+- **After that:** S4 to S8.
 
 ## Documentation
 
@@ -399,6 +430,8 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
   fix and prevention.
 - **[Runbook: the VPN is down](docs/runbooks/vpn-down.md):** what `vpn-check` found, and
   what to do about a VPN that is down or a leak.
+- **[Runbook: wiring failed](docs/runbooks/wiring-failed.md):** an app refused Mediaplane's
+  key or a change, or Mediaplane can't reach it.
 - **[Threat model](docs/security/threat-model.md):** what is protected, how, and what
   isn't.
 - **[Architecture decision records](docs/adr/):** why things are the way they are.

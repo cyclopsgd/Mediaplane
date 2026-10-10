@@ -47,7 +47,7 @@ folder, only its own config folder.
   Mediaplane lists `prowlarr`, which the other apps and Mediaplane use, and the addresses its
   web UI is published on. `localhost` and `127.0.0.1` always work. To use another name,
   such as your host's, set the variable yourself in `apps.prowlarr.env`, keeping `prowlarr` in
-  the list.
+  the list, with commas between the names.
 - **Byparr.** Listing Prowlarr also turns on Byparr, the Cloudflare challenge solver,
   unless you list FlareSolverr instead or set `byparr: { enabled: false }`.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its

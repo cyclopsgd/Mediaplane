@@ -1,7 +1,7 @@
 # Architecture
 
 This page is a condensed version of the [M1 design](design/m1-engine-cli.md), §3 to §6,
-covering what is built so far (Slices 1 to 3a, and 3d). The design describes the whole
+covering what is built so far (Slices 1 to 3a, 3d and 3b). The design describes the whole
 of M1; this page describes what exists.
 
 ## The idea
@@ -9,7 +9,8 @@ of M1; this page describes what exists.
 You describe the stack you want in one file, `stack.yaml`. Mediaplane then works like
 `terraform plan` and `apply`:
 
-- `plan` works out what would change, and changes nothing;
+- `plan` works out what would change, and changes nothing in your stack (in the image,
+  it joins the stack's wiring network, to ask the apps: see [The wiring](#the-wiring));
 - `apply` makes those changes, then plans again to check that nothing is left.
 
 What it writes is an ordinary Docker Compose project, which runs without Mediaplane.
@@ -30,6 +31,8 @@ host (Docker)
 ├─ mediaplane         Compose project
 │    your stack: Sonarr,
 │    Radarr, Jellyfin, …
+│    and its wiring network,
+│    which mediaplane joins
 │
 └─ host helper        container
      throwaway, during init,
@@ -37,15 +40,21 @@ host (Docker)
 ```
 
 - **`mediaplane-system`** is Mediaplane's own Compose project. Apply never manages it,
-  and the runtime refuses to. [`deploy/README.md`](../deploy/README.md) shows how to start
-  it.
+  and the runtime refuses to, but for one thing: it puts Mediaplane's own container on
+  the stack's wiring network, and takes it off for `up` ([The wiring](#the-wiring)).
+  [`deploy/README.md`](../deploy/README.md) shows how to start it.
 - **The Mediaplane container** has a read-only root, no capabilities and
   `no-new-privileges`. It runs as the user who owns the home.
   - Its only mount is the home, at the same path as on the host, because the host's
     Docker resolves every path in `compose.yaml`. `plan` checks that the home's
     `stack.yaml` is the host's own file at that path (`preflight.home-path`).
-  - Its network is internal: it reaches the socket proxy and nothing else. Image pulls
-    happen in the Docker daemon, which has the host's network.
+  - Its networks are internal, so it has no route out. One reaches the socket proxy;
+    the other, the stack's wiring network, reaches the apps whose API it calls
+    ([ADR 0011](adr/0011-a-private-wiring-network.md)). Image pulls happen in the Docker
+    daemon, which has the host's network.
+  - It sets `net.ipv4.ip_forward: 0`, so it can't route between the two networks. Only
+    the IPv4 key is set: the networks have no IPv6, and the IPv6 key fails on hosts
+    without IPv6.
 - **The socket proxy** is the only container with Docker's socket. It forwards only the
   kinds of Docker API call the engine makes, by method and path
   ([ADR 0008](adr/0008-docker-socket-proxy-on-by-default.md)). It is defence in depth,
@@ -65,7 +74,8 @@ host (Docker)
   - never pulls an image, and is removed when it exits.
 - **Running from source** (`pnpm mediaplane`, for development), `MEDIAPLANE_IMAGE` is
   unset. There is no container and no host helper: the CLI runs under Node on the host,
-  and looks at the host itself.
+  and looks at the host itself. It reaches the apps on the wiring network from the host,
+  which reaches every container on a Docker bridge network.
 
 ## The engine
 
@@ -91,7 +101,8 @@ Each part, and where its code is:
   read the host's facts, and check the host before anything changes. In the container,
   they ask the host helper.
 - **planner** (`packages/engine/src/plan`): diffs the files, the containers and the keys,
-  and lists the apps that are not healthy yet.
+  lists the apps that are not healthy yet, and asks the apps what the wiring would
+  change.
 - **apply** (`packages/engine/src/apply`, and the lock in `packages/engine/src/state`):
   runs the steps below, converging forward
   ([ADR 0004](adr/0004-converge-forward-apply.md)).
@@ -101,6 +112,10 @@ Each part, and where its code is:
   and the last apply.
 - **credentials** (`packages/engine/src/credentials.ts`): the shared admin login, and
   where each app's web UI is.
+- **http** (`packages/engine/src/http`): the client for the apps' APIs (see
+  [The wiring](#the-wiring)).
+- **integrations** (`packages/engine/src/integrations`, and `catalog/<app>/integration.ts`):
+  what Mediaplane manages in each app, and how `plan` and `apply` wire it.
 - **vpn** (`packages/engine/src/vpn`): `vpn-check`. It reads the containers, runs a probe
   inside qBittorrent's network, and compares where qBittorrent's traffic and the host's
   leave from (see [`vpn-check`](#vpn-check)).
@@ -109,7 +124,7 @@ Each part, and where its code is:
 
 Not built yet:
 
-- the integrations, which wire the apps together through their APIs (Slices 3b to 7);
+- the links between the apps, through their APIs (Slices 3c to 7);
 - drift detection, with Keep mine (Slice 4).
 
 ## `plan`
@@ -134,13 +149,21 @@ render
   │ pre-start files
   ▼
 diff
-  files, containers,
-  keys to generate,
-  apps not healthy yet
+  │ files, containers,
+  │ keys to generate,
+  │ apps not healthy yet
+  ▼
+ask the apps
+  each resource: create,
+  update, adopt, unchanged,
+  or after the start
 ```
 
 `plan` writes nothing. Its exit code is 0 when nothing would change, 2 when something
-would (or an app is still waiting for its health check), and 1 on an error.
+would (or an app is still waiting for its health check), and 1 on an error. In the
+image, when an app is running and left as it is, it joins Mediaplane's container to the
+stack's wiring network, to ask that app; that changes no app and no file. What it finds
+shows under `Wiring:`, and as `wiring` in `--json` (see [The wiring](#the-wiring)).
 
 **Which containers change** comes from Compose itself
 ([ADR 0010](adr/0010-predict-container-changes-with-compose-hashes.md)):
@@ -165,8 +188,13 @@ lock
    if absent
  → pull images
  → set appdata owners
+ → step off the wiring
+   network; stop a
+   stranded qBittorrent
  → up --wait
- → plan again
+ → wire each app
+ → plan again, and
+   vpn-check's checks
  → write change record
  → unlock
 ```
@@ -190,6 +218,13 @@ lock
   fail at once.
 - **`up --wait`** waits until every app is healthy. It fails as soon as an app is marked
   unhealthy, and gives up after 10 minutes.
+- **A stranded qBittorrent is restarted.** qBittorrent joins Gluetun's network when it
+  starts. When Gluetun starts again on its own, or `apply` starts a stopped one, Compose
+  leaves qBittorrent with the old network, which is gone. So `plan` lists qBittorrent as
+  `restart` then, and apply stops it before `up`, which starts it again in Gluetun's new
+  network.
+- **Verify** plans again, and nothing may be left to do. With qBittorrent behind
+  Gluetun, it also runs vpn-check's checks, without the address comparison.
 - **The lock** records the process and the host name. That is why the Mediaplane
   container's host name is fixed: a recreated container can still clear a lock its
   predecessor left.
@@ -208,6 +243,7 @@ lock
 │  └─ .env           0600
 ├─ state/            0700
 │  ├─ secrets.json   0600
+│  ├─ resources.json 0600
 │  ├─ history/
 │  └─ lock
 └─ appdata/          0700
@@ -233,6 +269,9 @@ lock
   `appdata/` itself private (0700), on every apply. Docker mounts each app's folder as
   root, so the apps don't need to pass through it. `plan` notes when `appdata/` isn't
   private yet, and warns when another user owns it, because apply can't change it then.
+- **`state/`** is Mediaplane's own record, private to its owner (0700): the keys it
+  generated (`secrets.json`), what it manages in each app (`resources.json`, which never
+  holds a secret's value), the change records (`history/`) and the apply lock.
 - **The home's filesystem must support hard links,** because the lock, `init`'s
   `stack.yaml` and the pre-start files are created with one.
 
@@ -241,6 +280,65 @@ Radarr, qBittorrent, and Jellyfin or Plex) mount it as `/data`. Keep downloads a
 inside it, on one filesystem, so moving a finished download into the library is an
 instant hardlink. `plan` checks that `torrents/`, `usenet/` and `media/`, where they
 exist, are on the same filesystem as the folder itself.
+
+## The wiring
+
+Wiring is what Mediaplane does through each app's API once the apps run. Today that is
+the shared admin login in Sonarr, Radarr and Prowlarr, and a check that Mediaplane's key
+still opens qBittorrent.
+
+```text
+mediaplane-system
+  mediaplane
+    │ wiring network:
+    │ internal, no way out
+    ▼
+mediaplane (the stack)
+  sonarr, radarr, prowlarr
+  gluetun ─ qbittorrent
+  (each keeps its default
+  network, for its own
+  traffic)
+```
+
+- **The wiring network** is part of `compose.yaml`: `wiring`, with `internal: true`.
+  Every app whose API Mediaplane calls is on it, and Gluetun is on it for qBittorrent.
+  Gluetun counts it as local, so its firewall lets it through to qBittorrent's port. The
+  apps are reached at their container's address on it, with
+  `Host: <service>:<port>`, as the other apps reach them. In the image, `plan` and
+  `apply` join Mediaplane's container to it, and it stays; `apply` steps off for `up`,
+  so that Compose can make the network anew if it must (only without the proxy, which
+  lets no one delete a network: [ADR 0011](adr/0011-a-private-wiring-network.md)).
+- **Joining and leaving** act on the network's ID, after a strict read of it: the
+  network must be internal, a bridge, and carry this project's Compose labels for
+  `wiring`, or the runtime refuses it. They touch Mediaplane's own container and that
+  network, and nothing else.
+- **Each app's integration** (`catalog/<app>/integration.ts`) lists the resources
+  Mediaplane manages in it, such as `sonarr.admin`. For each, it says how to read it
+  from the app, which of its fields are managed, which secrets it holds, and how to
+  create or change it. The app's README lists them.
+- **Each resource** is one of:
+  - `create` or `update`: the app lacks it, or a managed field or a secret differs. A
+    secret is checked by using it, such as signing in, never compared.
+  - `adopt`: the app already holds it as wanted, but `state/resources.json` doesn't say
+    so yet, such as after lost state.
+  - `unchanged`.
+  - `after start` (`after-start` in `--json`): its app isn't running yet, or apply will
+    change its container.
+  - `unknown`: Mediaplane couldn't ask the app, and a warning says why.
+- **The wire step** waits until each app is ready (`/ping` for Sonarr, Radarr and
+  Prowlarr), checks that its key still works, then makes each resource what the stack wants, in order: an app comes
+  after the apps its integration names. A resource that fails doesn't stop the others,
+  and one that needs it is skipped. Each result is kept at once in
+  `state/resources.json`: each resource's id, name and managed fields, and the names of
+  its secrets, never their values.
+- **The client** (`http/client.ts`) goes straight to the container, through an HTTP
+  agent of its own, never through a proxy from the environment. It sends the app's key in
+  a header, never in the URL. It tries a refused or cut connection, a timeout, or a 502,
+  503 or 504 again, waiting longer each time, for up to two minutes in `apply` and 15
+  seconds in `plan`; a create only when nothing reached the app. It reads at most 5 MiB of an
+  answer, checks its shape, and shows only the app's own message about a refusal, with
+  every secret replaced.
 
 ## `vpn-check`
 
@@ -299,7 +397,7 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
-- the wiring, app by app (Slices 3b to 7);
+- the wiring, app by app (Slices 3c to 7);
 - drift detection (Slice 4);
 - releases (Slice 8);
 - the web panel (M2).

@@ -29,7 +29,9 @@ unmodified, and by default puts it behind Gluetun's VPN.
   - qBittorrent uses Gluetun's network (`network_mode: service:gluetun`), so its traffic
     leaves through Gluetun's VPN tunnel and firewall;
   - it starts only once Gluetun is healthy, and Compose restarts it when it recreates
-    Gluetun;
+    Gluetun. When Gluetun has started again without it, by hand or after a crash, or
+    when `apply` starts a stopped Gluetun, `apply` restarts qBittorrent too, so that it
+    joins Gluetun's new network: `plan` lists it as `restart`;
   - its web UI is published on Gluetun's service;
   - `stack.yaml` needs a `vpn:` block, or `plan` reports an error;
   - an end-to-end test checks that it has no way out when the VPN is down, against a
@@ -37,6 +39,10 @@ unmodified, and by default puts it behind Gluetun's VPN.
     (see [Gluetun's README](../gluetun/README.md)). vpn-check runs its probe in
     qBittorrent's own image, as nobody: a throwaway container that writes nothing.
 - **Without the VPN** (`vpn: false`), it has its own network, and `plan` warns every time.
+- **Its API, over the wiring network.** `plan` and `apply` check that Mediaplane's key
+  still opens qBittorrent's API, sent as a Bearer token. Behind the VPN they reach it
+  through Gluetun, which is on the stack's wiring network for it, at qBittorrent's own
+  port. Slice 3c manages its settings through that API.
 - **One port, inside and out.** qBittorrent checks the `Host` header, so the published
   port and its own port must match. `apps.qbittorrent.port` changes both, through
   `WEBUI_PORT`, and `apps.qbittorrent.env` refuses `WEBUI_PORT`.
@@ -79,9 +85,9 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Known issues
 
-- **After Gluetun restarts on its own, qBittorrent has no network.** It keeps the network
-  the old Gluetun had, until it restarts too. `mediaplane vpn-check` reports it; see
-  [Gluetun's README](../gluetun/README.md).
+- **After Gluetun restarts on its own, qBittorrent has no network** until it restarts
+  too. `mediaplane vpn-check` reports it, and `mediaplane apply` restarts qBittorrent;
+  see [Gluetun's README](../gluetun/README.md).
 - **`stack.yaml` reaches qBittorrent only at its first start.** Mediaplane never
   rewrites `qBittorrent.conf`, so changing any of these afterwards doesn't change
   qBittorrent: `admin.username`, `admin.password`, `security.login_on_lan`,

@@ -47,7 +47,7 @@ LinuxServer.io image, unmodified.
   Mediaplane lists `radarr`, which the other apps and Mediaplane use, and the addresses its
   web UI is published on. `localhost` and `127.0.0.1` always work. To use another name,
   such as your host's, set the variable yourself in `apps.radarr.env`, keeping `radarr` in
-  the list.
+  the list, with commas between the names.
 - **What it needs.** A download client. Listing Radarr does not turn one on: list
   `qbittorrent` too, or `plan` reports an error.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its

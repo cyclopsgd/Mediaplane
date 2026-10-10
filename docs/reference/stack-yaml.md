@@ -28,7 +28,7 @@ Each field shows its type, then `required` or its default, if it has one.
 - `network.lan_subnet` (string): Your LAN, as a private (RFC 1918) IPv4 CIDR such as 192.168.1.0/24. Left out, it is detected from this host's private addresses, except on a cloud VM, where bind: lan needs it set. Mediaplane trusts it only while the web UIs are published on the LAN.
 - `security` (object; default `{ login_on_lan: true }`): Login settings.
 - `security.login_on_lan` (boolean; default `true`): Ask for a login from your own network too. false lets Sonarr, Radarr and Prowlarr skip it for any local (private) address, and qBittorrent for addresses in the LAN subnet while the web UIs are on the LAN.
-- `admin` (object; default `{ username: admin }`): The shared admin login for the apps' web UIs, set up in each app as its slice lands: qBittorrent in Slice 3a, Sonarr, Radarr and Prowlarr in Slice 3b, and Jellyfin in Slice 6.
+- `admin` (object; default `{ username: admin }`): The shared admin login for the apps' web UIs: qBittorrent, Sonarr, Radarr and Prowlarr use it, and Jellyfin will from Slice 6. Apply sets it in Sonarr, Radarr and Prowlarr through their API, and again whenever it changes.
 - `admin.username` (string; default `admin`): The user name of the shared admin login: 3 to 32 letters, digits, ".", "_" or "-".
 - `admin.password` (secret reference): The admin password, as a secret reference, at least 12 characters long. Left out, Mediaplane generates one; "mediaplane credentials" shows it.
 - `media_server` (`jellyfin` or `plex`; required): The media server, jellyfin or plex. It runs whether or not it is listed under apps.

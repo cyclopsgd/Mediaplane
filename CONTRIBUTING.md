@@ -26,13 +26,17 @@ After changing `packages/engine/src/config/schema.ts`, a command or option in
 `packages/cli/src/run.ts`, or an app in `catalog/`, run `pnpm docs:generate` and commit
 what it writes. CI fails while the generated docs are stale.
 
-The unit tests use in-memory fakes for Docker and the host. The spawned-CLI tests in
-`packages/cli/src/main.test.ts` and `pnpm test:e2e` use the real Docker, under their own
-Compose project names, so they never touch a real stack. The end-to-end suite passes its
-own project names (starting `mediaplane-e2e-`) straight to the engine; the spawned-CLI
-tests set `MEDIAPLANE_COMPOSE_PROJECT`. `MEDIAPLANE_COMPOSE_PROJECT` is for tests and
-dev; the generated header's eject command always names the default `mediaplane`
-project.
+The unit tests use in-memory fakes for Docker and the host. The apps' APIs are fake
+HTTP servers on 127.0.0.1 (`fakeHttpApp` in `@mediaplane/engine/testing`, §8.1(2) of the
+spec), which the CLI's tests reach through `CliDeps.wiring`; no unit test reaches a real
+app. One client test spawns a Node process, to check that no proxy sees a key.
+
+The spawned-CLI tests in `packages/cli/src/main.test.ts` and `pnpm test:e2e` use the
+real Docker, under their own Compose project names, so they never touch a real stack.
+The end-to-end suite passes its own project names (starting `mediaplane-e2e-`) straight
+to the engine; the spawned-CLI tests set `MEDIAPLANE_COMPOSE_PROJECT`.
+`MEDIAPLANE_COMPOSE_PROJECT` is for tests and dev; the generated header's eject command
+always names the default `mediaplane` project.
 
 The apply end-to-end test pulls the full app stack the first time, about 7 GB, and
 starts it, so allow several minutes. The test files run one at a time because they

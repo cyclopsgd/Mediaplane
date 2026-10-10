@@ -11,18 +11,14 @@ Mediaplane runs as two containers in their own Compose project, `mediaplane-syst
 The stack Mediaplane deploys is a separate Compose project, `mediaplane`, so `apply` can
 never touch Mediaplane itself.
 
-> Mediaplane is pre-alpha. The apps are not wired together yet (Slices 3b to 7 do that).
-> On a home network, `init` suggests publishing their web UIs on your LAN. Until the
-> wiring lands:
+> Mediaplane is pre-alpha. The apps are not wired to each other yet (Slices 3c to 7 do
+> that). On a home network, `init` suggests publishing their web UIs on your LAN. Until
+> the wiring lands, Jellyfin's setup wizard and Seerr's setup are open to anyone on your
+> LAN until you complete them, so complete them first.
 >
-> - Jellyfin's setup wizard and Seerr's setup are open to anyone on your LAN until you
->   complete them, so complete them first;
-> - Sonarr, Radarr and Prowlarr ask for a login that has no user yet (Slice 3b creates
->   it).
->
-> qBittorrent has the shared admin login from its first start: `mediaplane credentials`
-> shows it. To keep the web UIs on this machine only, answer `localhost` when `init`
-> asks (see [First run](#first-run)).
+> qBittorrent, Sonarr, Radarr and Prowlarr have the shared admin login:
+> `mediaplane credentials` shows it. To keep the web UIs on this machine only, answer
+> `localhost` when `init` asks (see [First run](#first-run)).
 
 ## What you need
 
@@ -143,19 +139,18 @@ nothing. Without a terminal it asks nothing: pass the flags in the
   - With `lan`, it also asks whether your own network must sign in too
     (`security.login_on_lan`; `--no-login-on-lan` says no).
 
-  Until the wiring lands (Slices 3b to 7):
-  - Jellyfin's setup wizard and Seerr's setup are open to anyone on your LAN until you
-    complete them. Complete them right after the first `apply`.
-  - Sonarr, Radarr and Prowlarr ask for a login that has no user yet. Their READMEs,
-    such as [Sonarr's](../catalog/sonarr/README.md), say how to create one.
+  Until the wiring lands (Slices 6 and 7), Jellyfin's setup wizard and Seerr's setup
+  are open to anyone on your LAN until you complete them. Complete them right after the
+  first `apply`.
 
 - **The admin login.** `init` asks for its user name (`--admin-user`), and whether
   Mediaplane should generate its password or read yours from a file in the home
   (`--admin-password-file secrets/admin-password`, at least 12 characters). After
   `apply`, `mediaplane credentials` shows the login and each app's address. It shows a
   password of your own only with `--reveal`, and its `--json` output leaves out either
-  unless you add `--reveal`. qBittorrent uses this login today; Sonarr, Radarr and
-  Prowlarr follow in Slice 3b.
+  unless you add `--reveal`. qBittorrent, Sonarr, Radarr and Prowlarr use it. `apply`
+  sets it in Sonarr, Radarr and Prowlarr through their API once they run, and sets it
+  again whenever it changes.
   - qBittorrent gets the login only at its first start, from a file Mediaplane never
     rewrites. So if you later change `admin.password`, or switch between yours and the
     generated one, `credentials` shows the new password but qBittorrent keeps the old
@@ -219,8 +214,10 @@ host
   device files under `/dev` stay writable where Docker's device rules and their file
   modes allow.
 
-- **Mediaplane's network** is internal: the container reaches the proxy and nothing else.
-  Image pulls happen in the Docker daemon, which has the host's network.
+- **Mediaplane's networks** are internal: the proxy's, and the stack's wiring network
+  ([How Mediaplane reaches the apps](#how-mediaplane-reaches-the-apps)). The container
+  has no route out. Image pulls happen in the Docker daemon, which has the host's
+  network.
 - **vpn-check's probe** is a throwaway container of qBittorrent's image, in Gluetun's
   network, as qBittorrent is. That is how `vpn-check` reaches Gluetun and the internet
   from the VPN's side without a route of its own.
@@ -365,6 +362,17 @@ Each item is a message you may see, then what to do.
   [VPN down runbook](../docs/runbooks/vpn-down.md), which goes by the line marked `DOWN`
   or `LEAK`.
 
+- `the wiring failed for …`, `refusing to join mediaplane_wiring`, or an app's own
+  message about its API, such as `refused Mediaplane's API key`
+
+  From `mediaplane plan` or `apply`. Follow the
+  [wiring failed runbook](../docs/runbooks/wiring-failed.md).
+
+- `Resource is still in use`, from `docker compose -p mediaplane down`
+
+  Mediaplane is still on the stack's wiring network. See
+  [How Mediaplane reaches the apps](#how-mediaplane-reaches-the-apps).
+
 - `Error response from daemon: Forbidden`
 
   The proxy refused a call. Its log names it, as `blocked request`:
@@ -373,11 +381,27 @@ Each item is a message you may see, then what to do.
   docker compose -f deploy/mediaplane.compose.yaml logs socket-proxy
   ```
 
+## How Mediaplane reaches the apps
+
+The stack has a network of its own for Mediaplane, `mediaplane_wiring`, with no route
+out ([ADR 0011](../docs/adr/0011-a-private-wiring-network.md)). The apps whose API
+Mediaplane calls are on it, and so is Gluetun, for qBittorrent. `plan` and `apply` put
+Mediaplane's container on it too, and it stays there; `apply` takes it off for `up`, and
+back on after. So Mediaplane's container is on two networks, and neither has a route
+out. After an update recreates the container, the next `plan` or `apply` puts it back.
+
+While Mediaplane is on it, `docker compose -p mediaplane down` on the host leaves that
+network behind ("Resource is still in use"). That holds after a plain `plan` too, not
+only after `apply`, because `plan` joins the network to ask the apps. Bring
+`mediaplane-system` down first, or take Mediaplane off:
+`docker network disconnect mediaplane_wiring mediaplane`.
+
 ## Removing Mediaplane
 
-`docker compose -f deploy/mediaplane.compose.yaml down` removes Mediaplane and the proxy.
-Your stack keeps running. The command in the header of
-`/opt/mediaplane/generated/compose.yaml` manages it without Mediaplane.
+`docker compose -f deploy/mediaplane.compose.yaml down` removes Mediaplane and the proxy,
+and takes Mediaplane off the stack's wiring network. Your stack keeps running. The
+command in the header of `/opt/mediaplane/generated/compose.yaml` manages it without
+Mediaplane.
 
 That command uses your host's Compose. If it is not the version in Mediaplane's image
 (5.5.1), its first `up -d` may recreate most apps once, for the reason in Updating.
