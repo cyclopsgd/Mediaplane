@@ -61,6 +61,35 @@ export interface AppContext<Options = Record<string, unknown>> {
   lanClientSubnets: string[];
 }
 
+/**
+ * A file the app reads when it starts, written into its appdata folder before its first
+ * start, and only when absent (spec §6.4). The app rewrites it afterwards, so Mediaplane
+ * never updates it.
+ */
+export interface ConfigFile {
+  /** Relative to the app's appdata folder, such as "qBittorrent/qBittorrent.conf". */
+  path: string;
+  content: string;
+  /**
+   * Matches the file for as long as it holds what Mediaplane seeded (its key), even after
+   * the app has rewritten it. An existing file that doesn't match is from an install made
+   * before Mediaplane seeded the app, and plan reports it.
+   */
+  seeded: RegExp;
+}
+
+/** What a pre-start file renderer sees. It holds secrets: never log or print it. */
+export interface ConfigFileContext<
+  Options = Record<string, unknown>,
+> extends AppContext<Options> {
+  /** The shared admin login (spec §6.1). */
+  admin: { username: string; password: string };
+  /** One of this app's generated secrets, such as "apiKey". Throws when it is missing. */
+  secret(name: string): string;
+  /** Cryptographically random bytes, such as a password hash's salt. */
+  random(size: number): Buffer;
+}
+
 export interface ServiceExtras {
   cap_add?: string[];
   devices?: string[];
@@ -95,6 +124,8 @@ export interface AppDefinition<Options = Record<string, unknown>> {
   env?(ctx: AppContext<Options>): Record<string, string>;
   extras?(ctx: AppContext<Options>): ServiceExtras;
   validate?(ctx: AppContext<Options>): Diagnostic[];
+  /** Files to write into its appdata folder before its first start, if absent. Pure. */
+  configFiles?(ctx: ConfigFileContext<Options>): ConfigFile[];
   experimental: boolean;
 }
 

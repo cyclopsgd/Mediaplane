@@ -1,6 +1,7 @@
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { AppDefinition, Catalog } from '../catalog/types';
 import type { HostFacts } from '../host/facts';
 import { COMPOSE_PATH, ENV_PATH, SECRETS_PATH } from '../paths';
 import { portKey } from '../preflight/checks';
@@ -29,6 +30,14 @@ apps:
 
 const SERVICES = ['gluetun', 'jellyfin', 'qbittorrent', 'sonarr'];
 const HASHES = Object.fromEntries(SERVICES.map((s, i) => [s, String(i).repeat(64)]));
+
+/** Sonarr with one pre-start file, whose first line marks it as Mediaplane's. */
+const configFiles: AppDefinition['configFiles'] = (ctx) => [
+  { path: 'config.ini', content: `key=${ctx.secret('apiKey')}\n`, seeded: /^key=/m },
+];
+const WITH_FILES: Catalog = fixtureCatalog.map((app) =>
+  app.id === 'sonarr' ? { ...app, configFiles } : app,
+);
 
 async function makeHome({
   stack = STACK,
@@ -82,12 +91,106 @@ function planFor(
     runtime = fakeRuntime(),
     probe = fakeProbe(),
     env = {},
-  }: { runtime?: Runtime; probe?: HostProbe; env?: NodeJS.ProcessEnv } = {},
+    catalog = fixtureCatalog,
+  }: {
+    runtime?: Runtime;
+    probe?: HostProbe;
+    env?: NodeJS.ProcessEnv;
+    catalog?: Catalog;
+  } = {},
 ) {
-  return plan({ home, catalog: fixtureCatalog, host: FIXTURE_HOST, env, runtime, probe });
+  return plan({ home, catalog, host: FIXTURE_HOST, env, runtime, probe });
 }
 
 describe('plan', () => {
+  it('plans pre-start files to create before first start, never showing them', async () => {
+    const result = await planFor(await makeHome(), { catalog: WITH_FILES });
+    expect(result).toMatchObject({ ok: true, changed: true });
+    expect(result.files.map((file) => file.path)).toEqual([
+      COMPOSE_PATH,
+      ENV_PATH,
+      'appdata/sonarr/config.ini',
+    ]);
+    expect(result.files[2]).toEqual({
+      path: 'appdata/sonarr/config.ini',
+      status: 'create',
+      diff: '',
+      content: '',
+      sensitive: true,
+      prestart: true,
+    });
+  });
+
+  it('leaves a pre-start file alone once it exists', async () => {
+    const runtime = fakeRuntime({
+      hashes: { ok: true, hashes: HASHES },
+      containers: running(HASHES),
+    });
+    const home = await makeCurrentHome(runtime);
+    await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+    await writeFile(join(home, 'appdata', 'sonarr', 'config.ini'), 'key=rewritten\n');
+    const result = await planFor(home, { runtime, catalog: WITH_FILES });
+    expect(result.changed).toBe(false);
+    expect(result.files[2]).toMatchObject({
+      path: 'appdata/sonarr/config.ini',
+      status: 'unchanged',
+    });
+  });
+
+  it('fails when a pre-start file is from before Mediaplane seeded the app', async () => {
+    const home = await makeHome();
+    await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+    await writeFile(join(home, 'appdata', 'sonarr', 'config.ini'), 'user=someone\n');
+    const result = await planFor(home, { catalog: WITH_FILES });
+    expect(result).toMatchObject({ ok: false, changed: false, files: [] });
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'sonarr.not-seeded', severity: 'error' }),
+    );
+  });
+
+  describe('with pre-start files that hold secrets', () => {
+    /** Sonarr's file holds its key and the admin password; the test records what it held. */
+    function recording() {
+      const secrets: string[] = [];
+      const recorded: AppDefinition['configFiles'] = (ctx) => {
+        const key = ctx.secret('apiKey');
+        const content = `key=${key}\npassword=${ctx.admin.password}\n`;
+        secrets.push(key, ctx.admin.password, content);
+        return [{ path: 'config.ini', content, seeded: /^key=/m }];
+      };
+      const catalog: Catalog = fixtureCatalog.map((app) =>
+        app.id === 'sonarr' ? { ...app, configFiles: recorded } : app,
+      );
+      return { catalog, secrets };
+    }
+
+    it('shows neither the file nor the keys in it, from a preview of new keys', async () => {
+      const { catalog, secrets } = recording();
+      const result = await planFor(await makeHome(), { catalog });
+      expect(result.ok).toBe(true);
+      expect(secrets).toHaveLength(3);
+      for (const secret of secrets) expect(JSON.stringify(result)).not.toContain(secret);
+    });
+
+    it('shows neither in the error for a file from before it was seeded', async () => {
+      const { catalog, secrets } = recording();
+      const home = await makeHome();
+      await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+      await writeFile(join(home, 'appdata', 'sonarr', 'config.ini'), 'user=someone\n');
+      const result = await planFor(home, { catalog });
+      expect(result.ok).toBe(false);
+      expect(secrets).toHaveLength(3);
+      for (const secret of secrets) expect(JSON.stringify(result)).not.toContain(secret);
+    });
+
+    it('writes nothing, not even the appdata folder', async () => {
+      const home = await makeHome();
+      const before = (await readdir(home, { recursive: true })).sort();
+      await planFor(home, { catalog: WITH_FILES });
+      expect((await readdir(home, { recursive: true })).sort()).toEqual(before);
+    });
+  });
+
   it('plans files, containers and secrets for a fresh home', async () => {
     const result = await planFor(await makeHome());
     expect(result).toMatchObject({ ok: true, changed: true, diagnostics: [] });

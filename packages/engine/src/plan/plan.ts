@@ -9,6 +9,7 @@ import { runPreflight } from '../preflight/checks';
 import type { HostProbe } from '../preflight/probe';
 import { renderCompose, type ComposeFile } from '../render/compose';
 import { renderEnvFile } from '../render/env';
+import { prestartFilesFor } from '../render/prestart';
 import { composeToYaml } from '../render/yaml';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { dockerAccessWarnings, usesSocketProxy } from '../runtime/docker';
@@ -18,11 +19,13 @@ import {
   type ContainerState,
   type Runtime,
 } from '../runtime/types';
+import { withGeneratedSecrets } from '../secrets/generate';
 import { readSecretStore, type SecretStore } from '../secrets/store';
 import { secretsToGenerate, secretValues } from '../secrets/values';
 import { notYetHealthy, otherHomes, ownPorts, type ContainerChange } from './containers';
 import { diffFiles, type FileChange } from './files';
 import { predictContainers, type PredictResult } from './predict';
+import { planPrestartFiles } from './prestart';
 
 export interface PlanOptions {
   home: string;
@@ -129,11 +132,25 @@ export async function planStack(
   const compose = renderCompose(stack);
   const store = await readSecretStore(home);
   const values = await secretValues(stack, store, options.env);
-  const files = await diffFiles(home, [
-    { path: COMPOSE_PATH, content: composeToYaml(compose, home) },
-    // The secret values: compared with what is on disk, never shown or kept.
-    { path: ENV_PATH, content: renderEnvFile(values), sensitive: true },
-  ]);
+  // The secrets a first apply would generate, in memory only, so the pre-start files
+  // can be rendered. Their content is never shown or kept: apply renders them again
+  // with the keys it saves.
+  const preview = withGeneratedSecrets(stack, store).store;
+  const prestart = await planPrestartFiles(
+    home,
+    await prestartFilesFor(stack, preview, options.env),
+  );
+  if (hasErrors(prestart.diagnostics)) {
+    return failed([...diagnostics, ...prestart.diagnostics]);
+  }
+  const files = [
+    ...(await diffFiles(home, [
+      { path: COMPOSE_PATH, content: composeToYaml(compose, home) },
+      // The secret values: compared with what is on disk, never shown or kept.
+      { path: ENV_PATH, content: renderEnvFile(values), sensitive: true },
+    ])),
+    ...prestart.changes,
+  ];
   const generate = secretsToGenerate(stack, store);
   let predicted: PredictResult;
   try {

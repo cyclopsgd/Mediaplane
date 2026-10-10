@@ -59,9 +59,11 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
   for (const file of files) {
     const mark = file.status === 'create' ? '+' : '~';
     io.stdout(
-      file.sensitive === true
-        ? `${mark} ${file.path} (secret values, not shown)\n\n`
-        : `${mark} ${file.path}\n${file.diff}\n`,
+      file.prestart === true
+        ? `${mark} ${file.path} (before first start; secret values, not shown)\n\n`
+        : file.sensitive === true
+          ? `${mark} ${file.path} (secret values, not shown)\n\n`
+          : `${mark} ${file.path}\n${file.diff}\n`,
     );
   }
   const containers = result.containers.filter((change) => change.action !== 'unchanged');

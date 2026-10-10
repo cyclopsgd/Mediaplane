@@ -19,6 +19,11 @@ export interface FileChange {
   content: string;
   /** Holds secret values: compared with what is on disk, never diffed or kept. */
   sensitive?: boolean;
+  /**
+   * A pre-start file (spec §6.4): created before the app's first start when absent, and
+   * never updated. Always sensitive.
+   */
+  prestart?: boolean;
 }
 
 export async function diffFiles(
