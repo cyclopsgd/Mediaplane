@@ -175,6 +175,32 @@ describe('createAppApi', () => {
     expect(error.message).not.toContain('phrase');
   });
 
+  it.each([
+    ['taking the HTML out', '<b>fake</b><i>pass</i> phrase'],
+    ['collapsing its whitespace', 'fake\n\npass \t phrase'],
+  ])(
+    'never shows part of a secret that %s put together, across the cut',
+    async (_how, tail) => {
+      // The raw answer doesn't hold the phrase; the clean text does, from character 191 of
+      // 207: the 200-character cut would keep its first characters, if the clean text
+      // weren't redacted before the cut.
+      const phrase = 'fake pass phrase';
+      const body = `${'x'.repeat(190)} ${tail}`;
+      expect(body).not.toContain(phrase);
+      const { api } = await sonarr(() => ({ status: 400, body }), {
+        secrets: [KEY, phrase],
+      });
+      const error = await failure(api.put('/api/v3/config/host/1', { password: phrase }));
+      expect(error.message).toContain('refused the request (HTTP 400): xxx');
+      expect(error.message).toContain('***');
+      expect(error.message).not.toContain('fake');
+      expect(error.message).not.toContain('pass');
+      expect(appMessage(body, (text) => text.replaceAll(phrase, '***'))).not.toContain(
+        'fake',
+      );
+    },
+  );
+
   it('names the path without a secret in it, and without its query', async () => {
     const { api } = await sonarr(() => ({ status: 404, body: 'Not Found' }));
     const error = await failure(api.get(`/api/v3/lookup/${KEY}?term=hidden`, STATUS));

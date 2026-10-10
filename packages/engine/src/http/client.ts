@@ -431,8 +431,10 @@ const MESSAGE_LIMIT = 200;
  * list (`[{propertyName, errorMessage}]`), ASP.NET's problem details (`{title, errors}`),
  * a `{message}`, or plain text such as qBittorrent's or an HTML error page. Never an
  * `attemptedValue`, which can be the very password that was refused. `clean` takes the
- * secrets out before anything else changes the text: a secret that the whitespace
- * collapse changed, or the cut split, would no longer be found whole.
+ * secrets out before anything else changes the text, and again after the HTML is taken
+ * out and the whitespace collapsed (which can put one together), and always before the
+ * cut: a secret that the whitespace collapse changed, or the cut split, would no longer
+ * be found whole. Callers redact the whole message once more.
  */
 export function appMessage(
   body: string,
@@ -445,11 +447,15 @@ export function appMessage(
     // A secret written with JSON escapes, such as \" or \u0020, appears only once parsed.
     message = said === undefined ? undefined : clean(said);
   } catch {
-    message = raw
-      .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
-      .replace(/<[^>]*>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    // Taking the tags out and collapsing the whitespace can put a secret together that
+    // the raw text didn't hold: redact again before the cut can split it.
+    message = clean(
+      raw
+        .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    );
   }
   if (message === undefined || message === '') return undefined;
   return message.length > MESSAGE_LIMIT
