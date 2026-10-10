@@ -21,6 +21,7 @@ import {
   composeDown,
   ejectArguments,
   makeHome,
+  parseRevealed,
   REPO,
   wiringMembers,
 } from './helpers';
@@ -90,7 +91,10 @@ async function expectSharedLogin(login: { username: string; password: string }) 
   }
 }
 
-/** The status an app answers with the Host header `host`, which fetch can't set. */
+/**
+ * The status an app answers with the Host header `host`, which fetch can't set. An app
+ * that sends nothing for 10 seconds fails the request: Node's `timeout` only reports it.
+ */
 function statusWithHost(port: number, host: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const req = request(
@@ -106,6 +110,9 @@ function statusWithHost(port: number, host: string): Promise<number> {
         resolve(res.statusCode ?? 0);
       },
     );
+    req.on('timeout', () => {
+      req.destroy(new Error(`127.0.0.1:${String(port)} sent nothing for 10 seconds`));
+    });
     req.on('error', reject);
     req.end();
   });
@@ -180,11 +187,7 @@ describe('apply against real Docker', () => {
       // qBittorrent takes the shared login that credentials shows, and its own key.
       const shown = await mediaplane('credentials', '--home', home, '--json', '--reveal');
       expect(shown.code, shown.stderr).toBe(0);
-      const login = JSON.parse(shown.stdout) as {
-        username: string;
-        password: string;
-        apps: { app: string; urls: string[]; login: string }[];
-      };
+      const login = parseRevealed(shown.stdout);
       expect(login.apps.find((a) => a.app === 'qbittorrent')).toMatchObject({
         login: 'shared',
         urls: ['http://127.0.0.1:8080'],
@@ -262,7 +265,7 @@ describe('apply against real Docker', () => {
         resources.includes(login.password),
         'resources.json holds the password',
       ).toBe(false);
-      // Lost state: apply adopts what the apps hold, by name, and changes nothing in them.
+      // Lost state: apply adopts what the apps hold, by name, and changes none of it.
       await rm(join(home, 'state', 'resources.json'));
       const adopted = await apply(options);
       expect(adopted.outcome).toBe('success');
@@ -274,7 +277,9 @@ describe('apply against real Docker', () => {
       expect(adopted.plan.containers.every((c) => c.action === 'unchanged')).toBe(true);
       expect((await apply(options)).outcome).toBe('no-changes');
       await expectSharedLogin(login);
-      // Things S1 encodes: Sonarr takes a comma-separated TRUSTEDNETWORKS, from apps.sonarr.env.
+      // Things S1 encodes: Sonarr reads the list as given. Its settings hold
+      // apps.sonarr.env's TRUSTEDNETWORKS as the same comma list; this doesn't show that
+      // Sonarr splits it into two subnets.
       const sonarrKey = store.apps.sonarr?.apiKey ?? '';
       const host = await fetch('http://127.0.0.1:8989/api/v3/config/host', {
         headers: { 'X-Api-Key': sonarrKey },

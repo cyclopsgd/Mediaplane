@@ -14,9 +14,12 @@ import {
   buildImage,
   composeDown,
   ejectArguments,
+  expectWiringRemoved,
+  parseRevealed,
   removeAsRoot,
   removeHome,
   REPO,
+  TEARDOWN_MS,
 } from './helpers';
 
 const ID = `mediaplane-e2e-${String(process.pid)}`;
@@ -55,7 +58,7 @@ let override = '';
 let env: NodeJS.ProcessEnv = {};
 
 /** docker compose on Mediaplane's own project, as a user would run it. */
-function system(...args: string[]): Promise<ExecResult> {
+function system(args: readonly string[], timeoutMs = 300_000): Promise<ExecResult> {
   return nodeExec(
     'docker',
     [
@@ -70,7 +73,7 @@ function system(...args: string[]): Promise<ExecResult> {
       override,
       ...args,
     ],
-    { env, cwd: '/', timeoutMs: 300_000 },
+    { env, cwd: '/', timeoutMs },
   );
 }
 
@@ -200,13 +203,14 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
       MEDIAPLANE_GID: GID,
       DOCKER_GID: String((await stat('/var/run/docker.sock')).gid),
     };
-    const up = await system('up', '--detach', '--wait');
+    const up = await system(['up', '--detach', '--wait']);
     if (up.code !== 0) throw new Error(`mediaplane-system did not start:\n${up.stderr}`);
   }, 1_200_000);
 
   afterAll(async () => {
     // Each removal runs whether or not the one before it worked (a command that times
     // out rejects, as well as one that fails); then the test fails with what failed.
+    // Each command is bounded by TEARDOWN_MS, and this hook's timeout is above their sum.
     const failures: unknown[] = [];
     const attempt = async (removal: () => Promise<unknown>) => {
       try {
@@ -222,26 +226,24 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     // The deployment first: while Mediaplane's container is on the stack's wiring
     // network, the stack's down can't remove that network, and leaves it behind.
     if (override !== '') {
-      await attempt(() => succeeds(system('down', '--remove-orphans')));
+      await attempt(() => succeeds(system(['down', '--remove-orphans'], TEARDOWN_MS)));
     }
     await attempt(() => succeeds(composeDown(STACK)));
-    // Compose still exits 0 when it can't remove a network: look for it.
-    await attempt(async () => {
-      const wiring = await nodeExec('docker', ['network', 'inspect', `${STACK}_wiring`], {
-        cwd: '/',
-      });
-      expect(wiring.code, `${STACK}_wiring was left behind`).not.toBe(0);
-      expect(wiring.stderr).toMatch(/not found/);
-    });
+    await attempt(() => expectWiringRemoved(STACK));
     if (override !== '') {
       await attempt(() => rm(dirname(override), { recursive: true, force: true }));
     }
     if (home !== '') await attempt(() => removeHome(home));
     if (data !== '') await attempt(() => removeAsRoot(data));
     // Last, once no container uses the image.
-    await attempt(() => succeeds(nodeExec('docker', ['image', 'rm', TAG], { cwd: '/' })));
+    await attempt(() =>
+      succeeds(
+        nodeExec('docker', ['image', 'rm', TAG], { cwd: '/', timeoutMs: TEARDOWN_MS }),
+      ),
+    );
     if (failures.length > 0) throw new AggregateError(failures, 'teardown failed');
-  }, 300_000);
+    // Above the sum of the six bounded commands (6 × TEARDOWN_MS, 720 s).
+  }, 900_000);
 
   it('runs hardened, as the home owner, without the Docker socket', async () => {
     const inspect = await nodeExec('docker', ['inspect', CONTAINER], { cwd: '/' });
@@ -265,8 +267,9 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
       { cwd: '/' },
     );
     expect(socket.code).toBe(1);
-    // It forwards no packets between its networks (the sysctl in mediaplane.compose.yaml):
-    // an app on the wiring network could otherwise reach the socket proxy through it.
+    // It forwards no packets between its networks (the sysctl in
+    // mediaplane.compose.yaml): an app on the wiring network could otherwise reach the
+    // socket proxy through it.
     const forwarding = await nodeExec(
       'docker',
       ['exec', CONTAINER, 'cat', '/proc/sys/net/ipv4/ip_forward'],
@@ -351,8 +354,8 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     expect(codesIn(again.stdout)).not.toContain('preflight.home-path');
 
     // Slice 3b, through the proxy: Mediaplane joined the stack's wiring network to set
-    // the shared login in Sonarr, and checked qBittorrent's key there. Its container is on
-    // two networks, both internal, so it still has no route out.
+    // the shared login in Sonarr, and checked qBittorrent's key there. Its container is
+    // on two networks, both internal, so it still has no route out.
     expect(
       (
         JSON.parse(first.stdout) as { actions: { resource?: string; detail?: string }[] }
@@ -362,7 +365,7 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     ).toEqual([['sonarr.admin', 'created']]);
     const shown = await mediaplane('credentials', '--json', '--reveal');
     expect(shown.code, shown.stderr).toBe(0);
-    const login = JSON.parse(shown.stdout) as { username: string; password: string };
+    const login = parseRevealed(shown.stdout);
     const signIn = await fetch('http://127.0.0.1:8989/login', {
       method: 'POST',
       body: new URLSearchParams({ username: login.username, password: login.password }),

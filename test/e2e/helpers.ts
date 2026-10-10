@@ -8,6 +8,13 @@ import { expect, onTestFinished } from 'vitest';
 export const BUSYBOX =
   'busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e';
 
+/**
+ * How long one teardown command may run. Each is bounded, so one that hangs fails on its
+ * own and the removals after it still run, within the timeout of the hook or test that
+ * runs them, which is set above their sum.
+ */
+export const TEARDOWN_MS = 120_000;
+
 /** The repository root: the image's build context. */
 export const REPO = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -49,10 +56,30 @@ apps:
  */
 export async function makeHome(): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-'));
-  onTestFinished(() => removeHome(home));
+  // removeHome runs one bounded command, then removes the folder.
+  onTestFinished(() => removeHome(home), 2 * TEARDOWN_MS);
   await mkdir(join(home, 'data'));
   await writeFile(join(home, 'stack.yaml'), stackFor(join(home, 'data')));
   return home;
+}
+
+/** What `credentials --json --reveal` prints: the shared login, and each app's. */
+export interface RevealedLogin {
+  username: string;
+  password: string;
+  apps: { app: string; urls: string[]; login: string }[];
+}
+
+/**
+ * `credentials --json --reveal`'s output, parsed. It holds the password, so a failure
+ * says only that it failed: JSON.parse's own error quotes the text, into the CI log.
+ */
+export function parseRevealed(stdout: string): RevealedLogin {
+  try {
+    return JSON.parse(stdout) as RevealedLogin;
+  } catch {
+    throw new Error('credentials --json --reveal did not print JSON');
+  }
 }
 
 /**
@@ -79,6 +106,19 @@ export async function wiringMembers(
 }
 
 /**
+ * `<project>_wiring` is gone. Compose still exits 0 when it can't remove a network,
+ * such as one that a container of another project is still on: a teardown looks for it.
+ */
+export async function expectWiringRemoved(project: string): Promise<void> {
+  const wiring = await nodeExec('docker', ['network', 'inspect', `${project}_wiring`], {
+    cwd: '/',
+    timeoutMs: TEARDOWN_MS,
+  });
+  expect(wiring.code, `${project}_wiring was left behind`).not.toBe(0);
+  expect(wiring.stderr).toMatch(/not found/);
+}
+
+/**
  * Remove a test project's containers, network and anonymous volumes, whatever it
  * contains. `-v` is the short form of `--volumes` in Compose v2 and v5.
  */
@@ -86,7 +126,7 @@ export function composeDown(project: string): Promise<ExecResult> {
   return nodeExec(
     'docker',
     ['compose', '-p', project, 'down', '--remove-orphans', '-v'],
-    { cwd: '/' },
+    { cwd: '/', timeoutMs: TEARDOWN_MS },
   );
 }
 
@@ -108,7 +148,7 @@ export async function removeHome(home: string): Promise<void> {
       '/home-to-remove/appdata',
       '/home-to-remove/data',
     ],
-    { cwd: '/' },
+    { cwd: '/', timeoutMs: TEARDOWN_MS },
   );
   if (result.code !== 0) {
     throw new Error(`could not remove ${home} as root:\n${result.stderr}`);
@@ -160,7 +200,7 @@ export async function removeAsRoot(dir: string): Promise<void> {
       '1',
       '-delete',
     ],
-    { cwd: '/' },
+    { cwd: '/', timeoutMs: TEARDOWN_MS },
   );
   if (result.code !== 0) {
     throw new Error(`could not empty ${dir} as root:\n${result.stderr}`);
@@ -212,7 +252,7 @@ export async function deployMediaplane(options: {
     DOCKER_GID: dockerGid,
   };
   const deploy = join(REPO, 'deploy', 'mediaplane.compose.yaml');
-  const system = (...args: string[]) =>
+  const system = (args: readonly string[], timeoutMs = 300_000) =>
     nodeExec(
       'docker',
       [
@@ -227,7 +267,7 @@ export async function deployMediaplane(options: {
         override(),
         ...args,
       ],
-      { env, cwd: '/', timeoutMs: 300_000 },
+      { env, cwd: '/', timeoutMs },
     );
   /** Every removal, each whether or not the one before it worked; what failed. */
   const teardown = async (): Promise<string[]> => {
@@ -245,14 +285,14 @@ export async function deployMediaplane(options: {
     // Without the folder, nothing was started: there is only the image to remove.
     const made = dir;
     if (made !== undefined) {
-      await step('compose down', () => system('down', '--remove-orphans'));
+      await step('compose down', () => system(['down', '--remove-orphans'], TEARDOWN_MS));
       await step('removing the override', async () => {
         await rm(made, { recursive: true, force: true });
         return undefined;
       });
     }
     await step('docker image rm', () =>
-      nodeExec('docker', ['image', 'rm', tag], { cwd: '/' }),
+      nodeExec('docker', ['image', 'rm', tag], { cwd: '/', timeoutMs: TEARDOWN_MS }),
     );
     return failed;
   };
@@ -269,7 +309,7 @@ export async function deployMediaplane(options: {
         '',
       ].join('\n'),
     );
-    const up = await system('up', '-d', '--wait');
+    const up = await system(['up', '-d', '--wait']);
     if (up.code !== 0) throw new Error(`mediaplane-system did not start:\n${up.stderr}`);
   } catch (error) {
     // The startup error first; a failed teardown is only added to it.

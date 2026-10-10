@@ -16,6 +16,7 @@ import {
   BUSYBOX,
   composeDown,
   deployMediaplane,
+  expectWiringRemoved,
   makeHome,
   REPO,
   wiringMembers,
@@ -190,7 +191,11 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
     const home = await makeHome();
     const wg = await startWireGuard(PROJECT);
     let deployed: DeployedMediaplane | undefined;
-    /** Every removal, each whether or not the one before it worked; what failed. */
+    /**
+     * Every removal, each whether or not the one before it worked; what failed. Seven
+     * commands, each bounded by TEARDOWN_MS (120 s): the test's timeout leaves room for
+     * them after the body's 20 minutes.
+     */
     const removeAll = async (): Promise<unknown[]> => {
       const failures: unknown[] = [];
       const attempt = async (removal: () => Promise<unknown>) => {
@@ -205,6 +210,9 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
         const down = await composeDown(PROJECT);
         expect(down.code, down.stderr).toBe(0);
       });
+      // The deployed Mediaplane joined the wiring network, and went down first so the
+      // stack's down could remove it.
+      await attempt(() => expectWiringRemoved(PROJECT));
       await attempt(() => wg.remove());
       return failures;
     };
@@ -534,5 +542,5 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
     }
     const failures = await removeAll();
     if (failures.length > 0) throw new AggregateError(failures, 'teardown failed');
-  }, 1_200_000);
+  }, 2_040_000);
 });
