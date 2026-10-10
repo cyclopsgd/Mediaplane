@@ -1,5 +1,6 @@
 import { defineApp, warning } from '@mediaplane/engine';
 import { z } from 'zod';
+import { qbittorrentConf } from './conf';
 
 export default defineApp({
   id: 'qbittorrent',
@@ -17,7 +18,7 @@ export default defineApp({
   provides: ['download-client:torrent'],
   requires: [],
   secrets: { apiKey: { generate: 'qbt' } },
-  credentials: [{ step: 'config-file', path: 'qBittorrent/qBittorrent.conf' }],
+  credentials: [],
   health: {
     test: ['CMD-SHELL', 'curl -fsS "http://localhost:$${WEBUI_PORT}/" > /dev/null'],
   },
@@ -31,8 +32,8 @@ export default defineApp({
   }),
   implies: (options) => (options.vpn ? ['gluetun'] : []),
   networkVia: (options) => (options.vpn ? 'gluetun' : undefined),
-  validate: (ctx) =>
-    ctx.options.vpn
+  validate: (ctx) => [
+    ...(ctx.options.vpn
       ? []
       : [
           warning(
@@ -43,6 +44,29 @@ export default defineApp({
               hint: 'peers will see your real IP address; add a vpn: block and remove vpn: false',
             },
           ),
-        ],
+        ]),
+    ...(!ctx.config.security.login_on_lan &&
+    ctx.publishesOnLan &&
+    ctx.lanClientSubnets.length === 0
+      ? [
+          warning(
+            'network.no-lan-subnet',
+            'security.login_on_lan is false, but Mediaplane knows no LAN subnet, so qBittorrent asks your LAN for a login too',
+            {
+              path: 'network.lan_subnet',
+              hint: 'set network.lan_subnet to your LAN, such as 192.168.1.0/24',
+            },
+          ),
+        ]
+      : []),
+  ],
+  // The shared login and the key, before the image's default can set a temporary password.
+  configFiles: (ctx) => [
+    {
+      path: 'qBittorrent/qBittorrent.conf',
+      content: qbittorrentConf(ctx),
+      seeded: /^WebUI\\APIKey=.+$/m,
+    },
+  ],
   experimental: false,
 });

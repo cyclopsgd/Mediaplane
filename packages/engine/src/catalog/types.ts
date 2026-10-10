@@ -30,10 +30,12 @@ export type SecretSource =
   | { createdBy: 'app' }
   | { userProvided: 'vpn.private_key' | 'plex.token' };
 
-/** How secrets and first-run setup reach the app, in order. */
+/**
+ * How secrets and first-run setup reach the app, in order. Files written before the
+ * first start come from configFiles instead.
+ */
 export type CredentialStep =
   | { step: 'env'; var: string; secret: string }
-  | { step: 'config-file'; path: string }
   | { step: 'bootstrap-api'; action: string };
 
 export interface HealthCheck {

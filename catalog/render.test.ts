@@ -264,6 +264,7 @@ describe('pre-start files', () => {
     expect(prestartFiles(SPEC_EXAMPLE).map((file) => file.path)).toEqual([
       'appdata/gluetun/auth/config.toml',
       'appdata/prowlarr/config.xml',
+      'appdata/qbittorrent/qBittorrent/qBittorrent.conf',
       'appdata/radarr/config.xml',
       'appdata/sonarr/config.xml',
     ]);

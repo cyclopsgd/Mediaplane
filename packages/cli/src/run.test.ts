@@ -170,13 +170,16 @@ describe('mediaplane plan', () => {
       '+ appdata/gluetun/auth/config.toml (before first start; secret values, not shown)\n',
     );
     expect(term.stdout()).toContain(
+      '+ appdata/qbittorrent/qBittorrent/qBittorrent.conf (before first start; secret values, not shown)\n',
+    );
+    expect(term.stdout()).toContain(
       '+ appdata/sonarr/config.xml (before first start; secret values, not shown)\n',
     );
     expect(term.stdout()).toContain(
       'Secrets to generate: admin.password, gluetun.controlApiKey, qbittorrent.apiKey, sonarr.apiKey\n',
     );
     expect(term.stdout()).toContain(
-      'Plan: 4 files to write, 4 containers to change, 4 secrets to generate.',
+      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate.',
     );
     expect(term.stdout()).toContain('+ generated/.env (secret values, not shown)\n');
   });
@@ -434,7 +437,7 @@ describe('mediaplane apply', () => {
     const first = capture();
     expect(await run(['apply', '--home', home, '--yes'], first.io, deps(docker))).toBe(0);
     expect(first.stdout()).toContain(
-      'Plan: 4 files to write, 4 containers to change, 4 secrets to generate.',
+      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate.',
     );
     expect(first.stdout()).toContain('  done    images: images present\n');
     expect(first.stdout()).toMatch(
@@ -764,7 +767,7 @@ describe('mediaplane history', () => {
     const list = capture();
     expect(await run(['history', '--home', home], list.io, deps(docker))).toBe(0);
     expect(list.stdout()).toBe(
-      `${id}  success  4 files written, 4 containers changed, 4 secrets generated\n`,
+      `${id}  success  5 files written, 4 containers changed, 4 secrets generated\n`,
     );
     const one = capture();
     expect(await run(['history', id, '--home', home], one.io, deps(docker))).toBe(0);
@@ -782,7 +785,7 @@ describe('mediaplane history', () => {
     await run(['history', '--home', home, '--json'], term.io, deps(docker));
     expect(JSON.parse(term.stdout())).toMatchObject({
       schema: 'mediaplane.history/v1',
-      records: [{ outcome: 'success', changes: { files: 4, containers: 4, secrets: 4 } }],
+      records: [{ outcome: 'success', changes: { files: 5, containers: 4, secrets: 4 } }],
       unreadable: [],
     });
   });
