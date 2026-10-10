@@ -7,6 +7,7 @@ import {
   credentials,
   DEFAULT_VPN_CHECK_URL,
   detectHostFacts,
+  EGRESS_TIMEOUT_MS,
   fetchEgress,
   helperEgress,
   helperHostFacts,
@@ -119,7 +120,7 @@ export const ENVIRONMENT: readonly { name: string; description: string }[] = [
   {
     name: 'DOCKER_HOST',
     description:
-      "Docker's own setting, passed to every docker command. In the Mediaplane container it points at the socket proxy.",
+      "Docker's own setting, passed to every docker command. In the Mediaplane container it points at the socket proxy. Run from source with anything but a unix:// socket, Docker may be on another host, so vpn-check doesn't compare this machine's address.",
   },
 ];
 
@@ -135,6 +136,17 @@ function setting(env: NodeJS.ProcessEnv, name: string): string | undefined {
 }
 
 /**
+ * Why the host's side of vpn-check isn't measured from source when DOCKER_HOST names a
+ * Docker that isn't on a local socket: the stack then runs on that other host, whose
+ * address is the one a leak would show.
+ */
+const REMOTE_DOCKER: EgressResult = {
+  ok: false,
+  error:
+    "Docker runs on another host (DOCKER_HOST), so this machine's address is not the one to compare",
+};
+
+/**
  * The real host. In Mediaplane's image (mediaplane.compose.yaml sets MEDIAPLANE_IMAGE),
  * the host's network, ports and folders outside the home can't be seen from the
  * container, so a host helper container of that image looks at them (spec §4.2). Run from
@@ -145,11 +157,24 @@ export function defaultDeps(env: NodeJS.ProcessEnv): CliDeps {
     createDockerRuntime({ home, project });
   const image = setting(env, 'MEDIAPLANE_IMAGE');
   if (image === undefined) {
+    // Only a unix socket is this machine's own Docker; tcp://, ssh:// and the rest may be
+    // anywhere. (In the image, DOCKER_HOST is the socket proxy, and the helper runs on
+    // Docker's host, so this applies from source only.)
+    const docker = setting(env, 'DOCKER_HOST');
+    const remote = docker !== undefined && !docker.startsWith('unix://');
     return {
       host: () => Promise.resolve(detectHostFacts()),
       runtime,
       probe: () => nodeProbe,
-      egress: () => (url) => fetchEgress(url),
+      egress: () =>
+        remote
+          ? () => Promise.resolve(REMOTE_DOCKER)
+          : // The CLI's own environment, and node's flags, decide whether fetch uses a proxy.
+            (url) =>
+              fetchEgress(url, fetch, EGRESS_TIMEOUT_MS, {
+                env,
+                execArgv: process.execArgv,
+              }),
     };
   }
   // Mediaplane's own user, as the helper must be; never root, even if the container is.

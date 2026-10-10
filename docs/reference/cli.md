@@ -164,4 +164,4 @@ Exit codes:
 - `MEDIAPLANE_IMAGE`: Set by mediaplane.compose.yaml in the Mediaplane container: the image the host helper runs. Leave it unset when running from source.
 - `MEDIAPLANE_COMPOSE_PROJECT`: For tests and development only: the full name of the Compose project to manage instead of mediaplane. It must be mediaplane-\<name>, such as mediaplane-dev.
 - `MEDIAPLANE_VPN_CHECK_URL`: The IP-echo service vpn-check asks which address qBittorrent and this host come from: an http or https URL that answers ip=\<address>, as Cloudflare's trace does, or only the address. Default https://1.1.1.1/cdn-cgi/trace. vpn-check --no-egress asks none.
-- `DOCKER_HOST`: Docker's own setting, passed to every docker command. In the Mediaplane container it points at the socket proxy.
+- `DOCKER_HOST`: Docker's own setting, passed to every docker command. In the Mediaplane container it points at the socket proxy. Run from source with anything but a unix:// socket, Docker may be on another host, so vpn-check doesn't compare this machine's address.

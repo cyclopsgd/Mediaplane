@@ -248,6 +248,48 @@ describe('mediaplane vpn-check', () => {
     expect(down.asked).toEqual([]);
   });
 
+  it('prints a fail-closed down as JSON, and exits 1: what a cron job reads', async () => {
+    const term = capture();
+    const home = await makeHome();
+    const answers: ProbeAnswers = {
+      ...HEALTHY,
+      egress: [28, 'curl: (28) Connection timed out after 10001 milliseconds'],
+    };
+    expect(
+      await run(
+        ['vpn-check', '--home', home, '--json'],
+        term.io,
+        deps(fakeProbeRuntime(answers)),
+      ),
+    ).toBe(1);
+    expect(JSON.parse(term.stdout())).toMatchObject({
+      schema: 'mediaplane.vpn-check/v1',
+      ok: true,
+      verdict: 'down',
+      egress: { url: TRACE, vpn: null, host: null },
+      failClosed: true,
+    });
+    expect(term.stderr()).toBe('');
+  });
+
+  it('never says nothing leaks when the route leaves the tunnel and nothing answers', async () => {
+    // Routed by eth0, only Gluetun's firewall stands in the way, and nothing measured it.
+    const down = await check({
+      ...HEALTHY,
+      route: [0, '1.1.1.1 via 172.20.0.1 dev eth0  src 172.20.0.2'],
+      egress: [28, 'curl: (28) Connection timed out after 10001 milliseconds'],
+    });
+    expect(down.code).toBe(1);
+    expect(down.stdout).toContain(
+      "  DOWN  qBittorrent's traffic is routed to eth0, not into the tunnel (tun0)\n",
+    );
+    expect(down.stdout).toContain(`        hint: the VPN is down; see ${RUNBOOK}\n`);
+    expect(down.stdout).toContain(`\n${OPEN}\n`);
+    expect(down.stdout).not.toContain('nothing leaks');
+    expect(down.stdout).not.toContain('nothing gets out');
+    expect(down.stdout).not.toContain('fail-closed');
+  });
+
   it('says a leak is a leak, with its hint', async () => {
     const leak = await check(HEALTHY, '203.0.113.7');
     expect(leak.code).toBe(1);
@@ -478,6 +520,78 @@ describe('where the host address comes from', () => {
     expect(seen).toEqual([]);
   });
 
+  it("reads the CLI's own environment for a Node proxy setting, not only the process's", async () => {
+    vi.stubEnv('NODE_USE_ENV_PROXY', '');
+    vi.stubEnv('NODE_OPTIONS', '');
+    const requested: string[] = [];
+    vi.stubGlobal('fetch', (url: string) => {
+      requested.push(url);
+      return Promise.resolve(new Response('ip=198.51.100.2\n'));
+    });
+    const egress = defaultDeps({ NODE_USE_ENV_PROXY: '1' }).egress(fakeRuntime());
+    expect(await egress(TRACE)).toEqual({
+      ok: false,
+      error:
+        "the request would go through a proxy (NODE_USE_ENV_PROXY), so it can't see this host's own address",
+    });
+    expect(requested).toEqual([]);
+  });
+
+  it('does not measure this machine when DOCKER_HOST names Docker on another', async () => {
+    vi.stubEnv('NODE_USE_ENV_PROXY', '');
+    vi.stubEnv('NODE_OPTIONS', '');
+    const requested: string[] = [];
+    vi.stubGlobal('fetch', (url: string) => {
+      requested.push(url);
+      return Promise.resolve(new Response('ip=198.51.100.2\n'));
+    });
+    const remote = {
+      ok: false,
+      error:
+        "Docker runs on another host (DOCKER_HOST), so this machine's address is not the one to compare",
+    };
+    for (const host of [
+      'tcp://192.0.2.10:2375',
+      'ssh://fake-user@192.0.2.10',
+      'unix-not://x',
+      'fd://',
+    ]) {
+      const egress = defaultDeps({ DOCKER_HOST: host }).egress(fakeRuntime());
+      expect(await egress(TRACE), host).toEqual(remote);
+    }
+    expect(requested).toEqual([]);
+    // A local socket, or none set, is this machine's Docker.
+    for (const env of [
+      { DOCKER_HOST: 'unix:///var/run/docker.sock' },
+      { DOCKER_HOST: '' },
+    ]) {
+      expect(await defaultDeps(env).egress(fakeRuntime())(TRACE)).toEqual({
+        ok: true,
+        address: '198.51.100.2',
+      });
+    }
+    expect(requested).toEqual([TRACE, TRACE]);
+  });
+
+  it('warns, and compares nothing, when run from source against a remote Docker', async () => {
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('fake: must not fetch')));
+    const term = capture({ DOCKER_HOST: 'tcp://192.0.2.10:2375' });
+    const home = await makeHome();
+    // No egress override: the source's own, from defaultDeps.
+    expect(
+      await run(['vpn-check', '--home', home], term.io, {
+        host: () => Promise.resolve(FIXTURE_HOST),
+        runtime: () => fakeProbeRuntime(HEALTHY),
+        probe: () => fakeProbe(),
+      }),
+    ).toBe(0);
+    expect(term.stdout()).toContain(
+      `  warn  qBittorrent's traffic leaves from 203.0.113.7, but this host could not ask ${TRACE} for its own address (Docker runs on another host (DOCKER_HOST), so this machine's address is not the one to compare), so the two were not compared\n`,
+    );
+    expect(term.stdout()).toContain(`\n${NOT_COMPARED}\n`);
+    expect(term.stdout()).not.toContain(COMPARED);
+  });
+
   it('asks the host helper in the image, and never fetches itself', async () => {
     const requested: string[] = [];
     vi.stubGlobal('fetch', (url: string) => {
@@ -497,7 +611,11 @@ describe('where the host address comes from', () => {
         return { ok: true, stdout: JSON.stringify(report) };
       },
     });
-    const image = defaultDeps({ MEDIAPLANE_IMAGE: 'mediaplane:test' });
+    // DOCKER_HOST points at the socket proxy there, and the helper still runs on the host.
+    const image = defaultDeps({
+      MEDIAPLANE_IMAGE: 'mediaplane:test',
+      DOCKER_HOST: 'tcp://socket-proxy:2375',
+    });
     expect(await image.egress(runtime)(TRACE)).toEqual({
       ok: true,
       address: '198.51.100.2',

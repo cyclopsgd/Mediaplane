@@ -423,8 +423,9 @@ export function parseDetails(stdout: string, project: string): ContainerDetails[
     .filter((line) => line.trim() !== '')
     .map((line) => {
       // The project is the one field that may be empty, so the separators are single
-      // spaces. Docker prints "<no value>" for a container without the label.
-      const match = /^(\S+) (\S+) (\S+) (<no value>|\S*)$/.exec(line);
+      // spaces. Docker prints "<no value>" for a container without the label, and
+      // `{{.Id}}` the full 64-character ID.
+      const match = /^([0-9a-f]{64}) (\S+) (\S+) (<no value>|\S*)$/.exec(line);
       const [, id, networkMode, startedAt, owner] = match ?? [];
       if (
         id === undefined ||

@@ -526,6 +526,18 @@ describe('createDockerRuntime', () => {
     }
   });
 
+  it('refuses a line whose ID is not a full container ID, as {{.Id}} prints it', async () => {
+    for (const id of [SONARR_ID.slice(0, 12), SONARR_ID.toUpperCase(), 'not-an-id']) {
+      const { exec } = recorder(() =>
+        ok(`${id} bridge 2026-10-10T10:00:00Z mediaplane\n`),
+      );
+      const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+      await expect(runtime.inspect([SONARR_ID])).rejects.toThrow(
+        'docker container inspect printed a line that is not "<id> <network mode> <started at> <project>"',
+      );
+    }
+  });
+
   it('refuses an answer that does not cover each requested container exactly once', async () => {
     const other = 'e'.repeat(64);
     const line = (id: string) => `${id} bridge 2026-10-10T10:00:00Z mediaplane\n`;

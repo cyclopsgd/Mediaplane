@@ -331,9 +331,34 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       deployed = undefined;
       await done.remove();
 
-      // The tunnel goes down. At once, nothing gets out of Gluetun's namespace, while an
-      // ordinary container on the stack's network still reaches the same target.
+      // The tunnel goes down. At once, with the route still into tun0, vpn-check finds the
+      // VPN down, and that nothing leaks: a route into the tunnel can't get out around it.
+      // Gluetun's health check restarts the dead tunnel every few seconds, and for a moment
+      // in each restart the route can leave by eth0. That is not the state under test, so
+      // a `route down` caught in it is asked again; a leak never is.
       await wg.stop();
+      let deadTunnel = await vpnCheck(home, toEcho);
+      for (
+        let again = 0;
+        itemOf(deadTunnel, 'route').status === 'down' && again < 2;
+        again++
+      ) {
+        deadTunnel = await vpnCheck(home, toEcho);
+      }
+      expect(deadTunnel.code, deadTunnel.stdout + deadTunnel.stderr).toBe(1);
+      expect(itemOf(deadTunnel, 'route').message).toBe(
+        "qBittorrent's traffic is routed into the tunnel (tun0)",
+      );
+      expect(JSON.parse(deadTunnel.stdout)).toMatchObject({
+        verdict: 'down',
+        failClosed: true,
+        egress: { url: echo, vpn: null, host: null },
+      });
+      expect(checksOf(deadTunnel).at(-1)).toBe('egress down');
+      expect(itemOf(deadTunnel, 'egress').hint).toContain('(fail-closed)');
+
+      // Nothing gets out of Gluetun's namespace, while an ordinary container on the
+      // stack's network still reaches the same target.
       const leak = `http://${wg.gateway}:${String(wg.leakPort)}/cgi-bin/ip`;
       expect((await fetchFrom(inGluetun, echo)).code).not.toBe(0);
       expect((await fetchFrom(inGluetun, leak)).code).not.toBe(0);
@@ -360,21 +385,34 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       expect(viaEth0.stdout, viaEth0.stderr).toMatch(/ dev eth0 /);
       expect((await fetchFrom(inGluetun, leak)).code).not.toBe(0);
 
-      // vpn-check finds the VPN down: nothing answers, so no address is known, and it says
-      // that nothing leaks. Only what holds whether Gluetun's own health check has
-      // restarted the tunnel yet is asserted.
+      // vpn-check finds the VPN down: nothing answers, so no address is known. Gluetun's
+      // health check may have rebuilt tun0 by now, so it says that nothing leaks only as
+      // the route it reports allows: into the tunnel or nowhere, yes; by eth0, where only
+      // the firewall stands in the way and nothing measured it, no.
       const tunnelDown = await vpnCheck(home, toEcho);
       expect(tunnelDown.code, tunnelDown.stdout + tunnelDown.stderr).toBe(1);
+      const reported = itemOf(tunnelDown, 'route');
+      const shut =
+        reported.status === 'ok' ||
+        reported.message === "qBittorrent's network has no route out";
       expect(JSON.parse(tunnelDown.stdout)).toMatchObject({
         verdict: 'down',
-        failClosed: true,
+        failClosed: shut,
         egress: { url: echo, vpn: null, host: null },
       });
       expect(checksOf(tunnelDown).at(-1)).toBe('egress down');
-      expect(itemOf(tunnelDown, 'egress').hint).toContain('(fail-closed)');
+      expect(itemOf(tunnelDown, 'egress').hint?.includes('(fail-closed)')).toBe(shut);
+      // The same in text: the summary follows the route line of its own run.
       const tunnelDownText = await vpnCheckText(home, toEcho);
       expect(tunnelDownText.code, tunnelDownText.stdout).toBe(1);
-      expect(tunnelDownText.stdout).toContain('nothing leaks (fail-closed)');
+      const shutText =
+        tunnelDownText.stdout.includes(
+          "  ok    qBittorrent's traffic is routed into the tunnel (tun0)\n",
+        ) || tunnelDownText.stdout.includes("qBittorrent's network has no route out\n");
+      expect(tunnelDownText.stdout).toContain('\nVPN down: ');
+      expect(tunnelDownText.stdout.includes('nothing leaks (fail-closed)')).toBe(
+        shutText,
+      );
 
       // Gluetun stops: qBittorrent keeps running, with nothing but loopback.
       const stopped = await nodeExec('docker', ['stop', '-t', '5', gluetun], {
@@ -421,6 +459,7 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       }
       const open = await vpnCheck(home, {}, '--no-egress');
       expect(open.code, open.stdout + open.stderr).toBe(1);
+      expect(JSON.parse(open.stdout)).toMatchObject({ verdict: 'down' });
       expect(checksOf(open)).toContain('network down');
       expect(checksOf(open)).toContain('control-key warning');
       expect(itemOf(open, 'network').hint).toBe(

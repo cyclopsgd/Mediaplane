@@ -83,10 +83,10 @@ export type VpnCheckResult =
       /** The address Gluetun reports for itself, when its public-IP lookup is on. */
       gluetunPublicIp: string | null;
       /**
-       * True only when qBittorrent was shown to be in Gluetun's network, and Gluetun isn't
-       * running (it is exited, dead or created; not paused or restarting) or nothing
-       * answered through the tunnel. Only then may a `down` verdict say that nothing gets
-       * out.
+       * True only when qBittorrent was shown to be in Gluetun's network, and either Gluetun
+       * isn't running (it is exited, dead or created; not paused or restarting), or its
+       * route goes into the tunnel or nowhere and nothing answered. Only then may a `down`
+       * verdict say that nothing gets out.
        */
       failClosed: boolean;
     }
@@ -220,18 +220,26 @@ async function check(options: VpnCheckOptions): Promise<VpnCheckResult> {
           `run vpn-check again; if it keeps stopping, look at qBittorrent's log ("docker logs ${containerName(project, 'qbittorrent')}")`,
         );
   }
-  checks.push(
-    ...controlChecks(probe, project),
-    routeCheck(probe, tunnelInterface(gluetunApp)),
-  );
+  const tunnel = tunnelInterface(gluetunApp);
+  checks.push(...controlChecks(probe, project), routeCheck(probe, tunnel));
   const publicIp = gluetunPublicIp(probe);
   if (egress === undefined || probe.egress === undefined) {
     return verdictOf(checks, null, publicIp, false);
   }
-  const compared = await egressCheck(probe.egress, egress, behindGluetun);
+  // A request routed into the tunnel, or with no route at all, can't get out around the
+  // VPN, whatever the service does. One routed elsewhere has only Gluetun's firewall in
+  // its way, and one service's silence doesn't show that the firewall holds: so no answer
+  // proves the way out shut only for the first two.
+  const shut =
+    behindGluetun && (routeDevice(probe.route) === tunnel || noRoute(probe.route));
+  const compared = await egressCheck(probe.egress, egress, shut);
   checks.push(compared.item);
-  const closed = behindGluetun && compared.item.status === 'down';
-  return verdictOf(checks, compared.egress, publicIp, closed);
+  return verdictOf(
+    checks,
+    compared.egress,
+    publicIp,
+    shut && compared.item.status === 'down',
+  );
 }
 
 async function networkCheck(
@@ -297,12 +305,13 @@ async function networkCheck(
       };
     }
     // Usually a Gluetun that has gone, but it may be a container outside the stack, which
-    // has a network: so it says only what it knows.
+    // has a network: so it says only what it knows. Docker keeps the ID, not the name, so
+    // a restart can't rejoin a Gluetun that has gone: only a recreate can, as apply does.
     return {
       id: 'network',
       status: 'down',
       message: `qBittorrent uses the network of a container that isn't a running part of this stack (${joined.slice(0, 12)}), not Gluetun's`,
-      hint: `restart qBittorrent ("${restart}") so it rejoins Gluetun's network, or take out a network_mode under qbittorrent in compose.override.yaml that points elsewhere`,
+      hint: `run "mediaplane apply": it recreates qBittorrent in Gluetun's current network. If compose.override.yaml gives qbittorrent a network_mode, take it out first`,
     };
   }
   return {
@@ -449,22 +458,39 @@ function routeCheck(probe: ProbeOutput, tunnel: string): VpnCheckItem {
     id: 'route',
     status: 'down',
     message:
-      device === undefined
-        ? "qBittorrent's network has no route out"
-        : `qBittorrent's traffic is ${where}`,
+      device !== undefined
+        ? `qBittorrent's traffic is ${where}`
+        : noRoute(probe.route)
+          ? "qBittorrent's network has no route out"
+          : `Mediaplane could not read qBittorrent's route: ${lastLine(probe.route?.output ?? '')}`,
     hint: `see ${VPN_RUNBOOK}`,
   };
 }
 
 /**
- * curl's exit codes that need a server at the other end, so something got out: 8 (a reply
- * it can't parse), 16 (HTTP/2 framing), 18 (a partial body), 35 (a TLS handshake that
- * failed), 52 (an empty reply), 55 (a send error once connected), 56 (a receive error),
- * 60 (a certificate it can't trust), 63 (a body over --max-filesize) and 92 (an HTTP/2
- * stream that broke).
+ * Whether the route check found no route at all: `ip` failed with the kernel's "Network
+ * unreachable" (busybox, as in qBittorrent's image) or "Network is unreachable"
+ * (iproute2). Any other failure, such as an image without `ip`, shows nothing about the
+ * route.
+ */
+function noRoute(line: ProbeLine | undefined): boolean {
+  return (
+    line !== undefined &&
+    line.exit !== 0 &&
+    /\bNetwork (?:is )?unreachable\b/.test(line.output)
+  );
+}
+
+/**
+ * curl's exit codes that need a server at the other end, so something got out: 1 (an
+ * HTTP/0.9 reply), 8 (a reply it can't parse), 16 (HTTP/2 framing), 18 (a partial body),
+ * 35 (a TLS handshake that failed), 52 (an empty reply), 55 (a send error once
+ * connected), 56 (a receive error), 60 (a certificate it can't trust), 61 (a body in an
+ * encoding it doesn't know), 63 (a body over --max-filesize) and 92 (an HTTP/2 stream
+ * that broke).
  */
 const AFTER_AN_ANSWER: ReadonlySet<number> = new Set([
-  8, 16, 18, 35, 52, 55, 56, 60, 63, 92,
+  1, 8, 16, 18, 35, 52, 55, 56, 60, 61, 63, 92,
 ]);
 
 /**
@@ -474,11 +500,17 @@ const AFTER_AN_ANSWER: ReadonlySet<number> = new Set([
  *
  * An accepted limit: curl 8 does the TLS handshake while it connects, so a TCP connection
  * that is up but whose handshake stalls also says "Connection timed out", and counts as
- * no answer. That can only word a `down` as fail-closed, or show a leak through an eth0
- * route as `down`. Both still exit 1, and neither can give a false pass. Telling them
- * apart (curl's `-w %{time_connect}`) would need a change to the probe's script.
+ * no answer. With the route into the tunnel, a working tunnel then reads as a `down` that
+ * is fail-closed, and "nothing leaks" still holds: that route can't get out around the
+ * VPN. With the route outside the tunnel, a leak reads as a `down`, which is then never
+ * fail-closed. Both still exit 1, and neither can give a false pass. Telling them apart
+ * (curl's `-w %{time_connect}`) would need a change to the probe's script.
  */
 const TIMED_OUT_CONNECTED = /Operation timed out after \d+ milliseconds with /;
+
+/** The same timeout, with nothing received at all: not even the headers' body size. */
+const TIMED_OUT_EMPTY =
+  /Operation timed out after \d+ milliseconds with 0 bytes received/;
 
 /**
  * Whether the egress check got an answer from a server, even one curl couldn't finish.
@@ -495,14 +527,14 @@ function answered(line: ProbeLine | undefined): boolean {
 }
 
 /**
- * What the probe's egress check (`tunnel`) and the host saw, compared. `behindGluetun`:
- * qBittorrent is in Gluetun's network, so no answer through the tunnel means nothing of
- * qBittorrent's gets out.
+ * What the probe's egress check (`tunnel`) and the host saw, compared. `shut`:
+ * qBittorrent is in Gluetun's network, and its route goes into the tunnel or nowhere, so
+ * no answer means nothing of qBittorrent's gets out.
  */
 async function egressCheck(
   tunnel: ProbeLine,
   egress: NonNullable<VpnCheckOptions['egress']>,
-  behindGluetun: boolean,
+  shut: boolean,
 ): Promise<{ item: VpnCheckItem; egress: VpnEgress }> {
   const { url } = egress;
   if (!answered(tunnel)) {
@@ -511,7 +543,7 @@ async function egressCheck(
         id: 'egress',
         status: 'down',
         message: `qBittorrent's traffic got no answer from ${url}: ${lastLine(tunnel.output)}`,
-        hint: behindGluetun
+        hint: shut
           ? `the VPN is down, and nothing gets out (fail-closed); see ${VPN_RUNBOOK}`
           : `the VPN is down; see ${VPN_RUNBOOK}`,
       },
@@ -519,11 +551,14 @@ async function egressCheck(
     };
   }
   if (tunnel.exit !== 0) {
+    const silent = tunnel.exit === 28 && TIMED_OUT_EMPTY.test(tunnel.output);
     return {
       item: {
         id: 'egress',
         status: 'warning',
-        message: `${url} answered qBittorrent, but its answer could not be read (curl exited ${String(tunnel.exit)}), so the addresses were not compared`,
+        message: silent
+          ? `qBittorrent connected to ${url}, but got no answer in time (curl exited 28), so the addresses were not compared`
+          : `${url} answered qBittorrent, but its answer could not be read (curl exited ${String(tunnel.exit)}), so the addresses were not compared`,
         hint: 'set MEDIAPLANE_VPN_CHECK_URL to an IP-echo service, or unset it',
       },
       egress: { url, vpn: null, host: null },
@@ -588,8 +623,9 @@ async function egressCheck(
 
 /**
  * A leak beats down, and down beats a pass. `closed` says whether the VPN's way out is shut
- * (Gluetun STOPPED, or no answer through the tunnel); with a leak elsewhere, such as a
- * network of qBittorrent's own, something still gets out, so it is never fail-closed.
+ * (Gluetun STOPPED, or no answer with the route into the tunnel or nowhere); with a leak
+ * elsewhere, such as a network of qBittorrent's own, something still gets out, so it is
+ * never fail-closed.
  */
 function verdictOf(
   checks: VpnCheckItem[],
@@ -636,8 +672,10 @@ function gluetunPublicIp(probe: ProbeOutput): string | null {
   const answer = httpAnswer(probe.publicip);
   // As with the status: after a non-zero exit, what curl printed is no answer.
   if (probe.publicip?.exit !== 0 || answer.status !== 200) return null;
+  // Only an address is shown: anything else, such as a control character, never reaches
+  // the terminal.
   const address = jsonField(answer.body, 'public_ip');
-  return address === undefined || address === '' ? null : address;
+  return address !== undefined && isIP(address) !== 0 ? address : null;
 }
 
 /** A string field of a JSON object, or undefined. */

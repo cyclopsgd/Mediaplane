@@ -89,13 +89,16 @@ export interface Runtime {
    * Run `command` in a throwaway container of `service` (`compose run --rm --no-deps -T`),
    * with the service's own image, mounts and network: for a service with `network_mode:
    * service:gluetun`, inside Gluetun's network namespace. Its exit code and output, with
-   * `command.values` replaced. Throws a `RuntimeError` when docker can't be started.
+   * `command.values` replaced. Throws a `RuntimeError` for a `service` that isn't a
+   * service name (one that could be read as an option), or when docker can't be started.
    */
   run(service: string, command: OneOffCommand): Promise<ExecResult>;
   /**
-   * Details of the containers `ids` (full IDs, as `containers()` gives them). Match the
-   * answers by `id`, never by position. Throws a `RuntimeError` for anything that isn't a
-   * container ID, for a container outside the managed project, or when docker fails.
+   * Details of the containers `ids` (full IDs, as `containers()` gives them), one for
+   * each ID however often it is named: it asks about each once. Match the answers by
+   * `id`, never by position. Throws a `RuntimeError` for anything that isn't a full
+   * container ID, for a container outside the managed project, when docker fails, or
+   * unless Docker answers each ID exactly once.
    */
   inspect(ids: readonly string[]): Promise<ContainerDetails[]>;
   /**

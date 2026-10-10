@@ -43,29 +43,43 @@ export function isEgressUrl(url: string): boolean {
   }
 }
 
+/** What can send Node's own fetch through a proxy: as in `process`, which is the default. */
+export interface NodeSettings {
+  env: NodeJS.ProcessEnv;
+  /** Node's own command-line flags, as `process.execArgv` has them. */
+  execArgv: readonly string[];
+}
+
 /**
  * The setting that would send Node's own fetch through HTTP(S)_PROXY (Node 24), or
- * undefined. The address it sees would then be the proxy's, not this host's, so a leak
+ * undefined: NODE_USE_ENV_PROXY, or --use-env-proxy in NODE_OPTIONS or on node's own
+ * command line. The address it sees would then be the proxy's, not this host's, so a leak
  * would read as a pass.
  */
-function envProxySetting(env: NodeJS.ProcessEnv): string | undefined {
+function envProxySetting({ env, execArgv }: NodeSettings): string | undefined {
   const use = env.NODE_USE_ENV_PROXY ?? '';
   if (use !== '' && use !== '0') return 'NODE_USE_ENV_PROXY';
-  if ((env.NODE_OPTIONS ?? '').includes('--use-env-proxy')) return '--use-env-proxy';
+  // Anywhere in the text, quoted or not: NODE_OPTIONS may quote it.
+  if (
+    [env.NODE_OPTIONS ?? '', ...execArgv].some((arg) => arg.includes('--use-env-proxy'))
+  ) {
+    return '--use-env-proxy';
+  }
   return undefined;
 }
 
 /**
  * Ask the IP-echo service at `url` which address this machine comes from. Refuses to ask
- * when `env` (the process's) makes fetch use a proxy: the answer would not be this host's.
+ * when `node` (the process's environment and flags) makes fetch use a proxy: the answer
+ * would not be this host's.
  */
 export async function fetchEgress(
   url: string,
   fetchFn: typeof fetch = fetch,
   timeoutMs: number = EGRESS_TIMEOUT_MS,
-  env: NodeJS.ProcessEnv = process.env,
+  node: NodeSettings = process,
 ): Promise<EgressResult> {
-  const proxy = envProxySetting(env);
+  const proxy = envProxySetting(node);
   if (proxy !== undefined) {
     return {
       ok: false,

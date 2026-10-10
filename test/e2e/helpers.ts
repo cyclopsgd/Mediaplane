@@ -147,7 +147,10 @@ export async function removeAsRoot(dir: string): Promise<void> {
 
 /** Mediaplane deployed for a test, as `deployMediaplane` started it. */
 export interface DeployedMediaplane {
-  /** `mediaplane <args>` in its container, with `env` added to the command's. */
+  /**
+   * `mediaplane <args>` in its container, with `env` added to the command's. Never a
+   * secret in `env`: its values go on `docker exec`'s command line, which `ps` shows.
+   */
   mediaplane(args: readonly string[], env?: Record<string, string>): Promise<ExecResult>;
   /** Bring the deployment down, and remove its image; fails if either fails. */
   remove(): Promise<void>;
@@ -174,8 +177,9 @@ export async function deployMediaplane(options: {
   // Before anything is made, so a failure here leaves nothing behind.
   const dockerGid = String((await stat('/var/run/docker.sock')).gid);
   await buildImage(tag);
-  const dir = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-system-'));
-  const override = join(dir, 'override.yaml');
+  /** The override's folder. Made in the try below, so a failure there still removes the image. */
+  let dir: string | undefined;
+  const override = () => join(dir ?? '', 'override.yaml');
   const env = {
     ...process.env,
     MEDIAPLANE_IMAGE: tag,
@@ -197,7 +201,7 @@ export async function deployMediaplane(options: {
         '-f',
         deploy,
         '-f',
-        override,
+        override(),
         ...args,
       ],
       { env, cwd: '/', timeoutMs: 300_000 },
@@ -215,19 +219,24 @@ export async function deployMediaplane(options: {
         failed.push(`${what} failed: ${messageOf(error)}`);
       }
     };
-    await step('compose down', () => system('down', '--remove-orphans'));
-    await step('removing the override', async () => {
-      await rm(dir, { recursive: true, force: true });
-      return undefined;
-    });
+    // Without the folder, nothing was started: there is only the image to remove.
+    const made = dir;
+    if (made !== undefined) {
+      await step('compose down', () => system('down', '--remove-orphans'));
+      await step('removing the override', async () => {
+        await rm(made, { recursive: true, force: true });
+        return undefined;
+      });
+    }
     await step('docker image rm', () =>
       nodeExec('docker', ['image', 'rm', tag], { cwd: '/' }),
     );
     return failed;
   };
   try {
+    dir = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-system-'));
     await writeFile(
-      override,
+      override(),
       [
         'services:',
         '  mediaplane:',

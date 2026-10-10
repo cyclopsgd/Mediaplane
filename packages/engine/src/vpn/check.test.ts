@@ -269,11 +269,85 @@ describe('vpnCheck', () => {
     }
   });
 
+  it('finds the VPN down, but never closed, when the route leaves the tunnel and nothing answers', async () => {
+    // Routed by eth0, the request never went into the tunnel. Only Gluetun's firewall
+    // stood in its way, and one service's silence doesn't show that the firewall holds:
+    // the service may be unreachable from this network, or stall the TLS handshake.
+    const answers: Answers = {
+      ...HEALTHY,
+      route: [0, '1.1.1.1 via 172.20.0.1 dev eth0  src 172.20.0.2'],
+      egress: [28, 'curl: (28) Connection timed out after 10002 milliseconds'],
+    };
+    const { result, asked } = await checkWith(await homeWith(), { answers });
+    expect(result).toMatchObject({
+      ok: true,
+      verdict: 'down',
+      egress: { url: TRACE, vpn: null, host: null },
+      failClosed: false,
+    });
+    expect(statuses(result).slice(-2)).toEqual(['route down', 'egress down']);
+    expect(result.ok && result.checks.at(-1)).toMatchObject({
+      id: 'egress',
+      status: 'down',
+      hint: 'the VPN is down; see docs/runbooks/vpn-down.md',
+    });
+    expect(JSON.stringify(result)).not.toContain('nothing gets out');
+    expect(JSON.stringify(result)).not.toContain('fail-closed');
+    expect(asked).toEqual([]);
+  });
+
+  it('finds the VPN down, and closed, when there is no route at all and nothing answers', async () => {
+    // busybox's ip, as in qBittorrent's image, and iproute2's.
+    for (const unreachable of [
+      'ip: RTNETLINK answers: Network unreachable',
+      'RTNETLINK answers: Network is unreachable',
+    ]) {
+      const answers: Answers = {
+        ...HEALTHY,
+        route: [2, unreachable],
+        egress: [7, 'curl: (7) Failed to connect to 1.1.1.1 port 443 after 0 ms'],
+      };
+      const { result } = await checkWith(await homeWith(), { answers });
+      expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: true });
+      expect(result.ok && result.checks.find((c) => c.id === 'route')).toMatchObject({
+        status: 'down',
+        message: "qBittorrent's network has no route out",
+      });
+      expect(result.ok && result.checks.at(-1)?.hint).toBe(
+        'the VPN is down, and nothing gets out (fail-closed); see docs/runbooks/vpn-down.md',
+      );
+    }
+  });
+
+  it("never calls it closed when it couldn't read the route: that shows nothing", async () => {
+    // An image without ip, say (an override can change qBittorrent's image).
+    const answers: Answers = {
+      ...HEALTHY,
+      route: [127, 'sh: ip: not found'],
+      egress: [7, 'curl: (7) Failed to connect to 1.1.1.1 port 443 after 0 ms'],
+    };
+    const { result } = await checkWith(await homeWith(), { answers });
+    expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
+    expect(result.ok && result.checks.find((c) => c.id === 'route')).toEqual({
+      id: 'route',
+      status: 'down',
+      message: "Mediaplane could not read qBittorrent's route: sh: ip: not found",
+      hint: 'see docs/runbooks/vpn-down.md',
+    });
+    expect(JSON.stringify(result)).not.toContain('nothing gets out');
+    expect(JSON.stringify(result)).not.toContain('no route out');
+  });
+
   /**
    * An answer curl couldn't finish, with the egress check's `exit` and `output`: through the
    * tunnel, a pass that warns and is never closed; with the route out of the tunnel, a leak.
+   * `message` is the warning, when it isn't that the answer could not be read.
    */
-  async function expectUnreadAnswer(exit: number, output: string): Promise<void> {
+  async function expectUnreadAnswer(
+    exit: number,
+    output: string,
+    message = `${TRACE} answered qBittorrent, but its answer could not be read (curl exited ${String(exit)}), so the addresses were not compared`,
+  ): Promise<void> {
     const answers: Answers = { ...HEALTHY, egress: [exit, output] };
     const { result, asked } = await checkWith(await homeWith(), { answers });
     expect(result).toMatchObject({
@@ -285,7 +359,7 @@ describe('vpnCheck', () => {
     expect(result.ok && result.checks.at(-1)).toMatchObject({
       id: 'egress',
       status: 'warning',
-      message: `${TRACE} answered qBittorrent, but its answer could not be read (curl exited ${String(exit)}), so the addresses were not compared`,
+      message,
     });
     expect(asked).toEqual([]);
 
@@ -314,6 +388,13 @@ describe('vpnCheck', () => {
       92,
       'curl: (92) HTTP/2 stream 1 was not closed cleanly: PROTOCOL_ERROR (err 1)',
     );
+    // An HTTP/0.9 reply (1) and a body in an encoding curl doesn't know (61) also come
+    // from a server.
+    await expectUnreadAnswer(1, 'curl: (1) Received HTTP/0.9 when not allowed');
+    await expectUnreadAnswer(
+      61,
+      'curl: (61) Unrecognized content encoding type. libcurl understands deflate, gzip, br, zstd content encodings.',
+    );
   });
 
   it('counts a timeout once curl was connected as an answer, wherever its error line falls', async () => {
@@ -330,10 +411,13 @@ describe('vpnCheck', () => {
       `${'x'.repeat(4096)}curl: (28) Operation timed out after 2002 milliseconds with 6000 bytes received\n${'x'.repeat(1903)}\n`,
     );
     // "Operation timed out" comes only after the connection was up, even with no byte back.
+    // With none, there was no answer to read: it says so.
     await expectUnreadAnswer(
       28,
       'curl: (28) Operation timed out after 10001 milliseconds with 0 bytes received',
+      `qBittorrent connected to ${TRACE}, but got no answer in time (curl exited 28), so the addresses were not compared`,
     );
+    // "0 out of 900": the headers came, with the body's size, so an answer did.
     await expectUnreadAnswer(
       28,
       'curl: (28) Operation timed out after 10001 milliseconds with 0 out of 900 bytes received',
@@ -624,7 +708,9 @@ describe('vpnCheck', () => {
       status: 'down',
       message:
         "qBittorrent uses the network of a container that isn't a running part of this stack (dddddddddddd), not Gluetun's",
-      hint: 'restart qBittorrent ("docker restart mediaplane-qbittorrent-1") so it rejoins Gluetun\'s network, or take out a network_mode under qbittorrent in compose.override.yaml that points elsewhere',
+      // Docker stores the container's ID, so a restart can't rejoin a Gluetun that has
+      // gone: only a recreate (apply) puts qBittorrent in Gluetun's current network.
+      hint: 'run "mediaplane apply": it recreates qBittorrent in Gluetun\'s current network. If compose.override.yaml gives qbittorrent a network_mode, take it out first',
     });
     expect(JSON.stringify(result)).not.toContain('nothing gets out');
   });
@@ -700,6 +786,23 @@ describe('vpnCheck', () => {
       status: 'warning',
       message: "Gluetun's control server's answer could not be read (curl exited 63)",
     });
+  });
+
+  it("shows Gluetun's own address only when it is an IP address", async () => {
+    // Anything else, such as text with a control character, never reaches the terminal.
+    for (const [reported, shown] of [
+      ['2001:db8::7', '2001:db8::7'],
+      ['203.0.113.7\u001b[2J', null],
+      ['fe80::1%\u001b[2J', null],
+      ['not-an-address', null],
+    ] as const) {
+      const answers: Answers = {
+        ...HEALTHY,
+        publicip: [0, `${JSON.stringify({ public_ip: reported })}\n200`],
+      };
+      const { result } = await checkWith(await homeWith(), { answers });
+      expect(result).toMatchObject({ ok: true, verdict: 'pass', gluetunPublicIp: shown });
+    }
   });
 
   it('finds the VPN down when the control server says it is stopped', async () => {

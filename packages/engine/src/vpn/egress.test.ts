@@ -24,6 +24,9 @@ function answering(
   });
 }
 
+/** No proxy setting at all: the local-server tests must not depend on the shell's. */
+const NO_PROXY = { env: {}, execArgv: [] };
+
 function close(server: Server): Promise<void> {
   server.closeAllConnections();
   return new Promise((done) => {
@@ -76,7 +79,10 @@ describe('fetchEgress', () => {
   it('asks the service, and reads the address it saw', async () => {
     const { url, server } = await answering(200, 'h=x\nip=127.0.0.1\n');
     try {
-      expect(await fetchEgress(url)).toEqual({ ok: true, address: '127.0.0.1' });
+      expect(await fetchEgress(url, fetch, 1_000, NO_PROXY)).toEqual({
+        ok: true,
+        address: '127.0.0.1',
+      });
     } finally {
       await close(server);
     }
@@ -88,7 +94,7 @@ describe('fetchEgress', () => {
       response.write('x'.repeat(20_000));
     });
     try {
-      expect(await fetchEgress(url, fetch, 1_000)).toEqual({
+      expect(await fetchEgress(url, fetch, 1_000, NO_PROXY)).toEqual({
         ok: false,
         error: `${url} answered without an address`,
       });
@@ -104,7 +110,7 @@ describe('fetchEgress', () => {
       response.end();
     });
     try {
-      expect(await fetchEgress(url)).toEqual({
+      expect(await fetchEgress(url, fetch, 1_000, NO_PROXY)).toEqual({
         ok: false,
         error: `no answer from ${url}: unexpected redirect`,
       });
@@ -123,7 +129,7 @@ describe('fetchEgress', () => {
       });
     });
     try {
-      expect(await fetchEgress(url, fetch, 400)).toEqual({
+      expect(await fetchEgress(url, fetch, 400, NO_PROXY)).toEqual({
         ok: false,
         error: `no answer from ${url}: nothing within 0.4 s`,
       });
@@ -136,11 +142,11 @@ describe('fetchEgress', () => {
     const refused = await answering(503, 'ip=127.0.0.1\n');
     const empty = await answering(200, 'nothing here\n');
     try {
-      expect(await fetchEgress(refused.url)).toEqual({
+      expect(await fetchEgress(refused.url, fetch, 1_000, NO_PROXY)).toEqual({
         ok: false,
         error: `${refused.url} answered HTTP 503`,
       });
-      expect(await fetchEgress(empty.url)).toEqual({
+      expect(await fetchEgress(empty.url, fetch, 1_000, NO_PROXY)).toEqual({
         ok: false,
         error: `${empty.url} answered without an address`,
       });
@@ -152,26 +158,27 @@ describe('fetchEgress', () => {
 
   it('reports no answer, with the network error or how long it waited', async () => {
     const url = 'http://192.0.2.10/';
+    const failing = (cause: unknown, timeoutMs = 1_000) =>
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+      fetchEgress(url, () => Promise.reject(cause), timeoutMs, NO_PROXY);
     const refused = Object.assign(new TypeError('fetch failed'), {
       cause: new Error('connect ECONNREFUSED 192.0.2.10:80'),
     });
-    expect(await fetchEgress(url, () => Promise.reject(refused))).toEqual({
+    expect(await failing(refused)).toEqual({
       ok: false,
       error: `no answer from ${url}: connect ECONNREFUSED 192.0.2.10:80`,
     });
     const timeout = new DOMException('The operation was aborted', 'TimeoutError');
-    expect(await fetchEgress(url, () => Promise.reject(timeout), 10_000)).toEqual({
+    expect(await failing(timeout, 10_000)).toEqual({
       ok: false,
       error: `no answer from ${url}: nothing within 10 s`,
     });
-    const other = new Error('fake: refused');
-    expect(await fetchEgress(url, () => Promise.reject(other))).toEqual({
+    expect(await failing(new Error('fake: refused'))).toEqual({
       ok: false,
       error: `no answer from ${url}: fake: refused`,
     });
     // Not even an Error: whatever it was, it is named.
-    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
-    expect(await fetchEgress(url, () => Promise.reject('fake: not an error'))).toEqual({
+    expect(await failing('fake: not an error')).toEqual({
       ok: false,
       error: `no answer from ${url}: fake: not an error`,
     });
@@ -180,7 +187,7 @@ describe('fetchEgress', () => {
   it('reports an answer that has no body at all as one without an address', async () => {
     const url = 'http://192.0.2.10/';
     const empty = () => Promise.resolve(new Response(null, { status: 204 }));
-    expect(await fetchEgress(url, empty)).toEqual({
+    expect(await fetchEgress(url, empty, 1_000, NO_PROXY)).toEqual({
       ok: false,
       error: `${url} answered without an address`,
     });
@@ -193,33 +200,40 @@ describe('fetchEgress', () => {
       asked.push(url);
       return Promise.resolve(new Response('ip=198.51.100.2\n'));
     };
-    expect(await fetchEgress(url, answer, 1_000, { NODE_USE_ENV_PROXY: '1' })).toEqual({
+    const refusal = (setting: string) => ({
       ok: false,
-      error:
-        "the request would go through a proxy (NODE_USE_ENV_PROXY), so it can't see this host's own address",
+      error: `the request would go through a proxy (${setting}), so it can't see this host's own address`,
     });
+    const ask = (env: NodeJS.ProcessEnv, execArgv: readonly string[] = []) =>
+      fetchEgress(url, answer, 1_000, { env, execArgv });
+    expect(await ask({ NODE_USE_ENV_PROXY: '1' })).toEqual(refusal('NODE_USE_ENV_PROXY'));
     expect(
-      await fetchEgress(url, answer, 1_000, {
-        NODE_OPTIONS: '--max-old-space-size=512 --use-env-proxy',
-      }),
-    ).toEqual({
-      ok: false,
-      error:
-        "the request would go through a proxy (--use-env-proxy), so it can't see this host's own address",
-    });
+      await ask({ NODE_OPTIONS: '--max-old-space-size=512 --use-env-proxy' }),
+    ).toEqual(refusal('--use-env-proxy'));
+    // On node's own command line (node --use-env-proxy main.ts), as process.execArgv has it.
+    expect(await ask({}, ['--import', 'tsx', '--use-env-proxy'])).toEqual(
+      refusal('--use-env-proxy'),
+    );
     expect(asked).toEqual([]);
     // Off, empty, or unrelated settings do not stop it.
-    for (const env of [
-      {},
-      { NODE_USE_ENV_PROXY: '0' },
-      { NODE_USE_ENV_PROXY: '' },
-      { NODE_OPTIONS: '--max-old-space-size=512', HTTPS_PROXY: 'http://192.0.2.1:3128' },
-    ]) {
-      expect(await fetchEgress(url, answer, 1_000, env), JSON.stringify(env)).toEqual({
+    for (const [env, execArgv] of [
+      [{}, []],
+      [{ NODE_USE_ENV_PROXY: '0' }, []],
+      [{ NODE_USE_ENV_PROXY: '' }, []],
+      [
+        {
+          NODE_OPTIONS: '--max-old-space-size=512',
+          HTTPS_PROXY: 'http://192.0.2.1:3128',
+        },
+        [],
+      ],
+      [{}, ['--import', 'tsx', '--no-use-env-proxy']],
+    ] as [NodeJS.ProcessEnv, string[]][]) {
+      expect(await ask(env, execArgv), JSON.stringify([env, execArgv])).toEqual({
         ok: true,
         address: '198.51.100.2',
       });
     }
-    expect(asked).toHaveLength(4);
+    expect(asked).toHaveLength(5);
   });
 });
