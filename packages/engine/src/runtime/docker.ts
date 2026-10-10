@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { warning, type Diagnostic } from '../diagnostics';
 import { COMPOSE_PATH, ENV_PATH, OVERRIDE_PATH } from '../paths';
 import { nodeExec, type Exec, type ExecResult } from './exec';
+import { redact } from './redact';
 import {
   HelperError,
   RuntimeError,
@@ -532,17 +533,6 @@ function text(value: unknown): string {
 function labelValue(labels: string, key: string): string | undefined {
   const name = key.replaceAll('.', '\\.');
   return new RegExp(`(?:^|,)${name}=(.*?)(?=,[^,=]+=|$)`).exec(labels)?.[1];
-}
-
-/**
- * Replace every secret value in `text` with "***". Longest first, so a value that contains
- * another is replaced whole; plain-string matching, so regex characters in a value are safe.
- */
-function redact(text: string, values: Record<string, string>): string {
-  return Object.values(values)
-    .filter((value) => value !== '')
-    .sort((a, b) => b.length - a.length)
-    .reduce((redacted, value) => redacted.replaceAll(value, '***'), text);
 }
 
 function firstLine(value: string): string {

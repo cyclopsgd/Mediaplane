@@ -6,6 +6,7 @@ import { COMPOSE_PATH, ENV_PATH } from '../paths';
 import type { HostRequest } from '../host/report';
 import type { HostProbe, PathStat } from '../preflight/probe';
 import type { ExecResult } from '../runtime/exec';
+import type { ProbeCheck } from '../vpn/probe';
 import {
   RuntimeError,
   type CommandResult,
@@ -251,4 +252,16 @@ export function running(hashes: Record<string, string>): ContainerState[] {
     configHash,
     published: [],
   }));
+}
+
+/** vpn-check's probe answers: each check's exit status, and what it printed. */
+export type ProbeAnswers = Partial<Record<ProbeCheck, readonly [number, string]>>;
+
+/** What the probe script prints for `answers`, after a line of Compose's own. */
+export function probeOutput(answers: ProbeAnswers): string {
+  const lines = Object.entries(answers).map(
+    ([name, [exit, output]]) =>
+      `${name} ${String(exit)} ${Buffer.from(output).toString('base64')}`,
+  );
+  return ['Container mediaplane-qbittorrent-run-0 Creating', ...lines, ''].join('\n');
 }
