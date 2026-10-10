@@ -27,6 +27,14 @@ export const VPN_RUNBOOK = 'docs/runbooks/vpn-down.md';
 /** The checks the probe always runs; it runs `egress` only when it is given a URL. */
 const PROBE_CHECKS: readonly ProbeCheck[] = ['route', 'anonymous', 'status', 'publicip'];
 
+/**
+ * The name Compose gives a service's first container in `project`. Mediaplane never sets
+ * `container_name`, so this is the name to give `docker restart` or `docker logs`.
+ */
+function containerName(project: string, service: string): string {
+  return `${project}-${service}-1`;
+}
+
 export interface VpnCheckOptions {
   home: string;
   catalog: Catalog;
@@ -34,6 +42,11 @@ export interface VpnCheckOptions {
   host: HostFacts | (() => Promise<HostFacts>);
   env: NodeJS.ProcessEnv;
   runtime: Runtime;
+  /**
+   * The Compose project `runtime` manages ("mediaplane", or MEDIAPLANE_COMPOSE_PROJECT's
+   * "mediaplane-<name>"). Hints name its containers as Compose does: `<project>-<service>-1`.
+   */
+  project: string;
   /**
    * Compare the addresses qBittorrent and this host come from, as the IP-echo service at
    * `url` sees them. `fromHost` asks it from the host. Leave it out to check the
@@ -96,7 +109,7 @@ export async function vpnCheck(options: VpnCheckOptions): Promise<VpnCheckResult
 }
 
 async function check(options: VpnCheckOptions): Promise<VpnCheckResult> {
-  const { egress, runtime } = options;
+  const { egress, runtime, project } = options;
   // The URL isn't repeated: one with a password in it would show the password.
   if (egress !== undefined && !isEgressUrl(egress.url)) {
     return failure(
@@ -163,7 +176,7 @@ async function check(options: VpnCheckOptions): Promise<VpnCheckResult> {
       'run "mediaplane apply" first',
     );
   }
-  const network = await networkCheck(runtime, containers, qbittorrent, gluetun);
+  const network = await networkCheck(runtime, project, containers, qbittorrent, gluetun);
   // Only a qBittorrent shown to be in Gluetun's network is shut in when Gluetun's way out
   // is: one in any other network may still get out (the "fail-closed" claim).
   const behindGluetun = network.status === 'ok' || network.status === 'warning';
@@ -201,10 +214,13 @@ async function check(options: VpnCheckOptions): Promise<VpnCheckResult> {
       : failure(
           'vpn-check.probe-failed',
           `the probe in qBittorrent's network stopped before its ${missing} check: ${why}`,
-          'run vpn-check again; if it keeps stopping, look at qBittorrent\'s log ("docker logs mediaplane-qbittorrent-1")',
+          `run vpn-check again; if it keeps stopping, look at qBittorrent's log ("docker logs ${containerName(project, 'qbittorrent')}")`,
         );
   }
-  checks.push(...controlChecks(probe), routeCheck(probe, tunnelInterface(gluetunApp)));
+  checks.push(
+    ...controlChecks(probe, project),
+    routeCheck(probe, tunnelInterface(gluetunApp)),
+  );
   const publicIp = gluetunPublicIp(probe);
   if (egress === undefined || probe.egress === undefined) {
     return verdictOf(checks, null, publicIp, false);
@@ -217,10 +233,12 @@ async function check(options: VpnCheckOptions): Promise<VpnCheckResult> {
 
 async function networkCheck(
   runtime: Runtime,
+  project: string,
   containers: readonly ContainerState[],
   qbittorrent: ContainerState,
   gluetun: ContainerState | undefined,
 ): Promise<VpnCheckItem> {
+  const restart = `docker restart ${containerName(project, 'qbittorrent')}`;
   const ids = gluetun === undefined ? [qbittorrent.id] : [qbittorrent.id, gluetun.id];
   const details = await runtime.inspect(ids);
   const of = (id: string) => details.find((d) => d.id === id);
@@ -254,7 +272,7 @@ async function networkCheck(
         status: 'down',
         message:
           'qBittorrent started before Gluetun last did, so it still holds the network Gluetun had then, which is gone: it has none',
-        hint: 'restart qBittorrent: "docker restart mediaplane-qbittorrent-1"',
+        hint: `restart qBittorrent: "${restart}"`,
       };
     }
     return {
@@ -281,7 +299,7 @@ async function networkCheck(
       id: 'network',
       status: 'down',
       message: `qBittorrent uses the network of a container that isn't a running part of this stack (${joined.slice(0, 12)}), not Gluetun's`,
-      hint: 'restart qBittorrent ("docker restart mediaplane-qbittorrent-1") so it rejoins Gluetun\'s network, or take out a network_mode under qbittorrent in compose.override.yaml that points elsewhere',
+      hint: `restart qBittorrent ("${restart}") so it rejoins Gluetun's network, or take out a network_mode under qbittorrent in compose.override.yaml that points elsewhere`,
     };
   }
   return {
@@ -323,7 +341,7 @@ function gluetunCheck(
 }
 
 /** What Gluetun's control server says with Mediaplane's key, and without it. */
-function controlChecks(probe: ProbeOutput): VpnCheckItem[] {
+function controlChecks(probe: ProbeOutput, project: string): VpnCheckItem[] {
   const checks: VpnCheckItem[] = [];
   const status = httpAnswer(probe.status);
   const exit = probe.status?.exit ?? 0;
@@ -358,7 +376,7 @@ function controlChecks(probe: ProbeOutput): VpnCheckItem[] {
       status: 'warning',
       message:
         "Gluetun's control server answers anyone on the stack's network, without a key: Gluetun has not read its key file since Mediaplane wrote it",
-      hint: 'restart Gluetun, then qBittorrent: "docker restart mediaplane-gluetun-1", then "docker restart mediaplane-qbittorrent-1" (Gluetun\'s README, "Set up before Slice 3a")',
+      hint: `restart Gluetun, then qBittorrent: "docker restart ${containerName(project, 'gluetun')}", then "docker restart ${containerName(project, 'qbittorrent')}" (Gluetun's README, "Set up before Slice 3a")`,
     });
   }
   return checks;

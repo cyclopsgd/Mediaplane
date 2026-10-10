@@ -57,6 +57,8 @@ interface Setup {
   host?: EgressResult;
   egress?: boolean;
   url?: string;
+  /** The Compose project; "mediaplane" unless the test says otherwise. */
+  project?: string;
   /** For the fake Docker: containers, details, a run of its own… */
   runtime?: FakeRuntimeOptions;
   /** Methods that replace the fake's own. */
@@ -79,6 +81,7 @@ async function checkWith(home: string, setup: Setup = {}) {
     host: FIXTURE_HOST,
     env: {},
     runtime,
+    project: setup.project ?? 'mediaplane',
     ...((setup.egress ?? true)
       ? {
           egress: {
@@ -389,7 +392,10 @@ describe('vpnCheck', () => {
   it('finds the VPN down when qBittorrent holds the network of an earlier Gluetun', async () => {
     // Gluetun restarted on its own, after qBittorrent: the probe would join Gluetun's new
     // network and pass, while qBittorrent itself has none.
+    // In a project of another name, such as MEDIAPLANE_COMPOSE_PROJECT's, the hint names
+    // that project's container.
     const { result } = await checkWith(await homeWith(), {
+      project: 'mediaplane-dev',
       runtime: {
         details: {
           [QBITTORRENT_ID]: { networkMode: `container:${GLUETUN_ID}` },
@@ -400,7 +406,7 @@ describe('vpnCheck', () => {
     expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
     expect(result.ok && result.checks[0]).toMatchObject({
       status: 'down',
-      hint: 'restart qBittorrent: "docker restart mediaplane-qbittorrent-1"',
+      hint: 'restart qBittorrent: "docker restart mediaplane-dev-qbittorrent-1"',
     });
   });
 
@@ -575,11 +581,14 @@ describe('vpnCheck', () => {
 
   it('warns when the control server answers without the key: Gluetun has not been restarted', async () => {
     const answers: Answers = { ...HEALTHY, anonymous: [0, '200'] };
-    const { result } = await checkWith(await homeWith(), { answers });
+    const { result } = await checkWith(await homeWith(), {
+      answers,
+      project: 'mediaplane-e2e-1234-vpn',
+    });
     expect(result).toMatchObject({ ok: true, verdict: 'pass' });
     expect(result.ok && result.checks.find((c) => c.id === 'control-key')).toMatchObject({
       status: 'warning',
-      hint: expect.stringContaining('docker restart mediaplane-gluetun-1') as unknown,
+      hint: 'restart Gluetun, then qBittorrent: "docker restart mediaplane-e2e-1234-vpn-gluetun-1", then "docker restart mediaplane-e2e-1234-vpn-qbittorrent-1" (Gluetun\'s README, "Set up before Slice 3a")',
     });
   });
 
