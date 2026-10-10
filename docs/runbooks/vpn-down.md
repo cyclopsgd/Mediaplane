@@ -111,8 +111,8 @@ and `unpause` from inside Mediaplane's container.
   with the output of `mediaplane vpn-check --json`. That output holds your addresses:
   take them out first if you'd rather not share them.
 - **`gluetun`: Gluetun is exited, dead or created, or has no container.** Run
-  `mediaplane apply`, which starts it. Then restart qBittorrent as above: it kept the
-  network Gluetun had before.
+  `mediaplane apply`, which starts or recreates it. Then run `mediaplane vpn-check` again,
+  and follow the `network` line if it now finds qBittorrent stranded.
 - **`gluetun`: Gluetun is paused or restarting.** A restart usually ends by itself: wait
   a minute, and run `mediaplane vpn-check` again. A restart loop doesn't end: if it stays,
   read Gluetun's log. A pause is a `docker pause` by hand: undo it with
@@ -162,8 +162,8 @@ Warnings (marked `warn`) don't fail the check, but say something is off:
   proxy setting (`NODE_USE_ENV_PROXY`, or `--use-env-proxy` in `NODE_OPTIONS` or on
   `node`'s command line), or when `DOCKER_HOST` names a Docker that may be on another
   host (anything but a `unix://` socket).
-- **`egress`: the service answered without an address, or its answer could not be read.**
-  The two addresses were not compared. Set `MEDIAPLANE_VPN_CHECK_URL` to a service that
+- **`egress`: the service answered without an address, its answer could not be read, or
+  it connected but got no answer in time.** The two addresses were not compared. Set `MEDIAPLANE_VPN_CHECK_URL` to a service that
   answers with `ip=<address>`, or with just the address, or unset it.
 - **`egress`: one IPv4 and one IPv6 address.** The service answered the two sides over
   different protocols, so the addresses prove nothing. Name the service by its IP
