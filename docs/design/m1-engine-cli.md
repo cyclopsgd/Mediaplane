@@ -1078,17 +1078,21 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   0 on a pass, and 1 on a leak or a VPN that is down. Its `--json` is
   `mediaplane.vpn-check/v1`, where `ok` says the check ran and `verdict` what it found.
   Its last line claims no more than the checks found: it says nothing leaks only when
-  Gluetun is stopped or nothing answered through the tunnel (`failClosed`). The default
-  of asking Cloudflare was decided while planning this slice; the owner can still change
-  it.
+  Gluetun is stopped, or nothing answered while the route went into the tunnel or
+  nowhere (`failClosed`). The default of asking Cloudflare was decided while planning
+  this slice; the owner can still change it.
   - **The addresses were compared, and differed,** when the check with the id `egress`
     has the status `ok`. Equal addresses give `leak`. `egress.vpn` and `egress.host` can
     hold addresses without a comparison: an IPv4 and an IPv6 address are both known, but
     prove nothing.
   - **`failClosed` is true** only when qBittorrent was shown to be in Gluetun's network,
-    and either Gluetun is stopped (exited, dead or created, or without a container) or
-    nothing answered through the tunnel. It is an inference, not a measurement: a
-    service that stalls the TLS handshake also reads as no answer.
+    and either Gluetun is stopped (exited, dead or created, or without a container), or
+    nothing answered while the route went into the tunnel or nowhere. It is an
+    inference, not a measurement. A route into the tunnel can't get out around the VPN,
+    so there a service that stalls the TLS handshake only makes a working tunnel read as
+    down. With the route outside the tunnel, no answer is still `down`, but never
+    fail-closed: only Gluetun's firewall stands in the way, and the silence may come from
+    a service this network can't reach, or from a TLS stall.
   - **It measures IPv4 only.** The route target is `1.1.1.1`, and the default URL is
     reached by an IPv4 address. An IPv6 check waits for Docker's IPv6 to be turned on; the
     roadmap lists it.
@@ -1096,8 +1100,9 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     and in the image it goes on the host helper's command line. It must carry no token.
     The host's request refuses a redirect and a URL with a user name or password, and
     only an address-shaped answer comes back. Run from source behind a Node env proxy
-    (`NODE_USE_ENV_PROXY`, `--use-env-proxy`), the host side can't be measured, so it is
-    a warning (threat model, T13).
+    (`NODE_USE_ENV_PROXY`, `--use-env-proxy`), or with a `DOCKER_HOST` that isn't a
+    `unix://` socket, the host side isn't measured, so it is a warning (threat model,
+    T13).
 - **vpn-check needs no route of its own.** Its probe is a `compose run` of the
   `qbittorrent` service, so it starts in Gluetun's network namespace, in qBittorrent's
   own image, as nobody. It reaches Gluetun's control server on `127.0.0.1:8000` there,

@@ -237,8 +237,8 @@ which moved to M2. The rest are for S3b and S3c.
 - **The Mediaplane container can reach only the socket proxy.** Its network is
   internal (S2c). Wiring needs the apps' APIs, so attach the container to the
   stack's network, or find another route. Then update ADR 0008 and the threat model.
-  **Decided by the owner on 2026-10-10, on how Mediaplane reaches the apps (option A2,
-  a private wiring network).** A Docker network with `internal: true`, which
+  **Decided by the owner on 2026-10-10, on how Mediaplane reaches the apps: a private
+  wiring network.** A Docker network with `internal: true`, which
   Mediaplane's container, every wired app and Gluetun (for qBittorrent) join.
   - Mediaplane's container stays offline: that network has no route out.
   - The apps keep their normal network for their own internet traffic.
@@ -377,6 +377,10 @@ which moved to M2. The rest are for S3b and S3c.
 - **An IPv6 egress check.** `vpn-check` measures IPv4 only (S3d): its route target is
   `1.1.1.1`, and its default URL is reached by an IPv4 address. When Docker's IPv6 is
   turned on for the stack, add an IPv6 egress check, so a leak over IPv6 shows.
+- **A `leak` verdict on real Docker.** Unit tests cover every `leak` path of
+  `vpn-check`, but no end-to-end test reaches one (S3d). Add one, for example a
+  `network_mode` override for qBittorrent in the kill-switch test, so the leak path runs
+  once against real Docker.
 
 ## Spec refinements made while planning (2026-10-08)
 

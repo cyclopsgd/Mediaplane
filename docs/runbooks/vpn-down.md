@@ -1,8 +1,10 @@
 # Runbook: the VPN is down
 
 qBittorrent has no network of its own: it uses Gluetun's. So when the VPN is down,
-qBittorrent can't reach anything, and nothing leaks (fail-closed). This page finds out
-why, and gets it back. A leak is a different failure, and worse: see [A leak](#a-leak).
+qBittorrent can't reach the internet, and Gluetun's firewall keeps it from leaking
+(fail-closed). `vpn-check` says that nothing leaks only when its checks show it: see
+below. This page finds out why the VPN is down, and gets it back. A leak is a different
+failure, and worse: see [A leak](#a-leak).
 
 ## Symptoms
 
@@ -22,22 +24,25 @@ why, and gets it back. A leak is a different failure, and worse: see [A leak](#a
   VPN down: qBittorrent can't reach the internet, and nothing leaks (fail-closed). See docs/runbooks/vpn-down.md.
   ```
 
-  The last line says that nothing leaks only when the checks show it: Gluetun is
-  stopped (exited, dead or created, or without a container), or nothing answered through
-  the tunnel. Otherwise it says
+  The last line says that nothing leaks only when the checks show it, with qBittorrent
+  in Gluetun's network: Gluetun is stopped (exited, dead or created, or without a
+  container), or nothing answered while qBittorrent's route went into the tunnel, or
+  there was no route at all. Otherwise it says
   `VPN down: the checks marked DOWN say what failed. See docs/runbooks/vpn-down.md.`
 
-  "Nothing leaks" is an inference, not a measurement. It rests on qBittorrent being shown
-  to be in Gluetun's network, and on no answer through the tunnel. A service that accepts
-  the connection but stalls the TLS handshake reads as no answer too, so a working
-  tunnel can read as down.
+  "Nothing leaks" is an inference, not a measurement. A route into the tunnel can't get
+  out around the VPN, whatever the service does. A service that accepts the connection
+  but stalls the TLS handshake reads as no answer, so a working tunnel can read as down.
 
   A `LEAK` is the result to act on first. But a `down` that doesn't say "nothing leaks"
-  has not been shown to be safe. A leak can read as `down` in three cases:
-  - the service stalls the TLS handshake, while the `route` line shows a way out that is
-    not the tunnel;
-  - the `network` line says qBittorrent uses the network of a container that isn't part of
-    this stack, and that container may have a way out;
+  has not been shown to be safe. A leak can read as `down` in these cases:
+  - the `route` line shows a way out that is not the tunnel, and nothing answered. Only
+    Gluetun's firewall stands in the way then, and nothing measured it: the service may
+    be one this network can't reach at all, or one that stalls the TLS handshake. Such a
+    `down` never says "nothing leaks". Nor does one whose `route` line says Mediaplane
+    could not read the route;
+  - the `network` line says qBittorrent uses the network of a container that isn't a
+    running part of this stack, and that container may have a way out;
   - you ran `--no-egress`, which asks no one: a route outside the tunnel is then `down`,
     not `LEAK`.
 
@@ -61,7 +66,8 @@ why, and gets it back. A leak is a different failure, and worse: see [A leak](#a
      `verdict` (`pass`, `down` or `leak`) says what it found. The exit code is 0 only for
      a `pass`.
    - `failClosed` is true only when qBittorrent was shown to be in Gluetun's network, and
-     Gluetun is stopped or nothing answered through the tunnel.
+     either Gluetun is stopped, or nothing answered while the route went into the tunnel
+     or nowhere.
    - The two addresses were compared, and differed, when the check with the id `egress`
      has the status `ok`. Equal addresses give `leak`. `egress.vpn` and `egress.host` hold
      what each side saw.
@@ -95,12 +101,12 @@ and `unpause` from inside Mediaplane's container.
   ```
 
 - **`network`: qBittorrent uses the network of a container that isn't a running part of
-  this stack.** Usually the Gluetun it joined has gone. Restart qBittorrent, as above, so
-  it rejoins Gluetun's network. If it points elsewhere on purpose, look for a
-  `network_mode` under `qbittorrent` in `compose.override.yaml`, take it out, and run
-  `mediaplane apply`.
+  this stack.** Usually the Gluetun it joined has gone. Docker keeps that container's ID,
+  so a restart can't rejoin the Gluetun running now: it fails, and leaves qBittorrent
+  stopped. Run `mediaplane apply`: it recreates qBittorrent in Gluetun's current network.
+  If `compose.override.yaml` gives `qbittorrent` a `network_mode`, take it out first.
 - **`network`: Mediaplane can't read the start times.** It can't tell whether qBittorrent
-  holds Gluetun's current network. Restart qBittorrent, as above, then run
+  holds Gluetun's current network. Restart qBittorrent, as in the first case, then run
   `mediaplane vpn-check` again. If it stays, open an issue on the project's GitHub page
   with the output of `mediaplane vpn-check --json`. That output holds your addresses:
   take them out first if you'd rather not share them.
@@ -130,7 +136,9 @@ and `unpause` from inside Mediaplane's container.
   tunnel. Its log says why. Fix the cause as above, then `mediaplane apply`.
 - **`route`: traffic is not routed into the tunnel.** Gluetun is usually between two
   attempts, with no tunnel. Wait a minute, and run `mediaplane vpn-check` again. If it
-  stays, read Gluetun's log.
+  stays, read Gluetun's log. If the line says Mediaplane could not read the route, the
+  probe's `ip` command failed in qBittorrent's image: look for an `image` under
+  `qbittorrent` in `compose.override.yaml`.
 
 Warnings (marked `warn`) don't fail the check, but say something is off:
 
@@ -150,8 +158,10 @@ Warnings (marked `warn`) don't fail the check, but say something is off:
   `MEDIAPLANE_VPN_CHECK_URL` to another service that answers with your address, or use
   `--no-egress`. In Mediaplane's container, pass the variable to the command:
   `docker exec -it -e MEDIAPLANE_VPN_CHECK_URL=<url> mediaplane mediaplane vpn-check`.
-  Run from source behind a Node proxy setting (`NODE_USE_ENV_PROXY`), the host side
-  can't be measured either, and it says so.
+  Run from source, the host side isn't measured either, and it says so, behind a Node
+  proxy setting (`NODE_USE_ENV_PROXY`, or `--use-env-proxy` in `NODE_OPTIONS` or on
+  `node`'s command line), or when `DOCKER_HOST` names a Docker that may be on another
+  host (anything but a `unix://` socket).
 - **`egress`: the service answered without an address, or its answer could not be read.**
   The two addresses were not compared. Set `MEDIAPLANE_VPN_CHECK_URL` to a service that
   answers with `ip=<address>`, or with just the address, or unset it.

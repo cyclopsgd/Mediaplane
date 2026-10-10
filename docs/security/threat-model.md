@@ -345,9 +345,16 @@ What remains:
   leak. The checks before it don't depend on that service.
 - vpn-check measures IPv4 only. An IPv6 egress check waits for Docker's IPv6 to be turned
   on; the roadmap lists it.
-- "Nothing leaks (fail-closed)" in a `VPN down` result is an inference from no answer
-  through the tunnel, with qBittorrent shown to be in Gluetun's network. A service that
-  stalls the TLS handshake reads the same way. A `LEAK` result is the one to act on first.
+- "Nothing leaks (fail-closed)" in a `VPN down` result is an inference, with qBittorrent
+  shown to be in Gluetun's network: Gluetun is stopped, or nothing answered while the
+  route went into the tunnel or nowhere. A route into the tunnel can't get out around
+  the VPN, so a service that stalls the TLS handshake can only make a working tunnel
+  read as down there.
+- With the route outside the tunnel and no answer, the result is `VPN down`, and never
+  says that nothing leaks. Only Gluetun's firewall stands in the way then, and nothing
+  measures it: the service may be one this network can't reach at all, or one that
+  stalls the TLS handshake, so a leak to other destinations can read as `down`. A `LEAK`
+  result is the one to act on first.
 
 ### T13. vpn-check tells an outside service your addresses
 
@@ -360,8 +367,14 @@ Controls today:
 - `MEDIAPLANE_VPN_CHECK_URL` names another service, which must be http or https.
 - The host's request refuses a redirect, and a URL with a user name or password. Only an
   answer shaped like an address comes back, and at most 16 KiB of it is read.
-- From source, behind a Node env proxy (`NODE_USE_ENV_PROXY`, `--use-env-proxy`), the
-  host side can't be measured, so `vpn-check` warns and compares nothing.
+- From source, behind a Node env proxy (`NODE_USE_ENV_PROXY`, or `--use-env-proxy` in
+  `NODE_OPTIONS` or on `node`'s command line), the host side can't be measured, so
+  `vpn-check` warns and compares nothing.
+- From source, with `DOCKER_HOST` set to anything but a `unix://` socket (`tcp://`,
+  `ssh://`), Docker may run on another host, whose address is the one a leak would
+  show. So the host side isn't measured, and `vpn-check` warns and compares nothing. In
+  the image, `DOCKER_HOST` is the socket proxy, and the host helper runs on Docker's
+  host, so it is measured there.
 
 What remains:
 
@@ -375,6 +388,9 @@ What remains:
   a leak or fake one.
 - The helper sends a GET from the host network to whatever URL is set, local and
   metadata addresses included. Run from source, the CLI sends it, from the host.
+- Run from source, only `DOCKER_HOST` is read. A Docker context chosen another way
+  (`docker context use`, `DOCKER_CONTEXT`) that points at another host isn't noticed,
+  and the host side is then this machine's.
 
 ## What the proxy does not stop
 

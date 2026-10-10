@@ -280,11 +280,13 @@ pass, down or leak
 - **The verdict:** a leak beats down, and down beats a pass. Warnings, such as a control
   server that answers without a key, don't change it. The exit code is 0 only for a pass.
   The last line never claims more than the checks found: "nothing leaks" only when
-  Gluetun is stopped or nothing answered through the tunnel, and "only through the VPN"
-  only when the two addresses were compared and differed.
+  Gluetun is stopped, or nothing answered while the route went into the tunnel or
+  nowhere, and "only through the VPN" only when the two addresses were compared and
+  differed.
 - **`--json`** is `mediaplane.vpn-check/v1`. Its `ok` says that the check ran, and
   `verdict` says what it found. `failClosed` is true only when qBittorrent was shown to
-  be in Gluetun's network, and Gluetun is stopped or nothing answered through the tunnel.
+  be in Gluetun's network, and either Gluetun is stopped, or nothing answered while the
+  route went into the tunnel or nowhere.
   The addresses were compared, and differed, when the check with the id `egress` has the
   status `ok`.
 
