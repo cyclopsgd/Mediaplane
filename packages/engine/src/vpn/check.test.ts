@@ -548,6 +548,13 @@ describe('vpnCheck', () => {
     });
     expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
     expect(statuses(result)).toEqual(['network down', 'gluetun down']);
+    expect(result.ok && result.checks[0]).toEqual({
+      id: 'network',
+      status: 'down',
+      message:
+        "qBittorrent uses the network of a container that isn't a running part of this stack (dddddddddddd), not Gluetun's",
+      hint: 'restart qBittorrent ("docker restart mediaplane-qbittorrent-1") so it rejoins Gluetun\'s network, or take out a network_mode under qbittorrent in compose.override.yaml that points elsewhere',
+    });
     expect(JSON.stringify(result)).not.toContain('nothing gets out');
   });
 

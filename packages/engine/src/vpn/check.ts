@@ -275,13 +275,13 @@ async function networkCheck(
         hint: 'look for a network_mode under qbittorrent in compose.override.yaml, take it out, and run "mediaplane apply"',
       };
     }
-    // Anything else is a Gluetun that has gone.
+    // Usually a Gluetun that has gone, but it may be a container outside the stack, which
+    // has a network: so it says only what it knows.
     return {
       id: 'network',
       status: 'down',
-      message:
-        'qBittorrent uses the network of a Gluetun that no longer runs, so it has none',
-      hint: 'run "mediaplane apply" to start Gluetun and qBittorrent again',
+      message: `qBittorrent uses the network of a container that isn't a running part of this stack (${joined.slice(0, 12)}), not Gluetun's`,
+      hint: 'restart qBittorrent ("docker restart mediaplane-qbittorrent-1") so it rejoins Gluetun\'s network, or take out a network_mode under qbittorrent in compose.override.yaml that points elsewhere',
     };
   }
   return {
