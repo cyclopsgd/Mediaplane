@@ -1,5 +1,5 @@
 import { defineApp } from '@mediaplane/engine';
-import { servarrEnv } from '../_shared/servarr';
+import { servarrConfigFiles, servarrEnv } from '../_shared/servarr';
 
 export default defineApp({
   id: 'sonarr',
@@ -19,10 +19,10 @@ export default defineApp({
   secrets: { apiKey: { generate: 'hex32' } },
   credentials: [
     { step: 'env', var: 'SONARR__AUTH__APIKEY', secret: 'apiKey' },
-    { step: 'config-file', path: 'config.xml' },
     { step: 'bootstrap-api', action: 'create-admin' },
   ],
   health: { test: ['CMD', 'curl', '-fsS', 'http://localhost:8989/ping'] },
   env: (ctx) => servarrEnv('SONARR', ctx),
+  configFiles: servarrConfigFiles,
   experimental: false,
 });

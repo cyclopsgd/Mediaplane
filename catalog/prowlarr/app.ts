@@ -1,5 +1,5 @@
 import { defineApp } from '@mediaplane/engine';
-import { servarrEnv } from '../_shared/servarr';
+import { servarrConfigFiles, servarrEnv } from '../_shared/servarr';
 
 export default defineApp({
   id: 'prowlarr',
@@ -19,11 +19,11 @@ export default defineApp({
   secrets: { apiKey: { generate: 'hex32' } },
   credentials: [
     { step: 'env', var: 'PROWLARR__AUTH__APIKEY', secret: 'apiKey' },
-    { step: 'config-file', path: 'config.xml' },
     { step: 'bootstrap-api', action: 'create-admin' },
   ],
   health: { test: ['CMD', 'curl', '-fsS', 'http://localhost:9696/ping'] },
   implies: () => ['byparr'],
   env: (ctx) => servarrEnv('PROWLARR', ctx),
+  configFiles: servarrConfigFiles,
   experimental: false,
 });

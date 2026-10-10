@@ -167,10 +167,16 @@ describe('mediaplane plan', () => {
     expect(term.stdout()).toContain('Containers:\n');
     expect(term.stdout()).toContain('  + create    sonarr\n');
     expect(term.stdout()).toContain(
-      'Secrets to generate: admin.password, qbittorrent.apiKey, sonarr.apiKey\n',
+      '+ appdata/gluetun/auth/config.toml (before first start; secret values, not shown)\n',
     );
     expect(term.stdout()).toContain(
-      'Plan: 2 files to write, 4 containers to change, 3 secrets to generate.',
+      '+ appdata/sonarr/config.xml (before first start; secret values, not shown)\n',
+    );
+    expect(term.stdout()).toContain(
+      'Secrets to generate: admin.password, gluetun.controlApiKey, qbittorrent.apiKey, sonarr.apiKey\n',
+    );
+    expect(term.stdout()).toContain(
+      'Plan: 4 files to write, 4 containers to change, 4 secrets to generate.',
     );
     expect(term.stdout()).toContain('+ generated/.env (secret values, not shown)\n');
   });
@@ -203,6 +209,7 @@ describe('mediaplane plan', () => {
     expect(json.containers).toContainEqual({ service: 'sonarr', action: 'create' });
     expect(json.secrets.generate).toEqual([
       'admin.password',
+      'gluetun.controlApiKey',
       'qbittorrent.apiKey',
       'sonarr.apiKey',
     ]);
@@ -427,7 +434,7 @@ describe('mediaplane apply', () => {
     const first = capture();
     expect(await run(['apply', '--home', home, '--yes'], first.io, deps(docker))).toBe(0);
     expect(first.stdout()).toContain(
-      'Plan: 2 files to write, 4 containers to change, 3 secrets to generate.',
+      'Plan: 4 files to write, 4 containers to change, 4 secrets to generate.',
     );
     expect(first.stdout()).toContain('  done    images: images present\n');
     expect(first.stdout()).toMatch(
@@ -757,7 +764,7 @@ describe('mediaplane history', () => {
     const list = capture();
     expect(await run(['history', '--home', home], list.io, deps(docker))).toBe(0);
     expect(list.stdout()).toBe(
-      `${id}  success  2 files written, 4 containers changed, 3 secrets generated\n`,
+      `${id}  success  4 files written, 4 containers changed, 4 secrets generated\n`,
     );
     const one = capture();
     expect(await run(['history', id, '--home', home], one.io, deps(docker))).toBe(0);
@@ -775,7 +782,7 @@ describe('mediaplane history', () => {
     await run(['history', '--home', home, '--json'], term.io, deps(docker));
     expect(JSON.parse(term.stdout())).toMatchObject({
       schema: 'mediaplane.history/v1',
-      records: [{ outcome: 'success', changes: { files: 2, containers: 4, secrets: 3 } }],
+      records: [{ outcome: 'success', changes: { files: 4, containers: 4, secrets: 4 } }],
       unreadable: [],
     });
   });

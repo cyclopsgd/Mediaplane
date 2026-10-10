@@ -43,6 +43,12 @@ describe('catalog', () => {
       expect(new Set(listeners).size).toBe(listeners.length);
     });
 
+    it('writes pre-start files only into its own appdata volume', () => {
+      expect(app.configFiles === undefined || app.volumes.appdata !== undefined).toBe(
+        true,
+      );
+    });
+
     it('only injects secrets it declares', () => {
       for (const step of app.credentials) {
         if (step.step === 'env') expect(Object.keys(app.secrets)).toContain(step.secret);

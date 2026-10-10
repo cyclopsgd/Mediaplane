@@ -16,7 +16,11 @@ export default defineApp({
   runAs: 'image-default',
   provides: ['vpn'],
   requires: [],
-  secrets: { wireguardKey: { userProvided: 'vpn.private_key' } },
+  secrets: {
+    // Mediaplane's key to the control server, for reading the VPN's status (Slice 3d).
+    controlApiKey: { generate: 'hex32' },
+    wireguardKey: { userProvided: 'vpn.private_key' },
+  },
   credentials: [{ step: 'env', var: 'WIREGUARD_PRIVATE_KEY', secret: 'wireguardKey' }],
   health: 'image',
   env: (ctx) => ({
@@ -52,6 +56,21 @@ export default defineApp({
           ),
         ]
       : []),
+  ],
+  // Without this file, Gluetun's control server answers anyone on the stack's network.
+  configFiles: (ctx) => [
+    {
+      path: 'auth/config.toml',
+      content: [
+        '[[roles]]',
+        'name = "mediaplane"',
+        'routes = ["GET /v1/vpn/status", "GET /v1/publicip/ip"]',
+        'auth = "apikey"',
+        `apikey = "${ctx.secret('controlApiKey')}"`,
+        '',
+      ].join('\n'),
+      seeded: /^apikey = "[^"]+"$/m,
+    },
   ],
   experimental: false,
 });

@@ -1,10 +1,14 @@
 import {
   composeToYaml,
+  emptySecretStore,
   parseConfig,
   renderCompose,
+  renderPrestartFiles,
   resolveStack,
+  withGeneratedSecrets,
   type Diagnostic,
   type HostFacts,
+  type PrestartFile,
 } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
 import { catalog } from './index';
@@ -234,5 +238,85 @@ describe('the real catalog', () => {
     const { compose } = render(source);
     expect(compose.services.plex?.environment).toMatchObject({ VERSION: 'docker' });
     expect(compose.services.jellyfin).toBeUndefined();
+  });
+});
+
+const zeros = (size: number) => Buffer.alloc(size, 0);
+
+/** The pre-start files for `source`, with every generated key all zeros. */
+function prestartFiles(source: string, host: HostFacts = HOST): PrestartFile[] {
+  const result = resolve(source, host);
+  if (result.stack === undefined) throw new Error(JSON.stringify(result.diagnostics));
+  const { store } = withGeneratedSecrets(result.stack, emptySecretStore(), zeros);
+  return renderPrestartFiles(
+    result.stack,
+    store,
+    { username: 'admin', password: 'fake-admin-password' },
+    zeros,
+  );
+}
+
+const contentOf = (files: PrestartFile[], path: string) =>
+  files.find((file) => file.path === path)?.content;
+
+describe('pre-start files', () => {
+  it('lists every file the stack writes before its apps first start', () => {
+    expect(prestartFiles(SPEC_EXAMPLE).map((file) => file.path)).toEqual([
+      'appdata/gluetun/auth/config.toml',
+      'appdata/prowlarr/config.xml',
+      'appdata/radarr/config.xml',
+      'appdata/sonarr/config.xml',
+    ]);
+  });
+
+  it('gives Sonarr, Radarr and Prowlarr their key and the forms login in config.xml', () => {
+    const files = prestartFiles(SPEC_EXAMPLE);
+    for (const app of ['prowlarr', 'radarr', 'sonarr']) {
+      expect(contentOf(files, `appdata/${app}/config.xml`)).toBe(
+        [
+          '<Config>',
+          `  <ApiKey>${'0'.repeat(32)}</ApiKey>`,
+          '  <AuthenticationMethod>Forms</AuthenticationMethod>',
+          '  <AuthenticationRequired>Enabled</AuthenticationRequired>',
+          '</Config>',
+          '',
+        ].join('\n'),
+      );
+    }
+  });
+
+  it('lets local addresses skip the login in config.xml when login_on_lan is false', () => {
+    const source = SPEC_EXAMPLE.replace(
+      'network: { bind: lan }',
+      'network: { bind: lan }\nsecurity: { login_on_lan: false }',
+    );
+    expect(contentOf(prestartFiles(source), 'appdata/sonarr/config.xml')).toContain(
+      '<AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>',
+    );
+  });
+
+  it("closes Gluetun's control server to all but reading the VPN status, with a key", () => {
+    expect(
+      contentOf(prestartFiles(SPEC_EXAMPLE), 'appdata/gluetun/auth/config.toml'),
+    ).toBe(
+      [
+        '[[roles]]',
+        'name = "mediaplane"',
+        'routes = ["GET /v1/vpn/status", "GET /v1/publicip/ip"]',
+        'auth = "apikey"',
+        `apikey = "${'0'.repeat(32)}"`,
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('knows its own files, and not a config.xml Sonarr wrote without one', () => {
+    const files = prestartFiles(SPEC_EXAMPLE);
+    for (const file of files) expect(file.seeded.test(file.content)).toBe(true);
+    const sonarr = files.find((file) => file.path === 'appdata/sonarr/config.xml');
+    // What Sonarr writes itself when it starts with only the environment variable.
+    const ownFile =
+      '<Config>\n  <BindAddress>*</BindAddress>\n  <Port>8989</Port>\n  <UrlBase></UrlBase>\n</Config>\n';
+    expect(sonarr?.seeded.test(ownFile)).toBe(false);
   });
 });
