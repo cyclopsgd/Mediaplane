@@ -3,7 +3,9 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fixtureConfig } from '../testing/fixtures';
 import { tempDir } from '../testing/temp';
-import { adminLogin, adminPasswordToGenerate } from './admin';
+import * as engine from '../index';
+import { ADMIN_PASSWORD_PATH as STACK_PATH_OF_PASSWORD } from '../config/secrets';
+import { ADMIN_PASSWORD_PATH, adminLogin, adminPasswordToGenerate } from './admin';
 import { emptySecretStore, type SecretStore } from './store';
 
 const BASE = 'version: 1\npaths: { data: /srv/data }\nmedia_server: jellyfin\n';
@@ -12,6 +14,14 @@ const STORED: SecretStore = {
   apps: {},
   shared: { adminPassword: 'fake-generated-password' },
 };
+
+describe('ADMIN_PASSWORD_PATH', () => {
+  it("is stack.yaml's own path, defined once and exported by the engine", () => {
+    expect(ADMIN_PASSWORD_PATH).toBe('admin.password');
+    expect(STACK_PATH_OF_PASSWORD).toBe(ADMIN_PASSWORD_PATH);
+    expect(engine.ADMIN_PASSWORD_PATH).toBe(ADMIN_PASSWORD_PATH);
+  });
+});
 
 describe('adminPasswordToGenerate', () => {
   it('is true until a password is stored, unless admin.password is set', () => {

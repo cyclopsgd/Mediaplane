@@ -79,11 +79,22 @@ const PRIVATE_RANGES = [
   ['192.168.0.0/16', 16],
 ] as const;
 
-/** Whether all of `cidr` lies inside one RFC 1918 range. */
+/** Whether all of `cidr` lies inside one RFC 1918 range. `cidr` must be a valid IPv4 CIDR. */
 export function isPrivateSubnet(cidr: string): boolean {
   const [address = '', prefix = '32'] = cidr.split('/');
   return PRIVATE_RANGES.some(
     ([range, size]) => Number(prefix) >= size && inSubnet(address, range),
+  );
+}
+
+/**
+ * The networks of the host's private addresses, each once: the LAN subnets Mediaplane
+ * detects. A private address with an odd prefix (10.0.0.5/4, say) is on a network wider
+ * than its private range, so such a network is left out rather than trusted.
+ */
+export function privateNetworks(host: Pick<HostFacts, 'privateAddresses'>): string[] {
+  return [...new Set(host.privateAddresses.map((a) => networkOf(a.cidr)))].filter(
+    isPrivateSubnet,
   );
 }
 

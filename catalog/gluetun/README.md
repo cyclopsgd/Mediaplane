@@ -87,10 +87,10 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   docker restart mediaplane-qbittorrent-1
   ```
 
-  - If `appdata/gluetun/auth/config.toml` was there already, without an `apikey` line,
-    `plan` stops with `gluetun.not-seeded`. Keep a copy of your own roles, delete the
-    file and apply again. Then add your roles below Mediaplane's, and restart both as
-    above.
+  - If `appdata/gluetun/auth/config.toml` was there already, without Mediaplane's role
+    (`name = "mediaplane"`), `plan` stops with `gluetun.not-seeded`, even if your own
+    roles have keys. Keep a copy of your own roles, delete the file and apply again.
+    Then add your roles below Mediaplane's, and restart both as above.
   - If `apply` then fails with `cannot create … (EACCES)`, the `auth` folder doesn't
     belong to the user Mediaplane runs as (`MEDIAPLANE_UID` in its container). Give it to
     that user, with `sudo chown <uid>:<gid> /opt/mediaplane/appdata/gluetun/auth` and the

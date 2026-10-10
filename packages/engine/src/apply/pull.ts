@@ -6,8 +6,7 @@ export const PULL_RETRY_DELAYS_MS: readonly number[] = [5_000, 15_000, 45_000];
 
 /**
  * Registry errors that usually pass, as Docker prints them: a slow or dropped connection,
- * a registry that is briefly down, or a rate limit (spec §5.1). A missing image, a refused
- * login or a name that doesn't resolve won't pass by waiting, so they are not here.
+ * a registry that is briefly down, or a rate limit (spec §5.1).
  */
 const TRANSIENT_PULL_ERRORS: readonly RegExp[] = [
   /TLS handshake timeout/i,
@@ -16,12 +15,35 @@ const TRANSIENT_PULL_ERRORS: readonly RegExp[] = [
   /unexpected EOF/i,
   /Client\.Timeout exceeded/i,
   /toomanyrequests|Too Many Requests/i,
-  /\b(?:500 Internal Server Error|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout)\b/i,
+  /\b(?:500 Internal Server Error|502 Bad Gateway|503 Service Unavailable|504 Gateway Time-?out)\b/i,
 ];
 
-/** Whether a failed pull is worth trying again. */
+/**
+ * Registry errors that waiting won't fix: a missing image, a refused login, or a name
+ * that doesn't resolve.
+ */
+const PERMANENT_PULL_ERRORS: readonly RegExp[] = [
+  /manifest unknown/i,
+  // HTTP 404 Not Found too.
+  /not found/i,
+  // "pull access denied", and "requested access to the resource is denied".
+  /denied/i,
+  // HTTP 401 Unauthorized too.
+  /unauthorized/i,
+  /\b403 Forbidden\b/i,
+  /no such host/i,
+  /invalid reference format/i,
+];
+
+/**
+ * Whether a failed pull is worth trying again: a temporary error, and nothing that waiting
+ * won't fix. Compose prints one line per image, so a pull can fail both ways at once.
+ */
 export function isTransientPullError(message: string): boolean {
-  return TRANSIENT_PULL_ERRORS.some((pattern) => pattern.test(message));
+  return (
+    TRANSIENT_PULL_ERRORS.some((pattern) => pattern.test(message)) &&
+    !PERMANENT_PULL_ERRORS.some((pattern) => pattern.test(message))
+  );
 }
 
 /**

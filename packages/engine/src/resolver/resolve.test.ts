@@ -316,6 +316,26 @@ describe('resolveStack: binding', () => {
     expect(stack?.lanSubnets).toEqual(['10.0.0.0/24', '192.168.1.0/24']);
   });
 
+  it('derives no subnet wider than a private range from an odd interface prefix', () => {
+    // 10.0.0.5/4 is the network 0.0.0.0/4: trusting it would trust public addresses.
+    const host: HostFacts = {
+      arch: 'amd64',
+      privateAddresses: [
+        { address: '10.0.0.5', cidr: '10.0.0.5/4' },
+        { address: '192.168.1.10', cidr: '192.168.1.10/24' },
+      ],
+    };
+    const stack = resolve('  qbittorrent: {}\n', { base: lan, host }).stack;
+    expect(stack?.lanSubnets).toEqual(['192.168.1.0/24']);
+    const odd: HostFacts = {
+      ...host,
+      privateAddresses: host.privateAddresses.slice(0, 1),
+    };
+    expect(
+      resolve('  qbittorrent: {}\n', { base: lan, host: odd }).stack?.lanSubnets,
+    ).toEqual([]);
+  });
+
   it('prefers an explicit lan_subnet', () => {
     const base = lan.replace('bind: lan', 'bind: lan, lan_subnet: 192.168.0.0/16');
     expect(resolve('  qbittorrent: {}\n', { base }).stack?.lanSubnets).toEqual([

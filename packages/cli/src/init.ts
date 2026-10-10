@@ -3,8 +3,8 @@ import { isAbsolute, join, normalize, resolve } from 'node:path';
 import {
   inSubnet,
   invokingUser,
-  networkOf,
   parseConfig,
+  privateNetworks,
   STACK_PATH,
   starterStack,
   writeFileExclusive,
@@ -379,7 +379,7 @@ async function askLanSubnet(
   io: Io,
   host: HostFacts,
 ): Promise<string | undefined> {
-  const seen = [...new Set(host.privateAddresses.map((a) => networkOf(a.cidr)))];
+  const seen = privateNetworks(host);
   const [only] = seen;
   if (host.cloud === undefined && seen.length === 1 && only !== undefined) {
     const answer = (await ask(`Your LAN looks like ${only}. Use it? [Y/n] `)).trim();

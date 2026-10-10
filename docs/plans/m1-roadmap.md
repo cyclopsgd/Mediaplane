@@ -264,7 +264,7 @@ which moved to M2. The rest are for S3b and S3c.
   it.
 - **Installs from before Slice 3a.** `plan` reports a `config.xml` without `ApiKey`,
   a `qBittorrent.conf` without `WebUI\APIKey`, or Gluetun's `auth/config.toml` without
-  an `apikey` line, as `<app>.not-seeded`, and the app READMEs give the manual fix.
+  Mediaplane's role, as `<app>.not-seeded`, and the app READMEs give the manual fix.
   Automate it: stop the app, add the stored key to its file, and start it ("restore
   the key at the source", spec §6.3).
 - **FlareSolverr's anonymous volume.** Its image declares `VOLUME /config`, and the

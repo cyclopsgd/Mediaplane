@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppContext, AppDefinition, Catalog, PortSpec } from '../catalog/types';
 import type { AppSettings, StackConfig } from '../config/schema';
 import { error, hasErrors, warning, withHint, type Diagnostic } from '../diagnostics';
-import { inSubnet, networkOf, type HostFacts } from '../host/facts';
+import { inSubnet, privateNetworks, type HostFacts } from '../host/facts';
 import { didYouMean } from '../util/did-you-mean';
 import { compare, unique } from '../util/sort';
 
@@ -70,7 +70,7 @@ export function resolveStack(
       ? [config.network.lan_subnet]
       : host.cloud !== undefined
         ? []
-        : unique(host.privateAddresses.map((a) => networkOf(a.cidr)));
+        : privateNetworks(host);
   const publishesOnLan = config.network.bind !== 'localhost';
   // Only LAN clients need trusting, and only while the web UIs are on the LAN.
   const lanClientSubnets = publishesOnLan ? lanSubnets : [];

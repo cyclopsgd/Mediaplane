@@ -69,7 +69,8 @@ export default defineApp({
         `apikey = "${ctx.secret('controlApiKey')}"`,
         '',
       ].join('\n'),
-      seeded: /^apikey = "[^"]+"$/m,
+      // Mediaplane's own role: an apikey line alone could be a role of your own.
+      seeded: /^name = "mediaplane"$/m,
     },
   ],
   experimental: false,

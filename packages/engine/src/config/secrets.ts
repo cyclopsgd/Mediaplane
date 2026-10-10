@@ -7,11 +7,14 @@ import type { SecretRef, StackConfig } from './schema';
 /** The shortest admin password Mediaplane accepts from you (spec §6.1). */
 export const ADMIN_PASSWORD_MIN_LENGTH = 12;
 
+/** How stack.yaml, plan, apply and the change records name the shared admin password. */
+export const ADMIN_PASSWORD_PATH = 'admin.password';
+
 /** Every secret reference in stack.yaml, with its dotted path. */
 export function secretRefs(config: StackConfig): { path: string; ref: SecretRef }[] {
   const refs: { path: string; ref: SecretRef }[] = [];
   if (config.admin.password)
-    refs.push({ path: 'admin.password', ref: config.admin.password });
+    refs.push({ path: ADMIN_PASSWORD_PATH, ref: config.admin.password });
   // A plex block is dormant unless Plex is the media server.
   if (config.media_server === 'plex' && config.plex)
     refs.push({ path: 'plex.token', ref: config.plex.token });
@@ -59,7 +62,7 @@ export async function checkSecretRefs(
           path,
         }),
       );
-    } else if (path === 'admin.password' && value.length < ADMIN_PASSWORD_MIN_LENGTH) {
+    } else if (path === ADMIN_PASSWORD_PATH && value.length < ADMIN_PASSWORD_MIN_LENGTH) {
       diagnostics.push(
         error(
           'admin.password-too-short',

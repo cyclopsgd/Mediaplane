@@ -5,11 +5,21 @@ import { ensureDir, writeFileAtomic } from '../util/atomic';
 import { readIfExists } from '../util/fs';
 import { compare } from '../util/sort';
 
+/**
+ * Every app secret goes into the app's own files as it is, unescaped (config.xml,
+ * qBittorrent.conf, Gluetun's config.toml), so a hand-edited one must not hold a quote, a
+ * "<" or a newline. Everything Mediaplane generates fits: hex, base62 and "qbt_".
+ */
+const appSecret = z.string().regex(/^[A-Za-z0-9_]+$/);
+
 const storeSchema = z.strictObject({
   version: z.literal(1),
-  apps: z.record(z.string(), z.record(z.string(), z.string())),
-  /** Secrets the whole stack shares. Added in Slice 3a: older stores have none. */
-  shared: z.strictObject({ adminPassword: z.string().optional() }).optional(),
+  apps: z.record(z.string(), z.record(z.string(), appSecret)),
+  /**
+   * Secrets the whole stack shares. Added in Slice 3a: older stores have none. The admin
+   * password goes into an app's file only hashed, so any characters will do.
+   */
+  shared: z.strictObject({ adminPassword: z.string().min(1).optional() }).optional(),
 });
 
 /** Secrets Mediaplane generated, or apps created, per app, and the shared admin password. */

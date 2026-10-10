@@ -968,8 +968,8 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   memory only, to learn their paths.
 - **Installs from before Slice 3a are reported, never overwritten.** A `config.xml`
   without `ApiKey`, a `qBittorrent.conf` without `WebUI\APIKey`, or Gluetun's
-  `auth/config.toml` without an `apikey` line fails `plan` with `<app>.not-seeded`, and
-  its hint gives the steps. A file Mediaplane can't read counts as seeded, because
+  `auth/config.toml` without Mediaplane's role (`name = "mediaplane"`) fails `plan`
+  with `<app>.not-seeded`, and its hint gives the steps. A file Mediaplane can't read counts as seeded, because
   there is no way to tell. Slice 4 automates the fix, with the rest of "restore the key
   at the source" (§6.3).
 - **The shared admin (§6.1).** `admin.username` is 3 to 32 letters, digits, `.`, `_`

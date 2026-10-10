@@ -333,4 +333,65 @@ describe('pre-start files', () => {
       '<Config>\n  <BindAddress>*</BindAddress>\n  <Port>8989</Port>\n  <UrlBase></UrlBase>\n</Config>\n';
     expect(sonarr?.seeded.test(ownFile)).toBe(false);
   });
+
+  it('still knows a config.xml the app has rewritten around its key', () => {
+    const files = prestartFiles(SPEC_EXAMPLE);
+    // What Sonarr, Radarr and Prowlarr make of the file: more settings, their own layout.
+    const rewritten = [
+      '<Config>',
+      '\t<LogLevel>info</LogLevel>',
+      '\t<Port>8989</Port>',
+      `\t<ApiKey>${'0'.repeat(32)}</ApiKey>`,
+      '\t<AuthenticationMethod>Forms</AuthenticationMethod>',
+      '\t<Branch>main</Branch>',
+      '</Config>',
+    ].join('\r\n');
+    for (const app of ['prowlarr', 'radarr', 'sonarr']) {
+      const file = files.find((f) => f.path === `appdata/${app}/config.xml`);
+      expect(file?.seeded.test(rewritten)).toBe(true);
+    }
+  });
+
+  it("knows Gluetun's file by Mediaplane's role, not by anyone's key", () => {
+    const gluetun = prestartFiles(SPEC_EXAMPLE).find(
+      (f) => f.path === 'appdata/gluetun/auth/config.toml',
+    );
+    // Your own roles from before Slice 3a: without a key, or with one of your own.
+    const withoutKey = ['[[roles]]', 'name = "mine"', 'auth = "none"', ''].join('\n');
+    const withYourKey = [
+      '[[roles]]',
+      'name = "mine"',
+      'routes = ["GET /v1/vpn/status"]',
+      'auth = "apikey"',
+      `apikey = "${'1'.repeat(32)}"`,
+      '',
+    ].join('\n');
+    expect(gluetun?.seeded.test(withoutKey)).toBe(false);
+    expect(gluetun?.seeded.test(withYourKey)).toBe(false);
+    // Mediaplane's role, with your own roles added below it.
+    expect(gluetun?.seeded.test(`${gluetun.content}\n${withYourKey}`)).toBe(true);
+  });
+
+  it('writes no Gluetun file, and keeps no key for it, without the VPN', () => {
+    const source = SPEC_EXAMPLE.replace(
+      /vpn:\n {2}provider: mullvad\n {2}private_key: \{ file: secrets\/wg.key \}\n/,
+      '',
+    ).replace('qbittorrent: {}', 'qbittorrent: { vpn: false }');
+    expect(source).not.toContain('vpn:\n');
+    const result = resolve(source);
+    if (result.stack === undefined) throw new Error(JSON.stringify(result.diagnostics));
+    const { store, generated } = withGeneratedSecrets(
+      result.stack,
+      emptySecretStore(),
+      zeros,
+    );
+    expect(store.apps.gluetun).toBeUndefined();
+    expect(generated.filter((name) => name.startsWith('gluetun.'))).toEqual([]);
+    expect(prestartFiles(source).map((file) => file.path)).toEqual([
+      'appdata/prowlarr/config.xml',
+      'appdata/qbittorrent/qBittorrent/qBittorrent.conf',
+      'appdata/radarr/config.xml',
+      'appdata/sonarr/config.xml',
+    ]);
+  });
 });

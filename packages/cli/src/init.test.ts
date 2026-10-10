@@ -308,6 +308,21 @@ describe('mediaplane init', () => {
     expect((await stackIn(home)).network.lan_subnet).toBe('172.16.0.0/16');
   });
 
+  it('never offers a network wider than a private range as your LAN', async () => {
+    const home = await newHome();
+    const odd = {
+      host: () =>
+        Promise.resolve({
+          ...FIXTURE_HOST,
+          privateAddresses: [{ address: '10.0.0.5', cidr: '10.0.0.5/4' }],
+        }),
+    };
+    const term = capture(['jellyfin', '/srv/data', '', 'lan', '10.0.0.0/8']);
+    expect(await run(['init', '--home', home], term.io, { ...deps(), ...odd })).toBe(0);
+    expect(term.questions[4]).toBe('Your LAN subnet, e.g. 192.168.1.0/24: ');
+    expect((await stackIn(home)).network.lan_subnet).toBe('10.0.0.0/8');
+  });
+
   it('leaves the subnet to plan when you type nothing for it', async () => {
     const home = await newHome();
     const term = capture(['jellyfin', '/srv/data', '', 'lan', 'n', '']);

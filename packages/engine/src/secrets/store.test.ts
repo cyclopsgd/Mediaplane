@@ -46,6 +46,54 @@ describe('readSecretStore', () => {
     );
   });
 
+  it('refuses a key that would break the files it is written into, naming only the path', async () => {
+    // A hand-edited key with a quote would land unescaped in config.xml or config.toml.
+    const home = await homeWithStore(
+      JSON.stringify({ version: 1, apps: { sonarr: { apiKey: 'fake"<key>' } } }),
+    );
+    const failure = readSecretStore(home);
+    await expect(failure).rejects.toThrow(
+      `${join(home, SECRETS_PATH)} is not a Mediaplane secrets file`,
+    );
+    await expect(failure).rejects.not.toThrow('fake"<key>');
+  });
+
+  it('refuses a key with a newline, and an empty one', async () => {
+    for (const apiKey of ['fake\nkey', '']) {
+      const home = await homeWithStore(
+        JSON.stringify({ version: 1, apps: { sonarr: { apiKey } } }),
+      );
+      await expect(readSecretStore(home)).rejects.toThrow(
+        'is not a Mediaplane secrets file',
+      );
+    }
+  });
+
+  it('refuses an empty admin password', async () => {
+    const home = await homeWithStore(
+      JSON.stringify({ version: 1, apps: {}, shared: { adminPassword: '' } }),
+    );
+    await expect(readSecretStore(home)).rejects.toThrow(
+      'is not a Mediaplane secrets file',
+    );
+  });
+
+  it('reads every kind of key Mediaplane generates, and any admin password', async () => {
+    const store: SecretStore = {
+      version: 1,
+      apps: {
+        gluetun: { controlApiKey: '0'.repeat(32) },
+        qbittorrent: { apiKey: `qbt_${'0'.repeat(28)}` },
+        sonarr: { apiKey: 'aB'.repeat(16) },
+      },
+      // Hashed before any app sees it, so it needs no charset of its own.
+      shared: { adminPassword: 'fake "admin" <password>' },
+    };
+    expect(await readSecretStore(await homeWithStore(JSON.stringify(store)))).toEqual(
+      store,
+    );
+  });
+
   it('rejects an unknown shared secret', async () => {
     const home = await homeWithStore(
       '{"version": 1, "apps": {}, "shared": {"fake": "fake-value"}}',

@@ -175,7 +175,7 @@ const stackShape = {
         .boolean()
         .default(true)
         .describe(
-          'Ask for a login from your own network too. false lets Sonarr, Radarr and Prowlarr skip it for addresses in the LAN subnet.',
+          'Ask for a login from your own network too. false lets Sonarr, Radarr and Prowlarr skip it for any local (private) address, and qBittorrent for addresses in the LAN subnet while the web UIs are on the LAN.',
         ),
     })
     .default({ login_on_lan: true })

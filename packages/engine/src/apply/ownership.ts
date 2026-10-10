@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { APPDATA_DIR } from '../paths';
 import type { HostProbe } from '../preflight/probe';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
+import { ensureDir } from '../util/atomic';
 
 export interface OwnershipFix {
   service: string;
@@ -31,8 +32,14 @@ export function appdataPath(stack: ResolvedStack, app: ResolvedApp): string {
   return join(stack.home, APPDATA_DIR, app.def.id);
 }
 
-/** Create every app's appdata folder now, so Docker doesn't create it as root. */
+/**
+ * Create every app's appdata folder now, so Docker doesn't create it as root. appdata/
+ * itself is kept private (0700), as state/ is: the apps rewrite their own files readable
+ * by all, and those hold their keys. Docker resolves bind mounts as root, so no app needs
+ * to pass through it. The app folders keep the modes their apps give them.
+ */
 export async function ensureAppdataDirs(stack: ResolvedStack): Promise<void> {
+  await ensureDir(join(stack.home, APPDATA_DIR), 0o700);
   for (const app of stack.apps) {
     if (app.def.volumes.appdata !== undefined) {
       await mkdir(appdataPath(stack, app), { recursive: true });

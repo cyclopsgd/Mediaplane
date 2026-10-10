@@ -2,8 +2,8 @@ import type { StackConfig } from '../config/schema';
 import { readSecret } from '../config/secrets';
 import type { SecretStore } from './store';
 
-/** How plan, apply and the change records name the shared admin password. */
-export const ADMIN_PASSWORD_PATH = 'admin.password';
+// Defined with the stack.yaml path it names; kept here too, beside the admin login.
+export { ADMIN_PASSWORD_PATH } from '../config/secrets';
 
 /** Whether apply must generate the admin password: none is stored, and none is yours. */
 export function adminPasswordToGenerate(

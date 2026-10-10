@@ -82,7 +82,7 @@
       "properties": {
         "login_on_lan": {
           "default": true,
-          "description": "Ask for a login from your own network too. false lets Sonarr, Radarr and Prowlarr skip it for addresses in the LAN subnet.",
+          "description": "Ask for a login from your own network too. false lets Sonarr, Radarr and Prowlarr skip it for any local (private) address, and qBittorrent for addresses in the LAN subnet while the web UIs are on the LAN.",
           "type": "boolean"
         }
       },

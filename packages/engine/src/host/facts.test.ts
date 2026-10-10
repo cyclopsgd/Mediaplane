@@ -10,6 +10,7 @@ import {
   isPrivateSubnet,
   networkOf,
   privateAddresses,
+  privateNetworks,
   readDmi,
   toArch,
 } from './facts';
@@ -94,6 +95,20 @@ describe('isPrivateSubnet', () => {
     ]) {
       expect(isPrivateSubnet(cidr)).toBe(false);
     }
+  });
+});
+
+describe('privateNetworks', () => {
+  it("lists each private address's network once, leaving out one wider than its range", () => {
+    expect(
+      privateNetworks({
+        privateAddresses: [
+          { address: '10.0.0.5', cidr: '10.0.0.5/4' },
+          { address: '192.168.1.10', cidr: '192.168.1.10/24' },
+          { address: '192.168.1.11', cidr: '192.168.1.11/24' },
+        ],
+      }),
+    ).toEqual(['192.168.1.0/24']);
   });
 });
 

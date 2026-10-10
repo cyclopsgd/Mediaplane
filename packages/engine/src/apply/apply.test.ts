@@ -687,6 +687,8 @@ describe('apply', () => {
     expect(await modeOf(path)).toBe(0o600);
     // No temporary copy of the file is left in its folder.
     expect(await readdir(join(home, 'appdata', 'sonarr', 'config'))).toEqual(['app.ini']);
+    // The apps rewrite their files readable by all: appdata/ itself keeps them private.
+    expect(await modeOf(join(home, 'appdata'))).toBe(0o700);
 
     // The app rewrites its own file; apply leaves it alone from now on.
     await writeFile(path, 'key=rewritten-by-the-app\n');

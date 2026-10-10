@@ -1,4 +1,4 @@
-import { readdir } from 'node:fs/promises';
+import { chmod, mkdir, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Catalog } from '../catalog/types';
@@ -117,5 +117,21 @@ describe('ensureAppdataDirs', () => {
       'requests',
       'solver',
     ]);
+  });
+
+  it('keeps appdata/ itself private, new or not, and leaves the app folders alone', async () => {
+    const modeOf = async (path: string) => (await stat(path)).mode & 0o777;
+    const fresh = await tempDir('mediaplane-ownership-');
+    await ensureAppdataDirs(stackIn(fresh));
+    expect(await modeOf(join(fresh, 'appdata'))).toBe(0o700);
+
+    // An appdata/ from before, open to every local user, with an app folder in it.
+    const home = await tempDir('mediaplane-ownership-');
+    await mkdir(join(home, 'appdata', 'jellyfin'), { recursive: true });
+    await chmod(join(home, 'appdata'), 0o755);
+    await chmod(join(home, 'appdata', 'jellyfin'), 0o755);
+    await ensureAppdataDirs(stackIn(home));
+    expect(await modeOf(join(home, 'appdata'))).toBe(0o700);
+    expect(await modeOf(join(home, 'appdata', 'jellyfin'))).toBe(0o755);
   });
 });

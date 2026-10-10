@@ -31,6 +31,10 @@ describe('isTransientPullError', () => {
     'received unexpected HTTP status: 429 Too Many Requests',
     'received unexpected HTTP status: 503 Service Unavailable',
     'received unexpected HTTP status: 502 Bad Gateway',
+    'received unexpected HTTP status: 500 Internal Server Error',
+    'received unexpected HTTP status: 504 Gateway Timeout',
+    // nginx's and Cloudflare's spelling.
+    'received unexpected HTTP status: 504 Gateway Time-out',
   ])('retries "%s"', (message) => {
     expect(isTransientPullError(message)).toBe(true);
   });
@@ -40,8 +44,21 @@ describe('isTransientPullError', () => {
     'pull access denied for registry.test/fake, repository does not exist',
     'dial tcp: lookup registry.test: no such host',
     'fake registry unreachable',
+    'unauthorized: authentication required',
+    'failed to resolve reference "registry.test/fake:1": registry.test/fake:1: not found',
+    'unexpected status from HEAD request to https://registry.test/v2/fake/manifests/1: 404 Not Found',
+    'unexpected status from HEAD request to https://registry.test/v2/fake/manifests/1: 403 Forbidden',
+    'invalid reference format',
   ])('does not retry "%s"', (message) => {
     expect(isTransientPullError(message)).toBe(false);
+  });
+
+  it('does not retry a temporary error mixed with one that waiting will not fix', () => {
+    const mixed = [
+      'sonarr Error Get "https://lscr.io/v2/": net/http: TLS handshake timeout',
+      'radarr Error manifest unknown: manifest unknown',
+    ].join('\n');
+    expect(isTransientPullError(mixed)).toBe(false);
   });
 });
 
