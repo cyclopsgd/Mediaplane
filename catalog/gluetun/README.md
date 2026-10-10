@@ -79,8 +79,8 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   within about half a minute, naming `gluetun` as unhealthy, and qBittorrent does not
   start.
 - **Set up before Slice 3a.** A Gluetun that was already running reads its key file only
-  when it next starts. Restart it once, then qBittorrent, which loses its network when
-  Gluetun restarts. Use the container names `docker ps` shows:
+  when it next starts. After the first apply, restart it once, then qBittorrent, which
+  loses its network when Gluetun restarts. Use the container names `docker ps` shows:
 
   ```bash
   docker restart mediaplane-gluetun-1
@@ -89,8 +89,22 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
   - If `appdata/gluetun/auth/config.toml` was there already, without Mediaplane's role
     (`name = "mediaplane"`), `plan` stops with `gluetun.not-seeded`, even if your own
-    roles have keys. Keep a copy of your own roles, delete the file and apply again.
-    Then add your roles below Mediaplane's, and restart both as above.
+    roles have keys. To fix it, stop Gluetun, move the file aside, and apply again:
+    Mediaplane writes a new one and starts Gluetun again. Then restart qBittorrent, which
+    shares Gluetun's network and loses it when Gluetun stops.
+
+    ```bash
+    docker stop mediaplane-gluetun-1
+    file=/opt/mediaplane/appdata/gluetun/auth/config.toml
+    mv "$file" "$file.before-3a"
+    mediaplane apply
+    docker restart mediaplane-qbittorrent-1
+    ```
+
+    Use your own home, and the container names `docker ps` shows. If `mv` is refused,
+    use `sudo mv`. The old file keeps your own roles: add them again below Mediaplane's
+    in the new file, then restart Gluetun and qBittorrent as above.
+
   - If `apply` then fails with `cannot create … (EACCES)`, the `auth` folder doesn't
     belong to the user Mediaplane runs as (`MEDIAPLANE_UID` in its container). Give it to
     that user, with `sudo chown <uid>:<gid> /opt/mediaplane/appdata/gluetun/auth` and the

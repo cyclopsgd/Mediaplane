@@ -1,8 +1,9 @@
-import { chmod, mkdir } from 'node:fs/promises';
+import { chmod, mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { APPDATA_DIR } from '../paths';
 import type { HostProbe } from '../preflight/probe';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
+import { codeOf } from '../util/error-code';
 
 export interface OwnershipFix {
   service: string;
@@ -31,14 +32,34 @@ export function appdataPath(stack: ResolvedStack, app: ResolvedApp): string {
   return join(stack.home, APPDATA_DIR, app.def.id);
 }
 
+/** What to do when appdata/ belongs to another user; plan and apply both say it. */
+export const APPDATA_NOT_PRIVATE_HINT =
+  'give appdata/ itself, not what is in it, to the user Mediaplane runs as (MEDIAPLANE_UID in its container), then run apply again';
+
+/** The user id Mediaplane runs as; undefined where the platform has no user ids. */
+export function runningUid(): number | undefined {
+  return process.geteuid?.();
+}
+
+/**
+ * Who owns appdata/, and who Mediaplane is, in words: "uid 4242, not to the user
+ * Mediaplane runs as (uid 1000)". Only the uid it finds out, never a name.
+ */
+export function ownerClause(owner: number | undefined): string {
+  if (owner === undefined) return 'another user';
+  const me = runningUid();
+  return `uid ${String(owner)}, not to the user Mediaplane runs as${me === undefined ? '' : ` (uid ${String(me)})`}`;
+}
+
 /** appdata/ can't be made private: it belongs to another user. */
 export class AppdataNotPrivateError extends Error {
   override readonly name = 'AppdataNotPrivateError';
-  readonly hint =
-    'give appdata/ itself, not what is in it, to the user Mediaplane runs as (MEDIAPLANE_UID in its container), then run apply again';
+  readonly hint = APPDATA_NOT_PRIVATE_HINT;
 
-  constructor(path: string, cause: unknown) {
-    super(`cannot make ${path} private (EPERM): it belongs to another user`, { cause });
+  constructor(path: string, cause: unknown, owner?: number) {
+    super(`cannot make ${path} private (EPERM): it belongs to ${ownerClause(owner)}`, {
+      cause,
+    });
   }
 }
 
@@ -52,9 +73,15 @@ export async function keepAppdataPrivate(home: string): Promise<void> {
   try {
     await chmod(path, 0o700);
   } catch (cause) {
-    const code = cause instanceof Error && 'code' in cause ? cause.code : undefined;
+    const code = codeOf(cause);
     if (code === 'ENOENT') return;
-    if (code === 'EPERM') throw new AppdataNotPrivateError(path, cause);
+    if (code === 'EPERM') {
+      const owner = await stat(path).then(
+        (found) => found.uid,
+        () => undefined,
+      );
+      throw new AppdataNotPrivateError(path, cause, owner);
+    }
     throw cause;
   }
 }

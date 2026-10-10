@@ -17,6 +17,16 @@ async function homeWithStore(content: string): Promise<string> {
   return home;
 }
 
+/** What readSecretStore refuses with: the message, which must never hold a value. */
+async function refusal(home: string): Promise<string> {
+  try {
+    await readSecretStore(home);
+  } catch (cause) {
+    return cause instanceof Error ? cause.message : String(cause);
+  }
+  throw new Error('readSecretStore accepted the file');
+}
+
 describe('readSecretStore', () => {
   it('is empty when the file does not exist', async () => {
     const home = await tempDir('mediaplane-store-');
@@ -46,36 +56,73 @@ describe('readSecretStore', () => {
     );
   });
 
-  it('refuses a key that would break the files it is written into, naming only the path', async () => {
+  it('refuses a key that would break the files it is written into, naming the entry, not the value', async () => {
     // A hand-edited key with a quote would land unescaped in config.xml or config.toml.
     const home = await homeWithStore(
       JSON.stringify({ version: 1, apps: { sonarr: { apiKey: 'fake"<key>' } } }),
     );
-    const failure = readSecretStore(home);
-    await expect(failure).rejects.toThrow(
+    const message = await refusal(home);
+    expect(message).toContain(
       `${join(home, SECRETS_PATH)} is not a Mediaplane secrets file`,
     );
-    await expect(failure).rejects.not.toThrow('fake"<key>');
+    expect(message).toContain('sonarr.apiKey');
+    expect(message).not.toContain('fake"<key>');
+    expect(message).not.toContain('fake');
   });
 
-  it('refuses a key with a newline, and an empty one', async () => {
+  it('refuses a key with a newline, and an empty one, naming the entry', async () => {
     for (const apiKey of ['fake\nkey', '']) {
       const home = await homeWithStore(
-        JSON.stringify({ version: 1, apps: { sonarr: { apiKey } } }),
+        JSON.stringify({ version: 1, apps: { radarr: { apiKey } } }),
       );
-      await expect(readSecretStore(home)).rejects.toThrow(
-        'is not a Mediaplane secrets file',
-      );
+      const message = await refusal(home);
+      expect(message).toContain('is not a Mediaplane secrets file');
+      expect(message).toContain('radarr.apiKey');
+      expect(message).not.toContain('fake');
     }
   });
 
-  it('refuses an empty admin password', async () => {
+  it('names every entry that is wrong, and none that is fine', async () => {
+    const home = await homeWithStore(
+      JSON.stringify({
+        version: 1,
+        apps: {
+          gluetun: { controlApiKey: '0'.repeat(32) },
+          qbittorrent: { apiKey: 'fake key with spaces' },
+          sonarr: { apiKey: 'fake;key', other: 'fake-dash' },
+        },
+      }),
+    );
+    const message = await refusal(home);
+    expect(message).toContain('qbittorrent.apiKey');
+    expect(message).toContain('sonarr.apiKey');
+    expect(message).toContain('sonarr.other');
+    expect(message).not.toContain('gluetun');
+    expect(message).not.toContain('fake');
+  });
+
+  it('names an entry that is not text, without showing it', async () => {
+    const home = await homeWithStore(
+      JSON.stringify({ version: 1, apps: { sonarr: { apiKey: 123456789 } } }),
+    );
+    const message = await refusal(home);
+    expect(message).toContain('sonarr.apiKey');
+    expect(message).not.toContain('123456789');
+  });
+
+  it('refuses an empty admin password, naming it', async () => {
     const home = await homeWithStore(
       JSON.stringify({ version: 1, apps: {}, shared: { adminPassword: '' } }),
     );
-    await expect(readSecretStore(home)).rejects.toThrow(
-      'is not a Mediaplane secrets file',
-    );
+    const message = await refusal(home);
+    expect(message).toContain('is not a Mediaplane secrets file');
+    expect(message).toContain('shared.adminPassword');
+  });
+
+  it('keeps to the general message when no entry is at fault', async () => {
+    const home = await homeWithStore('{"version": 2, "apps": {"sonarr": "fake-value"}}');
+    const message = await refusal(home);
+    expect(message).toBe(`${join(home, SECRETS_PATH)} is not a Mediaplane secrets file`);
   });
 
   it('reads every kind of key Mediaplane generates, and any admin password', async () => {

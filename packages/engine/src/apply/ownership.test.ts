@@ -1,6 +1,6 @@
 import { chmod, mkdir, readdir, stat, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Catalog } from '../catalog/types';
 import type { PathStat } from '../preflight/probe';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
@@ -12,6 +12,8 @@ import {
   fixtureConfig,
 } from '../testing/fixtures';
 import {
+  AppdataNotPrivateError,
+  APPDATA_NOT_PRIVATE_HINT,
   ensureAppdataDirs,
   keepAppdataPrivate,
   ownershipFixes,
@@ -153,5 +155,36 @@ describe('keepAppdataPrivate', () => {
     // A link to itself: chmod can't reach a folder at all.
     await symlink('appdata', join(home, 'appdata'));
     await expect(keepAppdataPrivate(home)).rejects.toThrow('ELOOP');
+  });
+});
+
+describe('AppdataNotPrivateError', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('names the uid that owns the folder and the uid Mediaplane runs as', () => {
+    vi.spyOn(process, 'geteuid').mockReturnValue(1000);
+    const failure = new AppdataNotPrivateError('/opt/mediaplane/appdata', 'EPERM', 4242);
+    expect(failure.message).toBe(
+      'cannot make /opt/mediaplane/appdata private (EPERM): it belongs to uid 4242, not to the user Mediaplane runs as (uid 1000)',
+    );
+    expect(failure.hint).toBe(APPDATA_NOT_PRIVATE_HINT);
+    expect(failure.cause).toBe('EPERM');
+  });
+
+  it('leaves out its own uid where the platform has no user ids', () => {
+    vi.spyOn(process, 'geteuid').mockReturnValue(undefined as unknown as number);
+    expect(
+      new AppdataNotPrivateError('/opt/mediaplane/appdata', 'EPERM', 4242).message,
+    ).toBe(
+      'cannot make /opt/mediaplane/appdata private (EPERM): it belongs to uid 4242, not to the user Mediaplane runs as',
+    );
+  });
+
+  it('says another user when it could not find out who owns the folder', () => {
+    expect(new AppdataNotPrivateError('/opt/mediaplane/appdata', 'EPERM').message).toBe(
+      'cannot make /opt/mediaplane/appdata private (EPERM): it belongs to another user',
+    );
   });
 });

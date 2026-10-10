@@ -11,7 +11,7 @@ import {
 import type * as FsPromises from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppDefinition, Catalog } from '../catalog/types';
 import { listRecords } from '../history/records';
 import {
@@ -39,6 +39,10 @@ beforeEach(() => {
   vi.mocked(chmod).mockReset();
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 /** chmod() fails on `path` with EPERM, as for a folder another user owns. */
 function refuseChmodOf(path: string): void {
   vi.mocked(chmod).mockImplementation((target, mode) => {
@@ -53,9 +57,19 @@ function refuseChmodOf(path: string): void {
   });
 }
 
-/** What apply says when appdata/ belongs to another user. */
-const NOT_PRIVATE = (home: string) => ({
-  message: `cannot make ${join(home, 'appdata')} private (EPERM): it belongs to another user`,
+/**
+ * Mediaplane runs as the next uid up from the one that owns what the test creates, so that
+ * folders it makes belong to "another user". Returns the owner's uid.
+ */
+function runAsAnotherUser(): number {
+  const owner = process.getuid?.() ?? 0;
+  vi.spyOn(process, 'geteuid').mockReturnValue(owner + 1);
+  return owner;
+}
+
+/** What apply says when appdata/ belongs to uid `owner`, and Mediaplane runs as the next. */
+const NOT_PRIVATE = (home: string, owner: number) => ({
+  message: `cannot make ${join(home, 'appdata')} private (EPERM): it belongs to uid ${String(owner)}, not to the user Mediaplane runs as (uid ${String(owner + 1)})`,
   hint: 'give appdata/ itself, not what is in it, to the user Mediaplane runs as (MEDIAPLANE_UID in its container), then run apply again',
 });
 
@@ -755,13 +769,14 @@ describe('apply', () => {
   it('says appdata/ belongs to another user when the files step cannot make it private', async () => {
     const home = await makeHome();
     refuseChmodOf(join(home, 'appdata'));
+    const owner = runAsAnotherUser();
     const result = await apply(options(home, fakeDocker(home)));
     expect(result.outcome).toBe('failed');
     expect(result.actions[1]).toMatchObject({ step: 'files', result: 'failed' });
     expect(result.diagnostics).toContainEqual({
       severity: 'error',
       code: 'apply.files-failed',
-      ...NOT_PRIVATE(home),
+      ...NOT_PRIVATE(home, owner),
     });
   });
 
@@ -770,14 +785,23 @@ describe('apply', () => {
     const docker = fakeDocker(home);
     expect((await apply(options(home, docker))).outcome).toBe('success');
     refuseChmodOf(join(home, 'appdata'));
+    const owner = runAsAnotherUser();
     const again = await apply(options(home, docker));
     expect(again.outcome).toBe('invalid');
     expect(again.actions).toEqual([]);
     expect(again.diagnostics).toContainEqual({
       severity: 'error',
       code: 'apply.appdata-not-private',
-      ...NOT_PRIVATE(home),
+      ...NOT_PRIVATE(home, owner),
     });
+    // Plan said so first, in the same words, as a warning.
+    expect(again.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: 'warning',
+        code: 'appdata.not-owned',
+        hint: NOT_PRIVATE(home, owner).hint,
+      }),
+    );
   });
 
   it('changes nothing when a pre-start file is from before Mediaplane seeded the app', async () => {

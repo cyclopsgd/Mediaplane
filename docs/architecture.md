@@ -227,8 +227,9 @@ lock
   app's user where the app needs that (Seerr), and writes its pre-start files once. The
   rest is the app's. It holds keys and qBittorrent's password hash, so treat it as
   sensitive. The apps rewrite their own files readable by all, so Mediaplane keeps
-  `appdata/` itself private (0700). Docker mounts each app's folder as root, so the apps
-  don't need to pass through it.
+  `appdata/` itself private (0700), on every apply. Docker mounts each app's folder as
+  root, so the apps don't need to pass through it. `plan` notes when `appdata/` isn't
+  private yet, and warns when another user owns it, because apply can't change it then.
 - **The home's filesystem must support hard links,** because the lock, `init`'s
   `stack.yaml` and the pre-start files are created with one.
 

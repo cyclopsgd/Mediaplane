@@ -22,6 +22,7 @@ import { RuntimeError, type ContainerState, type Runtime } from '../runtime/type
 import { withGeneratedSecrets } from '../secrets/generate';
 import { readSecretStore, type SecretStore } from '../secrets/store';
 import { secretsToGenerate, secretValues } from '../secrets/values';
+import { planAppdata } from './appdata';
 import { notYetHealthy, otherHomes, ownPorts, type ContainerChange } from './containers';
 import { diffFiles, type FileChange } from './files';
 import { predictContainers, type PredictResult } from './predict';
@@ -138,6 +139,8 @@ export async function planStack(
   if (hasErrors(prestart.diagnostics)) {
     return failed([...diagnostics, ...prestart.diagnostics]);
   }
+  // Notes on what apply will do to appdata/ itself; they don't make the plan "changed".
+  diagnostics.push(...(await planAppdata(home)));
   const files = [
     ...(await diffFiles(home, [
       { path: COMPOSE_PATH, content: composeToYaml(compose, home) },

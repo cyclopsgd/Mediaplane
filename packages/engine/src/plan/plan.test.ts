@@ -1,6 +1,6 @@
-import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppDefinition, Catalog } from '../catalog/types';
 import type { HostFacts } from '../host/facts';
 import { COMPOSE_PATH, ENV_PATH, SECRETS_PATH } from '../paths';
@@ -238,6 +238,102 @@ describe('plan', () => {
       expect.objectContaining({ path: ENV_PATH, status: 'unchanged', sensitive: true }),
     ]);
     expect(result.containers.every((c) => c.action === 'unchanged')).toBe(true);
+  });
+
+  describe('with an appdata/ folder apply would have to change', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    /** A current home (nothing else to change) with an appdata/ of mode `mode`. */
+    async function currentHomeWithAppdata(mode: number) {
+      const runtime = fakeRuntime({
+        hashes: { ok: true, hashes: HASHES },
+        containers: running(HASHES),
+      });
+      const home = await makeCurrentHome(runtime);
+      await mkdir(join(home, 'appdata'));
+      await chmod(join(home, 'appdata'), mode);
+      return { home, runtime };
+    }
+
+    /** Mediaplane runs as `uid`, as process.geteuid() says. */
+    function runningAs(uid: number): void {
+      vi.spyOn(process, 'geteuid').mockReturnValue(uid);
+    }
+
+    const modeOf = async (path: string) => (await stat(path)).mode & 0o777;
+
+    it('notes that apply will make an open appdata/ private, and still finds no change', async () => {
+      const { home, runtime } = await currentHomeWithAppdata(0o755);
+      const result = await planFor(home, { runtime });
+      expect(result).toMatchObject({ ok: true, changed: false });
+      expect(result.diagnostics).toEqual([
+        {
+          severity: 'warning',
+          code: 'appdata.not-private',
+          message: `${join(home, 'appdata')} has mode 0755, not 0700; apply will make it private (0700)`,
+          hint: 'nothing to do: apply makes appdata/ itself private on every run; the app folders in it keep the modes their apps give them',
+        },
+      ]);
+    });
+
+    it('writes nothing: plan only looks at appdata/', async () => {
+      const { home, runtime } = await currentHomeWithAppdata(0o755);
+      const before = (await readdir(home, { recursive: true })).sort();
+      await planFor(home, { runtime });
+      expect((await readdir(home, { recursive: true })).sort()).toEqual(before);
+      expect(await modeOf(join(home, 'appdata'))).toBe(0o755);
+    });
+
+    it('says nothing about an appdata/ that is private already', async () => {
+      const { home, runtime } = await currentHomeWithAppdata(0o700);
+      const result = await planFor(home, { runtime });
+      expect(result).toMatchObject({ ok: true, changed: false, diagnostics: [] });
+    });
+
+    it('says nothing about an appdata/ that does not exist, which apply creates', async () => {
+      const runtime = fakeRuntime({
+        hashes: { ok: true, hashes: HASHES },
+        containers: running(HASHES),
+      });
+      const result = await planFor(await makeCurrentHome(runtime), { runtime });
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it('leaves a file where appdata/ should be to apply, which stops with its own error', async () => {
+      const runtime = fakeRuntime({
+        hashes: { ok: true, hashes: HASHES },
+        containers: running(HASHES),
+      });
+      const home = await makeCurrentHome(runtime);
+      await writeFile(join(home, 'appdata'), 'not a folder');
+      expect((await planFor(home, { runtime })).diagnostics).toEqual([]);
+    });
+
+    it('warns that apply will fail when appdata/ belongs to another user, and how to fix it', async () => {
+      const { home, runtime } = await currentHomeWithAppdata(0o755);
+      const owner = (await stat(join(home, 'appdata'))).uid;
+      runningAs(owner + 1);
+      const result = await planFor(home, { runtime });
+      expect(result).toMatchObject({ ok: true, changed: false });
+      // The wording of the apply error's hint (apply.test.ts), and no mode note: apply
+      // stops before it would matter.
+      expect(result.diagnostics).toEqual([
+        {
+          severity: 'warning',
+          code: 'appdata.not-owned',
+          message: `${join(home, 'appdata')} belongs to uid ${String(owner)}, not to the user Mediaplane runs as (uid ${String(owner + 1)}), so apply will fail to make it private (0700)`,
+          hint: 'give appdata/ itself, not what is in it, to the user Mediaplane runs as (MEDIAPLANE_UID in its container), then run apply again',
+        },
+      ]);
+    });
+
+    it('does not warn about the owner when Mediaplane runs as root, which can change any mode', async () => {
+      const { home, runtime } = await currentHomeWithAppdata(0o700);
+      runningAs(0);
+      expect((await planFor(home, { runtime })).diagnostics).toEqual([]);
+    });
   });
 
   it('plans apps whose health check has not passed yet as something to wait for', async () => {

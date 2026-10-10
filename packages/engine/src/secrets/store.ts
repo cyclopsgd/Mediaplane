@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { SECRETS_PATH, STATE_DIR } from '../paths';
 import { ensureDir, writeFileAtomic } from '../util/atomic';
 import { readIfExists } from '../util/fs';
-import { compare } from '../util/sort';
+import { compare, unique } from '../util/sort';
 
 /**
  * Every app secret goes into the app's own files as it is, unescaped (config.xml,
@@ -41,8 +41,30 @@ export async function readSecretStore(home: string): Promise<SecretStore> {
     throw new Error(`${path} is not valid JSON`);
   }
   const parsed = storeSchema.safeParse(data);
-  if (!parsed.success) throw new Error(`${path} is not a Mediaplane secrets file`);
+  if (!parsed.success) {
+    const faults = unique(parsed.error.issues.flatMap((issue) => fault(issue.path)));
+    throw new Error(
+      `${path} is not a Mediaplane secrets file${faults.length === 0 ? '' : `: ${faults.join('; ')}`}`,
+    );
+  }
   return parsed.data;
+}
+
+/**
+ * What is wrong with one secret, named as the rest of Mediaplane names it ("sonarr.apiKey",
+ * "shared.adminPassword"), and never its value. Nothing for a fault that isn't a secret's.
+ */
+function fault(path: readonly PropertyKey[]): string[] {
+  const [section, app, name] = path;
+  if (section === 'apps' && path.length === 3) {
+    return [
+      `${String(app)}.${String(name)} must be text of letters, digits and "_" only, as the apps' files take it unescaped`,
+    ];
+  }
+  if (section === 'shared' && app === 'adminPassword' && path.length === 2) {
+    return ['shared.adminPassword must not be empty'];
+  }
+  return [];
 }
 
 /** Save the store atomically, private to its owner: state/ 0700, the file 0600 (§7.2(4)). */

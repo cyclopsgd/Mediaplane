@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { codeOf } from './error-code';
 
 /**
  * The file's contents, or undefined if it does not exist. Any other failure is thrown
@@ -8,8 +9,7 @@ export async function readIfExists(path: string): Promise<string | undefined> {
   try {
     return await readFile(path, 'utf8');
   } catch (cause) {
-    const code =
-      cause instanceof Error && 'code' in cause ? String(cause.code) : undefined;
+    const code = codeOf(cause);
     if (code === 'ENOENT') return undefined;
     const reason = code === undefined ? '' : ` (${code})`;
     const next =

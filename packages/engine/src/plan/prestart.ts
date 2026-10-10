@@ -2,14 +2,11 @@ import { lstat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { error, type Diagnostic } from '../diagnostics';
 import type { PrestartFile } from '../render/prestart';
+import { codeOf } from '../util/error-code';
 import type { FileChange } from './files';
 
 /** What is at a pre-start file's path: nothing, or a file, with its text when readable. */
 type Found = { exists: false } | { exists: true; text: string | undefined };
-
-function codeOf(cause: unknown): string | undefined {
-  return cause instanceof Error && 'code' in cause ? String(cause.code) : undefined;
-}
 
 function cannotRead(path: string, cause: unknown): Error {
   const code = codeOf(cause);
@@ -92,7 +89,20 @@ function notSeeded(file: PrestartFile): Diagnostic {
     `${file.app}.not-seeded`,
     `${file.path} was not written by Mediaplane, so it lacks the key Mediaplane gave ${name}`,
     {
-      hint: `stop ${name}, move ${file.path} in the Mediaplane home aside (to ${file.path}.before-3a, say), then run apply again: it writes a new one before ${name} starts. The old file keeps its settings, to enter again in ${name}; ${name}'s other data is kept. See "Set up before Slice 3a" in catalog/${file.app}/README.md`,
+      hint: `${moveAside(file)}. See "Set up before Slice 3a" in catalog/${file.app}/README.md`,
     },
   );
+}
+
+/**
+ * The steps that replace an old file with one Mediaplane seeds. qBittorrent shares
+ * Gluetun's network, so it loses it whenever Gluetun stops, and restarts afterwards.
+ */
+function moveAside(file: PrestartFile): string {
+  const name = file.appName;
+  const aside = `move ${file.path} in the Mediaplane home aside (to ${file.path}.before-3a, say)`;
+  if (file.app === 'gluetun') {
+    return `stop ${name}, ${aside}, run apply (it writes a new file and starts ${name} again), then restart qBittorrent: it shares ${name}'s network, and loses it when ${name} stops. The old file keeps your own roles, to add again below Mediaplane's`;
+  }
+  return `stop ${name}, ${aside}, then run apply again: it writes a new one before ${name} starts. The old file keeps its settings, to enter again in ${name}; ${name}'s other data is kept`;
 }

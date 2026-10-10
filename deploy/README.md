@@ -305,10 +305,11 @@ Each item is a message you may see, then what to do.
   stack's `user:`, so apply can't write the app's settings file there. Its README, under
   "Set up before Slice 3a", says what to do.
 
-- `cannot make …/appdata private (EPERM): it belongs to another user`
+- `cannot make …/appdata private (EPERM): it belongs to uid …, not to the user Mediaplane runs as (uid …)`
 
   Mediaplane keeps `appdata/` private (0700) on every apply, so it must own the folder.
-  Give the folder itself, not what is in it, to `MEDIAPLANE_UID`:
+  `plan` warns about it first (`appdata.not-owned`). Give the folder itself, not what
+  is in it, to `MEDIAPLANE_UID`:
 
   ```bash
   sudo chown 1000:1000 /opt/mediaplane/appdata

@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { chmod, link, mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { codeOf } from './error-code';
 
 /**
  * Replace `path` with `content` all at once: write a temporary file next to it, flush it
@@ -28,8 +29,7 @@ export async function writeFileAtomic(
   } catch (cause) {
     // Best effort: a cleanup failure (say ENOTDIR) must not hide the error that matters.
     await rm(temp, { force: true }).catch(() => undefined);
-    const code =
-      cause instanceof Error && 'code' in cause ? String(cause.code) : undefined;
+    const code = codeOf(cause);
     throw new Error(`cannot write ${path}${code === undefined ? '' : ` (${code})`}`, {
       cause,
     });
@@ -38,10 +38,6 @@ export async function writeFileAtomic(
 
 /** What link() reports on a filesystem without hard links (FAT, exFAT, some network shares). */
 const NO_HARD_LINKS = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS']);
-
-function codeOf(cause: unknown): string | undefined {
-  return cause instanceof Error && 'code' in cause ? String(cause.code) : undefined;
-}
 
 /** The error for a file `writeFileExclusive` could not create: names the target, not its temporary file. */
 function cannotCreate(path: string, cause: unknown): Error {

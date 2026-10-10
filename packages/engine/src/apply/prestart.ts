@@ -3,11 +3,8 @@ import { basename, dirname, join, posix } from 'node:path';
 import { APPDATA_DIR } from '../paths';
 import type { PrestartFile } from '../render/prestart';
 import { writeFileExclusive } from '../util/atomic';
+import { codeOf } from '../util/error-code';
 import { isInside } from '../util/path';
-
-function codeOf(cause: unknown): string | undefined {
-  return cause instanceof Error && 'code' in cause ? String(cause.code) : undefined;
-}
 
 /**
  * Whether nothing is at `path` yet. Anything else, even a path Mediaplane may not look
