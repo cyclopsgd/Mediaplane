@@ -1,6 +1,7 @@
 # Threat model
 
-This is the threat model for Mediaplane as built today: M1, up to and including Slice 3a.
+This is the threat model for Mediaplane as built today: M1, up to and including Slice 3a,
+and Slice 3d.
 It makes spec §7 concrete. To report a vulnerability, see [SECURITY.md](../../SECURITY.md).
 
 ## The one thing to know
@@ -50,10 +51,11 @@ host network, read-only mounts
 - **The socket proxy.** It is the only container with the Docker socket. It forwards only
   the API calls Mediaplane makes, and only from the address the name `mediaplane` has on
   its network ([ADR 0008](../adr/0008-docker-socket-proxy-on-by-default.md)).
-- **The host helper.** During `init`, `plan` and `apply`, Mediaplane starts a container
-  of its own image on the host network, for a second or two. It sees what the Mediaplane
-  container cannot:
-  - through the host network: the host's addresses and free ports;
+- **The host helper.** During `init`, `plan`, `apply` and `vpn-check`, Mediaplane
+  starts a container of its own image on the host network, for a few seconds. It sees
+  what the Mediaplane container cannot:
+  - through the host network: the host's addresses and free ports, and for `vpn-check`,
+    the address the host's own traffic leaves from (see T13);
   - through read-only bind mounts: the data folder, the home's `stack.yaml`, and `/dev`
     when the VPN needs `/dev/net/tun`.
 
@@ -73,6 +75,15 @@ host network, read-only mounts
   `compose.yaml` and `compose.override.yaml`, running `chown` as root on the appdata
   folder where the app mounts it. It belongs to the stack's project, and is removed when
   `chown` exits. Today only Seerr, which runs as uid 1000, needs it.
+- **vpn-check's probe.** `mediaplane vpn-check` runs
+  `docker compose run --rm --no-deps -T --user 65534:65534 --entrypoint sh qbittorrent`
+  with a short script: a throwaway container of qBittorrent's own image, as nobody, in
+  Gluetun's network namespace, as qBittorrent is. It asks Gluetun's control server for
+  the VPN's state, looks up the route out, and, unless `--no-egress` is given, asks an
+  IP-echo service which address it comes from. It writes nothing, and is removed when it
+  exits. Gluetun's key reaches it on its standard input, never on a command line or in
+  its environment. Its curl reads no config file and no proxy setting. It uses the same
+  Docker API calls as the ownership helper, so the proxy allows nothing new for it.
 - **The apps.**
   - They are unmodified upstream images, pinned by digest, and never get the Docker
     socket.
@@ -82,9 +93,9 @@ host network, read-only mounts
     Sonarr's, Radarr's and Prowlarr's `config.xml`, qBittorrent's `qBittorrent.conf` and
     Gluetun's `auth/config.toml`. Each is written 0600, and only if absent.
   - With a VPN, qBittorrent has no network of its own. It uses Gluetun's, so it has no
-    route out when the VPN is down. The automated test for that arrives in Slice 3d.
+    route out when the VPN is down (see T12).
   - Gluetun's control server (port 8000) is never published. It answers only Mediaplane's
-    key, on two read-only routes (see T11; Slice 3d's end-to-end test checks this).
+    key, on two read-only routes (see T11).
 
 ## Threats and controls
 
@@ -155,11 +166,15 @@ Controls today:
 
 - It has no Docker access, and no other app's appdata.
 - With a VPN, qBittorrent sits in Gluetun's network namespace.
+- vpn-check's probe runs qBittorrent's image as nobody, writes nothing, and is removed
+  when it exits.
 - Mediaplane writes an app's pre-start files only inside its `appdata/<app>` folder. It
   refuses a path that leaves the folder, and a link on the way that leads outside it.
 
 What remains:
 
+- vpn-check measures qBittorrent's side with qBittorrent's own image, so a compromised
+  image, or files it writes in its own appdata, could make the check pass.
 - The apps that handle media share the data folder, which hardlinks need, so a
   compromised one can change your media.
 - A running app could swap one of its folders for a link between Mediaplane's check and
@@ -177,6 +192,10 @@ Controls today:
 - Replaced with `***` in errors. Change records hold names, never values.
 - Given to Compose in its environment or in the 0600 `generated/.env`, never on its
   command line.
+- Gluetun's control key reaches vpn-check's probe on its standard input, and the probe
+  hands it to curl the same way. It is never on a command line, which every user on the
+  host can list, nor in the container's settings, and it is replaced with `***` in what
+  the probe prints.
 - The files apps read at their first start are written 0600, never half-written, and
   never over an existing file. `plan` lists them without their content, and change
   records hold only their paths.
@@ -284,14 +303,74 @@ Controls today:
 - Its port, 8000, is never published.
 - Before Gluetun's first start, Mediaplane writes `appdata/gluetun/auth/config.toml`. It
   gives a generated key two read-only routes, `GET /v1/vpn/status` and
-  `GET /v1/publicip/ip`, and nothing else. Requests without the key are refused
-  (Slice 3d's end-to-end test checks this). Without that file, Gluetun v3.41 answers
-  anyone on the stack's network.
+  `GET /v1/publicip/ip`, and nothing else. Requests without the key are refused, and so
+  are other routes with it: the kill-switch test checks both. Without that file, Gluetun
+  v3.41 answers anyone on the stack's network.
+- `mediaplane vpn-check` warns when the control server answers without the key.
 
 What remains:
 
 - A Gluetun that started before Slice 3a reads the file only when it next starts.
 - The key is kept in `state/secrets.json` and in Gluetun's appdata, both 0600.
+
+### T12. The VPN fails, and qBittorrent's traffic leaks
+
+Controls today:
+
+- qBittorrent uses Gluetun's network (`network_mode: service:gluetun`) and has none of its
+  own, so when the tunnel is down it has no way out (fail-closed). Gluetun's firewall
+  lets traffic out only through the tunnel, to the stack's own network, and to the LAN
+  subnets in `FIREWALL_OUTBOUND_SUBNETS` while the web UIs are on the LAN.
+- An end-to-end test, which CI runs on amd64 and arm64, checks it against a WireGuard
+  server of its own: traffic leaves through the tunnel; with the server stopped,
+  nothing gets out of qBittorrent's network while an ordinary container on the stack's
+  network still does; with Gluetun stopped, qBittorrent has nothing but loopback.
+- `mediaplane vpn-check` checks the same on your host: qBittorrent's network mode, that
+  it joined the Gluetun now running, Gluetun's health and its own report, the route into
+  the tunnel, and where qBittorrent's traffic leaves from, compared with the host's. It
+  exits 1 on a leak or a VPN that is down.
+- `plan` warns every time qBittorrent runs without the VPN
+  (`apps.qbittorrent.vpn: false`).
+
+What remains:
+
+- vpn-check runs only when you run it. Alerts come in M3.
+- When Gluetun restarts on its own, qBittorrent keeps the old, empty network until it
+  restarts too. That fails closed, and vpn-check reports it, but `apply` doesn't.
+- The address comparison asks one IP-echo service; one that answers wrongly could hide a
+  leak. The checks before it don't depend on that service.
+- vpn-check measures IPv4 only. An IPv6 egress check waits for Docker's IPv6 to be turned
+  on; the roadmap lists it.
+- "Nothing leaks (fail-closed)" in a `VPN down` result is an inference from no answer
+  through the tunnel, with qBittorrent shown to be in Gluetun's network. A service that
+  stalls the TLS handshake reads the same way. A `LEAK` result is the one to act on first.
+
+### T13. vpn-check tells an outside service your addresses
+
+Controls today:
+
+- Only when you run `mediaplane vpn-check`, and never with `--no-egress`.
+- The default service is Cloudflare's trace, by IP address
+  (`https://1.1.1.1/cdn-cgi/trace`), so no DNS query goes out. Cloudflare is already
+  Gluetun's DNS-over-TLS resolver and one of the services it asks for its own address.
+- `MEDIAPLANE_VPN_CHECK_URL` names another service, which must be http or https.
+- The host's request refuses a redirect, and a URL with a user name or password. Only an
+  answer shaped like an address comes back, and at most 16 KiB of it is read.
+- From source, behind a Node env proxy (`NODE_USE_ENV_PROXY`, `--use-env-proxy`), the
+  host side can't be measured, so `vpn-check` warns and compares nothing.
+
+What remains:
+
+- The service learns the VPN's exit address and the host's own address, once per run.
+  In the Mediaplane container, the host helper makes the host's request, from the host
+  network.
+- The URL is not a secret. It is shown in the output and in `egress.url`, and it goes on
+  the host helper's command line, where every user on the host can see it with `ps`. So
+  it must carry no token.
+- An `http:` URL can be answered by anything on the path, so a forged answer could hide
+  a leak or fake one.
+- The helper sends a GET from the host network to whatever URL is set, local and
+  metadata addresses included. Run from source, the CLI sends it, from the host.
 
 ## What the proxy does not stop
 
