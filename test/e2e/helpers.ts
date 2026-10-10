@@ -23,7 +23,7 @@ export async function buildImage(tag: string): Promise<void> {
 }
 
 /**
- * The M1 video stack without the VPN (the VPN gets its own end-to-end test in Slice 3d).
+ * The M1 video stack without the VPN (vpn.e2e.test.ts has its own, behind the VPN).
  * The apps run as the current user, who owns the temporary data folder.
  */
 export function stackFor(data: string): string {

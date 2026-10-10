@@ -109,6 +109,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: docker version && docker compose version
+      # The kill-switch test's WireGuard server needs the kernel module, and can't load it
+      # from inside its container. The test fails, and never skips, without it.
+      - name: Load the WireGuard kernel module
+        run: sudo modprobe wireguard && test -d /sys/module/wireguard
       - run: pnpm test:e2e
       # If the job ran out of disk, this shows how much was left at the end.
       - name: Disk space at the end
