@@ -6,6 +6,7 @@ import {
   createDockerRuntime,
   dockerAccessWarnings,
   isManagedProject,
+  JoinFailed,
   ownContainerId,
   OwnContainerUnknown,
   parseContainers,
@@ -1020,6 +1021,8 @@ describe('the wiring network', () => {
     );
     // Docker's failure, not a network Mediaplane refused.
     await expect(joined).rejects.not.toBeInstanceOf(WiringRefused);
+    // A join of its own, with a hint of its own, not Docker being unreachable.
+    await expect(joined).rejects.toBeInstanceOf(JoinFailed);
     const member = runtimeWith((args) =>
       args[1] === 'inspect'
         ? network('true', 'mediaplane', SELF)

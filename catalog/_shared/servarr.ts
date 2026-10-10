@@ -130,7 +130,7 @@ export function servarrIntegration(
  * config.xml, written before the first start (design §6.1): the API key, so the app keeps
  * it even if its environment variable is ever lost, and the forms login. Sonarr, Radarr
  * and Prowlarr keep these and add the rest of their settings. The admin user itself goes
- * through their API, from Slice 3b.
+ * through their API.
  */
 export function servarrConfigFiles(ctx: ConfigFileContext): ConfigFile[] {
   return [

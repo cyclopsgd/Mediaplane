@@ -1,6 +1,6 @@
 import { chmod } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { error, type Diagnostic } from '../diagnostics';
+import { error, warning, type Diagnostic } from '../diagnostics';
 import {
   CHANGE_SCHEMA,
   newRecordId,
@@ -262,6 +262,23 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         `the VPN check found ${vpn.verdict === 'leak' ? 'a leak' : 'the VPN down'}: ${failing?.message ?? vpn.verdict}`,
         failing?.hint ?? `see ${VPN_RUNBOOK}`,
       );
+    }
+    // Its warnings stay: a control server that answers anyone on the stack's networks, or
+    // that didn't answer, is worth knowing, and leaves "with the VPN up" unproven.
+    const warnings = vpn.checks.filter((c) => c.status === 'warning');
+    for (const check of warnings) {
+      steps.diagnostics.push(
+        warning(
+          `vpn.${check.id}`,
+          check.message,
+          check.hint === undefined ? {} : { hint: check.hint },
+        ),
+      );
+    }
+    if (warnings.length > 0) {
+      const count =
+        warnings.length === 1 ? 'a warning' : `${String(warnings.length)} warnings`;
+      return `no changes remain, and qBittorrent's network is Gluetun's, but the VPN check has ${count}`;
     }
     return "no changes remain, and qBittorrent's network is Gluetun's, with the VPN up";
   });

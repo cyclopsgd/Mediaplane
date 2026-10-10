@@ -2,7 +2,7 @@ import { chmod, mkdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
-import { dataSteps, prepareDataFolder } from './folders';
+import { dataSteps, homeProblem, prepareDataFolder, shellQuote } from './folders';
 
 const ME = { uid: process.getuid?.() ?? 1000, gid: process.getgid?.() ?? 1000 };
 
@@ -26,11 +26,16 @@ describe('prepareDataFolder', () => {
     expect(await prepareDataFolder(data, '/opt/mediaplane', false, other)).toBe('check');
   });
 
-  it('refuses a file where the folder should be', async () => {
+  it('names the file where the folder should be, or above it', async () => {
     const data = join(await tempDir('mediaplane-data-'), 'data');
     await writeFile(data, '');
     expect(await prepareDataFolder(data, '/opt/mediaplane', false, ME)).toEqual({
-      blocked: 'it is not a folder',
+      file: data,
+    });
+    // A file above it: stat says ENOTDIR, which names no path.
+    const below = join(data, 'media', 'downloads');
+    expect(await prepareDataFolder(below, '/opt/mediaplane', false, ME)).toEqual({
+      file: data,
     });
   });
 
@@ -92,10 +97,63 @@ describe('dataSteps', () => {
     ]);
   });
 
+  it('says to pass a folder when a file is in the way, with no command and no code', () => {
+    const steps = [
+      ...dataSteps('/srv/data', { file: '/srv/data' }, ME),
+      ...dataSteps('/srv/data/media', { file: '/srv/data' }, ME),
+    ];
+    expect(steps).toEqual([
+      '/srv/data is a file; pass a folder as paths.data in stack.yaml.',
+      '/srv/data is a file; pass a folder as paths.data in stack.yaml.',
+    ]);
+    for (const step of steps) expect(step).not.toMatch(/sudo|mkdir|chown|ENOTDIR/);
+  });
+
   it('says to give away a folder it created as someone else, such as root', () => {
     const apps = { uid: ME.uid + 1, gid: ME.gid + 1 };
     expect(dataSteps('/srv/data', 'created', apps)).toEqual([
       `Give /srv/data to uid ${String(apps.uid)} (gid ${String(apps.gid)}), whom the apps run as: sudo chown ${String(apps.uid)}:${String(apps.gid)} /srv/data`,
     ]);
   });
+});
+
+describe('homeProblem', () => {
+  it('says to pass a folder when the home, or a folder above it, is a file', async () => {
+    const file = join(await tempDir('mediaplane-home-'), 'stack.yaml');
+    await writeFile(file, 'version: 1\n');
+    const said = `${file} is a file; pass a folder: --home <a folder of yours>`;
+    expect(await homeProblem(file)).toBe(said);
+    // A file above the home: stat says ENOTDIR, which is no reason to give, and mkdir
+    // could never work.
+    expect(await homeProblem(join(file, 'mediaplane'))).toBe(said);
+  });
+
+  // root can write anywhere, so there is nothing to test when running as root.
+  it.skipIf(process.getuid?.() === 0)(
+    'quotes the home in the commands it gives, for the shell',
+    async () => {
+      const parent = await tempDir('mediaplane-home-');
+      const home = join(parent, "my home's");
+      // As shellQuote writes it, checked last.
+      const quoted = `'${parent}/my home'\\''s'`;
+      await chmod(parent, 0o555);
+      try {
+        expect(await homeProblem(home)).toBe(
+          `can't create ${home} (permission denied): pass --home <a folder of yours>, or create it first with "sudo mkdir -p ${quoted} && sudo chown $USER: ${quoted}"`,
+        );
+      } finally {
+        await chmod(parent, 0o755);
+      }
+      await mkdir(home);
+      await chmod(home, 0o555);
+      try {
+        expect(await homeProblem(home)).toBe(
+          `can't write into ${home} (permission denied): pass --home <a folder of yours>, or make it yours with "sudo chown $USER: ${quoted}"`,
+        );
+      } finally {
+        await chmod(home, 0o755);
+      }
+      expect(shellQuote(home)).toBe(quoted);
+    },
+  );
 });

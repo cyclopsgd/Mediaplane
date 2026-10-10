@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Catalog } from '../catalog/types';
-import { OwnContainerUnknown, WiringRefused } from '../runtime/docker';
+import { JoinFailed, OwnContainerUnknown, WiringRefused } from '../runtime/docker';
 import { RuntimeError } from '../runtime/types';
 import type { SecretStore } from '../secrets/store';
 import { fakeRuntime } from '../testing/fakes';
@@ -313,6 +313,18 @@ describe('joinFailure', () => {
       code: 'wire.network',
       message: cause.message,
       hint: `run Mediaplane with Docker, as deploy/mediaplane.compose.yaml does, or from source on the host, where it joins nothing; see ${WIRING_RUNBOOK}`,
+    });
+  });
+
+  it('says what to do when Docker refused the join itself', () => {
+    const cause = new JoinFailed(
+      'could not join the wiring network mediaplane_wiring: Error response from daemon: network 0123 not found',
+    );
+    expect(joinFailure(cause, {})).toEqual({
+      severity: 'error',
+      code: 'wire.network',
+      message: cause.message,
+      hint: `the reason after the colon is Docker's. If it says "not found", the network was removed or made anew meanwhile: run apply again. Otherwise see "could not join" in ${WIRING_RUNBOOK}`,
     });
   });
 

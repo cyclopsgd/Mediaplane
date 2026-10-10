@@ -207,8 +207,9 @@ export async function planStack(
       return failed([...diagnostics, resourcesInvalid(cause)]);
     }
     // In memory: the secrets apply would generate, so that a first plan can say what it
-    // would set. Apply sets the ones it saves. Read before the join, so that no failure
-    // of plan's comes after it has changed Docker.
+    // would set. Apply sets the ones it saves. Read before the join, so that a failure to
+    // read the admin login doesn't come after the join (wiringAddresses can still fail
+    // after it).
     const admin = await adminLogin(stack.config, home, preview, options.env);
     const changing = new Set(
       containers.filter((c) => c.action !== 'unchanged').map((c) => c.service),

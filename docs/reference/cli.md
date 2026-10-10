@@ -6,7 +6,7 @@ Every command takes `--json` for machine-readable output, and `--help` for this 
 
 ## `mediaplane plan`
 
-Show what apply would change, without changing anything.
+Show what apply would change; it changes nothing in the stack, but from the image it joins the stack's private wiring network.
 
 ```text
 mediaplane plan [options]

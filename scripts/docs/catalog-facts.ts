@@ -65,7 +65,9 @@ function health(def: AppDefinition): string {
 }
 
 function api(def: AppDefinition): string {
-  if (def.api === undefined) return 'none that Mediaplane calls';
+  // Not "none that Mediaplane calls": vpn-check asks Gluetun's control server, from
+  // inside qBittorrent's network rather than over the wiring network.
+  if (def.api === undefined) return 'none over the wiring network';
   const { port, key } = def.api;
   const carried =
     key.scheme === 'bearer' ? 'as a Bearer token' : 'in the `X-Api-Key` header';

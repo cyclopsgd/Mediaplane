@@ -45,7 +45,7 @@ describe('renderFacts', () => {
     expect(renderFacts(app('qbittorrent'))).not.toContain('$${WEBUI_PORT}');
   });
 
-  it("says how Mediaplane reaches an app's API, or that it calls none", () => {
+  it("says how Mediaplane reaches an app's API, or that it reaches none over the wiring network", () => {
     expect(renderFacts(app('sonarr'))).toContain(
       "- **API:** on its `web` port, which Mediaplane reaches over the stack's wiring network, with `apiKey` in the `X-Api-Key` header\n",
     );
@@ -53,8 +53,13 @@ describe('renderFacts', () => {
       'with `apiKey` as a Bearer token\n',
     );
     expect(renderFacts(app('jellyfin'))).toContain(
-      '- **API:** none that Mediaplane calls\n',
+      '- **API:** none over the wiring network\n',
     );
+    // vpn-check calls Gluetun's control server, from inside qBittorrent's network.
+    expect(renderFacts(app('gluetun'))).toContain(
+      '- **API:** none over the wiring network\n',
+    );
+    expect(renderFacts(app('gluetun'))).not.toContain('none that Mediaplane calls');
   });
 
   it('lists what Mediaplane manages in an app, by override key', () => {

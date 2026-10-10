@@ -225,7 +225,9 @@ export function createProgram(
 
   program
     .command('plan')
-    .description('Show what apply would change, without changing anything')
+    .description(
+      "Show what apply would change; it changes nothing in the stack, but from the image it joins the stack's private wiring network",
+    )
     .option('--home <dir>', 'Mediaplane home directory', defaultHome)
     .option('--json', 'print machine-readable JSON')
     .addHelpText('after', exitCodesHelp('plan'))

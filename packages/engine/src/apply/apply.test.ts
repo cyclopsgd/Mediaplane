@@ -1100,6 +1100,7 @@ describe('apply: qBittorrent behind Gluetun', () => {
         { service: 'qbittorrent', action: 'restart' },
       ]),
     );
+    expect(docker.calls).toContain('stop qbittorrent');
     expect(docker.calls.indexOf('stop qbittorrent')).toBeLessThan(
       docker.calls.indexOf('up'),
     );
@@ -1117,6 +1118,50 @@ describe('apply: qBittorrent behind Gluetun', () => {
       (call) => call === 'run qbittorrent sh as 65534:65534',
     );
     expect(probe).toHaveLength(1);
+  });
+
+  it("keeps the VPN check's warnings, and doesn't say the VPN is up", async () => {
+    const home = await makeHome();
+    // Gluetun's control server answers without a key, and refuses Mediaplane's.
+    const docker = fakeDocker(home, {
+      run: () => ({
+        code: 0,
+        stdout: probeOutput({
+          ...HEALTHY_PROBE,
+          anonymous: [0, '200'],
+          status: [0, '{"status":"running"}\n401'],
+        }),
+        stderr: '',
+      }),
+    });
+    const result = await apply(options(home, docker));
+    expect(result.outcome).toBe('success');
+    expect(result.actions.find((a) => a.step === 'verify')).toEqual({
+      step: 'verify',
+      result: 'done',
+      detail:
+        "no changes remain, and qBittorrent's network is Gluetun's, but the VPN check has 2 warnings",
+    });
+    const warnings = result.diagnostics.filter((d) => d.code.startsWith('vpn.'));
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        severity: 'warning',
+        code: 'vpn.control',
+        message: "Gluetun's control server refused Mediaplane's key",
+      }),
+      expect.objectContaining({
+        severity: 'warning',
+        code: 'vpn.control-key',
+        message:
+          "Gluetun's control server answers anyone on the stack's network, without a key: Gluetun has not read its key file since Mediaplane wrote it",
+        hint: expect.stringContaining('restart Gluetun, then qBittorrent') as string,
+      }),
+    ]);
+    // In the change record's outcome too: the apply still succeeded.
+    const [record] = (await listRecords(home)).records;
+    expect(record?.actions.find((a) => a.step === 'verify')?.detail).toContain(
+      'the VPN check has 2 warnings',
+    );
   });
 
   it('fails verify, with what to do, when the VPN check finds the VPN down', async () => {
@@ -1385,6 +1430,7 @@ describe('apply: what a failed wiring says to do', () => {
     );
     expect(result.outcome).toBe('failed');
     return {
+      home,
       result,
       docker,
       sonarr,
@@ -1444,6 +1490,44 @@ describe('apply: what a failed wiring says to do', () => {
       ['wire', '', 'failed'],
       ['verify', '', 'skipped'],
     ]);
+  });
+
+  it('keeps the secrets out of the record and the diagnostics of an unexpected error', async () => {
+    let password = '';
+    const leaky: Catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr'
+        ? {
+            ...def,
+            integration: {
+              after: [],
+              resources: [
+                {
+                  ...FAKE_LOGIN,
+                  create: (_api, desired) => {
+                    password = desired.secrets.password ?? '';
+                    return Promise.reject(new Error(`a fake bug, near ${password}`));
+                  },
+                },
+              ],
+            },
+          }
+        : def,
+    );
+    const { home, result, own } = await stepFailure('wire', undefined, leaky);
+    expect(password.length).toBeGreaterThanOrEqual(12);
+    expect(own?.message).toBe('a fake bug, near ***');
+    const { records } = await listRecords(home);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.actions).toContainEqual({
+      step: 'wire',
+      resource: 'sonarr.login',
+      result: 'failed',
+      error: 'a fake bug, near ***',
+    });
+    const shown = JSON.stringify([result, records]);
+    for (const secret of [password, 'ab'.repeat(16)]) {
+      expect(shown).not.toContain(secret);
+    }
   });
 
   it("says why it couldn't step off the network, and starts nothing", async () => {

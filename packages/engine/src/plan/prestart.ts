@@ -96,13 +96,14 @@ function notSeeded(file: PrestartFile): Diagnostic {
 
 /**
  * The steps that replace an old file with one Mediaplane seeds. qBittorrent shares
- * Gluetun's network, so it loses it whenever Gluetun stops, and restarts afterwards.
+ * Gluetun's network, so it loses it whenever Gluetun stops; apply restarts it when it
+ * starts Gluetun again (strandedGuests).
  */
 function moveAside(file: PrestartFile): string {
   const name = file.appName;
   const aside = `move ${file.path} in the Mediaplane home aside (to ${file.path}.before-3a, say)`;
   if (file.app === 'gluetun') {
-    return `stop ${name}, ${aside}, run apply (it writes a new file and starts ${name} again), then restart qBittorrent: it shares ${name}'s network, and loses it when ${name} stops. The old file keeps your own roles, to add again below Mediaplane's`;
+    return `stop ${name}, ${aside}, then run apply: it writes a new file, starts ${name} again, and restarts qBittorrent, which shares ${name}'s network and loses it when ${name} stops. The old file keeps your own roles, to add again below Mediaplane's`;
   }
   return `stop ${name}, ${aside}, then run apply again: it writes a new one before ${name} starts. The old file keeps its settings, to enter again in ${name}; ${name}'s other data is kept`;
 }

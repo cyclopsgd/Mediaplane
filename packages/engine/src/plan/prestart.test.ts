@@ -59,7 +59,7 @@ describe('planPrestartFiles', () => {
     });
   });
 
-  it('gives Gluetun its own steps: restarting it cuts qBittorrent off, so that restarts after', async () => {
+  it('gives Gluetun its own steps: stopping it cuts qBittorrent off, which apply restarts', async () => {
     const gluetun: PrestartFile = {
       app: 'gluetun',
       appName: 'Gluetun',
@@ -77,9 +77,11 @@ describe('planPrestartFiles', () => {
         code: 'gluetun.not-seeded',
         message:
           'appdata/gluetun/auth/config.toml was not written by Mediaplane, so it lacks the key Mediaplane gave Gluetun',
-        hint: 'stop Gluetun, move appdata/gluetun/auth/config.toml in the Mediaplane home aside (to appdata/gluetun/auth/config.toml.before-3a, say), run apply (it writes a new file and starts Gluetun again), then restart qBittorrent: it shares Gluetun\'s network, and loses it when Gluetun stops. The old file keeps your own roles, to add again below Mediaplane\'s. See "Set up before Slice 3a" in catalog/gluetun/README.md',
+        hint: 'stop Gluetun, move appdata/gluetun/auth/config.toml in the Mediaplane home aside (to appdata/gluetun/auth/config.toml.before-3a, say), then run apply: it writes a new file, starts Gluetun again, and restarts qBittorrent, which shares Gluetun\'s network and loses it when Gluetun stops. The old file keeps your own roles, to add again below Mediaplane\'s. See "Set up before Slice 3a" in catalog/gluetun/README.md',
       },
     ]);
+    // Apply restarts qBittorrent itself (strandedGuests): no step by hand.
+    expect(diagnostics[0]?.hint).not.toContain('then restart qBittorrent');
     // Not the generic steps, which would leave qBittorrent without a network.
     expect(diagnostics[0]?.hint).not.toContain("Gluetun's other data is kept");
   });

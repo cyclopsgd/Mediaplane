@@ -16,7 +16,7 @@ Prowlarr's indexers. Mediaplane runs the upstream image, unmodified, when you li
 - **Runs as:** the image's own user
 - **Health check:** none: `up --wait` waits only for it to be running
 - **Secrets:** none
-- **API:** none that Mediaplane calls
+- **API:** none over the wiring network
 - **Managed in the app:** nothing yet
 - **Needs:** nothing
 - **Provides:** `cloudflare-solver`

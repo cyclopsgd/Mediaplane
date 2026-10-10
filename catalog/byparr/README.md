@@ -15,7 +15,7 @@ image, unmodified. Listing Prowlarr turns it on.
 - **Runs as:** the image's own user
 - **Health check:** `curl -fsS -o /dev/null http://127.0.0.1:8191/health`, every 30s (timeout 10s, 5 retries, 60s to start)
 - **Secrets:** none
-- **API:** none that Mediaplane calls
+- **API:** none over the wiring network
 - **Managed in the app:** nothing yet
 - **Needs:** nothing
 - **Provides:** `cloudflare-solver`

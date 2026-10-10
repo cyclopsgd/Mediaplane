@@ -15,7 +15,7 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
 - **Runs as:** the stack's `user:`, through `PUID` and `PGID`
 - **Health check:** `curl -fsS http://localhost:8096/health`, every 30s (timeout 10s, 5 retries, 120s to start)
 - **Secrets:** `apiKey`: created by the app during its first-run setup
-- **API:** none that Mediaplane calls
+- **API:** none over the wiring network
 - **Managed in the app:** nothing yet
 - **Needs:** nothing
 - **Provides:** `media-server`

@@ -22,6 +22,7 @@ import {
   WIRING_RUNBOOK,
   wiringOrder,
   wiringTargets,
+  type Examined,
   type ReachedApp,
   type WiringSeams,
 } from './wiring';
@@ -113,14 +114,22 @@ export async function wire(options: WireOptions): Promise<string[]> {
     options.record({ step: 'wire', resource, result: 'failed', error: message });
   };
   // An error that isn't the app's, such as a resources.json that can't be written, or a
-  // bug: what it hit fails, and the step stops with it, keeping what failed before.
-  const stop = (resources: readonly string[], cause: unknown): WiringFailed => {
+  // bug: what it hit fails, and the step stops with it, keeping what failed before. Only
+  // its redacted message goes on, never the error itself, which could hold a secret.
+  const stop = (
+    resources: readonly string[],
+    cause: unknown,
+    before = '',
+  ): WiringFailed => {
     const said = cause instanceof Error ? cause.message : String(cause);
-    const message = redact(said, Object.fromEntries(secrets.map((s, i) => [i, s])));
+    const message = redact(
+      `${before}${said}`,
+      Object.fromEntries(secrets.map((s, i) => [i, s])),
+    );
     for (const resource of resources) {
       options.record({ step: 'wire', resource, result: 'failed', error: message });
     }
-    return new WiringFailed(message, diagnostics, { cause });
+    return new WiringFailed(message, diagnostics);
   };
   for (const app of order) {
     const ctx: WiringContext = { stack, app, admin };
@@ -167,8 +176,10 @@ export async function wire(options: WireOptions): Promise<string[]> {
         );
         continue;
       }
+      let result: Examined | undefined;
+      let id: string | number | null;
       try {
-        const result = await examine(spec, client.api, ctx, known[address]);
+        result = await examine(spec, client.api, ctx, known[address]);
         if (result === undefined) continue;
         if (result.action === 'unchanged') {
           options.record({
@@ -179,31 +190,41 @@ export async function wire(options: WireOptions): Promise<string[]> {
           });
           continue;
         }
-        let id = result.observed?.id ?? null;
+        id = result.observed?.id ?? null;
         if (result.action === 'create') {
           ({ id } = await spec.create(client.api, result.desired));
         } else if (result.action === 'update' && result.observed !== undefined) {
           await spec.update(client.api, result.desired, result.observed);
         }
-        // At once: a crash later loses no id, and the next plan finds it as it is.
-        known[address] = {
-          id,
-          name: result.desired.name,
-          fields: managedFields(spec, result.desired),
-          secrets: [...spec.secrets],
-          appliedAt: options.now().toISOString(),
-        };
-        await writeResources(options.home, known);
-        const what =
-          result.action === 'update'
-            ? `${DONE.update} ${result.changes.join(', ')}`
-            : DONE[result.action];
-        done.push(`${address} ${what}`);
-        options.record({ step: 'wire', resource: address, result: 'done', detail: what });
       } catch (cause) {
         if (!(cause instanceof AppApiError)) throw stop([address], cause);
         fail(address, cause.message, `wire.${cause.kind}`);
+        continue;
       }
+      // At once: a crash later loses no id, and the next plan finds it as it is.
+      known[address] = {
+        id,
+        name: result.desired.name,
+        fields: managedFields(spec, result.desired),
+        secrets: [...spec.secrets],
+        appliedAt: options.now().toISOString(),
+      };
+      try {
+        await writeResources(options.home, known);
+      } catch (cause) {
+        // The app holds it now, as the next plan will find (adopt): say so.
+        throw stop(
+          [address],
+          cause,
+          `${app.def.name} has it, but state/resources.json could not be saved: `,
+        );
+      }
+      const what =
+        result.action === 'update'
+          ? `${DONE.update} ${result.changes.join(', ')}`
+          : DONE[result.action];
+      done.push(`${address} ${what}`);
+      options.record({ step: 'wire', resource: address, result: 'done', detail: what });
     }
   }
   if (failed.length > 0) {
@@ -249,7 +270,8 @@ function managedFields(spec: ResourceSpec, desired: DesiredResource): Fields {
 
 /**
  * Some of the wiring failed: each failure's diagnostic, from the app's own message, and
- * what to do when the wire step's own hint doesn't fit.
+ * what to do when the wire step's own hint doesn't fit. It keeps no cause: the error it
+ * stands for could hold a secret, which util.inspect would print.
  */
 export class WiringFailed extends Error {
   override readonly name = 'WiringFailed';
@@ -259,9 +281,9 @@ export class WiringFailed extends Error {
   constructor(
     message: string,
     diagnostics: readonly Diagnostic[],
-    options: { hint?: string; cause?: unknown } = {},
+    options: { hint?: string } = {},
   ) {
-    super(message, 'cause' in options ? { cause: options.cause } : undefined);
+    super(message);
     this.diagnostics = [...diagnostics];
     this.hint = options.hint;
   }

@@ -16,7 +16,7 @@ upstream image, unmodified. It is turned on whenever qBittorrent runs behind the
 - **Runs as:** the image's own user
 - **Health check:** the image's own
 - **Secrets:** `controlApiKey`: 32 random hex characters, generated once and kept in `state/secrets.json`; `wireguardKey`: yours, from `vpn.private_key` in `stack.yaml`
-- **API:** none that Mediaplane calls
+- **API:** none over the wiring network
 - **Managed in the app:** nothing yet
 - **Needs:** nothing
 - **Provides:** `vpn`
@@ -127,7 +127,7 @@ Nothing for Gluetun itself. See the [roadmap](../../docs/plans/m1-roadmap.md).
   - If `appdata/gluetun/auth/config.toml` was there already, without Mediaplane's role
     (`name = "mediaplane"`), `plan` stops with `gluetun.not-seeded`, even if your own
     roles have keys. To fix it, stop Gluetun, move the file aside, and apply again:
-    Mediaplane writes a new one and starts Gluetun again. Then restart qBittorrent, which
+    Mediaplane writes a new one, starts Gluetun again, and restarts qBittorrent, which
     shares Gluetun's network and loses it when Gluetun stops.
 
     ```bash
@@ -135,7 +135,6 @@ Nothing for Gluetun itself. See the [roadmap](../../docs/plans/m1-roadmap.md).
     file=/opt/mediaplane/appdata/gluetun/auth/config.toml
     mv "$file" "$file.before-3a"
     mediaplane apply
-    docker restart mediaplane-qbittorrent-1
     ```
 
     Use your own home, and the container names `docker ps` shows. If `mv` is refused,

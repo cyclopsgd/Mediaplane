@@ -1,10 +1,11 @@
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { inspect } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import type { ActionResult } from '../history/records';
 import { RESOURCES_PATH, STATE_DIR } from '../paths';
-import { OwnContainerUnknown, WiringRefused } from '../runtime/docker';
+import { JoinFailed, OwnContainerUnknown, WiringRefused } from '../runtime/docker';
 import { RuntimeError } from '../runtime/types';
 import { fakeRuntime, type FakeRuntimeOptions } from '../testing/fakes';
 import { tempDir } from '../testing/temp';
@@ -255,6 +256,10 @@ describe('wire', () => {
       new OwnContainerUnknown("Mediaplane can't tell which container it runs in"),
       'wire.network',
     ],
+    [
+      new JoinFailed('could not join the wiring network fake_wiring: fake'),
+      'wire.network',
+    ],
     [new RuntimeError('docker network inspect failed: fake'), 'docker.unavailable'],
   ])('says what to do when the join fails (%s), and asks no app', async (cause, code) => {
     const sonarr = await fakeSonarr({ key: KEY });
@@ -425,7 +430,9 @@ describe('wire', () => {
     });
     const failure = await run.catch((thrown: unknown) => thrown);
     expect(failure).toBeInstanceOf(WiringFailed);
-    expect((failure as WiringFailed).cause).toBe(bug);
+    // Not even as its cause, which util.inspect would print.
+    expect((failure as WiringFailed).cause).toBeUndefined();
+    expect(inspect(failure)).not.toContain(PASSWORD);
     expect((failure as WiringFailed).message).toBe('a bug in a resource, near ***');
     // The step's own hint, for what Mediaplane can't explain.
     expect((failure as WiringFailed).hint).toBeUndefined();
@@ -458,7 +465,10 @@ describe('wire', () => {
       }),
     });
     const failure = await run.catch((thrown: unknown) => thrown);
-    expect((failure as WiringFailed).message).toBe(`cannot write ${path} (EISDIR)`);
+    // Sonarr took the third: the record says so, as well as what couldn't be saved. (The
+    // fixture names each app by its id.)
+    const said = `sonarr has it, but state/resources.json could not be saved: cannot write ${path} (EISDIR)`;
+    expect((failure as WiringFailed).message).toBe(said);
     expect((failure as WiringFailed).diagnostics.map((d) => d.code)).toEqual([
       'wire.rejected',
     ]);
@@ -467,6 +477,37 @@ describe('wire', () => {
       'sonarr.second done',
       'sonarr.third failed',
     ]);
-    expect(actions[2]?.error).toBe(`cannot write ${path} (EISDIR)`);
+    expect(actions[2]?.error).toBe(said);
+  });
+
+  it("says the app took an update whose record can't be saved", async () => {
+    const home = await tempDir('mediaplane-wire-');
+    const path = join(home, RESOURCES_PATH);
+    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: 'other' });
+    const login: ResourceSpec = {
+      ...FAKE_LOGIN,
+      // Once wire has read resources.json, a folder takes its place.
+      async update(api, desired, observed) {
+        await mkdir(join(path, 'in-the-way'), { recursive: true });
+        await FAKE_LOGIN.update(api, desired, observed);
+      },
+    };
+    const { run, actions } = await wireWith(sonarr, {
+      home,
+      stack: stackOf(
+        WIRED_CATALOG.map((def) =>
+          def.id === 'sonarr'
+            ? { ...def, integration: { after: [], resources: [login] } }
+            : def,
+        ),
+      ),
+    });
+    const failure = await run.catch((thrown: unknown) => thrown);
+    const said = `sonarr has it, but state/resources.json could not be saved: cannot write ${path} (EISDIR)`;
+    expect((failure as WiringFailed).message).toBe(said);
+    expect(actions).toEqual([
+      { step: 'wire', resource: 'sonarr.login', result: 'failed', error: said },
+    ]);
+    expect(sonarr.state).toMatchObject({ user: 'admin', password: PASSWORD });
   });
 });

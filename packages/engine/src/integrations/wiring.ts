@@ -9,7 +9,7 @@ import {
 } from '../http/client';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { runbookUrl } from '../runbooks';
-import { OwnContainerUnknown, WiringRefused } from '../runtime/docker';
+import { JoinFailed, OwnContainerUnknown, WiringRefused } from '../runtime/docker';
 import type { ContainerState, RuntimeError, Runtime } from '../runtime/types';
 import type { SecretStore } from '../secrets/store';
 import { compare } from '../util/sort';
@@ -274,7 +274,8 @@ export function unreachableWarning(app: ResolvedApp, cause: AppApiError): Diagno
 
 /**
  * The error for a join of the wiring network that failed (plan, and apply's wire step):
- * a network Mediaplane refuses, a container it can't find itself in, or Docker itself.
+ * a network Mediaplane refuses, a container it can't find itself in, a join Docker
+ * refused, or Docker itself.
  */
 export function joinFailure(cause: RuntimeError, env: NodeJS.ProcessEnv): Diagnostic {
   if (cause instanceof WiringRefused) {
@@ -285,6 +286,12 @@ export function joinFailure(cause: RuntimeError, env: NodeJS.ProcessEnv): Diagno
   if (cause instanceof OwnContainerUnknown) {
     return error('wire.network', cause.message, {
       hint: `run Mediaplane with Docker, as deploy/mediaplane.compose.yaml does, or from source on the host, where it joins nothing; see ${WIRING_RUNBOOK}`,
+    });
+  }
+  // Docker read the network a moment before: advice for a Docker out of reach rarely fits.
+  if (cause instanceof JoinFailed) {
+    return error('wire.network', cause.message, {
+      hint: `the reason after the colon is Docker's. If it says "not found", the network was removed or made anew meanwhile: run apply again. Otherwise see "could not join" in ${WIRING_RUNBOOK}`,
     });
   }
   return dockerUnavailable(cause, env);

@@ -72,7 +72,9 @@ const PW = 'fake<pass&x"pw\\! ';
 const PW_FORMS = {
   'JSON-escaped': 'fake<pass&x\\"pw\\\\! ',
   'percent-encoded': 'fake%3Cpass%26x%22pw%5C!%20',
+  'percent-encoded in lowercase hex': 'fake%3cpass%26x%22pw%5c!%20',
   'form-encoded': 'fake%3Cpass%26x%22pw%5C%21+',
+  'form-encoded in lowercase hex, as .NET writes it': 'fake%3cpass%26x%22pw%5c%21+',
   'HTML-escaped': 'fake&lt;pass&amp;x&quot;pw\\! ',
 };
 
@@ -665,6 +667,22 @@ describe('createAppApi', () => {
       "answered something Mediaplane doesn't understand (at version)",
     );
     expect(error.message).not.toContain('32');
+  });
+
+  it("names a path from the app's answer without its control characters", async () => {
+    // A record's keys come from the app, and a path names them.
+    const counts = z.record(z.string(), z.number());
+    const { api } = await sonarr(() => ({
+      status: 200,
+      body: { '\u001b[2Jcleared': 'x', 'new\nline\u009b': 'y' },
+    }));
+    const error = await failure(api.get('/x', counts));
+    expect(error.message).toContain(
+      "answered something Mediaplane doesn't understand (at [2Jcleared, new line) (GET /x)",
+    );
+    const control = (char: string) =>
+      char < ' ' || (char >= '\u007f' && char <= '\u009f');
+    expect(Array.from(error.message).some(control)).toBe(false);
   });
 
   it('follows no redirect for a call with the key', async () => {

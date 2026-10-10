@@ -42,6 +42,15 @@ export class OwnContainerUnknown extends RuntimeError {
 }
 
 /**
+ * Docker refused to put Mediaplane's container on the wiring network it had just checked:
+ * the network was removed or made anew meanwhile, the socket proxy refused the call, or
+ * Docker had a reason of its own. Docker had just answered, so it is rarely out of reach.
+ */
+export class JoinFailed extends RuntimeError {
+  override readonly name: string = 'JoinFailed';
+}
+
+/**
  * Whether Mediaplane may act on a Compose project: "mediaplane" or "mediaplane-<name>",
  * never its own "mediaplane-system" (spec §7.2(2)).
  */
@@ -426,7 +435,7 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
         self,
       ]);
       if (joined.code !== 0) {
-        throw new RuntimeError(
+        throw new JoinFailed(
           `could not join the wiring network ${wiringNetwork}: ${firstLine(joined.stderr)}`,
         );
       }

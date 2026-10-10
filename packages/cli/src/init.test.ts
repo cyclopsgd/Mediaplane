@@ -704,7 +704,7 @@ describe('mediaplane init', () => {
     expect(await run(['init', '--home', home], term.io, deps())).toBe(1);
     expect(term.questions).toEqual([]);
     expect(term.stderr()).toBe(
-      `error: ${home} is not a folder, so init can't put the Mediaplane home there: pass --home <a folder of yours>\n`,
+      `error: ${home} is a file; pass a folder: --home <a folder of yours>\n`,
     );
   });
 

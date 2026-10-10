@@ -399,10 +399,11 @@ export function createAppApi(options: AppApiOptions): AppApi {
     }
     const result = schema.safeParse(data);
     if (result.success) return result.data;
-    // The paths only: a value could be a key, a password or its hash.
+    // The paths only: a value could be a key, a password or its hash. A path can name a
+    // key of the app's answer (a record's), so it is made plain too.
     const at = [
       ...new Set(
-        result.error.issues.map((issue) => issue.path.join('.') || '(the answer)'),
+        result.error.issues.map((issue) => plain(issue.path.join('.')) || '(the answer)'),
       ),
     ];
     throw failure(
@@ -472,9 +473,10 @@ function toValues(secrets: readonly string[]): Record<string, string> {
 /**
  * The ways an app may write `secret` into an answer: as it is; JSON-escaped (inside a
  * quoted string, or a message that quotes JSON); percent-encoded (a URL, a Location);
- * form-encoded (a sign-in form echoed back; a space is a +); and HTML-escaped (an error
- * page), where apps differ in how they write a quote (`&quot;`, `&#34;`, or as it is) and
- * an apostrophe (`&#39;`, `&#x27;`, or as it is).
+ * form-encoded (a sign-in form echoed back; a space is a +), both in upper- or lowercase
+ * hex (.NET's `HttpUtility.UrlEncode` writes `%5b`); and HTML-escaped (an error page),
+ * where apps differ in how they write a quote (`&quot;`, `&#34;`, or as it is) and an
+ * apostrophe (`&#39;`, `&#x27;`, or as it is).
  */
 function formsOf(secret: string): string[] {
   const html = (quote: string, apostrophe: string) =>
@@ -484,11 +486,17 @@ function formsOf(secret: string): string[] {
       .replaceAll('>', '&gt;')
       .replaceAll('"', quote)
       .replaceAll("'", apostrophe);
+  const lowerHex = (encoded: string) =>
+    encoded.replace(/%[0-9A-F]{2}/g, (escape) => escape.toLowerCase());
+  const percent = encodeURIComponent(secret);
+  const form = new URLSearchParams({ v: secret }).toString().slice(2);
   return [
     secret,
     JSON.stringify(secret).slice(1, -1),
-    encodeURIComponent(secret),
-    new URLSearchParams({ v: secret }).toString().slice(2),
+    percent,
+    lowerHex(percent),
+    form,
+    lowerHex(form),
     ...['&quot;', '&#34;', '"'].flatMap((quote) =>
       ['&#39;', '&#x27;', "'"].map((apostrophe) => html(quote, apostrophe)),
     ),
