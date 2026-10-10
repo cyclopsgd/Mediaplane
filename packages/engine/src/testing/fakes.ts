@@ -17,6 +17,7 @@ import {
   type HelperResult,
   type OneOffCommand,
   type Runtime,
+  type WiringJoin,
 } from '../runtime/types';
 
 /** A probe for a healthy host: every path is a writable directory, every port is free. */
@@ -97,6 +98,17 @@ export interface FakeRuntimeOptions {
    * FAKE_STARTED_AT.
    */
   details?: Record<string, Partial<Omit<ContainerDetails, 'id'>>>;
+  /**
+   * Each container's address on the wiring network, by ID; one left out isn't on it.
+   * None by default, so a test that forgets its fake apps gets wire.not-on-network, and
+   * never a request to a real app on this host: fakeSonarr() and fakeStackApis() give
+   * the addresses to pass.
+   */
+  addresses?: Record<string, string>;
+  /** What joinWiring answers; 'not-needed', as from source, unless the test says. */
+  join?: WiringJoin | (() => WiringJoin | Promise<WiringJoin>);
+  /** What stop answers. */
+  stop?: CommandResult;
   /** Answers the host helper, given the parsed request; without it, the helper fails. */
   hostHelper?: (
     request: HostRequest,
@@ -160,6 +172,31 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
           ...options.details?.[id],
         })),
       );
+    },
+    wiringAddresses: (ids) => {
+      record(`wiring-addresses ${ids.join(' ')}`);
+      return Promise.resolve(
+        Object.fromEntries(
+          ids.flatMap((id) => {
+            const address = options.addresses?.[id];
+            return address === undefined ? [] : [[id, address]];
+          }),
+        ),
+      );
+    },
+    // async: a throwing callback rejects like a failed docker call.
+    joinWiring: async () => {
+      record('join-wiring');
+      const join = options.join ?? 'not-needed';
+      return typeof join === 'function' ? await join() : join;
+    },
+    leaveWiring: () => {
+      record('leave-wiring');
+      return Promise.resolve();
+    },
+    stop: (services) => {
+      record(`stop ${services.join(' ')}`);
+      return Promise.resolve(options.stop ?? { ok: true });
     },
     chown: (service, path, owner) => {
       record(`chown ${service} ${String(owner.uid)}:${String(owner.gid)} ${path}`);

@@ -86,7 +86,8 @@ services:
         condition: service_healthy
 
 networks:
-  # These two containers only, and no route out: in M1, Mediaplane needs nothing but the
-  # proxy, because image pulls happen in the Docker daemon.
+  # These two containers only, and no route out: image pulls happen in the Docker daemon.
+  # To wire the apps, Mediaplane also joins the stack's own wiring network, which is
+  # internal too (ADR 0011), so it never gets a route out.
   docker-api:
     internal: true

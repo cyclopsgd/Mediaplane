@@ -62,6 +62,13 @@ export interface OneOffCommand {
   values: Record<string, string>;
 }
 
+/**
+ * What joinWiring did: joined the stack's wiring network now, found Mediaplane already
+ * on it, had nothing to do (run from source, the host reaches the network itself), or
+ * found no network yet (the stack has never been applied with one).
+ */
+export type WiringJoin = 'joined' | 'already' | 'not-needed' | 'no-network';
+
 /** The host helper's output, or why it failed; `missingSource` is a source the host lacks. */
 export type HelperResult =
   { ok: true; stdout: string } | { ok: false; error: string; missingSource?: string };
@@ -101,6 +108,29 @@ export interface Runtime {
    * unless Docker answers each ID exactly once.
    */
   inspect(ids: readonly string[]): Promise<ContainerDetails[]>;
+  /**
+   * The IPv4 address of each of the containers `ids` on the stack's wiring network
+   * (`<project>_wiring`), by ID; one that isn't on it is left out. The same refusals as
+   * `inspect`.
+   */
+  wiringAddresses(ids: readonly string[]): Promise<Record<string, string>>;
+  /**
+   * Make Mediaplane's own container a member of the stack's wiring network, when it runs
+   * from its image, and stay there. Throws a `RuntimeError` for a network that isn't
+   * internal, or isn't this project's wiring network (it never joins a network with a
+   * route out), or when it can't tell which container it runs in, or docker fails.
+   */
+  joinWiring(): Promise<WiringJoin>;
+  /**
+   * Take Mediaplane's own container off the wiring network, if it is on it, so `up` can
+   * recreate the network: Compose can't while another project's container is on it.
+   */
+  leaveWiring(): Promise<void>;
+  /** `compose stop <services>` on the written project. */
+  stop(
+    services: readonly string[],
+    values: Record<string, string>,
+  ): Promise<CommandResult>;
   /**
    * `chown -R uid:gid path` as root, in a throwaway container of `service` (`compose
    * run --rm --no-deps`), so the project's own image and mounts are used.

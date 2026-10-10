@@ -63,7 +63,12 @@ const V = '/v1.51';
  * passes on as a kill when the helper times out. socket-proxy matches the path, not the
  * query. vpn-check (Slice 3d) adds none: its probe is a `compose run` like the chown
  * helper, its `container inspect` is `GET containers/{id}/json`, and its host side is the
- * host helper.
+ * host helper. Slice 3b adds no permission either (ADR 0011): Compose attaches the apps to
+ * the wiring network when it creates them, Mediaplane joins and leaves it with the network
+ * connect and disconnect the list already allowed for an override's networks, and a
+ * stranded qBittorrent is stopped, then started by `up`: `compose stop` lists and stops
+ * containers, as `up` already does when it recreates one. test/e2e/deploy.e2e.test.ts
+ * runs the join and the leave through the real proxy.
  */
 const ENGINE_CALLS: [string, string][] = [
   ['HEAD', '/_ping'],
@@ -84,6 +89,10 @@ const ENGINE_CALLS: [string, string][] = [
   ['POST', `${V}/images/create`],
   ['POST', `${V}/networks/create`],
   ['DELETE', `${V}/containers/${ID}`],
+  // Mediaplane's own container on the stack's wiring network (Slice 3b).
+  ['GET', `${V}/networks/mediaplane_wiring`],
+  ['POST', `${V}/networks/mediaplane_wiring/connect`],
+  ['POST', `${V}/networks/mediaplane_wiring/disconnect`],
 ];
 
 /** What Compose also calls when compose.override.yaml adds a network or a named volume. */

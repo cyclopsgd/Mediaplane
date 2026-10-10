@@ -1,7 +1,8 @@
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { warning, type Diagnostic } from '../diagnostics';
 import { COMPOSE_PATH, ENV_PATH, OVERRIDE_PATH } from '../paths';
+import { WIRING_NETWORK } from '../render/compose';
 import { nodeExec, type Exec, type ExecResult } from './exec';
 import { redact } from '../util/redact';
 import {
@@ -15,6 +16,7 @@ import {
   type HelperResult,
   type OneOffCommand,
   type Runtime,
+  type WiringJoin,
 } from './types';
 
 /** Mediaplane's own deployment (spec §4.4): read-only to Mediaplane, never managed. */
@@ -77,6 +79,25 @@ export interface DockerRuntimeOptions {
   project: string;
   exec?: Exec;
   env?: NodeJS.ProcessEnv;
+  /** The ID of the container Mediaplane runs in, from its image (ownContainerId). */
+  ownId?: () => Promise<string | undefined>;
+}
+
+/**
+ * The ID of the container this process runs in: Docker mounts the container's own
+ * hostname file from /var/lib/docker/containers/<id>/, and /proc/self/mountinfo shows
+ * where it came from. Undefined outside a Docker container.
+ */
+export async function ownContainerId(
+  read: () => Promise<string> = () => readFile('/proc/self/mountinfo', 'utf8'),
+): Promise<string | undefined> {
+  let mounts: string;
+  try {
+    mounts = await read();
+  } catch {
+    return undefined;
+  }
+  return /\/containers\/([0-9a-f]{64})\/hostname /.exec(mounts)?.[1];
 }
 
 export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
@@ -130,6 +151,50 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
       '--env-file',
       join(options.home, ENV_PATH),
     ];
+  }
+
+  /** The stack's wiring network, as Compose names it. */
+  const wiringNetwork = `${options.project}_${WIRING_NETWORK}`;
+  const findOwnId = options.ownId ?? (() => ownContainerId());
+
+  async function requireOwnId(): Promise<string> {
+    const id = await findOwnId();
+    if (id === undefined) {
+      throw new RuntimeError(
+        "Mediaplane can't tell which container it runs in (no container ID in /proc/self/mountinfo), so it can't join the stack's wiring network",
+      );
+    }
+    return id;
+  }
+
+  /**
+   * The wiring network: whether it is internal, whether this project's Compose made it
+   * as its wiring network, and the IDs of the containers on it. Undefined when there is
+   * none yet.
+   */
+  async function wiringState(): Promise<
+    { internal: boolean; ours: boolean; members: string[] } | undefined
+  > {
+    const result = await docker('network inspect', [
+      'network',
+      'inspect',
+      '--format',
+      '{{.Internal}} {{index .Labels "com.docker.compose.project"}} {{index .Labels "com.docker.compose.network"}}{{range $id, $c := .Containers}} {{$id}}{{end}}',
+      wiringNetwork,
+    ]);
+    if (result.code !== 0) {
+      // Docker 28 and 29 say "network … not found"; older ones "No such network".
+      if (/not found|No such network/i.test(result.stderr)) return undefined;
+      throw new RuntimeError(
+        `docker network inspect failed: ${firstLine(result.stderr)}`,
+      );
+    }
+    const [internal, project, key, ...members] = result.stdout.trim().split(' ');
+    return {
+      internal: internal === 'true',
+      ours: project === options.project && key === WIRING_NETWORK,
+      members,
+    };
   }
 
   async function run(service: string, command: OneOffCommand): Promise<ExecResult> {
@@ -261,13 +326,7 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
     run,
 
     async inspect(ids) {
-      // Full IDs, never names or options: they come from containers(), and `{{.Id}}`
-      // prints all 64 characters, which is what callers match the answers by.
-      const bad = ids.find((id) => !/^[0-9a-f]{64}$/.test(id));
-      if (bad !== undefined) {
-        throw new RuntimeError(`not a container ID: ${JSON.stringify(bad)}`);
-      }
-      const asked = [...new Set(ids)];
+      const asked = fullIds(ids);
       if (asked.length === 0) return [];
       const result = await docker('container inspect', [
         'container',
@@ -292,6 +351,102 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
         );
       }
       return details;
+    },
+
+    async wiringAddresses(ids) {
+      const asked = fullIds(ids);
+      if (asked.length === 0) return {};
+      // The network's name is the project's, which isManagedProject has checked: no quote
+      // can end the template's string early.
+      const result = await docker('container inspect', [
+        'container',
+        'inspect',
+        '--format',
+        `{{.Id}} {{with index .NetworkSettings.Networks "${wiringNetwork}"}}{{if .IPAddress}}{{.IPAddress}}{{else}}-{{end}}{{else}}-{{end}} {{index .Config.Labels "com.docker.compose.project"}}`,
+        ...asked,
+      ]);
+      if (result.code !== 0) {
+        throw new RuntimeError(
+          `docker container inspect failed: ${firstLine(result.stderr)}`,
+        );
+      }
+      const addresses = parseAddresses(result.stdout, options.project);
+      if (
+        addresses.length !== asked.length ||
+        !asked.every((id) => addresses.filter((answer) => answer.id === id).length === 1)
+      ) {
+        throw new RuntimeError(
+          `docker container inspect did not answer once for each of the ${String(asked.length)} containers asked about`,
+        );
+      }
+      return Object.fromEntries(
+        addresses.flatMap(({ id, address }) =>
+          address === undefined ? [] : [[id, address]],
+        ),
+      );
+    },
+
+    async joinWiring(): Promise<WiringJoin> {
+      // Run from source, the host reaches every container on the network already.
+      if (!inImage(baseEnv)) return 'not-needed';
+      const network = await wiringState();
+      if (network === undefined) return 'no-network';
+      // Never a network with a route out, nor one another project made: Mediaplane's
+      // own container would then have a way out, or a way into another stack.
+      if (!network.internal || !network.ours) {
+        throw new RuntimeError(
+          network.ours
+            ? `refusing to join ${wiringNetwork}: it is not internal, so Mediaplane's container would get a route out`
+            : `refusing to join ${wiringNetwork}: it is not the wiring network of the Compose project "${options.project}"`,
+        );
+      }
+      const self = await requireOwnId();
+      if (network.members.includes(self)) return 'already';
+      const joined = await docker('network connect', [
+        'network',
+        'connect',
+        wiringNetwork,
+        self,
+      ]);
+      if (joined.code !== 0) {
+        throw new RuntimeError(
+          `could not join the wiring network ${wiringNetwork}: ${firstLine(joined.stderr)}`,
+        );
+      }
+      return 'joined';
+    },
+
+    async leaveWiring() {
+      if (!inImage(baseEnv)) return;
+      const network = await wiringState();
+      if (network === undefined) return;
+      const self = await requireOwnId();
+      if (!network.members.includes(self)) return;
+      const left = await docker('network disconnect', [
+        'network',
+        'disconnect',
+        wiringNetwork,
+        self,
+      ]);
+      if (left.code !== 0) {
+        throw new RuntimeError(
+          `could not leave the wiring network ${wiringNetwork}: ${firstLine(left.stderr)}`,
+        );
+      }
+    },
+
+    async stop(services, values) {
+      const bad = services.find((service) => !/^[a-z0-9][a-z0-9_.-]*$/.test(service));
+      if (bad !== undefined) {
+        throw new RuntimeError(`not a service name: ${JSON.stringify(bad)}`);
+      }
+      if (services.length === 0) return { ok: true };
+      const result = await docker('compose stop', [
+        ...(await projectArgs()),
+        'stop',
+        ...services,
+      ]);
+      return commandResult(result, values);
     },
 
     async chown(service, path, owner, values) {
@@ -443,6 +598,50 @@ export function parseDetails(stdout: string, project: string): ContainerDetails[
         );
       }
       return { id, networkMode, startedAt };
+    });
+}
+
+/**
+ * `ids`, each once, after checking that every one is a full container ID: never a name or
+ * an option. They come from containers(), and `{{.Id}}` prints all 64 characters, which
+ * is what callers match the answers by.
+ */
+function fullIds(ids: readonly string[]): string[] {
+  const bad = ids.find((id) => !/^[0-9a-f]{64}$/.test(id));
+  if (bad !== undefined) {
+    throw new RuntimeError(`not a container ID: ${JSON.stringify(bad)}`);
+  }
+  return [...new Set(ids)];
+}
+
+/**
+ * `docker container inspect` lines of "<id> <wiring address or -> <project>", refused as
+ * parseDetails refuses them: a line of another shape, a container of another project or
+ * of none, and an address that isn't IPv4.
+ */
+export function parseAddresses(
+  stdout: string,
+  project: string,
+): { id: string; address: string | undefined }[] {
+  return stdout
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => {
+      const match = /^([0-9a-f]{64}) (\d{1,3}(?:\.\d{1,3}){3}|-) (<no value>|\S*)$/.exec(
+        line,
+      );
+      const [, id, address, owner] = match ?? [];
+      if (id === undefined || address === undefined || owner === undefined) {
+        throw new RuntimeError(
+          'docker container inspect printed a line that is not "<id> <wiring address> <project>"',
+        );
+      }
+      if (owner !== project) {
+        throw new RuntimeError(
+          `container ${id.slice(0, 12)} is not in the Compose project "${project}"`,
+        );
+      }
+      return { id, address: address === '-' ? undefined : address };
     });
 }
 

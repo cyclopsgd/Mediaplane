@@ -6,6 +6,7 @@ import {
   createDockerRuntime,
   dockerAccessWarnings,
   isManagedProject,
+  ownContainerId,
   parseContainers,
   parseHashes,
   usesSocketProxy,
@@ -760,6 +761,221 @@ describe('createDockerRuntime', () => {
         { uid: 1000, gid: 1000 },
       ),
     ).rejects.toThrow('/mediaplane-host/0,readonly=false');
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('the wiring network', () => {
+  const home = '/opt/mediaplane';
+  const SELF = 'c'.repeat(64);
+  const IN_IMAGE = { MEDIAPLANE_IMAGE: 'mediaplane:local' };
+  const network = (internal: string, project: string, ...members: string[]) =>
+    ok(`${[`${internal} ${project} wiring`, ...members].join(' ')}\n`);
+  const runtimeWith = (
+    respond: (args: readonly string[]) => ExecResult,
+    env: NodeJS.ProcessEnv = IN_IMAGE,
+  ) => {
+    const { exec, calls } = recorder(respond);
+    const runtime = createDockerRuntime({
+      home,
+      project: 'mediaplane',
+      exec,
+      env,
+      ownId: () => Promise.resolve(SELF),
+    });
+    return { runtime, calls };
+  };
+
+  it("reads each container's address on <project>_wiring, and leaves out one not on it", async () => {
+    const other = 'e'.repeat(64);
+    const { runtime, calls } = runtimeWith(() =>
+      ok(`${SONARR_ID} 172.20.0.3 mediaplane\n${other} - mediaplane\n`),
+    );
+    expect(await runtime.wiringAddresses([SONARR_ID, other])).toEqual({
+      [SONARR_ID]: '172.20.0.3',
+    });
+    expect(calls[0]?.args).toEqual([
+      'container',
+      'inspect',
+      '--format',
+      '{{.Id}} {{with index .NetworkSettings.Networks "mediaplane_wiring"}}{{if .IPAddress}}{{.IPAddress}}{{else}}-{{end}}{{else}}-{{end}} {{index .Config.Labels "com.docker.compose.project"}}',
+      SONARR_ID,
+      other,
+    ]);
+  });
+
+  it('refuses addresses of another project, an odd line, a name, or a missing answer', async () => {
+    const answers: [string, string][] = [
+      [`${SONARR_ID} 172.20.0.3 mediaplane-system\n`, 'is not in the Compose project'],
+      [`${SONARR_ID} 172.20.0.3 <no value>\n`, 'is not in the Compose project'],
+      [`${SONARR_ID} fe80::1 mediaplane\n`, 'a line that is not "<id> <wiring address>'],
+      ['', 'did not answer once for each of the 1 containers'],
+    ];
+    for (const [stdout, message] of answers) {
+      const { runtime } = runtimeWith(() => ok(stdout));
+      await expect(runtime.wiringAddresses([SONARR_ID])).rejects.toThrow(message);
+    }
+    const { runtime, calls } = runtimeWith(() => ok(''));
+    await expect(runtime.wiringAddresses(['sonarr'])).rejects.toThrow(
+      'not a container ID: "sonarr"',
+    );
+    expect(await runtime.wiringAddresses([])).toEqual({});
+    expect(calls).toEqual([]);
+  });
+
+  it('needs no join run from source, and asks Docker nothing', async () => {
+    const { runtime, calls } = runtimeWith(() => ok(''), {});
+    expect(await runtime.joinWiring()).toBe('not-needed');
+    await runtime.leaveWiring();
+    expect(calls).toEqual([]);
+  });
+
+  it('joins its own container to the internal wiring network of its project', async () => {
+    const { runtime, calls } = runtimeWith((args) =>
+      args[1] === 'inspect' ? network('true', 'mediaplane', SONARR_ID) : ok(''),
+    );
+    expect(await runtime.joinWiring()).toBe('joined');
+    expect(calls.map((call) => call.args)).toEqual([
+      [
+        'network',
+        'inspect',
+        '--format',
+        '{{.Internal}} {{index .Labels "com.docker.compose.project"}} {{index .Labels "com.docker.compose.network"}}{{range $id, $c := .Containers}} {{$id}}{{end}}',
+        'mediaplane_wiring',
+      ],
+      ['network', 'connect', 'mediaplane_wiring', SELF],
+    ]);
+  });
+
+  it('stays joined: a second join asks Docker to change nothing', async () => {
+    const { runtime, calls } = runtimeWith(() => network('true', 'mediaplane', SELF));
+    expect(await runtime.joinWiring()).toBe('already');
+    expect(calls.map((call) => call.args[1])).toEqual(['inspect']);
+  });
+
+  it('finds no network on a stack that was never applied with one', async () => {
+    const { runtime, calls } = runtimeWith(() => ({
+      code: 1,
+      stdout: '',
+      stderr: 'Error response from daemon: network mediaplane_wiring not found\n',
+    }));
+    expect(await runtime.joinWiring()).toBe('no-network');
+    await runtime.leaveWiring();
+    expect(calls.map((call) => call.args[1])).toEqual(['inspect', 'inspect']);
+  });
+
+  it("never joins a network with a route out, or another project's", async () => {
+    for (const [answer, message] of [
+      [network('false', 'mediaplane'), 'it is not internal'],
+      [network('true', 'mediaplane-other'), 'it is not the wiring network of'],
+      [network('true', '<no value>'), 'it is not the wiring network of'],
+    ] as const) {
+      const { runtime, calls } = runtimeWith(() => answer);
+      await expect(runtime.joinWiring()).rejects.toThrow(
+        `refusing to join mediaplane_wiring: ${message}`,
+      );
+      expect(calls.map((call) => call.args[1])).toEqual(['inspect']);
+    }
+  });
+
+  it("says so when it can't tell which container it runs in", async () => {
+    const { exec } = recorder(() => network('true', 'mediaplane'));
+    const runtime = createDockerRuntime({
+      home,
+      project: 'mediaplane',
+      exec,
+      env: IN_IMAGE,
+      ownId: () => Promise.resolve(undefined),
+    });
+    await expect(runtime.joinWiring()).rejects.toThrow(
+      "Mediaplane can't tell which container it runs in",
+    );
+  });
+
+  it('explains a join or a leave Docker refused', async () => {
+    const refused = (args: readonly string[]) =>
+      args[1] === 'inspect'
+        ? network('true', 'mediaplane')
+        : { code: 1, stdout: '', stderr: 'Error response from daemon: denied\n' };
+    const { runtime } = runtimeWith(refused);
+    await expect(runtime.joinWiring()).rejects.toThrow(
+      'could not join the wiring network mediaplane_wiring: Error response from daemon: denied',
+    );
+    const member = runtimeWith((args) =>
+      args[1] === 'inspect'
+        ? network('true', 'mediaplane', SELF)
+        : { code: 1, stdout: '', stderr: 'Error response from daemon: denied\n' },
+    );
+    await expect(member.runtime.leaveWiring()).rejects.toThrow(
+      'could not leave the wiring network mediaplane_wiring',
+    );
+  });
+
+  it('leaves the network only when it is on it', async () => {
+    const on = runtimeWith((args) =>
+      args[1] === 'inspect' ? network('true', 'mediaplane', SONARR_ID, SELF) : ok(''),
+    );
+    await on.runtime.leaveWiring();
+    expect(on.calls.at(-1)?.args).toEqual([
+      'network',
+      'disconnect',
+      'mediaplane_wiring',
+      SELF,
+    ]);
+    const off = runtimeWith(() => network('true', 'mediaplane', SONARR_ID));
+    await off.runtime.leaveWiring();
+    expect(off.calls.map((call) => call.args[1])).toEqual(['inspect']);
+  });
+});
+
+describe('ownContainerId', () => {
+  it("finds the ID in where the container's hostname file comes from", async () => {
+    const id = 'c'.repeat(64);
+    const mountinfo = [
+      '1 0 0:1 / / ro,relatime - overlay overlay rw',
+      `2 1 8:1 /var/lib/docker/containers/${id}/hostname /etc/hostname rw - ext4 /dev/sda1 rw`,
+    ].join('\n');
+    expect(await ownContainerId(() => Promise.resolve(mountinfo))).toBe(id);
+  });
+
+  it('finds none outside a container, or when it cannot read the file', async () => {
+    expect(
+      await ownContainerId(() => Promise.resolve('1 0 0:1 / / rw - ext4 x rw')),
+    ).toBe(undefined);
+    expect(await ownContainerId(() => Promise.reject(new Error('ENOENT')))).toBe(
+      undefined,
+    );
+  });
+});
+
+describe('stop', () => {
+  it('stops the services on the written project, and reports a failure', async () => {
+    const dir = await tempDir('mediaplane-runtime-');
+    const { exec, calls } = recorder(() => ({
+      code: 1,
+      stdout: '',
+      stderr: 'fake-secret-value: no such service\n',
+    }));
+    const runtime = createDockerRuntime({ home: dir, project: 'mediaplane', exec });
+    expect(await runtime.stop(['qbittorrent'], { MP_X: 'fake-secret-value' })).toEqual({
+      ok: false,
+      error: '***: no such service',
+    });
+    expect(calls[0]?.args.slice(-2)).toEqual(['stop', 'qbittorrent']);
+    expect(calls[0]?.args.slice(0, 3)).toEqual(['compose', '-p', 'mediaplane']);
+  });
+
+  it('stops nothing for no service, and refuses what is not a service name', async () => {
+    const { exec, calls } = recorder(() => ok(''));
+    const runtime = createDockerRuntime({
+      home: '/opt/mediaplane',
+      project: 'mediaplane',
+      exec,
+    });
+    expect(await runtime.stop([], {})).toEqual({ ok: true });
+    await expect(runtime.stop(['--all'], {})).rejects.toThrow(
+      'not a service name: "--all"',
+    );
     expect(calls).toEqual([]);
   });
 });
