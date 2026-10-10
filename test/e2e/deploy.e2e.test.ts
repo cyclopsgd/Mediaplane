@@ -99,6 +99,65 @@ async function composeVersion(where: 'host' | 'image'): Promise<string> {
   return result.stdout.trim().replace(/^v/, '');
 }
 
+/** The networks a container is on, as "<name> internal=<true|false>", sorted. */
+async function networksOf(container: string): Promise<string[]> {
+  const result = await nodeExec(
+    'docker',
+    [
+      'inspect',
+      '--format',
+      '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}\n{{end}}',
+      container,
+    ],
+    { cwd: '/' },
+  );
+  expect(result.code, result.stderr).toBe(0);
+  const names = result.stdout.split('\n').filter((name) => name !== '');
+  const described: string[] = [];
+  for (const name of names) {
+    const network = await nodeExec(
+      'docker',
+      ['network', 'inspect', '--format', '{{.Internal}}', name],
+      { cwd: '/' },
+    );
+    described.push(`${name} internal=${network.stdout.trim()}`);
+  }
+  return described.sort();
+}
+
+/**
+ * What happened to `container` on the stack's wiring network since `since` (a Unix time,
+ * in seconds), as Docker's events say: "connect" and "disconnect", in order.
+ */
+async function wiringEvents(container: string, since: string): Promise<string[]> {
+  const id = await nodeExec('docker', ['inspect', '--format', '{{.Id}}', container], {
+    cwd: '/',
+  });
+  expect(id.code, id.stderr).toBe(0);
+  const events = await nodeExec(
+    'docker',
+    [
+      'events',
+      '--since',
+      since,
+      '--until',
+      (Date.now() / 1000 + 1).toFixed(3),
+      '--filter',
+      'type=network',
+      '--filter',
+      `network=${STACK}_wiring`,
+      '--format',
+      '{{.Action}} {{index .Actor.Attributes "container"}}',
+    ],
+    { cwd: '/' },
+  );
+  expect(events.code, events.stderr).toBe(0);
+  return events.stdout
+    .split('\n')
+    .filter((line) => line.endsWith(` ${id.stdout.trim()}`))
+    .map((line) => line.split(' ')[0] ?? '');
+}
+
 function codesIn(stdout: string): string[] {
   const parsed = JSON.parse(stdout) as { diagnostics: { code: string }[] };
   return parsed.diagnostics.map((d) => d.code);
@@ -146,32 +205,42 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
   }, 1_200_000);
 
   afterAll(async () => {
+    // Each removal runs whether or not the one before it worked (a command that times
+    // out rejects, as well as one that fails); then the test fails with what failed.
+    const failures: unknown[] = [];
+    const attempt = async (removal: () => Promise<unknown>) => {
+      try {
+        await removal();
+      } catch (failure) {
+        failures.push(failure);
+      }
+    };
+    const succeeds = async (command: Promise<ExecResult>) => {
+      const result = await command;
+      expect(result.code, result.stderr).toBe(0);
+    };
     // The deployment first: while Mediaplane's container is on the stack's wiring
     // network, the stack's down can't remove that network, and leaves it behind.
-    const systemDown =
-      override === '' ? undefined : await system('down', '--remove-orphans');
-    const stackDown = await composeDown(STACK);
-    // Compose still exits 0 when it can't remove a network: look for it.
-    const wiring = await nodeExec('docker', ['network', 'inspect', `${STACK}_wiring`], {
-      cwd: '/',
-    });
-    // Each removal runs even if one before it throws, and so do the image removal (last,
-    // once no container uses the image) and the checks.
-    try {
-      if (override !== '') await rm(dirname(override), { recursive: true, force: true });
-      if (home !== '') await removeHome(home);
-    } finally {
-      try {
-        if (data !== '') await removeAsRoot(data);
-      } finally {
-        const image = await nodeExec('docker', ['image', 'rm', TAG], { cwd: '/' });
-        expect(stackDown.code, stackDown.stderr).toBe(0);
-        if (systemDown !== undefined) expect(systemDown.code, systemDown.stderr).toBe(0);
-        expect(image.code, image.stderr).toBe(0);
-        expect(wiring.code, `${STACK}_wiring was left behind`).not.toBe(0);
-        expect(wiring.stderr).toMatch(/not found/);
-      }
+    if (override !== '') {
+      await attempt(() => succeeds(system('down', '--remove-orphans')));
     }
+    await attempt(() => succeeds(composeDown(STACK)));
+    // Compose still exits 0 when it can't remove a network: look for it.
+    await attempt(async () => {
+      const wiring = await nodeExec('docker', ['network', 'inspect', `${STACK}_wiring`], {
+        cwd: '/',
+      });
+      expect(wiring.code, `${STACK}_wiring was left behind`).not.toBe(0);
+      expect(wiring.stderr).toMatch(/not found/);
+    });
+    if (override !== '') {
+      await attempt(() => rm(dirname(override), { recursive: true, force: true }));
+    }
+    if (home !== '') await attempt(() => removeHome(home));
+    if (data !== '') await attempt(() => removeAsRoot(data));
+    // Last, once no container uses the image.
+    await attempt(() => succeeds(nodeExec('docker', ['image', 'rm', TAG], { cwd: '/' })));
+    if (failures.length > 0) throw new AggregateError(failures, 'teardown failed');
   }, 300_000);
 
   it('runs hardened, as the home owner, without the Docker socket', async () => {
@@ -196,6 +265,15 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
       { cwd: '/' },
     );
     expect(socket.code).toBe(1);
+    // It forwards no packets between its networks (the sysctl in mediaplane.compose.yaml):
+    // an app on the wiring network could otherwise reach the socket proxy through it.
+    const forwarding = await nodeExec(
+      'docker',
+      ['exec', CONTAINER, 'cat', '/proc/sys/net/ipv4/ip_forward'],
+      { cwd: '/' },
+    );
+    expect(forwarding.code, forwarding.stderr).toBe(0);
+    expect(forwarding.stdout.trim()).toBe('0');
   });
 
   it("sees the host's own ports through the host helper", async () => {
@@ -272,19 +350,75 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     expect(codesIn(again.stdout)).not.toContain('docker.no-proxy');
     expect(codesIn(again.stdout)).not.toContain('preflight.home-path');
 
+    // Slice 3b, through the proxy: Mediaplane joined the stack's wiring network to set
+    // the shared login in Sonarr, and checked qBittorrent's key there. Its container is on
+    // two networks, both internal, so it still has no route out.
+    expect(
+      (
+        JSON.parse(first.stdout) as { actions: { resource?: string; detail?: string }[] }
+      ).actions
+        .filter((a) => a.resource !== undefined)
+        .map((a) => [a.resource, a.detail]),
+    ).toEqual([['sonarr.admin', 'created']]);
+    const shown = await mediaplane('credentials', '--json', '--reveal');
+    expect(shown.code, shown.stderr).toBe(0);
+    const login = JSON.parse(shown.stdout) as { username: string; password: string };
+    const signIn = await fetch('http://127.0.0.1:8989/login', {
+      method: 'POST',
+      body: new URLSearchParams({ username: login.username, password: login.password }),
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10_000),
+    });
+    expect([signIn.status, signIn.headers.get('location')]).toEqual([302, '/']);
+    expect(await networksOf(CONTAINER)).toEqual([
+      `${STACK}_wiring internal=true`,
+      `${SYSTEM}_docker-api internal=true`,
+    ]);
+    const routes = await nodeExec('docker', ['exec', CONTAINER, 'ip', 'route'], {
+      cwd: '/',
+    });
+    expect(routes.code, routes.stderr).toBe(0);
+    expect(routes.stdout).not.toMatch(/^default /m);
+    // An apply that recreates an app steps off the network for up, and back on after:
+    // network disconnect and connect, through the proxy.
+    const since = (Date.now() / 1000).toFixed(3);
+    await writeFile(
+      join(home, 'stack.yaml'),
+      smallStack(data).replace(
+        '  sonarr: {}',
+        '  sonarr: { env: { FAKE_SETTING: "1" } }',
+      ),
+    );
+    const changed = await mediaplane('apply', '--yes', '--json');
+    expect(changed.code, changed.stdout + changed.stderr).toBe(0);
+    const recreated = JSON.parse(changed.stdout) as {
+      outcome: string;
+      plan: { containers: { service: string; action: string }[] };
+    };
+    expect(recreated.outcome).toBe('success');
+    expect(recreated.plan.containers).toContainEqual({
+      service: 'sonarr',
+      action: 'recreate',
+    });
+    expect(await networksOf(CONTAINER)).toContain(`${STACK}_wiring internal=true`);
+    expect(await wiringEvents(CONTAINER, since)).toEqual(['disconnect', 'connect']);
+    const settled = await mediaplane('plan', '--json');
+    expect(settled.code, settled.stdout).toBe(0);
+
     // Ejectable (success criterion 6): the header's command, run on the host, runs the
     // stack without Mediaplane. An empty override makes its second -f real.
     await writeFile(join(home, 'compose.override.yaml'), 'services: {}\n');
     const sameCompose =
       (await composeVersion('host')) === (await composeVersion('image'));
     const header = await readFile(join(home, COMPOSE_PATH), 'utf8');
+    const before = await runtime.containers();
     const eject = await nodeExec('docker', ejectArguments(header, STACK), { cwd: '/' });
     expect(eject.code, eject.stderr).toBe(0);
     const ejected = await runtime.containers();
     if (sameCompose) {
       // The image's own Compose made the containers, so the hashes match: nothing is
       // recreated.
-      expect(ejected.map((c) => c.id).sort()).toEqual(containers.map((c) => c.id).sort());
+      expect(ejected.map((c) => c.id).sort()).toEqual(before.map((c) => c.id).sort());
     } else {
       // Another Compose version can hash the same bind volumes differently, and then
       // recreates each container that has one, once (ADR 0010: Compose 2.38 adds

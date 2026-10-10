@@ -8,6 +8,7 @@ import {
   nodeExec,
   nodeProbe,
   readSecretStore,
+  type ApplyOptions,
   type ExecResult,
 } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
@@ -17,6 +18,7 @@ import {
   deployMediaplane,
   makeHome,
   REPO,
+  wiringMembers,
   type DeployedMediaplane,
 } from './helpers';
 import { startWireGuard, TUNNEL, type WireGuardServer } from './wireguard';
@@ -213,17 +215,28 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
         mode: 0o600,
       });
       const runtime = createDockerRuntime({ home, project: PROJECT });
-      const applied = await apply({
+      const options: ApplyOptions = {
         home,
         catalog,
         host: detectHostFacts(),
         env: process.env,
         runtime,
         probe: nodeProbe,
+        project: PROJECT,
         confirm: () => Promise.resolve(true),
-      });
+      };
+      const applied = await apply(options);
       expect(applied.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
       expect(applied.outcome).toBe('success');
+      // Verify checked qBittorrent's key through Gluetun, from the host, on the wiring
+      // network, and ran vpn-check's checks.
+      expect(applied.actions.find((a) => a.step === 'verify')?.detail).toBe(
+        "no changes remain, and qBittorrent's network is Gluetun's, with the VPN up",
+      );
+      expect(await wiringMembers(PROJECT)).toEqual({
+        internal: true,
+        members: [`${PROJECT}-gluetun-1`],
+      });
 
       // Gluetun's own health check gates qBittorrent (depends_on: service_healthy).
       const containers = await runtime.containers();
@@ -326,16 +339,59 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       expect(JSON.parse(inImage.stdout)).toMatchObject(compared);
       expect(checksOf(inImage)).toEqual(checksOf(passedJson));
       expect(itemOf(inImage, 'egress').message).toBe(bothAddresses);
+      // Gluetun's firewall lets the wiring network reach qBittorrent's port: from its
+      // image, behind the proxy, Mediaplane checks qBittorrent's key through Gluetun.
+      const planned = await deployed.mediaplane(['plan', '--json']);
+      expect(planned.code, planned.stdout + planned.stderr).toBe(0);
+      expect(JSON.parse(planned.stdout)).toMatchObject({
+        changed: false,
+        wiring: [{ resource: 'qbittorrent', action: 'unchanged' }],
+      });
       // Cleared first, so the teardown below doesn't try a failed removal again.
       const done = deployed;
       deployed = undefined;
       await done.remove();
 
+      // The owner's trial: Gluetun stopped by hand, then apply. Compose would only start
+      // Gluetun, leaving qBittorrent with the network the old one had; apply restarts
+      // qBittorrent into the new one, and verify finds the VPN up.
+      const stoppedByHand = await nodeExec('docker', ['stop', '-t', '5', gluetun], {
+        cwd: '/',
+      });
+      expect(stoppedByHand.code, stoppedByHand.stderr).toBe(0);
+      const restarted = await apply(options);
+      expect(restarted.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+      expect(restarted.outcome).toBe('success');
+      expect(restarted.plan.containers).toEqual(
+        expect.arrayContaining([
+          { service: 'gluetun', action: 'start' },
+          { service: 'qbittorrent', action: 'restart' },
+        ]),
+      );
+      expect(restarted.actions.find((a) => a.step === 'start')?.detail).toBe(
+        'every app is running and healthy; restarted qbittorrent',
+      );
+      expect(restarted.actions.find((a) => a.step === 'verify')?.result).toBe('done');
+      // Started again, not recreated: every container is the one from before.
+      expect((await runtime.containers()).map((c) => c.id).sort()).toEqual(
+        containers.map((c) => c.id).sort(),
+      );
+      const rejoined = await vpnCheck(home, {}, '--no-egress');
+      expect(rejoined.code, rejoined.stdout + rejoined.stderr).toBe(0);
+      expect(checksOf(rejoined)).toEqual([
+        'network ok',
+        'gluetun ok',
+        'control ok',
+        'control-key ok',
+        'route ok',
+      ]);
+      expect((await apply(options)).outcome).toBe('no-changes');
+
       // The tunnel goes down. At once, with the route still into tun0, vpn-check finds the
       // VPN down, and that nothing leaks: a route into the tunnel can't get out around it.
       // Gluetun's health check restarts the dead tunnel every few seconds, and for a moment
-      // in each restart the route can leave by eth0. That is not the state under test, so
-      // a `route down` caught in it is asked again; a leak never is.
+      // in each restart the route can leave by Gluetun's own network. That is not the
+      // state under test, so a `route down` caught in it is asked again; a leak never is.
       await wg.stop();
       let deadTunnel = await vpnCheck(home, toEcho);
       for (
@@ -371,7 +427,9 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
 
       // The dead tunnel above swallows packets by itself, so it can't show the firewall
       // works. Take tun0 away, as if the VPN had lost its interface: the route now
-      // leaves by eth0 (the control), and only Gluetun's firewall stands in the way.
+      // leaves by one of Gluetun's own networks (the control), and only Gluetun's
+      // firewall stands in the way. Gluetun is on two, the stack's and the wiring one,
+      // and Docker names their interfaces (eth0, eth1) in no fixed order.
       const deleted = await busyboxWith(
         { flags: ['--cap-add', 'NET_ADMIN'] },
         inGluetun,
@@ -381,14 +439,14 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
         'tun0',
       );
       expect(deleted.code, deleted.stderr).toBe(0);
-      const viaEth0 = await busybox(inGluetun, 'ip', 'route', 'get', wg.gateway);
-      expect(viaEth0.stdout, viaEth0.stderr).toMatch(/ dev eth0 /);
+      const viaEth = await busybox(inGluetun, 'ip', 'route', 'get', wg.gateway);
+      expect(viaEth.stdout, viaEth.stderr).toMatch(/ dev eth\d+ /);
       expect((await fetchFrom(inGluetun, leak)).code).not.toBe(0);
 
       // vpn-check finds the VPN down: nothing answers, so no address is known. Gluetun's
       // health check may have rebuilt tun0 by now, so it says that nothing leaks only as
-      // the route it reports allows: into the tunnel or nowhere, yes; by eth0, where only
-      // the firewall stands in the way and nothing measured it, no.
+      // the route it reports allows: into the tunnel or nowhere, yes; by Gluetun's own
+      // network, where only the firewall stands in the way and nothing measured it, no.
       const tunnelDown = await vpnCheck(home, toEcho);
       expect(tunnelDown.code, tunnelDown.stdout + tunnelDown.stderr).toBe(1);
       const reported = itemOf(tunnelDown, 'route');

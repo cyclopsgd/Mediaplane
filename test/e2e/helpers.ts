@@ -56,6 +56,29 @@ export async function makeHome(): Promise<string> {
 }
 
 /**
+ * The stack's wiring network (`<project>_wiring`): whether it is internal, and the names
+ * of the containers on it, sorted.
+ */
+export async function wiringMembers(
+  project: string,
+): Promise<{ internal: boolean; members: string[] }> {
+  const inspect = await nodeExec(
+    'docker',
+    [
+      'network',
+      'inspect',
+      '--format',
+      '{{.Internal}}{{range $id, $c := .Containers}} {{$c.Name}}{{end}}',
+      `${project}_wiring`,
+    ],
+    { cwd: '/' },
+  );
+  expect(inspect.code, inspect.stderr).toBe(0);
+  const [internal, ...members] = inspect.stdout.trim().split(' ');
+  return { internal: internal === 'true', members: members.sort() };
+}
+
+/**
  * Remove a test project's containers, network and anonymous volumes, whatever it
  * contains. `-v` is the short form of `--volumes` in Compose v2 and v5.
  */

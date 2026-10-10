@@ -1,4 +1,5 @@
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { request } from 'node:http';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
@@ -15,7 +16,14 @@ import {
 } from '@mediaplane/engine';
 import { tempDir } from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
-import { BUSYBOX, composeDown, ejectArguments, makeHome, REPO } from './helpers';
+import {
+  BUSYBOX,
+  composeDown,
+  ejectArguments,
+  makeHome,
+  REPO,
+  wiringMembers,
+} from './helpers';
 
 const PROJECT = `mediaplane-e2e-${process.pid}-apply`;
 
@@ -30,6 +38,79 @@ function mediaplane(...args: string[]): Promise<ExecResult> {
   });
 }
 
+/** What the video stack wires, in the order apply wires it (Prowlarr after the arrs). */
+const WIRED = ['radarr.admin', 'sonarr.admin', 'prowlarr.admin', 'qbittorrent'];
+
+/** Two documentation subnets (RFC 5737), to check Sonarr takes a comma-separated list. */
+const TRUSTED = ['192.0.2.0/24', '198.51.100.0/24'];
+
+/** The Servarr apps, and where their web UI is published. */
+const SERVARR = [
+  ['Sonarr', 8989],
+  ['Radarr', 7878],
+  ['Prowlarr', 9696],
+] as const;
+
+interface Resources {
+  resources: Record<string, unknown>;
+}
+
+/**
+ * The stack's wiring network is internal, and holds exactly the apps Mediaplane calls.
+ * Run from source, Mediaplane itself is not on it: the host reaches it.
+ */
+async function expectWiringNetwork(containers: readonly { service: string }[]) {
+  const wired = ['prowlarr', 'qbittorrent', 'radarr', 'sonarr'];
+  expect(await wiringMembers(PROJECT)).toEqual({
+    internal: true,
+    members: wired.map((service) => `${PROJECT}-${service}-1`),
+  });
+  expect(containers.map((c) => c.service)).toEqual(expect.arrayContaining(wired));
+}
+
+/** The shared login opens Sonarr, Radarr and Prowlarr, and a wrong password doesn't. */
+async function expectSharedLogin(login: { username: string; password: string }) {
+  for (const [name, port] of SERVARR) {
+    const signIn = (password: string) =>
+      fetch(`http://127.0.0.1:${String(port)}/login`, {
+        method: 'POST',
+        body: new URLSearchParams({ username: login.username, password }),
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10_000),
+      });
+    const right = await signIn(login.password);
+    expect([right.status, right.headers.get('location')], `${name} login`).toEqual([
+      302,
+      '/',
+    ]);
+    const wrong = await signIn('not-the-password');
+    expect(wrong.headers.get('location') ?? '', `${name} wrong login`).toContain(
+      'loginFailed',
+    );
+  }
+}
+
+/** The status an app answers with the Host header `host`, which fetch can't set. */
+function statusWithHost(port: number, host: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        host: '127.0.0.1',
+        port,
+        path: '/ping',
+        headers: { Host: host },
+        timeout: 10_000,
+      },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 /** The pre-start files every apply of the video stack plans. */
 const PRESTART = [
   'appdata/prowlarr/config.xml',
@@ -41,6 +122,11 @@ const PRESTART = [
 describe('apply against real Docker', () => {
   it('starts the video stack healthy, then has nothing left to do', async () => {
     const home = await makeHome();
+    const stack = (await readFile(join(home, 'stack.yaml'), 'utf8')).replace(
+      '  sonarr: {}',
+      `  sonarr: { env: { SONARR__SERVER__TRUSTEDNETWORKS: "${TRUSTED.join(',')}" } }`,
+    );
+    await writeFile(join(home, 'stack.yaml'), stack);
     const runtime = createDockerRuntime({ home, project: PROJECT });
     const options: ApplyOptions = {
       home,
@@ -148,6 +234,55 @@ describe('apply against real Docker', () => {
           .map((f) => [f.path, f.status]),
       ).toEqual(PRESTART.map((path) => [path, 'unchanged']));
 
+      // Slice 3b: the wiring network, and the shared login through each app's API.
+      await expectWiringNetwork(containers);
+      expect(first.plan.wiring).toEqual(
+        WIRED.map((resource) => ({ resource, action: 'after-start' })),
+      );
+      expect(
+        first.actions
+          .filter((a) => a.resource !== undefined)
+          .map((a) => [a.resource, a.detail]),
+      ).toEqual([
+        ['radarr.admin', 'created'],
+        ['sonarr.admin', 'created'],
+        ['prowlarr.admin', 'created'],
+      ]);
+      expect(second.plan.wiring.map((w) => w.action)).toEqual(
+        WIRED.map(() => 'unchanged'),
+      );
+      await expectSharedLogin(login);
+      const resources = await readFile(join(home, 'state', 'resources.json'), 'utf8');
+      expect(Object.keys((JSON.parse(resources) as Resources).resources)).toEqual([
+        'prowlarr.admin',
+        'radarr.admin',
+        'sonarr.admin',
+      ]);
+      expect(
+        resources.includes(login.password),
+        'resources.json holds the password',
+      ).toBe(false);
+      // Lost state: apply adopts what the apps hold, by name, and changes nothing in them.
+      await rm(join(home, 'state', 'resources.json'));
+      const adopted = await apply(options);
+      expect(adopted.outcome).toBe('success');
+      expect(adopted.plan.wiring.filter((w) => w.action !== 'unchanged')).toEqual([
+        { resource: 'radarr.admin', action: 'adopt' },
+        { resource: 'sonarr.admin', action: 'adopt' },
+        { resource: 'prowlarr.admin', action: 'adopt' },
+      ]);
+      expect(adopted.plan.containers.every((c) => c.action === 'unchanged')).toBe(true);
+      expect((await apply(options)).outcome).toBe('no-changes');
+      await expectSharedLogin(login);
+      // Things S1 encodes: Sonarr takes a comma-separated TRUSTEDNETWORKS, from apps.sonarr.env.
+      const sonarrKey = store.apps.sonarr?.apiKey ?? '';
+      const host = await fetch('http://127.0.0.1:8989/api/v3/config/host', {
+        headers: { 'X-Api-Key': sonarrKey },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const { trustedNetworks } = (await host.json()) as { trustedNetworks: string };
+      expect(trustedNetworks).toBe(TRUSTED.join(','));
+
       // Ejectable: the command printed in compose.yaml's header recreates nothing. An
       // empty compose.override.yaml makes the command's second -f real, and changes
       // nothing in any container's configuration.
@@ -159,6 +294,41 @@ describe('apply against real Docker', () => {
       });
       expect(eject.code, eject.stderr).toBe(0);
       expect((await runtime.containers()).map((c) => c.id).sort()).toEqual(ids);
+
+      // Without a login for local addresses, the Servarr apps take only the Host names
+      // Mediaplane lists (their service name; 127.0.0.1 and localhost always pass), and
+      // still take the shared login through their API, Host and all. Radarr gets a name
+      // of the owner's own too, as its README says: the list in apps.radarr.env, keeping
+      // radarr in it, which shows the apps split the list on commas.
+      await writeFile(
+        join(home, 'stack.yaml'),
+        stack
+          .replace(
+            'network: { bind: localhost }',
+            'network: { bind: localhost }\nsecurity: { login_on_lan: false }',
+          )
+          .replace(
+            '  radarr: {}',
+            '  radarr: { env: { RADARR__SERVER__ALLOWEDHOSTS: "radarr,other.example" } }',
+          ),
+      );
+      const lanless = await apply(options);
+      expect(lanless.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+      expect(lanless.outcome).toBe('success');
+      expect(
+        lanless.plan.containers
+          .filter((c) => c.action === 'recreate')
+          .map((c) => c.service),
+      ).toEqual(['prowlarr', 'radarr', 'sonarr']);
+      await expectSharedLogin(login);
+      expect(await statusWithHost(8989, 'sonarr:8989')).toBe(200);
+      expect(await statusWithHost(8989, '127.0.0.1:8989')).toBe(200);
+      expect(await statusWithHost(8989, 'localhost:8989')).toBe(200);
+      expect(await statusWithHost(8989, 'rebinding.example:8989')).toBe(400);
+      expect(await statusWithHost(7878, 'radarr:7878')).toBe(200);
+      expect(await statusWithHost(7878, 'other.example:7878')).toBe(200);
+      expect(await statusWithHost(7878, 'third.example:7878')).toBe(400);
+      expect((await apply(options)).outcome).toBe('no-changes');
     } finally {
       const down = await composeDown(PROJECT);
       expect(down.code, down.stderr).toBe(0);
