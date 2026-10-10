@@ -175,14 +175,14 @@ describe('mediaplane init', () => {
 
   it('asks on a terminal for what the flags leave out', async () => {
     const home = await newHome();
-    const term = capture(['plex', '/srv/media', '', 'localhost', 'n', '', '']);
+    const term = capture(['plex', '/srv/media', '', 'localhost', '', '']);
     expect(await run(['init', '--home', home], term.io, deps())).toBe(0);
+    // Nothing is published beyond this machine, so there is no login on the LAN to ask about.
     expect(term.questions).toEqual([
       'Media server, jellyfin or plex [jellyfin]: ',
       'Data folder for downloads and media [/srv/data]: ',
       'VPN provider for qBittorrent, e.g. mullvad (empty for none): ',
       'Publish the web UIs on your LAN, or keep them on this machine? lan or localhost [lan]: ',
-      'Ask for a login from your own network too? [Y/n] ',
       'Admin user name for the apps [admin]: ',
       'Generate the admin password? [Y/n] ',
     ]);
@@ -191,7 +191,7 @@ describe('mediaplane init', () => {
       media_server: 'plex',
       paths: { data: '/srv/media' },
       network: { bind: 'localhost' },
-      security: { login_on_lan: false },
+      security: { login_on_lan: true },
       admin: { username: 'admin' },
     });
     expect(config.vpn).toBeUndefined();
@@ -247,12 +247,41 @@ describe('mediaplane init', () => {
 
   it('lets you type the LAN subnet when the one it sees is not it', async () => {
     const home = await newHome();
-    const term = capture(['jellyfin', '/srv/data', '', 'lan', 'n', '10.10.0.0/16']);
+    const term = capture(['jellyfin', '/srv/data', '', 'lan', 'n', '192.168.0.0/16']);
     expect(await run(['init', '--home', home], term.io, deps())).toBe(0);
     expect(term.questions).toContain('Your LAN subnet, e.g. 192.168.1.0/24: ');
     expect((await stackIn(home)).network).toEqual({
       bind: 'lan',
-      lan_subnet: '10.10.0.0/16',
+      lan_subnet: '192.168.0.0/16',
+    });
+  });
+
+  it('asks again for a typed subnet that plan would reject, then takes a good one', async () => {
+    const home = await newHome();
+    const term = capture([
+      'jellyfin',
+      '/srv/data',
+      '',
+      'lan',
+      'n',
+      'nonsense',
+      '203.0.113.0/24',
+      '10.10.0.0/16',
+      '192.168.1.0/24',
+    ]);
+    expect(await run(['init', '--home', home], term.io, deps())).toBe(0);
+    expect(term.questions.filter((q) => q.startsWith('Your LAN subnet'))).toHaveLength(4);
+    expect(term.stderr()).toBe(
+      [
+        'That must be an IPv4 CIDR such as 192.168.1.0/24.',
+        'That must be a private (RFC 1918) subnet, inside 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16: addresses in it may skip logins and get through the VPN firewall.',
+        "None of this host's private addresses (192.168.1.10) is inside 10.10.0.0/16. Type a subnet this host is on, or nothing to have plan detect it.",
+        '',
+      ].join('\n'),
+    );
+    expect((await stackIn(home)).network).toEqual({
+      bind: 'lan',
+      lan_subnet: '192.168.1.0/24',
     });
   });
 
@@ -268,7 +297,7 @@ describe('mediaplane init', () => {
           ],
         }),
     };
-    const term = capture(['jellyfin', '/srv/data', '', 'lan', '10.10.0.0/16']);
+    const term = capture(['jellyfin', '/srv/data', '', 'lan', '172.16.0.0/16']);
     expect(await run(['init', '--home', home], term.io, { ...deps(), ...twoLans })).toBe(
       0,
     );
@@ -276,7 +305,7 @@ describe('mediaplane init', () => {
       'Publish the web UIs on your LAN, or keep them on this machine? lan or localhost [lan]: ',
       'Your LAN subnet, e.g. 192.168.1.0/24: ',
     ]);
-    expect((await stackIn(home)).network.lan_subnet).toBe('10.10.0.0/16');
+    expect((await stackIn(home)).network.lan_subnet).toBe('172.16.0.0/16');
   });
 
   it('leaves the subnet to plan when you type nothing for it', async () => {
@@ -288,16 +317,33 @@ describe('mediaplane init', () => {
 
   it("never offers a cloud VM's own subnet as your LAN: you type it", async () => {
     const home = await newHome();
-    const term = capture(['jellyfin', '/srv/data', '', 'lan', '10.10.0.0/16']);
+    const term = capture(['jellyfin', '/srv/data', '', 'lan', '192.168.0.0/16']);
     expect(await run(['init', '--home', home], term.io, deps('Oracle Cloud'))).toBe(0);
+    // Worded as plan's hint is, so it doesn't invite the LAN at home.
     expect(term.questions.slice(3, 5)).toEqual([
       'Publish the web UIs on your LAN, or keep them on this machine? lan or localhost [localhost]: ',
-      'Your LAN subnet, e.g. 192.168.1.0/24: ',
+      'The private network to publish on, e.g. 10.0.0.0/24: ',
     ]);
     expect((await stackIn(home)).network).toEqual({
       bind: 'lan',
-      lan_subnet: '10.10.0.0/16',
+      lan_subnet: '192.168.0.0/16',
     });
+  });
+
+  it('tells a cloud VM to type a subnet this host is on, and not to leave it to plan', async () => {
+    const home = await newHome();
+    const term = capture([
+      'jellyfin',
+      '/srv/data',
+      '',
+      'lan',
+      '10.10.0.0/16',
+      '192.168.1.0/24',
+    ]);
+    expect(await run(['init', '--home', home], term.io, deps('Oracle Cloud'))).toBe(0);
+    expect(term.stderr()).toBe(
+      "None of this host's private addresses (192.168.1.10) is inside 10.10.0.0/16. Type a subnet this host is on.\n",
+    );
   });
 
   it('takes every answer as a flag when it cannot ask', async () => {
@@ -331,6 +377,24 @@ describe('mediaplane init', () => {
     });
   });
 
+  it('takes the media server and the bind in any case', async () => {
+    const home = await newHome();
+    const args = [
+      'init',
+      '--home',
+      home,
+      '--media-server',
+      'Plex',
+      '--data',
+      '/srv/data',
+    ];
+    expect(await run([...args, '--bind', 'LocalHost'], capture().io, deps())).toBe(0);
+    expect(await stackIn(home)).toMatchObject({
+      media_server: 'plex',
+      network: { bind: 'localhost' },
+    });
+  });
+
   it('writes no LAN subnet for --bind lan alone, so plan detects it', async () => {
     const home = await newHome();
     const args = [
@@ -348,7 +412,7 @@ describe('mediaplane init', () => {
 
   it('takes the flags it is given and asks only for the rest', async () => {
     const home = await newHome();
-    const term = capture(['', 'y']);
+    const term = capture(['']);
     const args = [
       'init',
       '--home',
@@ -371,25 +435,47 @@ describe('mediaplane init', () => {
     expect(term.questions).toEqual(['Generate the admin password? [Y/n] ']);
     expect(await stackIn(home)).toMatchObject({
       network: { bind: 'localhost' },
+      security: { login_on_lan: false },
       vpn: { addresses: '10.64.0.2/32' },
       admin: { username: 'media-admin' },
     });
   });
 
-  it.each([
+  const OUTSIDE_THE_HOME =
+    '--admin-password-file must be a path inside the Mediaplane home, such as secrets/admin-password';
+  const REFUSALS: [string[], string][] = [
     [['--bind', 'all'], '--bind must be lan or localhost, not "all"'],
+    [['--media-server', 'emby'], '--media-server must be jellyfin or plex, not "emby"'],
+    [['--data', 'relative/path'], 'paths.data: must be an absolute path'],
+    [['--admin-password-file', '/etc/fake-password'], OUTSIDE_THE_HOME],
+    [['--admin-password-file', '../fake-password'], OUTSIDE_THE_HOME],
+    [['--admin-password-file', 'secrets/../../fake-password'], OUTSIDE_THE_HOME],
+    // The home itself, and a folder, are not a file.
+    [['--admin-password-file', '.'], OUTSIDE_THE_HOME],
+    [['--admin-password-file', 'secrets/..'], OUTSIDE_THE_HOME],
+    [['--admin-password-file', 'secrets/'], OUTSIDE_THE_HOME],
+    [['--admin-password-file', 'secrets/.'], OUTSIDE_THE_HOME],
+    [['--admin-password-file', ''], OUTSIDE_THE_HOME],
     [
-      ['--admin-password-file', '/etc/fake-password'],
-      '--admin-password-file must be a path inside the Mediaplane home, such as secrets/admin-password',
+      ['--admin-password-file', 'stack.yaml'],
+      '--admin-password-file must not be stack.yaml, which holds the stack itself',
     ],
     [
-      ['--admin-password-file', '../fake-password'],
-      '--admin-password-file must be a path inside the Mediaplane home, such as secrets/admin-password',
+      ['--admin-password-file', './secrets/../stack.yaml'],
+      '--admin-password-file must not be stack.yaml, which holds the stack itself',
     ],
     [['--admin-user', 'ad'], 'admin.username: must be 3 to 32 letters, digits'],
+    [['--lan-subnet', 'nonsense'], 'network.lan_subnet: must be an IPv4 CIDR'],
     [['--bind', 'lan', '--lan-subnet', '203.0.113.0/24'], 'a private (RFC 1918) subnet'],
+    [
+      // Valid and private, but plan keeps only the host's addresses inside it: none here.
+      ['--bind', 'lan', '--lan-subnet', '10.10.0.0/16'],
+      'network.bind is "lan", but none of this host\'s private addresses (192.168.1.10) is inside 10.10.0.0/16; give --lan-subnet a subnet this host is on, or use --bind localhost',
+    ],
     [['--vpn-addresses', '10.64.0.2/32'], '--vpn-addresses needs --vpn-provider'],
-  ])('refuses %j, and writes nothing', async (extra, message) => {
+  ];
+
+  it.each(REFUSALS)('refuses %j, and writes nothing', async (extra, message) => {
     const home = await newHome();
     const term = capture();
     const args = [
@@ -404,6 +490,120 @@ describe('mediaplane init', () => {
     expect(await run([...args, ...extra], term.io, deps())).toBe(1);
     expect(term.stderr()).toContain(message);
     await expect(stat(join(home, 'stack.yaml'))).rejects.toThrow();
+  });
+
+  it.each(REFUSALS.filter(([extra]) => extra[0] !== '--vpn-addresses'))(
+    'refuses %j before it asks anything on a terminal',
+    async (extra, message) => {
+      const home = await newHome();
+      const term = capture([]);
+      const args = ['init', '--home', home, ...extra];
+      expect(await run(args, term.io, deps())).toBe(1);
+      expect(term.questions).toEqual([]);
+      expect(term.stderr()).toContain(message);
+      await expect(stat(join(home, 'stack.yaml'))).rejects.toThrow();
+    },
+  );
+
+  it('refuses --vpn-addresses without a provider as soon as the provider is answered', async () => {
+    const home = await newHome();
+    const term = capture(['jellyfin', '/srv/data', '']);
+    const args = ['init', '--home', home, '--vpn-addresses', '10.64.0.2/32'];
+    expect(await run(args, term.io, deps())).toBe(1);
+    expect(term.questions).toHaveLength(3);
+    expect(term.stderr()).toBe('error: --vpn-addresses needs --vpn-provider\n');
+  });
+
+  it('refuses a --lan-subnet that plan would reject when the LAN is chosen on the terminal', async () => {
+    const home = await newHome();
+    const term = capture(['jellyfin', '/srv/data', '', 'lan']);
+    const args = ['init', '--home', home, '--lan-subnet', '10.10.0.0/16'];
+    expect(await run(args, term.io, deps())).toBe(1);
+    // A flag is not asked again, so init stops at the answer that makes it matter.
+    expect(term.questions).toHaveLength(4);
+    expect(term.stderr()).toContain(
+      'network.bind is "lan", but none of this host\'s private addresses (192.168.1.10) is inside 10.10.0.0/16',
+    );
+    await expect(stat(join(home, 'stack.yaml'))).rejects.toThrow();
+  });
+
+  it('takes a --lan-subnet that plan would reject when the web UIs stay on localhost', async () => {
+    const home = await newHome();
+    const args = [
+      'init',
+      '--home',
+      home,
+      '--media-server',
+      'jellyfin',
+      '--data',
+      '/srv/data',
+    ];
+    const flags = [...args, '--bind', 'localhost', '--lan-subnet', '10.10.0.0/16'];
+    expect(await run(flags, capture().io, deps())).toBe(0);
+    expect((await stackIn(home)).network).toEqual({
+      bind: 'localhost',
+      lan_subnet: '10.10.0.0/16',
+    });
+  });
+
+  it('asks again for what you typed that is not right, naming the question and not a flag', async () => {
+    const home = await newHome();
+    const term = capture([
+      'emby',
+      'PLEX',
+      'relative/path',
+      '/srv/media',
+      '',
+      'everywhere',
+      'LAN',
+      'y',
+      '',
+      'ad',
+      'media-admin',
+      'n',
+      '/etc/fake-password',
+      'stack.yaml',
+      'secrets/',
+      'secrets/my-password',
+    ]);
+    expect(await run(['init', '--home', home], term.io, deps())).toBe(0);
+    expect(term.questions).toEqual([
+      'Media server, jellyfin or plex [jellyfin]: ',
+      'Media server, jellyfin or plex [jellyfin]: ',
+      'Data folder for downloads and media [/srv/data]: ',
+      'Data folder for downloads and media [/srv/data]: ',
+      'VPN provider for qBittorrent, e.g. mullvad (empty for none): ',
+      'Publish the web UIs on your LAN, or keep them on this machine? lan or localhost [lan]: ',
+      'Publish the web UIs on your LAN, or keep them on this machine? lan or localhost [lan]: ',
+      'Your LAN looks like 192.168.1.0/24. Use it? [Y/n] ',
+      'Ask for a login from your own network too? [Y/n] ',
+      'Admin user name for the apps [admin]: ',
+      'Admin user name for the apps [admin]: ',
+      'Generate the admin password? [Y/n] ',
+      'File holding your password, inside the Mediaplane home [secrets/admin-password]: ',
+      'File holding your password, inside the Mediaplane home [secrets/admin-password]: ',
+      'File holding your password, inside the Mediaplane home [secrets/admin-password]: ',
+      'File holding your password, inside the Mediaplane home [secrets/admin-password]: ',
+    ]);
+    expect(term.stderr()).toBe(
+      [
+        'Please answer jellyfin or plex.',
+        'That must be an absolute path (start with /).',
+        'Please answer lan or localhost.',
+        'That must be 3 to 32 letters, digits, ".", "_" or "-".',
+        'That must be a path inside the Mediaplane home, such as secrets/admin-password.',
+        'That must not be stack.yaml, which holds the stack itself.',
+        'That must be a path inside the Mediaplane home, such as secrets/admin-password.',
+        '',
+      ].join('\n'),
+    );
+    expect(term.stderr()).not.toContain('--');
+    expect(await stackIn(home)).toMatchObject({
+      media_server: 'plex',
+      paths: { data: '/srv/media' },
+      network: { bind: 'lan', lan_subnet: '192.168.1.0/24' },
+      admin: { username: 'media-admin', password: { file: 'secrets/my-password' } },
+    });
   });
 
   it('refuses --bind lan on a cloud VM without --lan-subnet', async () => {
