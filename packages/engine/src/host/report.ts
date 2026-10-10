@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { z } from 'zod';
 import { portKey } from '../preflight/checks';
 import { nodeProbe, type HostProbe, type PathStat } from '../preflight/probe';
@@ -57,7 +58,11 @@ const hostReportSchema = z.strictObject({
   ports: z.record(z.string(), z.boolean().nullable()),
   egress: z
     .union([
-      z.strictObject({ ok: z.literal(true), address: z.string() }),
+      z.strictObject({
+        ok: z.literal(true),
+        // A stale or broken helper must not hand the engine something that isn't one.
+        address: z.string().refine((a) => isIP(a) !== 0, 'must be an IP address'),
+      }),
       z.strictObject({ ok: z.literal(false), error: z.string() }),
     ])
     .optional(),

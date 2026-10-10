@@ -142,6 +142,22 @@ describe('parseHostReport', () => {
     expect(parseHostReport(JSON.stringify(report))).toEqual(report);
   });
 
+  it('refuses an egress address that is not an address', () => {
+    const report = {
+      schema: HOST_REPORT_SCHEMA,
+      stat: {},
+      free: {},
+      ports: {},
+      egress: { ok: true, address: '<html>blocked</html>' },
+    };
+    expect(() => parseHostReport(JSON.stringify(report))).toThrow(HelperError);
+    expect(() => parseHostReport(JSON.stringify(report))).toThrow(
+      'the host helper printed a report Mediaplane cannot read',
+    );
+    const good = { ...report, egress: { ok: true, address: '2001:db8::7' } };
+    expect(parseHostReport(JSON.stringify(good))).toEqual(good);
+  });
+
   it('refuses a report from another version, or none at all', () => {
     const other = JSON.stringify({ schema: 'mediaplane.host-report/v9' });
     expect(() => parseHostReport(other)).toThrow(HelperError);

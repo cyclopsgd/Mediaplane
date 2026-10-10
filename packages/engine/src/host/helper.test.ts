@@ -196,6 +196,40 @@ describe('helperEgress', () => {
       error:
         'the host helper image "--privileged" is not an image name: it must not start with "-"',
     });
+    // A helper that fails with something that is not an Error is named all the same.
+    const odd = fakeRuntime({
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+      hostHelper: () => Promise.reject('fake: not an error'),
+    });
+    expect(await helperEgress({ runtime: odd, image: IMAGE, user: USER }, TRACE)).toEqual(
+      {
+        ok: false,
+        error: 'fake: not an error',
+      },
+    );
+  });
+
+  it('refuses an address that is not one, as a failed answer', async () => {
+    const stale = fakeRuntime({
+      hostHelper: () => ({
+        ok: true,
+        stdout: JSON.stringify({
+          schema: HOST_REPORT_SCHEMA,
+          stat: {},
+          free: {},
+          ports: {},
+          egress: { ok: true, address: 'not-an-address' },
+        }),
+      }),
+    });
+    expect(
+      await helperEgress({ runtime: stale, image: IMAGE, user: USER }, TRACE),
+    ).toEqual({
+      ok: false,
+      error: expect.stringContaining(
+        'the host helper printed a report Mediaplane cannot read',
+      ) as unknown,
+    });
   });
 });
 

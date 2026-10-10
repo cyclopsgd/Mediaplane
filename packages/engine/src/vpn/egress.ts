@@ -26,22 +26,52 @@ export function egressAddress(answer: string): string | undefined {
   return isIP(candidate) === 0 ? undefined : candidate;
 }
 
-/** Whether `url` can be an egress check's: an http or https URL. */
+/**
+ * Whether `url` can be an egress check's: an http or https URL, without a user name or
+ * password (fetch refuses those, and its error would repeat the password).
+ */
 export function isEgressUrl(url: string): boolean {
   try {
-    const { protocol } = new URL(url);
-    return protocol === 'http:' || protocol === 'https:';
+    const { protocol, username, password } = new URL(url);
+    return (
+      (protocol === 'http:' || protocol === 'https:') &&
+      username === '' &&
+      password === ''
+    );
   } catch {
     return false;
   }
 }
 
-/** Ask the IP-echo service at `url` which address this machine comes from. */
+/**
+ * The setting that would send Node's own fetch through HTTP(S)_PROXY (Node 24), or
+ * undefined. The address it sees would then be the proxy's, not this host's, so a leak
+ * would read as a pass.
+ */
+function envProxySetting(env: NodeJS.ProcessEnv): string | undefined {
+  const use = env.NODE_USE_ENV_PROXY ?? '';
+  if (use !== '' && use !== '0') return 'NODE_USE_ENV_PROXY';
+  if ((env.NODE_OPTIONS ?? '').includes('--use-env-proxy')) return '--use-env-proxy';
+  return undefined;
+}
+
+/**
+ * Ask the IP-echo service at `url` which address this machine comes from. Refuses to ask
+ * when `env` (the process's) makes fetch use a proxy: the answer would not be this host's.
+ */
 export async function fetchEgress(
   url: string,
   fetchFn: typeof fetch = fetch,
   timeoutMs: number = EGRESS_TIMEOUT_MS,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<EgressResult> {
+  const proxy = envProxySetting(env);
+  if (proxy !== undefined) {
+    return {
+      ok: false,
+      error: `the request would go through a proxy (${proxy}), so it can't see this host's own address`,
+    };
+  }
   let answer: string;
   try {
     const response = await fetchFn(url, {
