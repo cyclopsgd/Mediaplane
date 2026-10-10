@@ -127,6 +127,22 @@ function options(
   };
 }
 
+/** `docker`, with `service` stopped by hand until up starts it again. */
+function stoppedUntilUp(docker: Runtime, service: string): Runtime {
+  let started = false;
+  return {
+    ...docker,
+    containers: async () =>
+      (await docker.containers()).map((c) =>
+        !started && c.service === service ? { ...c, state: 'exited', health: '' } : c,
+      ),
+    up: (seconds, values) => {
+      started = true;
+      return docker.up(seconds, values);
+    },
+  };
+}
+
 describe('apply', () => {
   it('generates keys, writes files, pulls, starts, verifies and records', async () => {
     const home = await makeHome();
@@ -253,8 +269,9 @@ describe('apply', () => {
     const result = await apply(options(home, starting));
     expect(result.outcome).toBe('success');
     expect(result.plan.unhealthy).toEqual(['sonarr (starting)']);
-    // compose.yaml was already current, so only .env was written.
-    expect(result.actions[1]?.detail).toBe('wrote generated/.env');
+    // compose.yaml and .env were already current, as plan said: nothing was written.
+    expect(result.plan.files.filter((f) => f.status !== 'unchanged')).toEqual([]);
+    expect(result.actions[1]?.detail).toBe('none needed');
     expect(result.actions.map((a) => [a.step, a.result])).toEqual([
       ['keys', 'done'],
       ['files', 'done'],
@@ -520,7 +537,7 @@ describe('apply', () => {
     expect(result.diagnostics.find((d) => d.code === 'apply.start-failed')).toMatchObject(
       {
         message: 'docker compose up failed: fake: port is already allocated',
-        hint: 'run "mediaplane status" to see each app, fix the cause, then run apply again',
+        hint: 'run "mediaplane status" to see each app, fix the cause, then run apply again; see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/app-wont-start.md',
       },
     );
   });
@@ -638,6 +655,49 @@ describe('apply', () => {
     await expect(stat(join(home, 'generated'))).rejects.toThrow();
   });
 
+  it('writes no file on an apply that only starts a stopped app, as plan said', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    expect((await apply(options(home, docker))).outcome).toBe('success');
+    const env = join(home, ENV_PATH);
+    const before = await stat(env);
+    // Plan's only change is to start Gluetun.
+    const result = await apply(options(home, stoppedUntilUp(docker, 'gluetun')));
+    expect(result.outcome).toBe('success');
+    expect(result.plan.containers).toContainEqual({
+      service: 'gluetun',
+      action: 'start',
+    });
+    expect(result.plan.files.filter((f) => f.status !== 'unchanged')).toEqual([]);
+    expect(result.actions[1]).toEqual({
+      step: 'files',
+      result: 'done',
+      detail: 'none needed',
+    });
+    const after = await stat(env);
+    expect([after.ino, after.mtimeMs]).toEqual([before.ino, before.mtimeMs]);
+    expect(await modeOf(env)).toBe(0o600);
+  });
+
+  it("rewrites an unchanged .env it can't make private, as apply did before", async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    expect((await apply(options(home, docker))).outcome).toBe('success');
+    const env = join(home, ENV_PATH);
+    const before = await stat(env);
+    // Another user's file, as after a run with sudo: chmod() is refused, a rename isn't.
+    refuseChmodOf(env);
+    const result = await apply(options(home, stoppedUntilUp(docker, 'gluetun')));
+    expect(result.outcome).toBe('success');
+    expect(result.actions[1]).toEqual({
+      step: 'files',
+      result: 'done',
+      detail: 'wrote generated/.env',
+    });
+    expect((await stat(env)).ino).not.toBe(before.ino);
+    expect(await modeOf(env)).toBe(0o600);
+  });
+
   it('lets an unexpected error taking the lock through', async () => {
     const home = await makeHome();
     // A file where the state folder should be: this is not "another apply is running".
@@ -652,13 +712,12 @@ describe('apply', () => {
     await expect(stat(join(home, COMPOSE_PREV_PATH))).rejects.toThrow();
     const first = await readFile(join(home, COMPOSE_PATH), 'utf8');
 
-    // Prowlarr brings Byparr, which has no appdata folder.
+    // Prowlarr brings Byparr, which has no appdata folder. Neither has a secret, so .env
+    // stays as it was.
     await writeFile(join(home, 'stack.yaml'), `${STACK}  prowlarr: {}\n`);
     const second = await apply(options(home, docker));
     expect(second.outcome).toBe('success');
-    expect(second.actions[1]?.detail).toBe(
-      'wrote generated/compose.yaml and generated/.env',
-    );
+    expect(second.actions[1]?.detail).toBe('wrote generated/compose.yaml');
     expect(await readFile(join(home, COMPOSE_PREV_PATH), 'utf8')).toBe(first);
     expect(await readFile(join(home, COMPOSE_PATH), 'utf8')).not.toBe(first);
     expect(await modeOf(join(home, COMPOSE_PREV_PATH))).toBe(0o644);

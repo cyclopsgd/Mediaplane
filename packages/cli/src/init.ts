@@ -12,6 +12,7 @@ import {
   type HostFacts,
   type StarterAnswers,
 } from '@mediaplane/engine';
+import { dataSteps, exists, homeProblem, type DataFolder } from './folders';
 import { printDiagnostics, printError } from './output';
 import { PromptCancelled } from './prompt';
 import type { Io } from './run';
@@ -41,20 +42,26 @@ export async function init(
   options: InitOptions,
   io: Io,
   host: HostFacts,
+  dataFolder: (
+    path: string,
+    home: string,
+    user: { uid: number; gid: number },
+  ) => Promise<DataFolder>,
 ): Promise<number> {
   const asJson = options.json === true;
   const home = resolve(options.home);
   const stackPath = join(home, STACK_PATH);
-  const answers = await gatherAnswers(options, io, host).catch((cause: unknown) => {
+  const gathered = await gatherAnswers(options, io, host).catch((cause: unknown) => {
     if (cause instanceof PromptCancelled) {
       return 'init stopped at a question; nothing was written';
     }
     throw cause;
   });
-  if (typeof answers === 'string') {
-    printError(answers, { json: asJson }, io);
+  if (typeof gathered === 'string') {
+    printError(gathered, { json: asJson }, io);
     return 1;
   }
+  const { starter: answers, wireguardKey } = gathered;
   const text = starterStack(answers);
   const parsed = parseConfig(text);
   if (!parsed.ok) {
@@ -74,11 +81,17 @@ export async function init(
   const secrets = join(home, 'secrets');
   await mkdir(secrets, { recursive: true });
   await chmod(secrets, 0o700);
+  const keyPath = join(home, WG_KEY_FILE);
+  // Only if absent too: a key file of yours that appeared meanwhile stays.
+  const savedKey =
+    wireguardKey !== undefined &&
+    (await writeFileExclusive(keyPath, `${wireguardKey}\n`, 0o600));
+  const data = await dataFolder(answers.dataPath, home, answers.user);
 
   const next = [
-    ...(answers.vpnProvider === undefined
+    ...(answers.vpnProvider === undefined || savedKey
       ? []
-      : [`Put your VPN's WireGuard private key in ${join(secrets, 'wg.key')}.`]),
+      : [`Put your VPN's WireGuard private key in ${keyPath}.`]),
     ...(answers.mediaServer === 'plex'
       ? [`Save your Plex token in ${join(secrets, 'plex-token')}.`]
       : []),
@@ -87,7 +100,7 @@ export async function init(
       : [
           `Put your admin password, at least 12 characters, in ${join(home, answers.adminPasswordFile)}.`,
         ]),
-    `Create ${answers.dataPath} and make sure uid ${String(answers.user.uid)} (gid ${String(answers.user.gid)}) can write to it.`,
+    ...dataSteps(answers.dataPath, data, answers.user),
     'Run "mediaplane plan" to check everything, then "mediaplane apply".',
     'Then "mediaplane credentials" shows the admin login and where each app is.',
   ];
@@ -98,6 +111,10 @@ export async function init(
     return 0;
   }
   io.stdout(`Wrote ${stackPath}.\n`);
+  if (savedKey) io.stdout(`Saved your WireGuard private key in ${keyPath}.\n`);
+  if (data === 'created') {
+    io.stdout(`Created ${answers.dataPath} for your downloads and media.\n`);
+  }
   if (host.cloud !== undefined && answers.bind === 'localhost') {
     io.stdout(
       `This looks like a VM on ${host.cloud}, so the web UIs stay on localhost (network.bind).\n`,
@@ -130,38 +147,55 @@ interface Flags {
   adminPasswordFile: string | undefined;
 }
 
+/** What init asks for: the starter's answers, and a WireGuard key pasted on a terminal. */
+interface Answers {
+  starter: StarterAnswers;
+  /** Held in memory until it is written to secrets/wg.key: never printed or logged. */
+  wireguardKey: string | undefined;
+}
+
 async function gatherAnswers(
   options: InitOptions,
   io: Io,
   host: HostFacts,
-): Promise<StarterAnswers | string> {
+): Promise<Answers | string> {
   const ask = options.json === true ? undefined : io.ask;
+  const askSecret = ask === undefined ? undefined : io.askSecret;
   const defaultBind: Bind = host.cloud === undefined ? 'lan' : 'localhost';
   // Every flag that needs no question is checked first, so a typo costs no answers.
-  const flags = readFlags(options, host, defaultBind, ask !== undefined);
+  const flags = await readFlags(options, host, defaultBind, ask !== undefined);
   if (typeof flags === 'string') return flags;
   let { mediaServer, dataPath, vpnProvider, vpnAddresses, bind, lanSubnet } = flags;
   let { adminUser, adminPasswordFile } = flags;
   let loginOnLan = options.loginOnLan;
+  let wireguardKey: string | undefined;
   if (ask !== undefined) {
-    mediaServer ??= await askUntil(
-      ask,
-      io,
-      'Media server, jellyfin or plex [jellyfin]: ',
-      (answer) => {
-        const choice = answer.toLowerCase() || 'jellyfin';
-        return isMediaServer(choice)
-          ? { value: choice }
-          : { problem: 'Please answer jellyfin or plex.' };
-      },
-    );
-    dataPath ??= await askUntil(
-      ask,
-      io,
-      'Data folder for downloads and media [/srv/data]: ',
-      (answer) => schemaCheck({ dataPath: answer || '/srv/data' }, answer || '/srv/data'),
-    );
+    if (mediaServer === undefined) {
+      explain(io, NOTES.mediaServer);
+      mediaServer = await askUntil(
+        ask,
+        io,
+        'Media server, jellyfin or plex [jellyfin]: ',
+        (answer) => {
+          const choice = answer.toLowerCase() || 'jellyfin';
+          return isMediaServer(choice)
+            ? { value: choice }
+            : { problem: 'Please answer jellyfin or plex.' };
+        },
+      );
+    }
+    if (dataPath === undefined) {
+      explain(io, NOTES.dataPath);
+      dataPath = await askUntil(
+        ask,
+        io,
+        'Data folder for downloads and media [/srv/data]: ',
+        (answer) =>
+          schemaCheck({ dataPath: answer || '/srv/data' }, answer || '/srv/data'),
+      );
+    }
     if (vpnProvider === undefined) {
+      explain(io, NOTES.vpnProvider);
       const answer = (
         await ask('VPN provider for qBittorrent, e.g. mullvad (empty for none): ')
       ).trim();
@@ -171,6 +205,7 @@ async function gatherAnswers(
       return '--vpn-addresses needs --vpn-provider';
     }
     if (vpnProvider !== undefined && vpnAddresses === undefined) {
+      explain(io, NOTES.vpnAddresses);
       vpnAddresses = await askUntil<string | undefined>(
         ask,
         io,
@@ -178,18 +213,44 @@ async function gatherAnswers(
         (answer) => (answer === '' ? { value: undefined } : addressesCheck(answer)),
       );
     }
-    bind ??= await askUntil(
-      ask,
-      io,
-      `Publish the web UIs on your LAN, or keep them on this machine? lan or localhost [${defaultBind}]: `,
-      (answer) => {
-        const choice = answer.toLowerCase() || defaultBind;
-        return isBind(choice)
-          ? { value: choice }
-          : { problem: 'Please answer lan or localhost.' };
-      },
-    );
+    // Pasted, never shown: the key stays off the screen, the scrollback and the logs.
+    if (
+      vpnProvider !== undefined &&
+      askSecret !== undefined &&
+      !(await exists(join(resolve(options.home), WG_KEY_FILE)))
+    ) {
+      explain(io, NOTES.wireguardKey);
+      wireguardKey = await askUntil<string | undefined>(
+        askSecret,
+        io,
+        'Paste your WireGuard private key (nothing shows as you paste; Enter to do it later): ',
+        (answer) =>
+          answer === ''
+            ? { value: undefined }
+            : isWireguardKey(answer)
+              ? { value: answer }
+              : {
+                  problem:
+                    'That is not a WireGuard private key, which is 44 characters of base64 ending in "=". Paste it again, or press Enter to do it later.',
+                },
+      );
+    }
+    if (bind === undefined) {
+      explain(io, NOTES.bind);
+      bind = await askUntil(
+        ask,
+        io,
+        `Publish the web UIs on your LAN, or keep them on this machine? lan or localhost [${defaultBind}]: `,
+        (answer) => {
+          const choice = answer.toLowerCase() || defaultBind;
+          return isBind(choice)
+            ? { value: choice }
+            : { problem: 'Please answer lan or localhost.' };
+        },
+      );
+    }
     if (bind === 'lan' && lanSubnet === undefined) {
+      explain(io, NOTES.lanSubnet);
       lanSubnet = await askLanSubnet(ask, io, host);
     }
     // A subnet given as a flag can't be re-asked, so it is refused. Known bind refused it
@@ -200,32 +261,37 @@ async function gatherAnswers(
     }
     // Only a LAN has a network of your own to ask about: on localhost nothing is published.
     if (bind === 'lan' && loginOnLan) {
+      explain(io, NOTES.loginOnLan);
       loginOnLan = !/^n/i.test(
         (await ask('Ask for a login from your own network too? [Y/n] ')).trim(),
       );
     }
-    adminUser ??= await askUntil(
-      ask,
-      io,
-      'Admin user name for the apps [admin]: ',
-      (answer) => schemaCheck({ adminUser: answer || 'admin' }, answer || 'admin'),
-    );
-    if (
-      adminPasswordFile === undefined &&
-      /^n/i.test((await ask('Generate the admin password? [Y/n] ')).trim())
-    ) {
-      adminPasswordFile = await askUntil(
+    if (adminUser === undefined) {
+      explain(io, NOTES.adminUser);
+      adminUser = await askUntil(
         ask,
         io,
-        `File holding your password, inside the Mediaplane home [${DEFAULT_PASSWORD_FILE}]: `,
-        (answer) => {
-          const file = answer || DEFAULT_PASSWORD_FILE;
-          const problem = passwordFileProblem(file);
-          return problem === undefined
-            ? { value: file }
-            : { problem: `That ${problem}.` };
-        },
+        'Admin user name for the apps [admin]: ',
+        (answer) => schemaCheck({ adminUser: answer || 'admin' }, answer || 'admin'),
       );
+    }
+    if (adminPasswordFile === undefined) {
+      explain(io, NOTES.adminPassword);
+      if (/^n/i.test((await ask('Generate the admin password? [Y/n] ')).trim())) {
+        explain(io, NOTES.passwordFile);
+        adminPasswordFile = await askUntil(
+          ask,
+          io,
+          `File holding your password, inside the Mediaplane home [${DEFAULT_PASSWORD_FILE}]: `,
+          (answer) => {
+            const file = answer || DEFAULT_PASSWORD_FILE;
+            const problem = passwordFileProblem(file);
+            return problem === undefined
+              ? { value: file }
+              : { problem: `That ${problem}.` };
+          },
+        );
+      }
     }
   }
   if (mediaServer === undefined || dataPath === undefined) {
@@ -236,30 +302,100 @@ async function gatherAnswers(
     return `this looks like a VM on ${host.cloud}, where bind: lan needs your LAN subnet: add --lan-subnet, or use --bind localhost`;
   }
   return {
-    mediaServer,
-    dataPath,
-    vpnProvider,
-    vpnAddresses,
-    loginOnLan,
-    timezone: options.timezone,
-    user: invokingUser(),
-    bind,
-    lanSubnet,
-    adminUser: adminUser ?? 'admin',
-    adminPasswordFile,
+    starter: {
+      mediaServer,
+      dataPath,
+      vpnProvider,
+      vpnAddresses,
+      loginOnLan,
+      timezone: options.timezone,
+      user: invokingUser(),
+      bind,
+      lanSubnet,
+      adminUser: adminUser ?? 'admin',
+      adminPasswordFile,
+    },
+    wireguardKey,
   };
 }
 
 /**
- * The flags that need no question, checked before the first one is asked: what is wrong
- * with them, named by flag, or what they decide.
+ * What each question is for, shown on a terminal just before it is first asked, at most
+ * 60 columns a line. The question line itself, with its [default], follows.
  */
-function readFlags(
+export const NOTES = {
+  mediaServer: [
+    'Media server: jellyfin needs no account. plex needs a Plex',
+    "account; Mediaplane can't claim it for you until Slice 6.",
+  ],
+  dataPath: [
+    'Data folder: one folder for downloads and your library,',
+    'so finished downloads move instantly.',
+  ],
+  vpnProvider: [
+    "VPN provider: Gluetun's name for yours, such as mullvad or",
+    'surfshark. Leave it empty for no VPN.',
+  ],
+  vpnAddresses: [
+    "WireGuard address: the Address line of your provider's",
+    'WireGuard config file, if it has one.',
+  ],
+  wireguardKey: [
+    'WireGuard key: the PrivateKey line of that same file.',
+    'Mediaplane keeps it in secrets/wg.key, for you only.',
+  ],
+  bind: [
+    'Web pages: lan reaches other devices on your home network;',
+    'localhost reaches only this machine.',
+  ],
+  lanSubnet: [
+    'Your LAN: the network your other devices are on, as a',
+    'subnet such as 192.168.1.0/24.',
+  ],
+  loginOnLan: [
+    'Login: answer n to let devices on your LAN open the apps',
+    'without signing in.',
+  ],
+  adminUser: ["Admin user: one login for every app's web page."],
+  adminPassword: [
+    'Admin password: Mediaplane can generate a strong one, or',
+    'use your own, from a file in the Mediaplane home.',
+  ],
+  passwordFile: [
+    'Your password file: at least 12 characters. Put it there',
+    'before you run plan.',
+  ],
+} as const satisfies Record<string, readonly string[]>;
+
+/** Say what a question is for, on the terminal, just before it is asked. */
+function explain(io: Io, lines: readonly string[]): void {
+  io.stdout(`${lines.join('\n')}\n`);
+}
+
+/** Where init saves a WireGuard key pasted on a terminal; stack.yaml's vpn.private_key. */
+const WG_KEY_FILE = 'secrets/wg.key';
+
+/** A WireGuard key as wg and providers write it: 32 bytes in base64, 44 characters. */
+function isWireguardKey(text: string): boolean {
+  return (
+    /^[A-Za-z0-9+/]{43}=$/.test(text) &&
+    Buffer.from(text, 'base64').toString('base64') === text
+  );
+}
+
+/**
+ * The flags that need no question, checked before the first one is asked: what is wrong
+ * with them, named by flag, or what they decide. The home (--home, or its default) is
+ * one of them: answers are no use if init can't write stack.yaml there.
+ */
+async function readFlags(
   options: InitOptions,
   host: HostFacts,
   defaultBind: Bind,
   canAsk: boolean,
-): Flags | string {
+): Promise<Flags | string> {
+  const unwritable = await homeProblem(resolve(options.home));
+  if (unwritable !== undefined) return unwritable;
   const mediaServer = options.mediaServer?.trim().toLowerCase();
   if (mediaServer !== undefined && !isMediaServer(mediaServer)) {
     return `--media-server must be jellyfin or plex, not "${options.mediaServer ?? ''}"`;

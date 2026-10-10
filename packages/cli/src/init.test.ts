@@ -1,4 +1,4 @@
-import { open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import type * as FsPromises from 'node:fs/promises';
 import { join } from 'node:path';
 import { invokingUser, parseConfig } from '@mediaplane/engine';
@@ -9,6 +9,8 @@ import {
   tempDir,
 } from '@mediaplane/engine/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DataFolder } from './folders';
+import { NOTES } from './init';
 import { PromptCancelled } from './prompt';
 import { run, type CliDeps, type Io } from './run';
 
@@ -48,16 +50,25 @@ function fillDiskOnNextWrite(): void {
   });
 }
 
-function capture(answers?: string[], env: NodeJS.ProcessEnv = {}) {
+/**
+ * A terminal that answers `answers` to its questions, in order, and `pasted` to its hidden
+ * ones; without `answers`, no terminal. `shown` is everything on the screen, in order:
+ * what init printed, and each question, with a hidden one's answer never in it.
+ */
+function capture(answers?: string[], env: NodeJS.ProcessEnv = {}, pasted: string[] = []) {
   const out: string[] = [];
   const err: string[] = [];
+  const shown: string[] = [];
   const questions: string[] = [];
+  const hidden: string[] = [];
   const io: Io = {
     stdout: (text) => {
       out.push(text);
+      shown.push(text);
     },
     stderr: (text) => {
       err.push(text);
+      shown.push(text);
     },
     env,
     ...(answers === undefined
@@ -65,23 +76,40 @@ function capture(answers?: string[], env: NodeJS.ProcessEnv = {}) {
       : {
           ask: (question: string) => {
             questions.push(question);
+            shown.push(question);
             return Promise.resolve(answers.shift() ?? '');
+          },
+          askSecret: (question: string) => {
+            hidden.push(question);
+            shown.push(question);
+            return Promise.resolve(pasted.shift() ?? '');
           },
         }),
   };
   return {
     io,
     questions,
+    hidden,
     stdout: () => out.join(''),
     stderr: () => err.join(''),
+    shown: () => shown.join(''),
   };
 }
 
-const deps = (cloud?: string): Partial<CliDeps> => ({
+const deps = (
+  cloud?: string,
+  dataFolder: DataFolder = 'unseen',
+  folders: string[] = [],
+): Partial<CliDeps> => ({
   host: () =>
     Promise.resolve(cloud === undefined ? FIXTURE_HOST : { ...FIXTURE_HOST, cloud }),
   runtime: () => fakeRuntime(),
   probe: () => fakeProbe(),
+  // Never the host's own folders: /srv/data is only a name here.
+  dataFolder: (path) => {
+    folders.push(path);
+    return Promise.resolve(dataFolder);
+  },
 });
 
 const newHome = () => tempDir('mediaplane-init-');
@@ -622,6 +650,64 @@ describe('mediaplane init', () => {
     },
   );
 
+  // root can write anywhere, so there is nothing to test when running as root.
+  it.skipIf(process.getuid?.() === 0)(
+    "says how to get a home it can't create, before it asks anything",
+    async () => {
+      const parent = await newHome();
+      await chmod(parent, 0o555);
+      try {
+        const home = join(parent, 'mediaplane');
+        const term = capture([]);
+        expect(await run(['init', '--home', home], term.io, deps())).toBe(1);
+        expect(term.questions).toEqual([]);
+        expect(term.stderr()).toBe(
+          `error: can't create ${home} (permission denied): pass --home <a folder of yours>, or create it first with "sudo mkdir -p ${home} && sudo chown $USER: ${home}"\n`,
+        );
+        // The same with flags only, and as JSON.
+        const json = capture();
+        const flags = ['--media-server', 'jellyfin', '--data', '/srv/data', '--json'];
+        expect(await run(['init', '--home', home, ...flags], json.io, deps())).toBe(1);
+        expect(JSON.parse(json.stdout())).toMatchObject({
+          ok: false,
+          error: { message: expect.stringContaining(`can't create ${home}`) as string },
+        });
+      } finally {
+        // So that the temporary folder can be removed.
+        await chmod(parent, 0o755);
+      }
+    },
+  );
+
+  it.skipIf(process.getuid?.() === 0)(
+    "says how to get a home it can't write into, before it asks anything",
+    async () => {
+      const home = await newHome();
+      await chmod(home, 0o555);
+      try {
+        const term = capture([]);
+        expect(await run(['init', '--home', home], term.io, deps())).toBe(1);
+        expect(term.questions).toEqual([]);
+        expect(term.stderr()).toBe(
+          `error: can't write into ${home} (permission denied): pass --home <a folder of yours>, or make it yours with "sudo chown $USER: ${home}"\n`,
+        );
+      } finally {
+        await chmod(home, 0o755);
+      }
+    },
+  );
+
+  it('refuses a home that is a file, before it asks anything', async () => {
+    const home = join(await newHome(), 'stack.yaml');
+    await writeFile(home, 'version: 1\n');
+    const term = capture([]);
+    expect(await run(['init', '--home', home], term.io, deps())).toBe(1);
+    expect(term.questions).toEqual([]);
+    expect(term.stderr()).toBe(
+      `error: ${home} is not a folder, so init can't put the Mediaplane home there: pass --home <a folder of yours>\n`,
+    );
+  });
+
   it('refuses --vpn-addresses without a provider as soon as the provider is answered', async () => {
     const home = await newHome();
     const term = capture(['jellyfin', '/srv/data', '']);
@@ -853,5 +939,182 @@ describe('mediaplane init', () => {
       ok: true,
       stackPath: join(home, 'stack.yaml'),
     });
+  });
+});
+
+describe('mediaplane init: what each question is for', () => {
+  /** Every answer for a VPN stack on the LAN, with your own password file. */
+  const EVERY_QUESTION = [
+    'plex',
+    '/srv/data',
+    'mullvad',
+    '',
+    'lan',
+    'y',
+    'y',
+    'admin',
+    'n',
+    '',
+  ];
+
+  it('says what each question is for, just before it, in lines of 60 columns at most', async () => {
+    const term = capture([...EVERY_QUESTION]);
+    expect(await run(['init', '--home', await newHome()], term.io, deps())).toBe(0);
+    const shown = term.shown();
+    const before = (note: readonly string[], question: string) => {
+      expect(shown).toContain(`${note.join('\n')}\n${question}`);
+    };
+    before(NOTES.mediaServer, 'Media server, jellyfin or plex [jellyfin]: ');
+    before(NOTES.dataPath, 'Data folder for downloads and media [/srv/data]: ');
+    before(NOTES.vpnProvider, 'VPN provider for qBittorrent');
+    before(NOTES.vpnAddresses, "Your provider's WireGuard address");
+    before(NOTES.wireguardKey, 'Paste your WireGuard private key');
+    before(NOTES.bind, 'Publish the web UIs on your LAN');
+    before(NOTES.lanSubnet, 'Your LAN looks like 192.168.1.0/24. Use it? [Y/n] ');
+    before(NOTES.loginOnLan, 'Ask for a login from your own network too? [Y/n] ');
+    before(NOTES.adminUser, 'Admin user name for the apps [admin]: ');
+    before(NOTES.adminPassword, 'Generate the admin password? [Y/n] ');
+    before(NOTES.passwordFile, 'File holding your password, inside the Mediaplane home');
+    for (const line of Object.values(NOTES).flat()) {
+      expect(line.length, line).toBeLessThanOrEqual(60);
+    }
+  });
+
+  it('says it once, not again after an answer that will not do', async () => {
+    const term = capture(['emby', 'jellyfin', '/srv/data', '', 'localhost', '', '']);
+    expect(await run(['init', '--home', await newHome()], term.io, deps())).toBe(0);
+    expect(term.shown().split(NOTES.mediaServer[0]).length - 1).toBe(1);
+    expect(term.questions.slice(0, 2)).toEqual([
+      'Media server, jellyfin or plex [jellyfin]: ',
+      'Media server, jellyfin or plex [jellyfin]: ',
+    ]);
+  });
+
+  it('says nothing about questions it does not ask: none without a terminal or with --json', async () => {
+    const flags = ['--media-server', 'jellyfin', '--data', '/srv/data'];
+    for (const extra of [[], ['--json']]) {
+      const term = capture(extra.length === 0 ? undefined : []);
+      const args = ['init', '--home', await newHome(), ...flags, ...extra];
+      expect(await run(args, term.io, deps())).toBe(0);
+      for (const line of Object.values(NOTES).flat()) {
+        expect(term.shown()).not.toContain(line);
+      }
+    }
+  });
+});
+
+describe('mediaplane init: the WireGuard key', () => {
+  const FAKE_KEY = `${'A'.repeat(43)}=`;
+  const PASTE =
+    'Paste your WireGuard private key (nothing shows as you paste; Enter to do it later): ';
+  /** Jellyfin, /srv/data, a provider, no address, localhost, the admin, generated. */
+  const VPN_ANSWERS = ['jellyfin', '/srv/data', 'mullvad', '', 'localhost', '', ''];
+
+  it('takes the key pasted on a hidden prompt, and keeps it in secrets/wg.key for you only', async () => {
+    const home = await newHome();
+    const term = capture([...VPN_ANSWERS], {}, [`  ${FAKE_KEY}  `]);
+    expect(await run(['init', '--home', home], term.io, deps())).toBe(0);
+    expect(term.hidden).toEqual([PASTE]);
+    const keyPath = join(home, 'secrets', 'wg.key');
+    expect(await readFile(keyPath, 'utf8')).toBe(`${FAKE_KEY}\n`);
+    expect((await stat(keyPath)).mode & 0o777).toBe(0o600);
+    expect((await stackIn(home)).vpn?.private_key).toEqual({ file: 'secrets/wg.key' });
+    expect(term.stdout()).toContain(`Saved your WireGuard private key in ${keyPath}.`);
+    expect(term.stdout()).not.toContain('Put your VPN');
+    expect(term.shown()).not.toContain(FAKE_KEY);
+  });
+
+  it('asks again for what is not a key, without repeating it', async () => {
+    const home = await newHome();
+    const notKeys = ['not-a-fake-key', `${'A'.repeat(42)}==`, 'A'.repeat(44)];
+    const term = capture([...VPN_ANSWERS], {}, [...notKeys, FAKE_KEY]);
+    expect(await run(['init', '--home', home], term.io, deps())).toBe(0);
+    expect(term.hidden).toEqual([PASTE, PASTE, PASTE, PASTE]);
+    expect(term.stderr()).toBe(
+      'That is not a WireGuard private key, which is 44 characters of base64 ending in "=". Paste it again, or press Enter to do it later.\n'.repeat(
+        3,
+      ),
+    );
+    for (const typed of notKeys) expect(term.shown()).not.toContain(typed);
+    expect(await readFile(join(home, 'secrets', 'wg.key'), 'utf8')).toBe(`${FAKE_KEY}\n`);
+  });
+
+  it('leaves it for later on Enter, as a next step', async () => {
+    const home = await newHome();
+    const term = capture([...VPN_ANSWERS], {}, ['']);
+    expect(await run(['init', '--home', home], term.io, deps())).toBe(0);
+    expect(term.hidden).toEqual([PASTE]);
+    await expect(stat(join(home, 'secrets', 'wg.key'))).rejects.toThrow();
+    expect(term.stdout()).toContain(
+      `Put your VPN's WireGuard private key in ${join(home, 'secrets', 'wg.key')}.`,
+    );
+  });
+
+  it('never asks for one you already have, and never overwrites it', async () => {
+    const home = await newHome();
+    await real.mkdir(join(home, 'secrets'));
+    await writeFile(join(home, 'secrets', 'wg.key'), 'fake-key-of-yours\n');
+    const term = capture([...VPN_ANSWERS], {}, [FAKE_KEY]);
+    expect(await run(['init', '--home', home], term.io, deps())).toBe(0);
+    expect(term.hidden).toEqual([]);
+    expect(await readFile(join(home, 'secrets', 'wg.key'), 'utf8')).toBe(
+      'fake-key-of-yours\n',
+    );
+  });
+
+  it('never asks without a VPN, without a terminal, or with --json', async () => {
+    const none = capture(['jellyfin', '/srv/data', '', 'localhost', '', ''], {}, [
+      FAKE_KEY,
+    ]);
+    expect(await run(['init', '--home', await newHome()], none.io, deps())).toBe(0);
+    expect(none.hidden).toEqual([]);
+    const flags = ['--media-server', 'jellyfin', '--data', '/srv/data'];
+    const vpn = ['--vpn-provider', 'mullvad'];
+    const json = capture([], {}, [FAKE_KEY]);
+    const args = ['init', '--home', await newHome(), ...flags, ...vpn, '--json'];
+    expect(await run(args, json.io, deps())).toBe(0);
+    expect(json.hidden).toEqual([]);
+    const script = capture(undefined);
+    expect(
+      await run(['init', '--home', await newHome(), ...flags, ...vpn], script.io, deps()),
+    ).toBe(0);
+    expect(script.stdout()).toContain("Put your VPN's WireGuard private key in");
+  });
+});
+
+describe('mediaplane init: the data folder', () => {
+  const FLAGS = ['--media-server', 'jellyfin', '--data', '/srv/data'];
+  const { uid, gid } = invokingUser();
+  const who = `uid ${String(uid)} (gid ${String(gid)})`;
+
+  it('creates it when it can, and needs no step for it then', async () => {
+    const home = await newHome();
+    const folders: string[] = [];
+    const term = capture();
+    const args = ['init', '--home', home, ...FLAGS];
+    expect(await run(args, term.io, deps(undefined, 'created', folders))).toBe(0);
+    expect(folders).toEqual(['/srv/data']);
+    expect(term.stdout()).toContain('Created /srv/data for your downloads and media.');
+    expect(term.stdout()).not.toContain('/srv/data and make sure');
+  });
+
+  it("gives the commands to create it when it can't", async () => {
+    const term = capture();
+    const args = ['init', '--home', await newHome(), ...FLAGS];
+    const blocked = { blocked: 'permission denied' };
+    expect(await run(args, term.io, deps(undefined, blocked))).toBe(0);
+    expect(term.stdout()).toContain(
+      `Create /srv/data (permission denied), for ${who}: sudo mkdir -p /srv/data && sudo chown ${String(uid)}:${String(gid)} /srv/data`,
+    );
+  });
+
+  it('says to check a folder it found but can not vouch for, and nothing for a ready one', async () => {
+    const args = async () => ['init', '--home', await newHome(), ...FLAGS];
+    const check = capture();
+    expect(await run(await args(), check.io, deps(undefined, 'check'))).toBe(0);
+    expect(check.stdout()).toContain(`Make sure ${who} can write to /srv/data.`);
+    const ready = capture();
+    expect(await run(await args(), ready.io, deps(undefined, 'ready'))).toBe(0);
+    expect(ready.stdout()).not.toContain('/srv/data');
   });
 });

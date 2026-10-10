@@ -9,7 +9,7 @@
     failed  containers
     skipped verify
   error: these apps did not start healthy: sonarr (unhealthy). Compose said: …
-    hint: run "mediaplane status" to see each app, fix the cause, then run apply again
+    hint: run "mediaplane status" to see each app, fix the cause, then run apply again; see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/app-wont-start.md
 
   Apply failed: 4 done, 1 failed, 1 skipped. Run apply again to retry. Change record: 20261009T120000Z-0a1b2c3d
   ```

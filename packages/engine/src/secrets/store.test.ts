@@ -188,4 +188,25 @@ describe('writeSecretStore', () => {
       apps: {},
     });
   });
+
+  it('never saves a key it could not read back, and keeps the store it had', async () => {
+    // A key an app makes itself (createdBy: 'app') is kept as the app gives it: one with a
+    // quote or a dash would make the next plan unable to read the store at all.
+    const home = await tempDir('mediaplane-store-');
+    const before: SecretStore = {
+      version: 1,
+      apps: { sonarr: { apiKey: '0'.repeat(32) } },
+    };
+    await writeSecretStore(home, before);
+    const bad: SecretStore = {
+      version: 1,
+      apps: { ...before.apps, jellyfin: { apiKey: 'fake"app-key' } },
+    };
+    const failure = writeSecretStore(home, bad);
+    await expect(failure).rejects.toThrow(
+      `cannot save ${join(home, SECRETS_PATH)}: jellyfin.apiKey must be text of letters, digits and "_" only`,
+    );
+    await expect(failure).rejects.not.toThrow('fake"app-key');
+    expect(await readSecretStore(home)).toEqual(before);
+  });
 });

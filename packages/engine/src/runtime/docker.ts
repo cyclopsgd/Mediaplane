@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { warning, type Diagnostic } from '../diagnostics';
 import { COMPOSE_PATH, ENV_PATH, OVERRIDE_PATH } from '../paths';
 import { nodeExec, type Exec, type ExecResult } from './exec';
-import { redact } from './redact';
+import { redact } from '../util/redact';
 import {
   HelperError,
   RuntimeError,

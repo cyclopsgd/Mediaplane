@@ -1,4 +1,4 @@
-import { terminalAsk } from './prompt';
+import { terminalAsk, terminalAskSecret } from './prompt';
 import { run } from './run';
 
 // A reader that exits early (`mediaplane plan | head -1`) closes the pipe. That is not
@@ -17,5 +17,10 @@ process.exitCode = await run(process.argv.slice(2), {
     process.stderr.write(text);
   },
   env: process.env,
-  ...(interactive ? { ask: terminalAsk(process.stdin, process.stdout) } : {}),
+  ...(interactive
+    ? {
+        ask: terminalAsk(process.stdin, process.stdout),
+        askSecret: terminalAskSecret(process.stdin, process.stdout),
+      }
+    : {}),
 });

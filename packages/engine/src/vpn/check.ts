@@ -7,6 +7,7 @@ import type { HostFacts } from '../host/facts';
 import { dockerUnavailable, hostFactsOrFailure } from '../host/failure';
 import { STACK_PATH } from '../paths';
 import { resolveStack, type ResolvedApp } from '../resolver/resolve';
+import { runbookUrl } from '../runbooks';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { readSecretStore } from '../secrets/store';
 import { secretValues } from '../secrets/values';
@@ -22,7 +23,7 @@ import {
 } from './probe';
 
 /** Where a failed check sends you. */
-export const VPN_RUNBOOK = 'docs/runbooks/vpn-down.md';
+export const VPN_RUNBOOK = runbookUrl('vpn-down');
 
 /** The checks the probe always runs; it runs `egress` only when it is given a URL. */
 const PROBE_CHECKS: readonly ProbeCheck[] = ['route', 'anonymous', 'status', 'publicip'];
@@ -352,7 +353,11 @@ function gluetunCheck(
           ? `Gluetun ${state}, so qBittorrent has no network: nothing gets out`
           : `Gluetun ${state}, so the VPN is down`
         : `Gluetun ${state}`,
-      hint: `see ${VPN_RUNBOOK}`,
+      // A Gluetun with no process is started again by apply; a paused or restarting one
+      // needs looking at.
+      hint: gluetunStopped(gluetun)
+        ? `run "mediaplane apply" to start Gluetun again, then see ${VPN_RUNBOOK} if it stops again`
+        : `see ${VPN_RUNBOOK}`,
     };
   }
   if (gluetun.health !== 'healthy') {

@@ -198,7 +198,7 @@ describe('vpnCheck', () => {
       status: 'leak',
       message:
         "qBittorrent's traffic leaves from 203.0.113.7, which is this host's own address: it does not go through the VPN",
-      hint: 'see docs/runbooks/vpn-down.md',
+      hint: 'see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
     });
   });
 
@@ -245,7 +245,7 @@ describe('vpnCheck', () => {
       id: 'egress',
       status: 'down',
       message: `qBittorrent's traffic got no answer from ${TRACE}: curl: (28) Connection timed out after 10002 milliseconds`,
-      hint: 'the VPN is down, and nothing gets out (fail-closed); see docs/runbooks/vpn-down.md',
+      hint: 'the VPN is down, and nothing gets out (fail-closed); see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
     });
     expect(asked).toEqual([]);
   });
@@ -289,7 +289,7 @@ describe('vpnCheck', () => {
     expect(result.ok && result.checks.at(-1)).toMatchObject({
       id: 'egress',
       status: 'down',
-      hint: 'the VPN is down; see docs/runbooks/vpn-down.md',
+      hint: 'the VPN is down; see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
     });
     expect(JSON.stringify(result)).not.toContain('nothing gets out');
     expect(JSON.stringify(result)).not.toContain('fail-closed');
@@ -314,7 +314,7 @@ describe('vpnCheck', () => {
         message: "qBittorrent's network has no route out",
       });
       expect(result.ok && result.checks.at(-1)?.hint).toBe(
-        'the VPN is down, and nothing gets out (fail-closed); see docs/runbooks/vpn-down.md',
+        'the VPN is down, and nothing gets out (fail-closed); see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
       );
     }
   });
@@ -332,7 +332,7 @@ describe('vpnCheck', () => {
       id: 'route',
       status: 'down',
       message: "Mediaplane could not read qBittorrent's route: sh: ip: not found",
-      hint: 'see docs/runbooks/vpn-down.md',
+      hint: 'see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
     });
     expect(JSON.stringify(result)).not.toContain('nothing gets out');
     expect(JSON.stringify(result)).not.toContain('no route out');
@@ -543,7 +543,7 @@ describe('vpnCheck', () => {
     expect(result.ok && result.checks.at(-1)).toMatchObject({
       id: 'egress',
       status: 'down',
-      hint: 'the VPN is down; see docs/runbooks/vpn-down.md',
+      hint: 'the VPN is down; see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
     });
     expect(JSON.stringify(result)).not.toContain('nothing gets out');
   });
@@ -628,6 +628,10 @@ describe('vpnCheck', () => {
       expect(result.ok && result.checks[1]?.message).toBe(
         `Gluetun is ${state}, so qBittorrent has no network: nothing gets out`,
       );
+      // The first thing to do is plain, and comes before the link.
+      expect(result.ok && result.checks[1]?.hint).toBe(
+        'run "mediaplane apply" to start Gluetun again, then see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md if it stops again',
+      );
       expect(calls).not.toContain('run qbittorrent sh as 65534:65534');
     }
   });
@@ -654,7 +658,7 @@ describe('vpnCheck', () => {
         id: 'gluetun',
         status: 'down',
         message: `Gluetun is ${state}`,
-        hint: 'see docs/runbooks/vpn-down.md',
+        hint: 'see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
       });
       expect(JSON.stringify(result)).not.toContain('nothing gets out');
       expect(calls).not.toContain('run qbittorrent sh as 65534:65534');

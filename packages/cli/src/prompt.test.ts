@@ -1,6 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { PromptCancelled, terminalAsk } from './prompt';
+import { PromptCancelled, terminalAsk, terminalAskSecret } from './prompt';
 
 /** A terminal's two ends: what the person types, and everything shown to them. */
 function terminal() {
@@ -65,5 +65,28 @@ describe('terminalAsk', () => {
     const answer = terminalAsk(input, output, true)('Media server: ');
     input.write(key);
     expect(await settled(answer)).toBe('cancelled');
+  });
+});
+
+describe('terminalAskSecret', () => {
+  const FAKE_KEY = `${'A'.repeat(43)}=`;
+
+  it.each([false, true])(
+    'returns what was pasted, and never shows it (terminal: %s)',
+    async (isTerminal) => {
+      const { input, output, shown } = terminal();
+      const answer = terminalAskSecret(input, output, isTerminal)('Paste your key: ');
+      input.write(`${FAKE_KEY}\r\n`);
+      expect(await settled(answer)).toBe(`answered "${FAKE_KEY}"`);
+      expect(shown()).toBe('Paste your key: \n');
+    },
+  );
+
+  it('is cancelled by Ctrl-C, showing nothing it was given', async () => {
+    const { input, output, shown } = terminal();
+    const answer = terminalAskSecret(input, output, true)('Paste your key: ');
+    input.write('AAAA\x03');
+    expect(await settled(answer)).toBe('cancelled');
+    expect(shown()).not.toContain('AAAA');
   });
 });

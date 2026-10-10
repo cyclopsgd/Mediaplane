@@ -8,7 +8,9 @@ import { compare, unique } from '../util/sort';
 /**
  * Every app secret goes into the app's own files as it is, unescaped (config.xml,
  * qBittorrent.conf, Gluetun's config.toml), so a hand-edited one must not hold a quote, a
- * "<" or a newline. Everything Mediaplane generates fits: hex, base62 and "qbt_".
+ * "<" or a newline. Everything Mediaplane generates fits: hex, base62 and "qbt_". So must
+ * a key an app creates itself (Jellyfin's is 32 hex characters): writeSecretStore
+ * refuses to save one that doesn't.
  */
 const appSecret = z.string().regex(/^[A-Za-z0-9_]+$/);
 
@@ -67,8 +69,20 @@ function fault(path: readonly PropertyKey[]): string[] {
   return [];
 }
 
-/** Save the store atomically, private to its owner: state/ 0700, the file 0600 (§7.2(4)). */
+/**
+ * Save the store atomically, private to its owner: state/ 0700, the file 0600 (§7.2(4)).
+ * A store that readSecretStore would refuse is never written, so a key an app made with
+ * other characters can't lock plan out of the store; the error names the key, never its
+ * value, and the store on disk stays as it was.
+ */
 export async function writeSecretStore(home: string, store: SecretStore): Promise<void> {
+  const checked = storeSchema.safeParse(store);
+  if (!checked.success) {
+    const faults = unique(checked.error.issues.flatMap((issue) => fault(issue.path)));
+    throw new Error(
+      `cannot save ${join(home, SECRETS_PATH)}${faults.length === 0 ? '' : `: ${faults.join('; ')}`}`,
+    );
+  }
   const sorted = <T>(record: Record<string, T>): Record<string, T> =>
     Object.fromEntries(Object.entries(record).sort(([a], [b]) => compare(a, b)));
   const apps = Object.fromEntries(

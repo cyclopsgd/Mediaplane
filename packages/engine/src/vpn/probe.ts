@@ -1,4 +1,4 @@
-import { redact } from '../runtime/redact';
+import { redact } from '../util/redact';
 import type { OneOffCommand } from '../runtime/types';
 import { EGRESS_MAX_BYTES, EGRESS_TIMEOUT_MS } from './egress';
 

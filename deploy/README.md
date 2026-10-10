@@ -109,10 +109,22 @@ mediaplane credentials  # the admin login, and where each app is
 mediaplane vpn-check    # with a VPN: qBittorrent gets out only through it
 ```
 
-`init` checks the flags it can before its first question, and asks again when an answer
-won't do. Ctrl-D or Ctrl-C at a question stops it, writing nothing.
-Without a terminal it asks nothing: pass the flags in the
+`init` checks the flags it can before its first question, including that it can create
+the home or write into it, and asks again when an answer won't do. A line or two before
+each question says what it is for. Ctrl-D or Ctrl-C at a question stops it, writing
+nothing. Without a terminal it asks nothing: pass the flags in the
 [CLI reference](../docs/reference/cli.md#mediaplane-init) instead.
+
+- **The data folder.** Run from source, `init` creates it if it is missing and you may,
+  as you, and changes no owner or mode. When it can't, such as for a folder under `/srv`
+  that needs root, its next steps give the `sudo mkdir -p` and `sudo chown` commands.
+  Inside the container it sees only the home, so for a folder outside it the next step
+  says to create it.
+- **The WireGuard key.** With a VPN provider, on a terminal, `init` asks you to paste
+  your provider's private key (its `PrivateKey` line). Nothing shows as you paste. It
+  keeps it in `secrets/wg.key`, readable by you only, and never overwrites one that is
+  there. Press Enter to put it there yourself later; without a terminal, or with
+  `--json`, it never asks.
 
 - **`init`** writes the user it runs as into `stack.yaml`. Inside the container that is
   `MEDIAPLANE_UID`; run as root (`docker exec -u 0`), it writes 1000 instead. The apps

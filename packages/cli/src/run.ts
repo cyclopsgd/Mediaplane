@@ -29,6 +29,7 @@ import {
 } from '@mediaplane/engine';
 import { Command, CommanderError, Option } from 'commander';
 import { printCredentials } from './credentials';
+import { prepareDataFolder, type DataFolder } from './folders';
 import { init, type InitOptions } from './init';
 import {
   printApply,
@@ -53,6 +54,8 @@ export interface Io {
    * with PromptCancelled when the user ends the input instead (Ctrl-D, Ctrl-C).
    */
   ask?: (question: string) => Promise<string>;
+  /** ask, for a secret: what is typed or pasted never shows. Absent with ask. */
+  askSecret?: (question: string) => Promise<string>;
 }
 
 /** What the CLI talks to: the real host by default, fakes in tests. */
@@ -64,6 +67,12 @@ export interface CliDeps {
   probe: (runtime: Runtime, home: string) => HostProbe;
   /** Which address the host comes from, as the IP-echo service at a URL sees it. */
   egress: (runtime: Runtime) => (url: string) => Promise<EgressResult>;
+  /** init's data folder: created where it can be (prepareDataFolder). */
+  dataFolder: (
+    path: string,
+    home: string,
+    user: { uid: number; gid: number },
+  ) => Promise<DataFolder>;
 }
 
 export const DEFAULT_HOME = '/opt/mediaplane';
@@ -175,6 +184,7 @@ export function defaultDeps(env: NodeJS.ProcessEnv): CliDeps {
                 env,
                 execArgv: process.execArgv,
               }),
+      dataFolder: (path, home, user) => prepareDataFolder(path, home, false, user),
     };
   }
   // Mediaplane's own user, as the helper must be; never root, even if the container is.
@@ -184,6 +194,8 @@ export function defaultDeps(env: NodeJS.ProcessEnv): CliDeps {
     runtime,
     probe: (docker, home) => helperProbe({ runtime: docker, image, user, home }),
     egress: (docker) => (url) => helperEgress({ runtime: docker, image, user }, url),
+    // The container sees the host's folders only inside the home.
+    dataFolder: (path, home, owner) => prepareDataFolder(path, home, true, owner),
   };
 }
 
@@ -405,7 +417,9 @@ export function createProgram(
 
   program
     .command('init')
-    .description('Write a starter stack.yaml and a secrets/ folder (never overwrites)')
+    .description(
+      'Write a starter stack.yaml and a secrets/ folder, and create the data folder if it can (never overwrites)',
+    )
     .option('--home <dir>', 'Mediaplane home directory', defaultHome)
     .option('--media-server <name>', 'jellyfin or plex')
     .option('--data <path>', 'the data folder for downloads and media (absolute)')
@@ -452,7 +466,7 @@ export function createProgram(
         setExitCode(1);
         return;
       }
-      setExitCode(await init(options, io, host.host));
+      setExitCode(await init(options, io, host.host, deps.dataFolder));
     });
 
   // What the host helper container runs (spec §4.2); not for people, so not in --help.

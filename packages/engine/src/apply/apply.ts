@@ -1,3 +1,4 @@
+import { chmod } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { error, type Diagnostic } from '../diagnostics';
 import {
@@ -12,6 +13,7 @@ import {
 import { COMPOSE_PATH, COMPOSE_PREV_PATH, ENV_PATH, STACK_PATH } from '../paths';
 import { plan, planStack, type PlanOptions, type PlanResult } from '../plan/plan';
 import { renderEnvFile } from '../render/env';
+import { runbookUrl } from '../runbooks';
 import { prestartFilesFor } from '../render/prestart';
 import { composeToYaml } from '../render/yaml';
 import type { CommandResult, ContainerState, Runtime } from '../runtime/types';
@@ -20,6 +22,7 @@ import { writeSecretStore } from '../secrets/store';
 import { secretValues } from '../secrets/values';
 import { acquireLock, LockedError, type Lock } from '../state/lock';
 import { writeFileAtomic } from '../util/atomic';
+import { codeOf } from '../util/error-code';
 import { readIfExists } from '../util/fs';
 import { compare } from '../util/sort';
 import {
@@ -71,7 +74,7 @@ const STEP_HINTS: Record<ApplyStep, string> = {
   files: 'check that this user can write to the Mediaplane home, then run apply again',
   pull: 'check the network connection and that the image registries are reachable, then run apply again',
   ownership: "the error comes from the app's own image; run apply again to retry",
-  start: 'run "mediaplane status" to see each app, fix the cause, then run apply again',
+  start: `run "mediaplane status" to see each app, fix the cause, then run apply again; see ${runbookUrl('app-wont-start')}`,
   verify: 'run "mediaplane plan" to see what is still different',
 };
 
@@ -147,10 +150,11 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       home,
       await prestartFilesFor(stack, store, options.env, options.random),
     );
-    return [
-      `wrote ${written.join(' and ')}`,
+    const done = [
+      ...(written.length === 0 ? [] : [`wrote ${written.join(' and ')}`]),
       ...(created.length === 0 ? [] : [`created ${created.join(', ')}`]),
-    ].join('; ');
+    ];
+    return done.length === 0 ? NONE_NEEDED : done.join('; ');
   });
   await steps.run('pull', () => pullImages(runtime, values, options.sleep));
   await steps.run('ownership', async () => {
@@ -286,8 +290,9 @@ async function startFailure(runtime: Runtime, composeError: string): Promise<str
 }
 
 /**
- * compose.yaml when it changed, keeping the previous one as compose.prev.yaml (spec §5
- * step 6), and .env. Returns the paths it wrote, relative to the home.
+ * compose.yaml and .env, each only when it changed, as plan says, keeping the previous
+ * compose.yaml as compose.prev.yaml (spec §5 step 6). An unchanged .env is still made
+ * private again. Returns the paths it wrote, relative to the home.
  */
 async function writeGenerated(
   home: string,
@@ -304,9 +309,27 @@ async function writeGenerated(
     await writeFileAtomic(composePath, compose);
     written.push(COMPOSE_PATH);
   }
-  await writeFileAtomic(join(home, ENV_PATH), env, 0o600);
+  const envPath = join(home, ENV_PATH);
+  if ((await readIfExists(envPath)) === env && (await madePrivate(envPath))) {
+    return written;
+  }
+  await writeFileAtomic(envPath, env, 0o600);
   written.push(ENV_PATH);
   return written;
+}
+
+/**
+ * chmod 0600, or false where only the owner may and this user isn't it (after a run with
+ * sudo): the rewrite, as before Slice 3b, makes it this user's and private.
+ */
+async function madePrivate(path: string): Promise<boolean> {
+  try {
+    await chmod(path, 0o600);
+    return true;
+  } catch (cause) {
+    if (codeOf(cause) === 'EPERM') return false;
+    throw cause;
+  }
 }
 
 function succeeded(result: CommandResult, prefix = ''): void {

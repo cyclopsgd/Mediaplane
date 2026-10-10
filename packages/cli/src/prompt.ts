@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline/promises';
-import type { Readable, Writable } from 'node:stream';
+import { Writable, type Readable } from 'node:stream';
 
 /** What an `ask` throws when the person ends the input (Ctrl-D) or interrupts it (Ctrl-C). */
 export class PromptCancelled extends Error {
@@ -21,29 +21,63 @@ export function terminalAsk(
   output: Writable,
   terminal?: boolean,
 ): (question: string) => Promise<string> {
-  return (question: string) =>
-    new Promise<string>((resolve, reject) => {
-      const prompt = createInterface({
-        input,
-        output,
-        ...(terminal === undefined ? {} : { terminal }),
-      });
-      let answered = false;
-      const cancel = () => {
-        if (answered) return;
-        answered = true;
-        // Closing twice does nothing, so this is safe whichever way the input ended.
-        prompt.close();
-        // The cursor is still after the question: what comes next starts a line.
-        output.write('\n');
-        reject(new PromptCancelled());
-      };
-      prompt.once('close', cancel);
-      prompt.question(question).then((answer) => {
-        if (answered) return;
-        answered = true;
-        prompt.close();
-        resolve(answer);
-      }, cancel);
+  return (question: string) => askLine(input, output, output, question, terminal);
+}
+
+/**
+ * terminalAsk, for a secret: what is typed or pasted is never shown. The question goes to
+ * `output`, and readline echoes into a stream that drops everything. On a terminal it is
+ * still readline's own terminal (raw mode), so the terminal doesn't echo either.
+ */
+export function terminalAskSecret(
+  input: Readable,
+  output: Writable,
+  terminal: boolean = (output as { isTTY?: boolean }).isTTY === true,
+): (question: string) => Promise<string> {
+  return async (question: string) => {
+    const muted = new Writable({
+      write(_chunk, _encoding, done) {
+        done();
+      },
     });
+    output.write(question);
+    const answer = await askLine(input, muted, output, '', terminal);
+    // Enter was never echoed: end the question's line.
+    output.write('\n');
+    return answer;
+  };
+}
+
+/** One question: readline writes to `echo`, and a cancel ends the line on `output`. */
+function askLine(
+  input: Readable,
+  echo: Writable,
+  output: Writable,
+  question: string,
+  terminal: boolean | undefined,
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const prompt = createInterface({
+      input,
+      output: echo,
+      ...(terminal === undefined ? {} : { terminal }),
+    });
+    let answered = false;
+    const cancel = () => {
+      if (answered) return;
+      answered = true;
+      // Closing twice does nothing, so this is safe whichever way the input ended.
+      prompt.close();
+      // The cursor is still after the question: what comes next starts a line.
+      output.write('\n');
+      reject(new PromptCancelled());
+    };
+    prompt.once('close', cancel);
+    prompt.question(question).then((answer) => {
+      if (answered) return;
+      answered = true;
+      prompt.close();
+      resolve(answer);
+    }, cancel);
+  });
 }

@@ -32,7 +32,8 @@ apps:
 `;
 const KEY = '0'.repeat(32);
 const TRACE = 'https://1.1.1.1/cdn-cgi/trace';
-const RUNBOOK = 'docs/runbooks/vpn-down.md';
+const RUNBOOK =
+  'https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md';
 const COMPARED = 'Passed: qBittorrent reaches the internet only through the VPN.';
 const NOT_COMPARED =
   "Passed: qBittorrent has no way out but the tunnel; its address was not compared with this host's.";

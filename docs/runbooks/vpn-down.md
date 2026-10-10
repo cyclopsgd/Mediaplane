@@ -19,16 +19,16 @@ failure, and worse: see [A leak](#a-leak).
     ok    Gluetun's control server refuses requests without Mediaplane's key
     ok    qBittorrent's traffic is routed into the tunnel (tun0)
     DOWN  qBittorrent's traffic got no answer from https://1.1.1.1/cdn-cgi/trace: curl: (28) Connection timed out after 10002 milliseconds
-          hint: the VPN is down, and nothing gets out (fail-closed); see docs/runbooks/vpn-down.md
+          hint: the VPN is down, and nothing gets out (fail-closed); see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md
 
-  VPN down: qBittorrent can't reach the internet, and nothing leaks (fail-closed). See docs/runbooks/vpn-down.md.
+  VPN down: qBittorrent can't reach the internet, and nothing leaks (fail-closed). See https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md.
   ```
 
   The last line says that nothing leaks only when the checks show it, with qBittorrent
   in Gluetun's network: Gluetun is stopped (exited, dead or created, or without a
   container), or nothing answered while qBittorrent's route went into the tunnel, or
   there was no route at all. Otherwise it says
-  `VPN down: the checks marked DOWN say what failed. See docs/runbooks/vpn-down.md.`
+  `VPN down: the checks marked DOWN say what failed.`, then gives this runbook's address.
 
   "Nothing leaks" is an inference, not a measurement. A route into the tunnel can't get
   out around the VPN, whatever the service does. A service that accepts the connection

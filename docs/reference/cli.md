@@ -132,7 +132,7 @@ Exit codes:
 
 ## `mediaplane init`
 
-Write a starter stack.yaml and a secrets/ folder (never overwrites).
+Write a starter stack.yaml and a secrets/ folder, and create the data folder if it can (never overwrites).
 
 ```text
 mediaplane init [options]
