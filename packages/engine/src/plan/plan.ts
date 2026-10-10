@@ -39,6 +39,7 @@ import { notYetHealthy, otherHomes, ownPorts, type ContainerChange } from './con
 import { diffFiles, type FileChange } from './files';
 import { predictContainers, type PredictResult } from './predict';
 import { planPrestartFiles } from './prestart';
+import { strandedGuests } from './stranded';
 
 export interface PlanOptions {
   home: string;
@@ -183,7 +184,17 @@ export async function planStack(
       ),
     ]);
   }
-  const containers = predicted.changes;
+  let containers = predicted.changes;
+  try {
+    // A guest whose host apply starts again, or that holds a host's old network.
+    const stranded = await strandedGuests(stack, current, containers, options.runtime);
+    containers = containers.map((change) =>
+      stranded.includes(change.service) ? { ...change, action: 'restart' } : change,
+    );
+  } catch (cause) {
+    if (!(cause instanceof RuntimeError)) throw cause;
+    return failed([...diagnostics, dockerUnavailable(cause, options.env)]);
+  }
   const unhealthy = notYetHealthy(current, containers);
 
   let wiring: WiringChange[] = [];

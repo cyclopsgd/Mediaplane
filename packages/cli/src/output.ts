@@ -25,6 +25,7 @@ const MARKS: Record<ContainerAction, string> = {
   create: '+',
   recreate: '~',
   start: '>',
+  restart: '>',
   remove: '-',
   unchanged: ' ',
 };

@@ -26,7 +26,7 @@ import {
 } from '../paths';
 import { WiringRefused } from '../runtime/docker';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
-import { fakeDocker, fakeProbe } from '../testing/fakes';
+import { fakeDocker, fakeProbe, HEALTHY_PROBE, probeOutput } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureApp, fixtureCatalog } from '../testing/fixtures';
 import { FAKE_LOGIN, fakeSonarr, WIRED_CATALOG } from '../testing/wiring';
 import { apply, unhealthyServices, type ApplyOptions, type StepEvent } from './apply';
@@ -171,7 +171,9 @@ describe('apply', () => {
       ['wire', 'done'],
       ['verify', 'done'],
     ]);
-    expect(result.actions[0]?.detail).toBe('generated admin.password, sonarr.apiKey');
+    expect(result.actions[0]?.detail).toBe(
+      'generated admin.password, gluetun.controlApiKey, sonarr.apiKey',
+    );
     expect(events.slice(0, 4)).toEqual([
       'keys:start',
       'keys:end',
@@ -185,7 +187,10 @@ describe('apply', () => {
     expect(await modeOf(join(home, ENV_PATH))).toBe(0o600);
     expect(JSON.parse(await readFile(join(home, SECRETS_PATH), 'utf8'))).toEqual({
       version: 1,
-      apps: { sonarr: { apiKey: 'ab'.repeat(16) } },
+      apps: {
+        gluetun: { controlApiKey: 'ab'.repeat(16) },
+        sonarr: { apiKey: 'ab'.repeat(16) },
+      },
       shared: { adminPassword: 'l'.repeat(24) },
     });
     expect(await modeOf(join(home, SECRETS_PATH))).toBe(0o600);
@@ -209,6 +214,7 @@ describe('apply', () => {
     expect(result.recordId).toBe('20261009T094312Z-abababab');
     expect(records[0]?.plan.secrets.generate).toEqual([
       'admin.password',
+      'gluetun.controlApiKey',
       'sonarr.apiKey',
     ]);
     const recorded = JSON.stringify(records);
@@ -801,7 +807,10 @@ describe('apply', () => {
     await mkdir(join(home, 'state'));
     const stored = JSON.stringify({
       version: 1,
-      apps: { sonarr: { apiKey: '0'.repeat(32) } },
+      apps: {
+        gluetun: { controlApiKey: '1'.repeat(32) },
+        sonarr: { apiKey: '0'.repeat(32) },
+      },
       shared: { adminPassword: 'fake-admin-password' },
     });
     await writeFile(join(home, SECRETS_PATH), stored);
@@ -1072,6 +1081,134 @@ describe('unhealthyServices', () => {
         { ...base, service: 'gluetun', state: 'running', health: '' },
       ]),
     ).toEqual(['byparr (starting)', 'seerr (exited)']);
+  });
+});
+
+describe('apply: qBittorrent behind Gluetun', () => {
+  it('restarts qBittorrent when it starts a Gluetun stopped by hand, and verifies the VPN', async () => {
+    // The owner's trial: "docker stop" on Gluetun, then apply. qBittorrent kept running
+    // with the network the old Gluetun had; Compose would start Gluetun alone.
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    expect((await apply(options(home, docker))).outcome).toBe('success');
+    docker.calls.length = 0;
+    const result = await apply(options(home, stoppedUntilUp(docker, 'gluetun')));
+    expect(result.outcome).toBe('success');
+    expect(result.plan.containers).toEqual(
+      expect.arrayContaining([
+        { service: 'gluetun', action: 'start' },
+        { service: 'qbittorrent', action: 'restart' },
+      ]),
+    );
+    expect(docker.calls.indexOf('stop qbittorrent')).toBeLessThan(
+      docker.calls.indexOf('up'),
+    );
+    expect(result.actions.find((a) => a.step === 'start')?.detail).toBe(
+      'every app is running and healthy; restarted qbittorrent',
+    );
+    expect(result.actions.find((a) => a.step === 'verify')).toEqual({
+      step: 'verify',
+      result: 'done',
+      detail:
+        "no changes remain, and qBittorrent's network is Gluetun's, with the VPN up",
+    });
+    // The VPN check's probe ran, in qBittorrent's network, without asking the internet.
+    const probe = docker.calls.filter(
+      (call) => call === 'run qbittorrent sh as 65534:65534',
+    );
+    expect(probe).toHaveLength(1);
+  });
+
+  it('fails verify, with what to do, when the VPN check finds the VPN down', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home, {
+      run: () => ({
+        code: 0,
+        stdout: probeOutput({
+          ...HEALTHY_PROBE,
+          status: [0, '{"status":"stopped"}\n200'],
+        }),
+        stderr: '',
+      }),
+    });
+    const result = await apply(options(home, docker));
+    expect(result.outcome).toBe('failed');
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'apply.verify-failed',
+        message:
+          "the VPN check found the VPN down: Gluetun's control server says the VPN is stopped",
+        hint: 'see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
+      }),
+    );
+  });
+
+  it("fails verify with a leak, naming the check's own hint", async () => {
+    const home = await makeHome();
+    // Docker says qBittorrent has a network of its own, which the plan can't see.
+    const docker = fakeDocker(home, {
+      details: { 'fake-qbittorrent': { networkMode: 'bridge' } },
+    });
+    const result = await apply(options(home, docker));
+    expect(result.outcome).toBe('failed');
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'apply.verify-failed',
+        message:
+          'the VPN check found a leak: qBittorrent has a network of its own ("bridge"), not Gluetun\'s: its traffic does not go through the VPN',
+        hint: 'run "mediaplane apply" to recreate it behind Gluetun, and check compose.override.yaml for a network_mode of its own',
+      }),
+    );
+  });
+
+  it('fails verify, with the check and its hint, when the VPN check cannot run', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home, {
+      run: () => ({ code: 125, stdout: '', stderr: 'fake: no such image' }),
+    });
+    const result = await apply(options(home, docker));
+    expect(result.outcome).toBe('failed');
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'apply.verify-failed',
+        message:
+          "the VPN check could not run: the probe in qBittorrent's network could not run: fake: no such image",
+        hint: 'check that the qBittorrent image is present ("docker image ls"), then run vpn-check again',
+      }),
+    );
+  });
+
+  it('stops at a restart that fails, before up', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    expect((await apply(options(home, docker))).outcome).toBe('success');
+    docker.calls.length = 0;
+    const failing: Runtime = {
+      ...stoppedUntilUp(docker, 'gluetun'),
+      stop: () => Promise.resolve({ ok: false, error: 'fake: cannot stop qbittorrent' }),
+    };
+    const result = await apply(options(home, failing));
+    expect(result.outcome).toBe('failed');
+    expect(result.actions.find((a) => a.step === 'start')).toEqual({
+      step: 'start',
+      result: 'failed',
+      error: 'fake: cannot stop qbittorrent',
+    });
+    expect(docker.calls).not.toContain('up');
+    expect(result.actions.at(-1)).toEqual({ step: 'verify', result: 'skipped' });
+  });
+
+  it('does not check the VPN when qBittorrent is not behind Gluetun', async () => {
+    const home = await makeHome(
+      STACK.replace('qbittorrent: {}', 'qbittorrent: { vpn: false }'),
+    );
+    const docker = fakeDocker(home);
+    const result = await apply(options(home, docker));
+    expect(result.outcome).toBe('success');
+    expect(result.actions.find((a) => a.step === 'verify')?.detail).toBe(
+      'no changes remain',
+    );
+    expect(docker.calls.filter((call) => call.startsWith('run '))).toEqual([]);
   });
 });
 

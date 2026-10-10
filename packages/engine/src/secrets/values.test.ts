@@ -35,13 +35,17 @@ async function stackIn(source = STACK): Promise<ResolvedStack> {
 
 const stored: SecretStore = {
   version: 1,
-  apps: { sonarr: { apiKey: '0'.repeat(32) } },
+  apps: {
+    gluetun: { controlApiKey: '1'.repeat(32) },
+    sonarr: { apiKey: '0'.repeat(32) },
+  },
   shared: { adminPassword: 'fake-admin-password' },
 };
 
 describe('missingGeneratedSecrets', () => {
   it('names the app, the secret and how to generate it', async () => {
     expect(missingGeneratedSecrets(await stackIn(), emptySecretStore())).toEqual([
+      { app: 'gluetun', name: 'controlApiKey', kind: 'hex32' },
       { app: 'sonarr', name: 'apiKey', kind: 'hex32' },
     ]);
   });
@@ -55,6 +59,7 @@ describe('secretsToGenerate', () => {
   it('lists generated secrets that are not in the store yet', async () => {
     expect(secretsToGenerate(await stackIn(), emptySecretStore())).toEqual([
       'admin.password',
+      'gluetun.controlApiKey',
       'sonarr.apiKey',
     ]);
   });

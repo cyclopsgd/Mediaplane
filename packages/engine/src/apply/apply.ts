@@ -13,6 +13,7 @@ import {
 import { wire, WiringFailed } from '../integrations/wire';
 import { COMPOSE_PATH, COMPOSE_PREV_PATH, ENV_PATH, STACK_PATH } from '../paths';
 import { plan, planStack, type PlanOptions, type PlanResult } from '../plan/plan';
+import { PROJECT_NAME } from '../render/compose';
 import { renderEnvFile } from '../render/env';
 import { runbookUrl } from '../runbooks';
 import { prestartFilesFor } from '../render/prestart';
@@ -31,6 +32,7 @@ import { writeFileAtomic } from '../util/atomic';
 import { codeOf } from '../util/error-code';
 import { readIfExists } from '../util/fs';
 import { compare } from '../util/sort';
+import { vpnCheck, VPN_RUNBOOK } from '../vpn/check';
 import {
   AppdataNotPrivateError,
   ensureAppdataDirs,
@@ -60,6 +62,11 @@ export interface ApplyOptions extends PlanOptions {
   waitSeconds?: number;
   /** How apply waits between pull retries; tests pass one that returns at once. */
   sleep?: (ms: number) => Promise<unknown>;
+  /**
+   * The Compose project `runtime` manages ("mediaplane" by default): verify's VPN check
+   * names its containers by it.
+   */
+  project?: string;
 }
 
 export type ApplyOutcome = 'success' | 'failed' | 'no-changes' | 'cancelled' | 'invalid';
@@ -185,9 +192,17 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       if (!(cause instanceof RuntimeError)) throw cause;
       throw new LeaveFailed(cause.message, { cause });
     }
+    // A guest whose host up starts again (strandedGuests): stopped now, up starts it in
+    // the host's new network.
+    const restart = shown.containers
+      .filter((change) => change.action === 'restart')
+      .map((change) => change.service);
+    if (restart.length > 0) succeeded(await runtime.stop(restart, values));
     const result = await runtime.up(options.waitSeconds ?? DEFAULT_WAIT_SECONDS, values);
     if (!result.ok) throw new Error(await startFailure(runtime, result.error));
-    return 'every app is running and healthy';
+    return restart.length === 0
+      ? 'every app is running and healthy'
+      : `every app is running and healthy; restarted ${restart.join(', ')}`;
   });
   await steps.run('wire', async () => {
     try {
@@ -218,7 +233,37 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       throw new Error(`could not plan again: ${first?.message ?? 'unknown error'}`);
     }
     if (after.changed) throw new Error(`changes remain after apply: ${remaining(after)}`);
-    return 'no changes remain';
+    // The VPN's topology too (spec §6.4, §7.2(6)): vpn-check's checks, without egress.
+    if (
+      !stack.apps.some(
+        (app) => app.def.id === 'qbittorrent' && app.networkVia === 'gluetun',
+      )
+    ) {
+      return 'no changes remain';
+    }
+    const vpn = await vpnCheck({
+      home,
+      catalog: options.catalog,
+      host: options.host,
+      env: options.env,
+      runtime,
+      project: options.project ?? PROJECT_NAME,
+    });
+    if (!vpn.ok) {
+      const first = vpn.diagnostics.find((d) => d.severity === 'error');
+      throw new StepError(
+        `the VPN check could not run: ${first?.message ?? 'unknown error'}`,
+        first?.hint ?? `see ${VPN_RUNBOOK}`,
+      );
+    }
+    if (vpn.verdict !== 'pass') {
+      const failing = vpn.checks.find((c) => c.status === 'leak' || c.status === 'down');
+      throw new StepError(
+        `the VPN check found ${vpn.verdict === 'leak' ? 'a leak' : 'the VPN down'}: ${failing?.message ?? vpn.verdict}`,
+        failing?.hint ?? `see ${VPN_RUNBOOK}`,
+      );
+    }
+    return "no changes remain, and qBittorrent's network is Gluetun's, with the VPN up";
   });
 
   const finishedAt = now();
@@ -310,6 +355,16 @@ class Steps {
   }
 }
 
+/** A step that failed, and what to do about it, better said than the step's own hint. */
+class StepError extends Error {
+  readonly hint: string;
+
+  constructor(message: string, hint: string) {
+    super(message);
+    this.hint = hint;
+  }
+}
+
 /** Mediaplane couldn't step off the wiring network before up, so nothing was started. */
 class LeaveFailed extends Error {
   override readonly name = 'LeaveFailed';
@@ -318,7 +373,11 @@ class LeaveFailed extends Error {
 
 /** What an error that knows its own cause says to do, if it does. */
 function ownHint(cause: unknown): string | undefined {
-  if (cause instanceof AppdataNotPrivateError || cause instanceof LeaveFailed) {
+  if (
+    cause instanceof AppdataNotPrivateError ||
+    cause instanceof LeaveFailed ||
+    cause instanceof StepError
+  ) {
     return cause.hint;
   }
   return cause instanceof WiringFailed ? cause.hint : undefined;

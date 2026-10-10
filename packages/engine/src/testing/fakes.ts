@@ -217,15 +217,25 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
  * A Docker whose `up` starts what is written in `home`. Afterwards containers() reports a
  * running, healthy `fake-<service>` per service, labelled with the fakeHash of the written
  * compose.yaml and .env. Like Compose, it hashes a guest (`network_mode: service:<host>`)
- * as `container:<host's id>`.
+ * as `container:<host's id>`, and inspect says it is in its host's network. A vpn-check
+ * probe in qBittorrent's network finds a healthy tunnel, unless `run` says otherwise.
  */
 export function fakeDocker(
   home: string,
   options: FakeRuntimeOptions & { upChangesNothing?: boolean } = {},
 ): Runtime & { calls: string[] } {
   const calls: string[] = [];
-  const base = fakeRuntime({ ...options, calls });
+  const base = fakeRuntime({
+    run: (service, command) =>
+      service === 'qbittorrent' && command.entrypoint === 'sh'
+        ? { code: 0, stdout: probeOutput(HEALTHY_PROBE), stderr: '' }
+        : { code: 0, stdout: '', stderr: '' },
+    ...options,
+    calls,
+  });
   let containers = options.containers ?? [];
+  /** Guest container ID → its host's, from the compose.yaml up started. */
+  const hosts = new Map<string, string>();
   return {
     ...base,
     calls,
@@ -233,6 +243,14 @@ export function fakeDocker(
       calls.push('containers');
       return Promise.resolve(containers);
     },
+    inspect: async (ids) =>
+      (await base.inspect(ids)).map((details) => {
+        const host = hosts.get(details.id);
+        return host === undefined ||
+          options.details?.[details.id]?.networkMode !== undefined
+          ? details
+          : { ...details, networkMode: `container:${host}` };
+      }),
     up: async (waitSeconds, values) => {
       const result = await base.up(waitSeconds, values);
       if (!result.ok || options.upChangesNothing === true) return result;
@@ -244,6 +262,12 @@ export function fakeDocker(
         const host =
           typeof mode === 'string' ? /^service:(.+)$/.exec(mode)?.[1] : undefined;
         if (host !== undefined) config.network_mode = `container:fake-${host}`;
+      }
+      hosts.clear();
+      for (const [service, config] of Object.entries(compose.services)) {
+        const mode = config.network_mode;
+        if (typeof mode === 'string')
+          hosts.set(`fake-${service}`, mode.slice('container:'.length));
       }
       const env = parseEnvFile(await readFile(join(home, ENV_PATH), 'utf8'));
       containers = running(fakeHash(stringify(compose), env));
@@ -293,6 +317,17 @@ export function running(hashes: Record<string, string>): ContainerState[] {
 
 /** vpn-check's probe answers: each check's exit status, and what it printed. */
 export type ProbeAnswers = Partial<Record<ProbeCheck, readonly [number, string]>>;
+
+/**
+ * A probe of a healthy tunnel, without the egress check: the route goes into tun0, and
+ * Gluetun's control server says the VPN runs, with Mediaplane's key only.
+ */
+export const HEALTHY_PROBE: ProbeAnswers = {
+  route: [0, '1.1.1.1 dev tun0  src 10.66.0.2 '],
+  anonymous: [0, '401'],
+  status: [0, '{"status":"running"}\n200'],
+  publicip: [0, '{"public_ip":""}\n200'],
+};
 
 /** What the probe script prints for `answers`, after a line of Compose's own. */
 export function probeOutput(answers: ProbeAnswers): string {

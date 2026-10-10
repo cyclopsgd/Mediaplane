@@ -74,6 +74,18 @@ describe('printPlan: the wiring', () => {
 });
 
 describe('printPlan', () => {
+  it('shows a guest apply restarts, with the hosts it starts', () => {
+    const term = capture();
+    const containers: PlanResult['containers'] = [
+      { service: 'gluetun', action: 'start' },
+      { service: 'qbittorrent', action: 'restart' },
+    ];
+    printPlan({ ...PLAN, files: [], containers }, { json: false }, term.io);
+    expect(term.stdout()).toBe(
+      'Containers:\n  > start     gluetun\n  > restart   qbittorrent\nPlan: 2 containers to change.\n',
+    );
+  });
+
   it('shows a pre-start file as written before first start, without its content', () => {
     const term = capture();
     printPlan(PLAN, { json: false }, term.io);

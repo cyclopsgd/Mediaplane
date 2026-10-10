@@ -387,7 +387,7 @@ describe('mediaplane vpn-check', () => {
     const term = capture({ MEDIAPLANE_COMPOSE_PROJECT: 'mediaplane-dev' });
     expect(await run(['vpn-check', '--home', home], term.io, deps(stranded))).toBe(1);
     expect(term.stdout()).toContain(
-      '        hint: restart qBittorrent: "docker restart mediaplane-dev-qbittorrent-1"\n',
+      '        hint: run "mediaplane apply", which restarts it (or "docker restart mediaplane-dev-qbittorrent-1")\n',
     );
     // Not fail-closed: the traffic still got out.
     expect(term.stdout()).toContain(`\n${OPEN}\n`);
@@ -396,7 +396,7 @@ describe('mediaplane vpn-check', () => {
     const plain = capture();
     expect(await run(['vpn-check', '--home', home], plain.io, deps(stranded))).toBe(1);
     expect(plain.stdout()).toContain(
-      '        hint: restart qBittorrent: "docker restart mediaplane-qbittorrent-1"\n',
+      '        hint: run "mediaplane apply", which restarts it (or "docker restart mediaplane-qbittorrent-1")\n',
     );
   });
 

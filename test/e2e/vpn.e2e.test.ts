@@ -463,7 +463,7 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       expect(checksOf(open)).toContain('network down');
       expect(checksOf(open)).toContain('control-key warning');
       expect(itemOf(open, 'network').hint).toBe(
-        `restart qBittorrent: "docker restart ${PROJECT}-qbittorrent-1"`,
+        `run "mediaplane apply", which restarts it (or "docker restart ${PROJECT}-qbittorrent-1")`,
       );
       expect(itemOf(open, 'control-key').hint).toContain(
         `"docker restart ${PROJECT}-gluetun-1", then "docker restart ${PROJECT}-qbittorrent-1"`,

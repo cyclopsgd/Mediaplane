@@ -42,7 +42,7 @@ export const changeRecordSchema = z.strictObject({
     containers: z.array(
       z.strictObject({
         service: z.string(),
-        action: z.enum(['create', 'recreate', 'start', 'remove', 'unchanged']),
+        action: z.enum(['create', 'recreate', 'start', 'restart', 'remove', 'unchanged']),
       }),
     ),
     secrets: z.strictObject({ generate: z.array(z.string()) }),

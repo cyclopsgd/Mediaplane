@@ -3,7 +3,12 @@ import { ownPortKey } from '../preflight/checks';
 import type { ContainerState } from '../runtime/types';
 import { compare, unique } from '../util/sort';
 
-export type ContainerAction = 'create' | 'recreate' | 'start' | 'remove' | 'unchanged';
+/**
+ * What up does to a service's containers. `restart`: plan's own, for a guest whose host
+ * apply starts again (strandedGuests): apply stops it, and up starts it.
+ */
+export type ContainerAction =
+  'create' | 'recreate' | 'start' | 'restart' | 'remove' | 'unchanged';
 
 export interface ContainerChange {
   service: string;

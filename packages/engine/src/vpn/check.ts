@@ -6,6 +6,7 @@ import { error, withHint, type Diagnostic } from '../diagnostics';
 import type { HostFacts } from '../host/facts';
 import { dockerUnavailable, hostFactsOrFailure } from '../host/failure';
 import { STACK_PATH } from '../paths';
+import { startedBefore } from '../plan/stranded';
 import { resolveStack, type ResolvedApp } from '../resolver/resolve';
 import { runbookUrl } from '../runbooks';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
@@ -266,10 +267,9 @@ async function networkCheck(
     }
     // A container joins another's namespace when it starts. Gluetun started again on its
     // own, after qBittorrent, has a new one; qBittorrent keeps the old, which is gone.
-    const started = (id: string) => Date.parse(of(id)?.startedAt ?? '');
-    const [ours, gluetuns] = [started(qbittorrent.id), started(gluetun.id)];
+    const before = startedBefore(of(qbittorrent.id), of(gluetun.id));
     // A time that can't be read must not read as "not before".
-    if (gluetun.state === 'running' && (Number.isNaN(ours) || Number.isNaN(gluetuns))) {
+    if (gluetun.state === 'running' && before === undefined) {
       return {
         id: 'network',
         status: 'down',
@@ -278,13 +278,14 @@ async function networkCheck(
         hint: `see ${VPN_RUNBOOK}`,
       };
     }
-    if (gluetun.state === 'running' && ours < gluetuns) {
+    if (gluetun.state === 'running' && before === true) {
       return {
         id: 'network',
         status: 'down',
         message:
           'qBittorrent started before Gluetun last did, so it still holds the network Gluetun had then, which is gone: it has none',
-        hint: `restart qBittorrent: "${restart}"`,
+        // Apply restarts it (strandedGuests), which says what it does; docker as well.
+        hint: `run "mediaplane apply", which restarts it (or "${restart}")`,
       };
     }
     return {

@@ -61,7 +61,10 @@ async function makeHome({
       join(home, SECRETS_PATH),
       JSON.stringify({
         version: 1,
-        apps: { sonarr: { apiKey: '0'.repeat(32) } },
+        apps: {
+          gluetun: { controlApiKey: '1'.repeat(32) },
+          sonarr: { apiKey: '0'.repeat(32) },
+        },
         shared: { adminPassword: 'fake-admin-password' },
       }),
     );
@@ -233,7 +236,78 @@ describe('plan', () => {
     expect(result.containers).toEqual(
       SERVICES.map((service) => ({ service, action: 'create' })),
     );
-    expect(result.secrets).toEqual({ generate: ['admin.password', 'sonarr.apiKey'] });
+    expect(result.secrets).toEqual({
+      generate: ['admin.password', 'gluetun.controlApiKey', 'sonarr.apiKey'],
+    });
+  });
+
+  describe("with qBittorrent in Gluetun's network", () => {
+    const planWith = async (
+      containers: ContainerState[],
+      extra: {
+        details?: Record<string, { startedAt: string }>;
+        inspect?: Runtime['inspect'];
+      } = {},
+    ) => {
+      const base = fakeRuntime({
+        hashes: { ok: true, hashes: HASHES },
+        containers,
+        ...(extra.details === undefined ? {} : { details: extra.details }),
+      });
+      const runtime: Runtime =
+        extra.inspect === undefined ? base : { ...base, inspect: extra.inspect };
+      return planFor(await makeCurrentHome(runtime), { runtime });
+    };
+
+    it('plans a restart of the running guest of a Gluetun that apply starts', async () => {
+      const result = await planWith(
+        running(HASHES).map((c) =>
+          c.service === 'gluetun' ? { ...c, state: 'exited', health: '' } : c,
+        ),
+      );
+      expect(result.changed).toBe(true);
+      expect(result.containers).toEqual([
+        { service: 'gluetun', action: 'start' },
+        { service: 'jellyfin', action: 'unchanged' },
+        { service: 'qbittorrent', action: 'restart' },
+        { service: 'sonarr', action: 'unchanged' },
+      ]);
+    });
+
+    it('plans a restart of a guest that started before its host did', async () => {
+      const result = await planWith(running(HASHES), {
+        details: {
+          'fake-qbittorrent': { startedAt: '2026-10-10T10:00:00Z' },
+          'fake-gluetun': { startedAt: '2026-10-10T11:00:00Z' },
+        },
+      });
+      expect(result.changed).toBe(true);
+      expect(result.containers.find((c) => c.service === 'qbittorrent')).toEqual({
+        service: 'qbittorrent',
+        action: 'restart',
+      });
+    });
+
+    it('explains a Docker that stops answering while it reads the start times', async () => {
+      const result = await planWith(running(HASHES), {
+        inspect: () =>
+          Promise.reject(new RuntimeError('docker container inspect failed: fake error')),
+      });
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: 'docker.unavailable',
+          message: 'docker container inspect failed: fake error',
+        }),
+      );
+    });
+
+    it('lets an unexpected error reading the start times through', async () => {
+      const bug = new TypeError('fake: a bug, not Docker');
+      await expect(
+        planWith(running(HASHES), { inspect: () => Promise.reject(bug) }),
+      ).rejects.toBe(bug);
+    });
   });
 
   it('reports no changes when files, containers and secrets are current', async () => {

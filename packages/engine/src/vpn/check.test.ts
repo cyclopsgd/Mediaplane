@@ -524,7 +524,7 @@ describe('vpnCheck', () => {
     expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
     expect(result.ok && result.checks[0]).toMatchObject({
       status: 'down',
-      hint: 'restart qBittorrent: "docker restart mediaplane-dev-qbittorrent-1"',
+      hint: 'run "mediaplane apply", which restarts it (or "docker restart mediaplane-dev-qbittorrent-1")',
     });
   });
 
