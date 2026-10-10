@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { portKey } from '../preflight/checks';
 import { nodeProbe, type HostProbe, type PathStat } from '../preflight/probe';
 import { HelperError } from '../runtime/types';
+import { fetchEgress, isEgressUrl, type EgressResult } from '../vpn/egress';
 import { detectHostFacts, type HostFacts } from './facts';
 
 /** The version of the host helper's report: the helper and the engine share one image. */
@@ -24,6 +25,8 @@ const hostRequestSchema = z.strictObject({
       protocol: z.enum(['tcp', 'udp']),
     }),
   ),
+  /** An IP-echo service to ask which address the host comes from (vpn-check). */
+  egress: z.string().refine(isEgressUrl, 'must be an http or https URL').optional(),
 });
 
 /** What the engine asks the host helper. */
@@ -52,6 +55,12 @@ const hostReportSchema = z.strictObject({
   stat: z.record(z.string(), pathStatSchema.nullable()),
   free: z.record(z.string(), z.number().nullable()),
   ports: z.record(z.string(), z.boolean().nullable()),
+  egress: z
+    .union([
+      z.strictObject({ ok: z.literal(true), address: z.string() }),
+      z.strictObject({ ok: z.literal(false), error: z.string() }),
+    ])
+    .optional(),
 });
 
 /**
@@ -69,6 +78,7 @@ export async function collectHostReport(
   request: HostRequest,
   probe: HostProbe = nodeProbe,
   facts: () => HostFacts = () => detectHostFacts(),
+  egress: (url: string) => Promise<EgressResult> = fetchEgress,
 ): Promise<HostReport> {
   const stat: Record<string, PathStat | null> = {};
   for (const { key, at } of request.stat) stat[key] = (await probe.stat(at)) ?? null;
@@ -85,6 +95,7 @@ export async function collectHostReport(
     stat,
     free,
     ports,
+    ...(request.egress === undefined ? {} : { egress: await egress(request.egress) }),
   };
 }
 

@@ -10,7 +10,7 @@ import {
 import type { HelperMount, HelperResult } from '../runtime/types';
 import { fakeProbe, fakeRuntime } from '../testing/fakes';
 import { FIXTURE_HOST } from '../testing/fixtures';
-import { helperHostFacts, helperMountSources, helperProbe } from './helper';
+import { helperEgress, helperHostFacts, helperMountSources, helperProbe } from './helper';
 import { collectHostReport, HOST_REPORT_SCHEMA, type HostRequest } from './report';
 import { tempDir } from '../testing/temp';
 
@@ -132,6 +132,70 @@ describe('helperHostFacts', () => {
       'the host helper image "--privileged" is not an image name: it must not start with "-"',
     );
     expect(calls).toEqual([]);
+  });
+});
+
+describe('helperEgress', () => {
+  const TRACE = 'https://1.1.1.1/cdn-cgi/trace';
+
+  it('asks the helper, on the host network, which address the host comes from', async () => {
+    const seen: HostRequest[] = [];
+    const runtime = fakeRuntime({
+      hostHelper: async (request) => {
+        seen.push(request);
+        const report = await collectHostReport(
+          request,
+          fakeProbe(),
+          () => FIXTURE_HOST,
+          () => Promise.resolve({ ok: true, address: '198.51.100.2' }),
+        );
+        return { ok: true, stdout: JSON.stringify(report) };
+      },
+    });
+    expect(await helperEgress({ runtime, image: IMAGE, user: USER }, TRACE)).toEqual({
+      ok: true,
+      address: '198.51.100.2',
+    });
+    expect(seen).toEqual([
+      { facts: false, stat: [], free: [], ports: [], egress: TRACE },
+    ]);
+  });
+
+  it('turns every failure into a failed answer, never an error', async () => {
+    const failed = await helperEgress(
+      { runtime: fakeRuntime(), image: IMAGE, user: USER },
+      TRACE,
+    );
+    expect(failed).toEqual({
+      ok: false,
+      error: 'the host helper failed: this fake Docker has no host helper',
+    });
+    const silent = fakeRuntime({
+      hostHelper: () => ({
+        ok: true,
+        stdout: JSON.stringify({
+          schema: HOST_REPORT_SCHEMA,
+          stat: {},
+          free: {},
+          ports: {},
+        }),
+      }),
+    });
+    expect(
+      await helperEgress({ runtime: silent, image: IMAGE, user: USER }, TRACE),
+    ).toEqual({
+      ok: false,
+      error: 'the host helper reported no address',
+    });
+    const refused = await helperEgress(
+      { runtime: fakeRuntime(), image: '--privileged', user: USER },
+      TRACE,
+    );
+    expect(refused).toEqual({
+      ok: false,
+      error:
+        'the host helper image "--privileged" is not an image name: it must not start with "-"',
+    });
   });
 });
 

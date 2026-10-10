@@ -39,3 +39,4 @@ export * from './apply/pull';
 export * from './apply/apply';
 export * from './status';
 export * from './credentials';
+export * from './vpn/egress';

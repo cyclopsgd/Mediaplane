@@ -9,6 +9,7 @@ import {
 } from '../runtime/types';
 import { isInside } from '../util/path';
 import { compare, unique } from '../util/sort';
+import type { EgressResult } from '../vpn/egress';
 import type { HostFacts } from './facts';
 import { parseHostReport, type HostReport, type HostRequest } from './report';
 
@@ -51,6 +52,34 @@ export async function helperHostFacts(options: HelperOptions): Promise<HostFacts
   if (facts === undefined)
     throw new HelperError('the host helper reported no host facts');
   return facts;
+}
+
+/**
+ * Which address the host comes from, as the IP-echo service at `url` sees it, asked by the
+ * host helper on the host network: this container has no route out (spec §4.2). A helper
+ * that fails is a failed answer, not an error, because vpn-check then only warns.
+ */
+export async function helperEgress(
+  options: HelperOptions,
+  url: string,
+): Promise<EgressResult> {
+  try {
+    const result = await runHelper(
+      options,
+      { facts: false, stat: [], free: [], ports: [], egress: url },
+      [],
+    );
+    if (!result.ok)
+      return { ok: false, error: `the host helper failed: ${result.error}` };
+    return (
+      parseHostReport(result.stdout).egress ?? {
+        ok: false,
+        error: 'the host helper reported no address',
+      }
+    );
+  } catch (cause) {
+    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+  }
 }
 
 /**

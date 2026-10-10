@@ -75,9 +75,44 @@ describe('collectHostReport', () => {
   });
 });
 
+describe('collectHostReport, asked for the egress address', () => {
+  it('asks the IP-echo service only when the request names one', async () => {
+    const asked: string[] = [];
+    const egress = (url: string) => {
+      asked.push(url);
+      return Promise.resolve({ ok: true as const, address: '198.51.100.2' });
+    };
+    const none = { facts: false, stat: [], free: [], ports: [] };
+    const url = 'https://1.1.1.1/cdn-cgi/trace';
+    const report = await collectHostReport(
+      { ...none, egress: url },
+      fakeProbe(),
+      () => FIXTURE_HOST,
+      egress,
+    );
+    expect(report.egress).toEqual({ ok: true, address: '198.51.100.2' });
+    const without = await collectHostReport(
+      none,
+      fakeProbe(),
+      () => FIXTURE_HOST,
+      egress,
+    );
+    expect(without).not.toHaveProperty('egress');
+    expect(asked).toEqual([url]);
+  });
+});
+
 describe('parseHostRequest', () => {
   it('reads back what the engine sends', () => {
     expect(parseHostRequest(JSON.stringify(REQUEST))).toEqual(REQUEST);
+  });
+
+  it('reads back an egress URL, and refuses one that is not http or https', () => {
+    const asking = { ...REQUEST, egress: 'https://1.1.1.1/cdn-cgi/trace' };
+    expect(parseHostRequest(JSON.stringify(asking))).toEqual(asking);
+    expect(() =>
+      parseHostRequest(JSON.stringify({ ...REQUEST, egress: 'file:///etc/shadow' })),
+    ).toThrow('egress: must be an http or https URL');
   });
 
   it('refuses anything else', () => {
@@ -94,6 +129,17 @@ describe('parseHostReport', () => {
   it('reads the last line the helper printed', async () => {
     const report = await collectHostReport(REQUEST, fakeProbe(), () => FIXTURE_HOST);
     expect(parseHostReport(`some warning\n${JSON.stringify(report)}\n`)).toEqual(report);
+  });
+
+  it('reads the egress answer', () => {
+    const report = {
+      schema: HOST_REPORT_SCHEMA,
+      stat: {},
+      free: {},
+      ports: {},
+      egress: { ok: false, error: 'no answer from https://1.1.1.1/cdn-cgi/trace' },
+    };
+    expect(parseHostReport(JSON.stringify(report))).toEqual(report);
   });
 
   it('refuses a report from another version, or none at all', () => {
