@@ -22,6 +22,7 @@ import { writeFileAtomic } from '../util/atomic';
 import { readIfExists } from '../util/fs';
 import { compare } from '../util/sort';
 import { ensureAppdataDirs, ownershipFixes } from './ownership';
+import { pullImages } from './pull';
 
 export const DEFAULT_WAIT_SECONDS = 600;
 
@@ -41,6 +42,8 @@ export interface ApplyOptions extends PlanOptions {
   now?: () => Date;
   /** How long `up --wait` waits for every app to be healthy. */
   waitSeconds?: number;
+  /** How apply waits between pull retries; tests pass one that returns at once. */
+  sleep?: (ms: number) => Promise<unknown>;
 }
 
 export type ApplyOutcome = 'success' | 'failed' | 'no-changes' | 'cancelled' | 'invalid';
@@ -123,10 +126,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     await ensureAppdataDirs(stack);
     return `wrote ${written.join(' and ')}`;
   });
-  await steps.run('pull', async () => {
-    succeeded(await runtime.pull(values));
-    return 'images present';
-  });
+  await steps.run('pull', () => pullImages(runtime, values, options.sleep));
   await steps.run('ownership', async () => {
     const fixes = await ownershipFixes(stack, options.probe);
     for (const fix of fixes) {

@@ -288,6 +288,26 @@ describe('apply', () => {
     expect((await listRecords(home)).records[0]?.outcome).toBe('failed');
   });
 
+  it('pulls again after a temporary registry error', async () => {
+    const home = await makeHome();
+    const slept: number[] = [];
+    const docker = fakeDocker(home, {
+      pull: [{ ok: false, error: 'net/http: TLS handshake timeout' }, { ok: true }],
+    });
+    const sleep = (ms: number) => {
+      slept.push(ms);
+      return Promise.resolve();
+    };
+    const result = await apply(options(home, docker, { sleep }));
+    expect(result.outcome).toBe('success');
+    expect(result.actions[2]).toEqual({
+      step: 'pull',
+      result: 'done',
+      detail: 'images present, after 1 retry',
+    });
+    expect(slept).toEqual([5_000]);
+  });
+
   it('treats a runtime that throws like a failed step, and still records it', async () => {
     const home = await makeHome();
     const docker = fakeDocker(home);

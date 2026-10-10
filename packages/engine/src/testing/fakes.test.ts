@@ -46,6 +46,17 @@ describe('fakeDocker', () => {
   });
 });
 
+describe('fakeRuntime().pull', () => {
+  it('answers from a list, one result per call, repeating the last', async () => {
+    const runtime = fakeRuntime({
+      pull: [{ ok: false, error: 'fake: first' }, { ok: true }],
+    });
+    expect(await runtime.pull({})).toEqual({ ok: false, error: 'fake: first' });
+    expect(await runtime.pull({})).toEqual({ ok: true });
+    expect(await runtime.pull({})).toEqual({ ok: true });
+  });
+});
+
 describe('fakeRuntime().hostHelper', () => {
   it('fails unless the test gives it an answer, and records the mounts', async () => {
     const calls: string[] = [];

@@ -79,7 +79,8 @@ export interface FakeRuntimeOptions {
   hashes?: HashesResult;
   /** When set, Docker is unreachable with this message. */
   unavailable?: string;
-  pull?: CommandResult;
+  /** What pull answers: the same for every call, or one per call, the last repeating. */
+  pull?: CommandResult | readonly CommandResult[];
   up?: CommandResult;
   chown?: CommandResult;
   /** Answers the host helper, given the parsed request; without it, the helper fails. */
@@ -94,6 +95,7 @@ export interface FakeRuntimeOptions {
 /** A Docker that answers from memory. */
 export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
   const record = (call: string) => options.calls?.push(call);
+  let pulls = 0;
   return {
     versions: () => {
       record('versions');
@@ -113,7 +115,11 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
     },
     pull: () => {
       record('pull');
-      return Promise.resolve(options.pull ?? { ok: true });
+      const planned = options.pull ?? { ok: true };
+      const results = 'ok' in planned ? [planned] : planned;
+      return Promise.resolve(
+        results[Math.min(pulls++, results.length - 1)] ?? { ok: true },
+      );
     },
     up: () => {
       record('up');
