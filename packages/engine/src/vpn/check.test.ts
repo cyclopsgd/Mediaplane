@@ -242,8 +242,65 @@ describe('vpnCheck', () => {
       id: 'egress',
       status: 'down',
       message: `qBittorrent's traffic got no answer from ${TRACE}: curl: (28) Connection timed out after 10002 milliseconds`,
+      hint: 'the VPN is down, and nothing gets out (fail-closed); see docs/runbooks/vpn-down.md',
     });
     expect(asked).toEqual([]);
+  });
+
+  it('finds no answer when curl could not reach a server, or got no byte back', async () => {
+    for (const output of [
+      'curl: (7) Failed to connect to 1.1.1.1 port 443 after 3 ms: Could not connect to server',
+      'curl: (6) Could not resolve host: echo.example',
+      'curl: (28) Operation timed out after 10001 milliseconds with 0 bytes received',
+      'curl: (28) Operation timed out after 10001 milliseconds with 0 out of 900 bytes received',
+    ]) {
+      const exit = Number(/\((\d+)\)/.exec(output)?.[1]);
+      const answers: Answers = { ...HEALTHY, egress: [exit, output] };
+      const { result } = await checkWith(await homeWith(), { answers });
+      expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: true });
+      expect(statuses(result).at(-1)).toBe('egress down');
+    }
+  });
+
+  it("counts an answer curl couldn't finish as an answer: something got out", async () => {
+    // curl exits 63 for a body over --max-filesize, 52 for an empty reply, 28 for a
+    // timeout: each after a server answered, so the tunnel's way out isn't shut.
+    for (const output of [
+      'curl: (63) Maximum file size exceeded',
+      'curl: (52) Empty reply from server',
+      'ip=203.0.113.7\ncurl: (28) Operation timed out after 10001 milliseconds with 15 bytes received',
+      'curl: (28) Operation timed out after 10001 milliseconds with 15 out of 900 bytes received',
+    ]) {
+      const exit = Number(/\((\d+)\)/.exec(output)?.[1]);
+      const answers: Answers = { ...HEALTHY, egress: [exit, output] };
+      const { result, asked } = await checkWith(await homeWith(), { answers });
+      expect(result).toMatchObject({
+        ok: true,
+        verdict: 'pass',
+        egress: { url: TRACE, vpn: null, host: null },
+        failClosed: false,
+      });
+      expect(result.ok && result.checks.at(-1)).toMatchObject({
+        id: 'egress',
+        status: 'warning',
+        message: `${TRACE} answered qBittorrent, but its answer could not be read (curl exited ${String(exit)}), so the addresses were not compared`,
+      });
+      expect(asked).toEqual([]);
+
+      // The same answer, with the route out of the tunnel, left outside the VPN.
+      const leaked = await checkWith(await homeWith(), {
+        answers: {
+          ...answers,
+          route: [0, '1.1.1.1 via 172.20.0.1 dev eth0  src 172.20.0.2'],
+        },
+      });
+      expect(leaked.result).toMatchObject({
+        ok: true,
+        verdict: 'leak',
+        failClosed: false,
+      });
+      expect(statuses(leaked.result)).toContain('route leak');
+    }
   });
 
   it('passes on the structure, with a warning, when the host gets no answer', async () => {
@@ -347,6 +404,51 @@ describe('vpnCheck', () => {
     });
   });
 
+  it("never calls it closed when the probe measured a network qBittorrent doesn't hold", async () => {
+    // The probe joins Gluetun's current network; a stranded qBittorrent holds another.
+    const { result } = await checkWith(await homeWith(), {
+      answers: { ...HEALTHY, egress: [7, 'curl: (7) Failed to connect'] },
+      runtime: {
+        details: {
+          [QBITTORRENT_ID]: { networkMode: `container:${GLUETUN_ID}` },
+          [GLUETUN_ID]: { startedAt: '2026-10-10T10:05:00Z' },
+        },
+      },
+    });
+    expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
+    expect(result.ok && result.checks.at(-1)).toMatchObject({
+      id: 'egress',
+      status: 'down',
+      hint: 'the VPN is down; see docs/runbooks/vpn-down.md',
+    });
+    expect(JSON.stringify(result)).not.toContain('nothing gets out');
+  });
+
+  it("finds the VPN down when it can't read when qBittorrent or Gluetun started", async () => {
+    for (const unreadable of [QBITTORRENT_ID, GLUETUN_ID]) {
+      const { result } = await checkWith(await homeWith(), {
+        runtime: {
+          details: {
+            [QBITTORRENT_ID]: { networkMode: `container:${GLUETUN_ID}` },
+            [unreadable]: {
+              ...(unreadable === QBITTORRENT_ID
+                ? { networkMode: `container:${GLUETUN_ID}` }
+                : {}),
+              startedAt: 'not-a-time',
+            },
+          },
+        },
+      });
+      expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
+      expect(result.ok && result.checks[0]).toMatchObject({
+        id: 'network',
+        status: 'down',
+        message:
+          "Mediaplane can't read qBittorrent's or Gluetun's start time, so it can't tell whether qBittorrent holds Gluetun's current network",
+      });
+    }
+  });
+
   it('matches what Docker says to each container by its ID, not by its place', async () => {
     const reversed: Runtime['inspect'] = (ids) =>
       Promise.resolve(
@@ -405,10 +507,14 @@ describe('vpnCheck', () => {
   });
 
   it('finds the VPN down when Gluetun has no container, or one that has gone', async () => {
+    // qBittorrent's network is a container that isn't there: not shown to be Gluetun's.
     const containers = [container('qbittorrent', QBITTORRENT_ID)];
     const { result } = await checkWith(await homeWith(), { runtime: { containers } });
     expect(statuses(result)).toEqual(['network down', 'gluetun down']);
-    expect(result).toMatchObject({ ok: true, verdict: 'down' });
+    expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
+    expect(result.ok && result.checks[1]?.message).toBe(
+      'Gluetun has no container, so the VPN is down',
+    );
   });
 
   it('never calls a leak closed: qBittorrent with a network of its own gets out without Gluetun', async () => {
@@ -423,6 +529,26 @@ describe('vpnCheck', () => {
     });
     expect(result).toMatchObject({ ok: true, verdict: 'leak', failClosed: false });
     expect(statuses(result)).toEqual(['network leak', 'gluetun down']);
+    expect(result.ok && result.checks.map((c) => c.message)).toEqual([
+      'qBittorrent has a network of its own ("mediaplane_default"), not Gluetun\'s: its traffic does not go through the VPN',
+      'Gluetun is exited, so the VPN is down',
+    ]);
+  });
+
+  it('claims nothing about what gets out when qBittorrent is in an unknown network', async () => {
+    // A container outside the stack, say: Gluetun being stopped shuts nothing.
+    const { result } = await checkWith(await homeWith(), {
+      runtime: {
+        containers: [
+          container('gluetun', GLUETUN_ID, { state: 'exited', health: '' }),
+          container('qbittorrent', QBITTORRENT_ID),
+        ],
+        details: { [QBITTORRENT_ID]: { networkMode: `container:${'d'.repeat(64)}` } },
+      },
+    });
+    expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
+    expect(statuses(result)).toEqual(['network down', 'gluetun down']);
+    expect(JSON.stringify(result)).not.toContain('nothing gets out');
   });
 
   it('finds the VPN down, but not closed, when Gluetun is unhealthy; it still probes', async () => {
@@ -453,8 +579,13 @@ describe('vpnCheck', () => {
   it('leaves the keyless check out when the control server does not answer at all', async () => {
     const answers: Answers = { ...HEALTHY, anonymous: [7, '000'] };
     const { result } = await checkWith(await homeWith(), { answers });
-    expect(statuses(result)).not.toContain('control-key ok');
-    expect(statuses(result)).not.toContain('control-key warning');
+    expect(statuses(result)).toEqual([
+      'network ok',
+      'gluetun ok',
+      'control ok',
+      'route ok',
+      'egress ok',
+    ]);
   });
 
   it('warns when the control server refuses the key or does not answer', async () => {
@@ -583,11 +714,29 @@ describe('vpnCheck', () => {
       },
     });
     expect(result.ok ? 'passed' : result.diagnostics).toEqual([
-      expect.objectContaining({
+      {
+        severity: 'error',
         code: 'vpn-check.probe-failed',
         message:
           "the probe in qBittorrent's network stopped before its egress check: fake: killed",
-      }) as unknown,
+        hint: 'run vpn-check again; if it keeps stopping, look at qBittorrent\'s log ("docker logs mediaplane-qbittorrent-1")',
+      },
+    ]);
+  });
+
+  it('points to the image when the probe printed nothing at all', async () => {
+    const { result } = await checkWith(await homeWith(), {
+      runtime: {
+        run: () => ({ code: 125, stdout: '', stderr: 'fake: no such image\n' }),
+      },
+    });
+    expect(result.ok ? 'passed' : result.diagnostics).toEqual([
+      {
+        severity: 'error',
+        code: 'vpn-check.probe-failed',
+        message: "the probe in qBittorrent's network could not run: fake: no such image",
+        hint: 'check that the qBittorrent image is present ("docker image ls"), then run vpn-check again',
+      },
     ]);
   });
 
