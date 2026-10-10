@@ -29,6 +29,25 @@ const PROJECT = `mediaplane-e2e-${String(process.pid)}-vpn`;
 const QBT_PORT = 8090;
 /** Two documentation subnets (RFC 5737), to check Gluetun takes a comma-separated list. */
 const OUTBOUND = ['192.0.2.0/24', '198.51.100.0/24'];
+/** Verify's detail when it ran vpn-check's checks and found the VPN up. */
+const VPN_UP =
+  "no changes remain, and qBittorrent's network is Gluetun's, with the VPN up";
+
+/** The ID of `service`'s container in `containers`. */
+function idOf(containers: readonly { service: string; id: string }[], service: string) {
+  return containers.find((c) => c.service === service)?.id ?? 'missing';
+}
+
+/** The network a container runs in: `container:<id>` for one in another's namespace. */
+async function networkModeOf(container: string): Promise<string> {
+  const inspect = await nodeExec(
+    'docker',
+    ['container', 'inspect', '--format', '{{.HostConfig.NetworkMode}}', container],
+    { cwd: '/' },
+  );
+  expect(inspect.code, inspect.stderr).toBe(0);
+  return inspect.stdout.trim();
+}
 
 /**
  * qBittorrent behind Gluetun, Gluetun on the test's WireGuard server (Gluetun's `custom`
@@ -238,9 +257,7 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       expect(applied.outcome).toBe('success');
       // Verify checked qBittorrent's key through Gluetun, from the host, on the wiring
       // network, and ran vpn-check's checks.
-      expect(applied.actions.find((a) => a.step === 'verify')?.detail).toBe(
-        "no changes remain, and qBittorrent's network is Gluetun's, with the VPN up",
-      );
+      expect(applied.actions.find((a) => a.step === 'verify')?.detail).toBe(VPN_UP);
       expect(await wiringMembers(PROJECT)).toEqual({
         internal: true,
         members: [`${PROJECT}-gluetun-1`],
@@ -255,16 +272,11 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
           'qbittorrent running healthy',
         ],
       );
-      const gluetun = containers.find((c) => c.service === 'gluetun')?.id ?? 'missing';
-      const qbittorrent =
-        containers.find((c) => c.service === 'qbittorrent')?.id ?? 'missing';
-      const inGluetun = `container:${gluetun}`;
-      const inspect = await nodeExec(
-        'docker',
-        ['container', 'inspect', '--format', '{{.HostConfig.NetworkMode}}', qbittorrent],
-        { cwd: '/' },
-      );
-      expect(inspect.stdout.trim()).toBe(inGluetun);
+      // Read again after the apply from the image, which can recreate them.
+      let gluetun = idOf(containers, 'gluetun');
+      let qbittorrent = idOf(containers, 'qbittorrent');
+      let inGluetun = `container:${gluetun}`;
+      expect(await networkModeOf(qbittorrent)).toBe(inGluetun);
       // vpn-check's hints name containers as <project>-<service>-1: these are the real names.
       const names = await nodeExec(
         'docker',
@@ -313,10 +325,7 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       const fromHost = await fetch(echo, { signal: AbortSignal.timeout(10_000) });
       expect((await fromHost.text()).trim()).toBe(`ip=${wg.gateway}`);
 
-      // vpn-check passes, and sees the same two addresses: from source, and from the image
-      // behind the socket proxy, whose own network has no route to the stack (its probe
-      // runs inside qBittorrent's namespace, and the host helper asks for the host's own
-      // address).
+      // vpn-check passes from source, and sees the two addresses.
       const toEcho = { MEDIAPLANE_VPN_CHECK_URL: echo };
       const compared = {
         verdict: 'pass',
@@ -341,24 +350,6 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       expect(passedText.stdout).toContain(
         'Passed: qBittorrent reaches the internet only through the VPN.',
       );
-      deployed = await deployMediaplane({ home, stack: PROJECT });
-      const inImage = await deployed.mediaplane(['vpn-check', '--json'], toEcho);
-      expect(inImage.code, inImage.stdout + inImage.stderr).toBe(0);
-      expect(JSON.parse(inImage.stdout)).toMatchObject(compared);
-      expect(checksOf(inImage)).toEqual(checksOf(passedJson));
-      expect(itemOf(inImage, 'egress').message).toBe(bothAddresses);
-      // Gluetun's firewall lets the wiring network reach qBittorrent's port: from its
-      // image, behind the proxy, Mediaplane checks qBittorrent's key through Gluetun.
-      const planned = await deployed.mediaplane(['plan', '--json']);
-      expect(planned.code, planned.stdout + planned.stderr).toBe(0);
-      expect(JSON.parse(planned.stdout)).toMatchObject({
-        changed: false,
-        wiring: [{ resource: 'qbittorrent', action: 'unchanged' }],
-      });
-      // Cleared first, so the teardown below doesn't try a failed removal again.
-      const done = deployed;
-      deployed = undefined;
-      await done.remove();
 
       // The owner's trial: Gluetun stopped by hand, then apply. Compose would only start
       // Gluetun, leaving qBittorrent with the network the old one had; apply restarts
@@ -380,7 +371,7 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
         'every app is running and healthy; restarted qbittorrent',
       );
       expect(restarted.actions.find((a) => a.step === 'verify')?.result).toBe('done');
-      // Started again, not recreated: every container is the one from before.
+      // Started again, not recreated: every container is the one the first apply made.
       expect((await runtime.containers()).map((c) => c.id).sort()).toEqual(
         containers.map((c) => c.id).sort(),
       );
@@ -394,6 +385,62 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
         'route ok',
       ]);
       expect((await apply(options)).outcome).toBe('no-changes');
+
+      // From the image, behind the socket proxy. Its first apply recreates Jellyfin, for
+      // a setting changed, so its verify always runs vpn-check's checks behind the proxy.
+      // Where the host's Compose isn't the image's (CI's is 2.38), it recreates Gluetun
+      // and qBittorrent too: the two hash the apps' bind volumes differently (ADR 0010).
+      // Then the plan from the image has nothing to change, and the IDs are read again.
+      deployed = await deployMediaplane({ home, stack: PROJECT });
+      await writeFile(
+        join(home, 'stack.yaml'),
+        vpnStack(join(home, 'data'), wg).replace(
+          'apps:\n',
+          'apps:\n  jellyfin: { env: { FAKE_SETTING: "1" } }\n',
+        ),
+      );
+      const inImageApply = await deployed.mediaplane(['apply', '--yes', '--json']);
+      expect(inImageApply.code, inImageApply.stdout + inImageApply.stderr).toBe(0);
+      const appliedInImage = JSON.parse(inImageApply.stdout) as {
+        plan: { containers: { service: string; action: string }[] };
+        actions: { step: string; detail?: string }[];
+      };
+      expect(appliedInImage.plan.containers).toContainEqual({
+        service: 'jellyfin',
+        action: 'recreate',
+      });
+      expect(appliedInImage.actions.find((a) => a.step === 'verify')?.detail).toBe(
+        VPN_UP,
+      );
+      expect(await wiringMembers(PROJECT)).toEqual({
+        internal: true,
+        members: [`${PROJECT}-gluetun-1`, `${PROJECT}-mediaplane`],
+      });
+      const current = await runtime.containers();
+      gluetun = idOf(current, 'gluetun');
+      qbittorrent = idOf(current, 'qbittorrent');
+      inGluetun = `container:${gluetun}`;
+      expect(await networkModeOf(qbittorrent)).toBe(inGluetun);
+      // vpn-check from the image sees the same two addresses as from source: its own
+      // network has no route to the stack, so its probe runs inside qBittorrent's
+      // namespace, and the host helper asks for the host's own address.
+      const inImage = await deployed.mediaplane(['vpn-check', '--json'], toEcho);
+      expect(inImage.code, inImage.stdout + inImage.stderr).toBe(0);
+      expect(JSON.parse(inImage.stdout)).toMatchObject(compared);
+      expect(checksOf(inImage)).toEqual(checksOf(passedJson));
+      expect(itemOf(inImage, 'egress').message).toBe(bothAddresses);
+      // Gluetun's firewall lets the wiring network reach qBittorrent's port: from its
+      // image, behind the proxy, Mediaplane checks qBittorrent's key through Gluetun.
+      const planned = await deployed.mediaplane(['plan', '--json']);
+      expect(planned.code, planned.stdout + planned.stderr).toBe(0);
+      expect(JSON.parse(planned.stdout)).toMatchObject({
+        changed: false,
+        wiring: [{ resource: 'qbittorrent', action: 'unchanged' }],
+      });
+      // Cleared first, so the teardown below doesn't try a failed removal again.
+      const done = deployed;
+      deployed = undefined;
+      await done.remove();
 
       // The tunnel goes down. At once, with the route still into tun0, vpn-check finds the
       // VPN down, and that nothing leaks: a route into the tunnel can't get out around it.
