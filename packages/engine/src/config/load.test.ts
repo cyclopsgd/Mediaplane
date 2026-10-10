@@ -61,6 +61,20 @@ describe('parseConfig', () => {
     });
   });
 
+  it('takes admin user names of 3 to 32 letters, digits, ".", "_" or "-"', () => {
+    expect(parseConfig(`${MINIMAL}admin: { username: media.admin_1-x }\n`).ok).toBe(true);
+    for (const username of ['ad', 'media admin', 'admin:x', 'a'.repeat(33)]) {
+      const [diagnostic] = diagnosticsOf(
+        `${MINIMAL}admin: { username: "${username}" }\n`,
+      );
+      expect(diagnostic).toMatchObject({
+        code: 'config.invalid',
+        path: 'admin.username',
+      });
+      expect(diagnostic?.message).toContain('3 to 32 letters, digits');
+    }
+  });
+
   it('accepts the design-spec example', () => {
     expect(parseConfig(SPEC_EXAMPLE).ok).toBe(true);
   });

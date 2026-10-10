@@ -131,3 +131,31 @@ describe('secretRefs and checkSecretRefs', () => {
     ).toEqual([]);
   });
 });
+
+describe('the admin password', () => {
+  const config = configWith('admin: { password: { env: FAKE_ADMIN_PASSWORD } }\n');
+
+  it('must be at least 12 characters, and the error never shows it', async () => {
+    const diagnostics = await checkSecretRefs(config, await homeWith({}), {
+      FAKE_ADMIN_PASSWORD: 'fake-short1',
+    });
+    expect(diagnostics).toEqual([
+      {
+        severity: 'error',
+        code: 'admin.password-too-short',
+        message: 'admin.password is shorter than 12 characters',
+        path: 'admin.password',
+        hint: 'use a longer password, or leave admin.password out and Mediaplane generates one',
+      },
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain('fake-short1');
+  });
+
+  it('may be exactly 12 characters', async () => {
+    expect(
+      await checkSecretRefs(config, await homeWith({}), {
+        FAKE_ADMIN_PASSWORD: 'fake-twelve1',
+      }),
+    ).toEqual([]);
+  });
+});

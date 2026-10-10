@@ -4,6 +4,9 @@ import { error, type Diagnostic } from '../diagnostics';
 import { compare } from '../util/sort';
 import type { SecretRef, StackConfig } from './schema';
 
+/** The shortest admin password Mediaplane accepts from you (spec §6.1). */
+export const ADMIN_PASSWORD_MIN_LENGTH = 12;
+
 /** Every secret reference in stack.yaml, with its dotted path. */
 export function secretRefs(config: StackConfig): { path: string; ref: SecretRef }[] {
   const refs: { path: string; ref: SecretRef }[] = [];
@@ -48,13 +51,26 @@ export async function checkSecretRefs(
 ): Promise<Diagnostic[]> {
   const diagnostics: Diagnostic[] = [];
   for (const { path, ref } of secretRefs(config)) {
-    if ((await readSecret(ref, home, env)) !== undefined) continue;
-    const where = 'env' in ref ? `environment variable ${ref.env}` : `file ${ref.file}`;
-    diagnostics.push(
-      error('secret.missing', `${path}: ${where} is missing, empty or unreadable`, {
-        path,
-      }),
-    );
+    const value = await readSecret(ref, home, env);
+    if (value === undefined) {
+      const where = 'env' in ref ? `environment variable ${ref.env}` : `file ${ref.file}`;
+      diagnostics.push(
+        error('secret.missing', `${path}: ${where} is missing, empty or unreadable`, {
+          path,
+        }),
+      );
+    } else if (path === 'admin.password' && value.length < ADMIN_PASSWORD_MIN_LENGTH) {
+      diagnostics.push(
+        error(
+          'admin.password-too-short',
+          `admin.password is shorter than ${ADMIN_PASSWORD_MIN_LENGTH} characters`,
+          {
+            path,
+            hint: 'use a longer password, or leave admin.password out and Mediaplane generates one',
+          },
+        ),
+      );
+    }
   }
   return diagnostics;
 }

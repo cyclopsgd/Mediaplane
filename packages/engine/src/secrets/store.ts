@@ -8,9 +8,11 @@ import { compare } from '../util/sort';
 const storeSchema = z.strictObject({
   version: z.literal(1),
   apps: z.record(z.string(), z.record(z.string(), z.string())),
+  /** Secrets the whole stack shares. Added in Slice 3a: older stores have none. */
+  shared: z.strictObject({ adminPassword: z.string().optional() }).optional(),
 });
 
-/** Secrets Mediaplane generated, or apps created, per app: { sonarr: { apiKey: "…" } }. */
+/** Secrets Mediaplane generated, or apps created, per app, and the shared admin password. */
 export type SecretStore = z.infer<typeof storeSchema>;
 
 export function emptySecretStore(): SecretStore {
@@ -41,9 +43,18 @@ export async function writeSecretStore(home: string, store: SecretStore): Promis
     Object.entries(sorted(store.apps)).map(([id, secrets]) => [id, sorted(secrets)]),
   );
   await ensureDir(join(home, STATE_DIR), 0o700);
+  const adminPassword = store.shared?.adminPassword;
   await writeFileAtomic(
     join(home, SECRETS_PATH),
-    `${JSON.stringify({ version: 1, apps }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        version: 1,
+        apps,
+        ...(adminPassword === undefined ? {} : { shared: { adminPassword } }),
+      },
+      null,
+      2,
+    )}\n`,
     0o600,
   );
 }

@@ -1,12 +1,19 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
   collectHostReport,
+  COMPOSE_PATH,
+  composeToYaml,
+  ENV_PATH,
   invokingUser,
   nodeProbe,
-  plan,
+  planStack,
+  readSecretStore,
   renderEnvFile,
+  secretValues,
+  withGeneratedSecrets,
+  writeSecretStore,
   type ContainerState,
   type HostRequest,
   type Runtime,
@@ -44,21 +51,13 @@ async function makeHome(stack = STACK): Promise<string> {
   return home;
 }
 
+/** All zeros: the keys currentHome stores are never printed, so their value is moot. */
+const zeros = (size: number) => Buffer.alloc(size, 0);
+
 /** A home whose generated files and stored keys are what plan expects, as of `runtime`. */
 async function currentHome(runtime: Runtime): Promise<string> {
   const home = await makeHome();
-  await mkdir(join(home, 'state'));
-  await writeFile(
-    join(home, 'state', 'secrets.json'),
-    JSON.stringify({
-      version: 1,
-      apps: {
-        sonarr: { apiKey: '0'.repeat(32) },
-        qbittorrent: { apiKey: `qbt_${'0'.repeat(28)}` },
-      },
-    }),
-  );
-  const current = await plan({
+  const { context } = await planStack({
     home,
     catalog,
     host: FIXTURE_HOST,
@@ -66,30 +65,27 @@ async function currentHome(runtime: Runtime): Promise<string> {
     runtime,
     probe: fakeProbe(),
   });
+  if (context === undefined) throw new Error('the test stack must plan');
+  const { store } = withGeneratedSecrets(context.stack, context.store, zeros);
+  await writeSecretStore(home, store);
   await mkdir(join(home, 'generated'));
+  await writeFile(join(home, COMPOSE_PATH), composeToYaml(context.compose, home));
   await writeFile(
-    join(home, 'generated', 'compose.yaml'),
-    current.files[0]?.content ?? '',
-  );
-  await writeFile(
-    join(home, 'generated', '.env'),
-    renderEnvFile({
-      MP_GLUETUN_WIREGUARD_KEY: 'fake-wireguard-key-for-tests',
-      MP_SONARR_API_KEY: '0'.repeat(32),
-    }),
+    join(home, ENV_PATH),
+    renderEnvFile(await secretValues(context.stack, store, {})),
   );
   return home;
 }
 
-/** The fake WireGuard key and every key apply stored in the home: none may be printed. */
+/** The fake WireGuard key and every secret apply stored in the home: none may be printed. */
 async function secretsIn(home: string): Promise<string[]> {
-  const store = JSON.parse(
-    await readFile(join(home, 'state', 'secrets.json'), 'utf8'),
-  ) as {
-    apps: Record<string, Record<string, string>>;
-  };
-  const generated = Object.values(store.apps).flatMap((keys) => Object.values(keys));
-  expect(generated).toHaveLength(2);
+  const store = await readSecretStore(home);
+  const adminPassword = store.shared?.adminPassword;
+  expect(adminPassword).toBeDefined();
+  const generated = [
+    ...Object.values(store.apps).flatMap((keys) => Object.values(keys)),
+    ...(adminPassword === undefined ? [] : [adminPassword]),
+  ];
   return ['fake-wireguard-key-for-tests', ...generated];
 }
 
@@ -162,10 +158,10 @@ describe('mediaplane plan', () => {
     expect(term.stdout()).toContain('Containers:\n');
     expect(term.stdout()).toContain('  + create    sonarr\n');
     expect(term.stdout()).toContain(
-      'Secrets to generate: qbittorrent.apiKey, sonarr.apiKey\n',
+      'Secrets to generate: admin.password, qbittorrent.apiKey, sonarr.apiKey\n',
     );
     expect(term.stdout()).toContain(
-      'Plan: 2 files to write, 4 containers to change, 2 secrets to generate.',
+      'Plan: 2 files to write, 4 containers to change, 3 secrets to generate.',
     );
     expect(term.stdout()).toContain('+ generated/.env (secret values, not shown)\n');
   });
@@ -196,7 +192,11 @@ describe('mediaplane plan', () => {
       sensitive: true,
     });
     expect(json.containers).toContainEqual({ service: 'sonarr', action: 'create' });
-    expect(json.secrets.generate).toEqual(['qbittorrent.apiKey', 'sonarr.apiKey']);
+    expect(json.secrets.generate).toEqual([
+      'admin.password',
+      'qbittorrent.apiKey',
+      'sonarr.apiKey',
+    ]);
   });
 
   it('exits 0 when nothing would change', async () => {
@@ -418,7 +418,7 @@ describe('mediaplane apply', () => {
     const first = capture();
     expect(await run(['apply', '--home', home, '--yes'], first.io, deps(docker))).toBe(0);
     expect(first.stdout()).toContain(
-      'Plan: 2 files to write, 4 containers to change, 2 secrets to generate.',
+      'Plan: 2 files to write, 4 containers to change, 3 secrets to generate.',
     );
     expect(first.stdout()).toContain('  done    images: images present\n');
     expect(first.stdout()).toMatch(
@@ -747,7 +747,7 @@ describe('mediaplane history', () => {
     const list = capture();
     expect(await run(['history', '--home', home], list.io, deps(docker))).toBe(0);
     expect(list.stdout()).toBe(
-      `${id}  success  2 files written, 4 containers changed, 2 secrets generated\n`,
+      `${id}  success  2 files written, 4 containers changed, 3 secrets generated\n`,
     );
     const one = capture();
     expect(await run(['history', id, '--home', home], one.io, deps(docker))).toBe(0);
@@ -765,7 +765,7 @@ describe('mediaplane history', () => {
     await run(['history', '--home', home, '--json'], term.io, deps(docker));
     expect(JSON.parse(term.stdout())).toMatchObject({
       schema: 'mediaplane.history/v1',
-      records: [{ outcome: 'success', changes: { files: 2, containers: 4, secrets: 2 } }],
+      records: [{ outcome: 'success', changes: { files: 2, containers: 4, secrets: 3 } }],
       unreadable: [],
     });
   });

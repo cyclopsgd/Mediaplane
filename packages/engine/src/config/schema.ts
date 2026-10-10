@@ -8,6 +8,8 @@ const OCTET = '(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)';
 const IPV4_CIDR = new RegExp(`^${OCTET}(?:\\.${OCTET}){3}\\/(?:\\d|[12]\\d|3[0-2])$`);
 /** A Docker image tag: letters, digits, "_", "." and "-", not starting with "." or "-". */
 const DOCKER_TAG = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+/** An admin user name every M1 app accepts. */
+const ADMIN_USERNAME = /^[A-Za-z0-9._-]{3,32}$/;
 
 function isIpv4Cidr(value: string): boolean {
   return IPV4_CIDR.test(value);
@@ -182,18 +184,20 @@ const stackShape = {
     .strictObject({
       username: z
         .string()
-        .min(1)
+        .regex(ADMIN_USERNAME, 'must be 3 to 32 letters, digits, ".", "_" or "-"')
         .default('admin')
-        .describe('The admin user name. Not used yet (Slice 3).'),
+        .describe(
+          'The user name of the shared admin login: 3 to 32 letters, digits, ".", "_" or "-".',
+        ),
       password: secretRefSchema
         .optional()
         .describe(
-          'The admin password, as a secret reference. Checked to exist, but not used yet: from Slice 3, a password is generated when this is left out.',
+          'The admin password, as a secret reference, at least 12 characters long. Left out, Mediaplane generates one; "mediaplane credentials" shows it.',
         ),
     })
     .default({ username: 'admin' })
     .describe(
-      "The shared admin login for the apps that have one. Not used yet: the apps' logins are set up from Slice 3.",
+      "The shared admin login for the apps' web UIs, set up in each app as its slice lands: qBittorrent in Slice 3a, Sonarr, Radarr and Prowlarr in Slice 3b, and Jellyfin in Slice 6.",
     ),
   media_server: z
     .enum(['jellyfin', 'plex'])

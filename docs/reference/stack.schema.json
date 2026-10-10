@@ -92,17 +92,17 @@
       "default": {
         "username": "admin"
       },
-      "description": "The shared admin login for the apps that have one. Not used yet: the apps' logins are set up from Slice 3.",
+      "description": "The shared admin login for the apps' web UIs, set up in each app as its slice lands: qBittorrent in Slice 3a, Sonarr, Radarr and Prowlarr in Slice 3b, and Jellyfin in Slice 6.",
       "type": "object",
       "properties": {
         "username": {
           "default": "admin",
-          "description": "The admin user name. Not used yet (Slice 3).",
+          "description": "The user name of the shared admin login: 3 to 32 letters, digits, \".\", \"_\" or \"-\".",
           "type": "string",
-          "minLength": 1
+          "pattern": "^[A-Za-z0-9._-]{3,32}$"
         },
         "password": {
-          "description": "The admin password, as a secret reference. Checked to exist, but not used yet: from Slice 3, a password is generated when this is left out.",
+          "description": "The admin password, as a secret reference, at least 12 characters long. Left out, Mediaplane generates one; \"mediaplane credentials\" shows it.",
           "anyOf": [
             {
               "type": "object",

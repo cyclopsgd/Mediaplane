@@ -67,6 +67,7 @@ describe('plan against real Docker', () => {
       ['sonarr', 'create'],
     ]);
     expect(result.secrets.generate).toEqual([
+      'admin.password',
       'prowlarr.apiKey',
       'qbittorrent.apiKey',
       'radarr.apiKey',

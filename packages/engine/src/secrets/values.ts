@@ -4,6 +4,7 @@ import { readSecret } from '../config/secrets';
 import { appEnvSecretName, secretEnvName } from '../render/compose';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { compare } from '../util/sort';
+import { ADMIN_PASSWORD_PATH, adminPasswordToGenerate } from './admin';
 import type { SecretStore } from './store';
 
 /**
@@ -27,9 +28,15 @@ export function missingGeneratedSecrets(
   return missing;
 }
 
-/** "<app>.<secret>" for every secret Mediaplane must generate on the next apply. */
+/**
+ * The name of every secret Mediaplane must generate on the next apply, in the order
+ * withGeneratedSecrets generates them: admin.password first, then "<app>.<secret>".
+ */
 export function secretsToGenerate(stack: ResolvedStack, store: SecretStore): string[] {
-  return missingGeneratedSecrets(stack, store).map(({ app, name }) => `${app}.${name}`);
+  return [
+    ...(adminPasswordToGenerate(stack.config, store) ? [ADMIN_PASSWORD_PATH] : []),
+    ...missingGeneratedSecrets(stack, store).map(({ app, name }) => `${app}.${name}`),
+  ];
 }
 
 /** The value of every ${MP_…} variable compose.yaml references. Unknown values are "". */

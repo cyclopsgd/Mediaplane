@@ -2,7 +2,12 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SECRETS_PATH } from '../paths';
-import { emptySecretStore, readSecretStore, writeSecretStore } from './store';
+import {
+  emptySecretStore,
+  readSecretStore,
+  writeSecretStore,
+  type SecretStore,
+} from './store';
 import { tempDir } from '../testing/temp';
 
 async function homeWithStore(content: string): Promise<string> {
@@ -40,6 +45,15 @@ describe('readSecretStore', () => {
       'is not a Mediaplane secrets file',
     );
   });
+
+  it('rejects an unknown shared secret', async () => {
+    const home = await homeWithStore(
+      '{"version": 1, "apps": {}, "shared": {"fake": "fake-value"}}',
+    );
+    await expect(readSecretStore(home)).rejects.toThrow(
+      'is not a Mediaplane secrets file',
+    );
+  });
 });
 
 describe('writeSecretStore', () => {
@@ -58,5 +72,25 @@ describe('writeSecretStore', () => {
     expect(text.indexOf('qbittorrent')).toBeLessThan(text.indexOf('sonarr'));
     expect((await stat(join(home, SECRETS_PATH))).mode & 0o777).toBe(0o600);
     expect((await stat(join(home, 'state'))).mode & 0o777).toBe(0o700);
+  });
+
+  it('keeps the shared admin password', async () => {
+    const home = await tempDir('mediaplane-store-');
+    const store: SecretStore = {
+      version: 1,
+      apps: { sonarr: { apiKey: '0'.repeat(32) } },
+      shared: { adminPassword: 'fake-admin-password' },
+    };
+    await writeSecretStore(home, store);
+    expect(await readSecretStore(home)).toEqual(store);
+  });
+
+  it('writes no shared block when it holds nothing', async () => {
+    const home = await tempDir('mediaplane-store-');
+    await writeSecretStore(home, { version: 1, apps: {}, shared: {} });
+    expect(JSON.parse(await readFile(join(home, SECRETS_PATH), 'utf8'))).toEqual({
+      version: 1,
+      apps: {},
+    });
   });
 });

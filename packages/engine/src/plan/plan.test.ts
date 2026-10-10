@@ -45,7 +45,11 @@ async function makeHome({
     await mkdir(join(home, 'state'));
     await writeFile(
       join(home, SECRETS_PATH),
-      JSON.stringify({ version: 1, apps: { sonarr: { apiKey: '0'.repeat(32) } } }),
+      JSON.stringify({
+        version: 1,
+        apps: { sonarr: { apiKey: '0'.repeat(32) } },
+        shared: { adminPassword: 'fake-admin-password' },
+      }),
     );
   }
   return home;
@@ -95,7 +99,7 @@ describe('plan', () => {
     expect(result.containers).toEqual(
       SERVICES.map((service) => ({ service, action: 'create' })),
     );
-    expect(result.secrets).toEqual({ generate: ['sonarr.apiKey'] });
+    expect(result.secrets).toEqual({ generate: ['admin.password', 'sonarr.apiKey'] });
   });
 
   it('reports no changes when files, containers and secrets are current', async () => {

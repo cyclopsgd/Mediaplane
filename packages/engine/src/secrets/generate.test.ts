@@ -41,6 +41,10 @@ describe('generateSecret', () => {
     expect(generateSecret('qbt', constant(171))).toBe(`qbt_${'l'.repeat(28)}`);
   });
 
+  it('makes a password from 24 base62 characters', () => {
+    expect(generateSecret('password', constant(171))).toBe('l'.repeat(24));
+  });
+
   it('discards bytes that would bias the base62 alphabet', () => {
     let call = 0;
     const random: RandomBytes = (size) => Buffer.alloc(size, call++ === 0 ? 0xff : 0x00);
@@ -50,31 +54,48 @@ describe('generateSecret', () => {
   it('uses real randomness by default', () => {
     expect(generateSecret('hex32')).toMatch(/^[0-9a-f]{32}$/);
     expect(generateSecret('qbt')).toMatch(/^qbt_[0-9A-Za-z]{28}$/);
+    expect(generateSecret('password')).toMatch(/^[0-9A-Za-z]{24}$/);
     expect(generateSecret('hex32')).not.toBe(generateSecret('hex32'));
   });
 });
 
 describe('withGeneratedSecrets', () => {
-  it('fills in missing generated secrets and lists them', () => {
+  it('fills in missing generated secrets and the admin password, and lists them', () => {
     const result = withGeneratedSecrets(
       stackOf(STACK),
       emptySecretStore(),
       constant(0xab),
     );
-    expect(result.generated).toEqual(['sonarr.apiKey']);
+    expect(result.generated).toEqual(['admin.password', 'sonarr.apiKey']);
     expect(result.store).toEqual({
       version: 1,
       apps: { sonarr: { apiKey: 'ab'.repeat(16) } },
+      shared: { adminPassword: 'l'.repeat(24) },
     });
   });
 
   it('never replaces a secret that already exists', () => {
-    const existing = {
-      version: 1 as const,
+    const existing: SecretStore = {
+      version: 1,
       apps: { sonarr: { apiKey: '0'.repeat(32) } },
+      shared: { adminPassword: 'fake-admin-password' },
     };
     const result = withGeneratedSecrets(stackOf(STACK), existing, constant(0xab));
     expect(result).toEqual({ store: existing, generated: [] });
+  });
+
+  it('generates no admin password when admin.password is set', () => {
+    const yours = STACK.replace(
+      'apps:',
+      'admin: { password: { env: FAKE_ADMIN_PASSWORD } }\napps:',
+    );
+    const result = withGeneratedSecrets(
+      stackOf(yours),
+      emptySecretStore(),
+      constant(0xab),
+    );
+    expect(result.generated).toEqual(['sonarr.apiKey']);
+    expect(result.store.shared).toBeUndefined();
   });
 });
 
@@ -95,13 +116,14 @@ describe('withGeneratedSecrets agrees with secretsToGenerate', () => {
 
   it('generates exactly what the plan says it will, in the same order', () => {
     const planned = secretsToGenerate(stack, emptySecretStore());
-    expect(planned).toHaveLength(4);
+    expect(planned).toHaveLength(5);
     const result = withGeneratedSecrets(stack, emptySecretStore());
     expect(result.generated).toEqual(planned);
     expect(result.store.apps.qbittorrent?.apiKey).toMatch(/^qbt_[0-9A-Za-z]{28}$/);
     expect(result.store.apps.prowlarr?.token).toMatch(/^qbt_[0-9A-Za-z]{28}$/);
     expect(result.store.apps.prowlarr?.apiKey).toMatch(/^[0-9a-f]{32}$/);
     expect(result.store.apps.sonarr?.apiKey).toMatch(/^[0-9a-f]{32}$/);
+    expect(result.store.shared?.adminPassword).toMatch(/^[0-9A-Za-z]{24}$/);
   });
 
   it('still agrees when some secrets are already stored', () => {
@@ -110,7 +132,7 @@ describe('withGeneratedSecrets agrees with secretsToGenerate', () => {
       apps: { prowlarr: { apiKey: '0'.repeat(32) }, sonarr: { apiKey: '1'.repeat(32) } },
     };
     const planned = secretsToGenerate(stack, partial);
-    expect(planned).toHaveLength(2);
+    expect(planned).toHaveLength(3);
     const result = withGeneratedSecrets(stack, partial);
     expect(result.generated).toEqual(planned);
     expect(result.store.apps.prowlarr?.apiKey).toBe('0'.repeat(32));

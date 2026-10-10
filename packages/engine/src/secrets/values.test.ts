@@ -33,7 +33,11 @@ async function stackIn(source = STACK): Promise<ResolvedStack> {
   return result.stack;
 }
 
-const stored: SecretStore = { version: 1, apps: { sonarr: { apiKey: '0'.repeat(32) } } };
+const stored: SecretStore = {
+  version: 1,
+  apps: { sonarr: { apiKey: '0'.repeat(32) } },
+  shared: { adminPassword: 'fake-admin-password' },
+};
 
 describe('missingGeneratedSecrets', () => {
   it('names the app, the secret and how to generate it', async () => {
@@ -50,6 +54,7 @@ describe('missingGeneratedSecrets', () => {
 describe('secretsToGenerate', () => {
   it('lists generated secrets that are not in the store yet', async () => {
     expect(secretsToGenerate(await stackIn(), emptySecretStore())).toEqual([
+      'admin.password',
       'sonarr.apiKey',
     ]);
   });

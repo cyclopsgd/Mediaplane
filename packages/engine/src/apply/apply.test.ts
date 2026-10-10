@@ -79,7 +79,7 @@ describe('apply', () => {
       ['start', 'done'],
       ['verify', 'done'],
     ]);
-    expect(result.actions[0]?.detail).toBe('generated sonarr.apiKey');
+    expect(result.actions[0]?.detail).toBe('generated admin.password, sonarr.apiKey');
     expect(events.slice(0, 4)).toEqual([
       'keys:start',
       'keys:end',
@@ -94,6 +94,7 @@ describe('apply', () => {
     expect(JSON.parse(await readFile(join(home, SECRETS_PATH), 'utf8'))).toEqual({
       version: 1,
       apps: { sonarr: { apiKey: 'ab'.repeat(16) } },
+      shared: { adminPassword: 'l'.repeat(24) },
     });
     expect(await modeOf(join(home, SECRETS_PATH))).toBe(0o600);
     expect((await readdir(join(home, 'appdata'))).sort()).toEqual([
@@ -114,10 +115,14 @@ describe('apply', () => {
       }),
     ]);
     expect(result.recordId).toBe('20261009T094312Z-abababab');
-    expect(records[0]?.plan.secrets.generate).toEqual(['sonarr.apiKey']);
+    expect(records[0]?.plan.secrets.generate).toEqual([
+      'admin.password',
+      'sonarr.apiKey',
+    ]);
     const recorded = JSON.stringify(records);
     expect(recorded).not.toContain('ab'.repeat(16));
     expect(recorded).not.toContain('fake-wireguard-key-for-tests');
+    expect(recorded).not.toContain('l'.repeat(24));
   });
 
   it('reports no changes on a second apply, without asking or recording', async () => {
@@ -479,7 +484,7 @@ describe('apply', () => {
   it('stops at a failed key generation, and still records it', async () => {
     const home = await makeHome();
     let draws = 0;
-    // The first draw (the sonarr key) fails; later ones (the record id) work.
+    // The first draw (the admin password) fails; later ones (the record id) work.
     const flaky = (size: number) => {
       if (draws++ === 0) throw new Error('fake: no entropy available');
       return random(size);
@@ -597,6 +602,7 @@ describe('apply', () => {
     const stored = JSON.stringify({
       version: 1,
       apps: { sonarr: { apiKey: '0'.repeat(32) } },
+      shared: { adminPassword: 'fake-admin-password' },
     });
     await writeFile(join(home, SECRETS_PATH), stored);
     const result = await apply(options(home, fakeDocker(home)));

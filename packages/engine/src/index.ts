@@ -22,6 +22,7 @@ export * from './plan/plan';
 export * from './secrets/store';
 export * from './secrets/generate';
 export * from './secrets/values';
+export * from './secrets/admin';
 export * from './runtime/types';
 export * from './runtime/exec';
 export * from './runtime/docker';
