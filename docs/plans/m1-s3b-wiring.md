@@ -113,13 +113,17 @@ These are added or restated for this slice:
 - **Secrets never appear** in diagnostics, errors, change records, logs, human or JSON
   output, command lines, container environments or `docker inspect`. That covers the
   apps' API keys, the admin password, a pasted WireGuard key, and session cookies.
-  - A key travels only in a request header (`X-Api-Key`, or `Authorization: Bearer` for
-    qBittorrent), never in a query string (`?apikey=` ends up in the apps' logs). The
-    admin password travels only in request bodies: the settings that set it, and the
-    sign-in form that checks it.
+  - No key ever goes in a URL (`?apikey=` ends up in the apps' logs). Mediaplane sends
+    an app's key in a request header (`X-Api-Key`, or `Authorization: Bearer` for
+    qBittorrent). The one body that holds a key is the Servarr host settings, which
+    carry the app's own key back to that app as it gave it (decision 9). The admin
+    password travels only in request bodies: those settings, and the sign-in form that
+    checks it.
   - Every message the HTTP client makes is redacted with every secret the stack knows
     (`.env`'s values, the store's keys, the admin password), and names a path without
-    its query. An app's own message is quoted, but never Servarr's `attemptedValue`.
+    its query. An app's own message is quoted, but never Servarr's `attemptedValue`. Its
+    answer is redacted before anything collapses or cuts it, and again after (preflight
+    B1): a secret split by the cut, or changed by the collapse, would otherwise escape.
   - `state/resources.json` and the change records hold secret *names*, never values.
     Secrets are verified by use (a sign-in), never stored or compared (spec §6.3).
   - The client runs in Mediaplane's own process. The Docker commands this slice adds
@@ -139,7 +143,10 @@ These are added or restated for this slice:
   dependency.
 - **Unit tests never reach a real app.** HTTP tests use `fakeHttpApp` on `127.0.0.1`.
   CLI tests pass `CliDeps.wiring`, from `fakeStackApis()`, so the real catalog's apps are
-  asked on a fake server.
+  asked on a fake server. The fake runtime puts no container on the wiring network unless
+  a test says where (`fakeSonarr().addresses`, `fakeStackApis().addresses`), so a test
+  that forgets its fake apps gets `wire.not-on-network`, never a request to a real app on
+  the host.
 - **Docker and Compose flags.** CI runs Docker 28 with Compose v2.38.2; the dev box runs
   Docker 29.8 with Compose 5.5.1; the image bundles Compose 5.5.1. The runtime adds only
   `docker network inspect --format`, `docker network connect`, `docker network
@@ -189,10 +196,13 @@ applied. The ones the controller should look at first are marked **(check)**.
    **No proxy permission changes.** The allow-list's regexes already allow network
    connect and disconnect for any network, for an override's networks. In
    `deploy/deploy.test.ts`, the three network calls join `ENGINE_CALLS` as the engine's
-   own, and `proxy-net/disconnect` leaves `OVERRIDE_CALLS`, since the engine's list now
-   covers it. `deploy/mediaplane.compose.yaml` changes a comment only. The research
-   recorded the calls through a logging proxy; Task 9 runs them through the real proxy,
-   from the deployed image (Tasks 2, 3, 9).
+   own, and `OVERRIDE_CALLS` keeps all its lines, so what an override needs stays pinned
+   (preflight M9). `deploy/mediaplane.compose.yaml` changes a comment only. The research
+   recorded every call through a logging proxy. Task 9 runs the join and the leave through
+   the real proxy, from the deployed image, and checks Docker's own events for the
+   disconnect and the connect. The stranded qBittorrent's trial runs from source only:
+   `compose stop` lists and stops containers, calls that `up` already makes through the
+   proxy when it recreates one (preflight M8) (Tasks 2, 3, 9).
 2. **(check) `plan` joins the wiring network.** "`plan` writes nothing" still holds for
    files. Joining is the one change to Docker's state that `plan` makes: without it,
    `plan` in the image can't ask the apps anything. It is idempotent ("already" when
@@ -213,7 +223,8 @@ applied. The ones the controller should look at first are marked **(check)**.
 4. **(check) The HTTP client never goes through a proxy.** `node:http` with an agent of
    its own (`keepAlive: false`). Node's global agent sends requests to `HTTP_PROXY`
    when `NODE_USE_ENV_PROXY` is set, which would hand the proxy the key. A spawned test
-   sets both and proves no request reaches the proxy. The rest:
+   sets both, shows that a request through Node's own agent reaches the proxy, and that
+   the client's doesn't (preflight M5). The rest:
    - retries with full jitter (500 ms, doubling, at most 10 s a wait) until a deadline:
      120 s in `apply` (`APP_DEADLINE_MS`), 15 s in `plan` (`PLAN_DEADLINE_MS`);
    - GET, PUT and the sign-in form (a POST that changes nothing) are retried on a
@@ -223,22 +234,35 @@ applied. The ones the controller should look at first are marked **(check)**.
    - messages are `<App> at http://<service>:<port> (<address>) <what> (<METHOD> <path>)`,
      redacted, with the app's own message from Servarr's validation errors
      (`errorMessage`, never `attemptedValue`), a ProblemDetails, `{ message }` or its text
-     with the HTML taken out, at most 200 characters (Task 4).
+     with the HTML taken out, at most 200 characters;
+   - **(check) the order of the redaction** (preflight B1): `appMessage(body, clean)`
+     redacts the raw body first, then, for JSON, the parsed message again (a secret with
+     JSON escapes appears only once parsed), and only then collapses whitespace and cuts
+     at 200 characters. The failure's message is redacted once more as a whole. Tests:
+     the key at character 190 of a 300-character answer (no 8 characters of it remain),
+     and a password with runs of spaces;
+   - a size limit is named in the unit it is a whole number of: "answered more than
+     1 KiB", never "0 MiB" (Task 4).
 5. **Requests carry `Host: <service>:<port>`**, as the other apps of the stack send, which
    the Servarr apps' allowed hosts and qBittorrent's Host-header check accept. The TCP
    connection goes to the container's address on the wiring network (Task 4).
 6. **(check) Secrets in and out of the wiring.** See the Global Constraints: keys in
-   headers, the password in request bodies only, redaction with every secret the stack
+   headers (and in the Servarr settings sent back to their own app), the password in
+   request bodies only, redaction with every secret the stack
    knows (`knownSecrets`), cookies dropped. A resource's secrets are *verified* by use
    (Servarr: `POST /login` with the shared admin, where a 302 to anywhere but
-   `…loginFailed…` means the login works), never compared or stored (Tasks 4 to 7).
+   `…loginFailed…` means the login works), never compared or stored. The fake Sonarr
+   repeats a key it refuses, as an app may, so the plan and wire tests fail if
+   `knownSecrets` ever stops reaching the client (preflight M5) (Tasks 4 to 7).
 7. **(check) `state/resources.json` holds no secret.** Schema `mediaplane.resources/v1`:
    `{ schema, resources: { "<app>.<resource>": { id, name, fields, secrets, appliedAt } } }`,
    where `fields` are the managed, non-secret values (`username`) and `secrets` are
-   *names* (`["password"]`). Written atomically, `0600` in `state/` (`0700`), at once
-   after each resource. A file that doesn't parse is an error (`resources.invalid`),
-   never overwritten. The change record's `wire` actions name the resource and what was
-   done (`created`, `updated username`), never a value (Tasks 5, 7).
+   *names* (`["password"]`). Its addresses follow the contract's rule for a resource
+   name (`<app>.` then `[a-z][a-z0-9_]*`: preflight M22). Written atomically, `0600` in
+   `state/` (`0700`), at once after each resource. A file that doesn't parse is an error
+   (`resources.invalid`), never overwritten. The change record's `wire` actions name the
+   resource and what was done (`created`, `updated username`), never a value (Tasks 5,
+   7).
 8. **(check) Keys an app creates must fit the store, and the store refuses to save one
    that doesn't.** The roadmap item left two choices. The charset rule
    (`^[A-Za-z0-9_]+$`) stays for every key, because the keys go into the apps' files
@@ -252,7 +276,8 @@ applied. The ones the controller should look at first are marked **(check)**.
    `GET /api/v{3|1}/config/host`, and a user name of `""` means none yet; `create` and
    `update` `PUT` the whole settings object back with the user name and the password
    (as the app's own UI does; that object holds the app's key and the old hash, and is
-   never shown). No restart needed (Tasks 5, 7).
+   never shown). That body is the one place a key travels outside a header: back to the
+   app it belongs to (the Global Constraints). No restart needed (Tasks 5, 7).
 10. **(check) Servarr's allowed hosts when the LAN needn't sign in.** With
     `security.login_on_lan: false`, Sonarr, Radarr and Prowlarr take only Host names on
     a list, and refuse to save their settings until they have one (found by the
@@ -312,11 +337,34 @@ applied. The ones the controller should look at first are marked **(check)**.
     again` (Task 1).
 17. **`apply` writes `generated/.env` only when it differs,** as it already did for
     `compose.yaml`; an unchanged one is only made `0600` again. The files step then says
-    "none needed" (Task 1).
+    "none needed". Where that `chmod` is refused (`EPERM`: another user's file, after a
+    run with `sudo`), it rewrites the file as before and counts it written, so it is never
+    worse than the atomic rewrite it replaces (preflight M18) (Task 1).
 18. **Host reachability from source is assumed on Docker 28.** Run from source, the CLI
     reaches the containers' addresses on an internal network from the host. Verified on
     Docker 29.8; CI (Docker 28) confirms it on the slice PR's first run. If it doesn't
     hold there, the fix is a task on that PR, not a change of design.
+19. **What the preflight scan changed** (B1, M1 to M22, the controller's rulings). Each is
+    in the task that owns the code; the ones that change a decision are above (B1 in 4,
+    M5 in 6, M8 and M9 in 1, M18 in 17, M19 in 9, M22 in 7).
+    - Shared code instead of copies: `wiringTargets` and `notOnNetwork` in the wire step
+      (M1); one `wiringLine` for `plan` and `history` (M2); the engine's `codeOf` in the
+      client and in `folders.ts` (M3); `stoppedUntilUp`, the shared wiring fixture in
+      `testing/wiring.ts`, and `wiringMembers` in the e2e helpers (M4).
+    - Tests that can fail: the catalog's checks run only over the apps with an API or an
+      integration, and list them (M5); the no-proxy test first shows Node's own agent
+      does go through the proxy (M5); the deploy e2e checks Docker's events (M5).
+    - The tests that need a folder this user can't write keep skipping as root, the
+      existing pattern (M6, as ruled).
+    - The deploy e2e's teardown runs every removal whatever the one before did (M7).
+    - The fake runtime gives no address by default (M10).
+    - The docs: the deploy guide's network line, the architecture's `mediaplane-system`
+      and `plan` lines, the README's flow (the wire step), the spec's §5.2 `plan` row,
+      its §11 entry (the runtime's new calls, the ports' source), T14's indirect egress,
+      `CONTRIBUTING.md`, and claims cut back to what is checked (M11 to M14, M21); short
+      table cells, the detail in lists (M15); and vpn-check's stranded hint, which puts
+      `mediaplane apply` first (M20).
+    - The completion checklist compares against `4125ce1` (M16).
 
 ## File structure (new and changed in this slice)
 
@@ -337,7 +385,8 @@ applied. The ones the controller should look at first are marked **(check)**.
   `runtime/types.ts` and `runtime/docker.ts` (join, leave, addresses, stop),
   `plan/plan.ts`, `plan/containers.ts` (`restart`), `apply/apply.ts` (the wire step,
   verify, `.env`), `history/records.ts`, `secrets/store.ts`, `vpn/check.ts`,
-  `credentials.ts`, `paths.ts`, `config/schema.ts` (a description), `index.ts`.
+  `credentials.ts`, `paths.ts`, `config/schema.ts` (a description), `index.ts` (which
+  now exports `util/error-code.ts`'s `codeOf` too).
 - tests' helpers: `testing/http.ts` (new: `fakeHttpApp`, `closedPort`),
   `testing/wiring.ts` (new: `fakeStackApis`, `fakeSonarr`, `WIRED_CATALOG`),
   `testing/fakes.ts`, `testing/fixtures.ts`, `testing/index.ts`.
@@ -360,9 +409,11 @@ Elsewhere:
 
 - `deploy/deploy.test.ts` (the calls), `deploy/mediaplane.compose.yaml` (a comment).
 - `scripts/docs/catalog-facts.ts` (+test): the "API" and "Managed in the app" facts.
-- `test/e2e/apply.e2e.test.ts`, `deploy.e2e.test.ts`, `vpn.e2e.test.ts`.
+- `test/e2e/apply.e2e.test.ts`, `deploy.e2e.test.ts`, `vpn.e2e.test.ts`, and
+  `helpers.ts` (`wiringMembers`).
 - docs: ADR 0011 (new), the "wiring failed" runbook (new), ADR 0008, the threat model,
-  the architecture, the READMEs, the runbooks, the spec and the roadmap.
+  the architecture, the READMEs, the runbooks, `CONTRIBUTING.md`, the spec and the
+  roadmap.
 
 **Tasks:**
 
@@ -392,18 +443,26 @@ Elsewhere:
 
 ---
 
-### Task 1: Housekeeping: the store's charset, `init`, runbook URLs, and `.env`
+### Task 1: Housekeeping: the store's charset, runbook URLs, `.env`, and `init`
 
 Small items that the wiring builds on, or that the owner's trial of S3d found. Each has
 its own test cycle; they are committed together.
 
 - **A. The store refuses to save what it couldn't read back** (decision 8), and `redact`
   moves to `util/`, since the HTTP client (Task 4) uses it as well as the runtime.
-- **B. `init`** checks its home first, creates the data folder, says what each question
+- **B. Runbook hints are URLs** (decision 16), and `apply` writes `.env` only when it
+  differs (decision 17). The engine also exports `codeOf`, which C uses.
+- **C. `init`** checks its home first, creates the data folder, says what each question
   is for, and takes the WireGuard key on a hidden prompt (decision 15).
-- **C. Runbook hints are URLs** (decision 16), and `apply` writes `.env` only when it
-  differs (decision 17).
 
+Decision: an unchanged `.env` is only made `0600` again. Where that `chmod` is refused
+with `EPERM` (another user's file, after a run with `sudo`), apply rewrites it, as it did
+before, and counts it written (preflight M18). The test refuses the `chmod` with the
+`refuseChmodOf` mock `apply.test.ts` already has; it passes before B's code too, since
+that code rewrote `.env` every time: it pins that this is no worse.
+Decision: the apply tests that stop Gluetun by hand share one wrapper,
+`stoppedUntilUp(docker, service)` in `apply.test.ts`, which Task 8 uses again
+(preflight M4).
 Decision: `readFlags` becomes `async` and checks the home first, so a home init can't
 write fails before any question, with the fix in the message. The check walks up to the
 nearest folder that exists, as `mkdir -p` would, and asks for write and search access
@@ -411,13 +470,16 @@ there. It is a check, not a promise: `init` still reports a failed write.
 Decision: the data folder is created by `prepareDataFolder`, a `CliDeps` seam, so
 `init`'s tests never touch the real filesystem outside a temporary folder. From source it
 may create any path; in the image (`MEDIAPLANE_IMAGE`), only one inside the home, which
-is the only host folder the container sees.
+is the only host folder the container sees. `folders.ts` reads a failure's code with the
+engine's `codeOf`, not a copy of it (preflight M3).
 Decision: the notes go to `io.stdout`, the stream the questions are on, and only when
 `init` asks (`io.ask` is set): `--json` and runs without a terminal print exactly what
 they did.
 Decision: the hidden prompt is `terminalAskSecret`: readline on its own terminal (raw
 mode, so the terminal doesn't echo) writing into a stream that drops everything. Only
 the question and a final newline reach the output.
+Decision: the tests that need a folder this user can't write (`0o555`) skip as root, as
+the five such tests at `4125ce1` already do (preflight M6, ruled: the existing pattern).
 
 **Files:**
 - Create: `packages/engine/src/runbooks.ts`, `packages/cli/src/folders.ts`,
@@ -435,9 +497,10 @@ the question and a final newline reach the output.
   `packages/engine/src/vpn/check.test.ts`, `packages/engine/src/apply/apply.test.ts`
 
 **Interfaces:**
-- **Consumes:** `storeSchema` and `fault` inside `secrets/store.ts`; `writeFileExclusive`,
-  `starterStack` and `HostFacts` from the engine; `askUntil`, `readFlags` and
-  `gatherAnswers` inside `init.ts`; `Io` and `CliDeps` from `run.ts`.
+- **Consumes:** `storeSchema` and `fault` inside `secrets/store.ts`; `codeOf` from
+  `util/error-code.ts`; `writeFileExclusive`, `writeFileAtomic`, `starterStack` and
+  `HostFacts` from the engine; `askUntil`, `readFlags` and `gatherAnswers` inside
+  `init.ts`; `Io` and `CliDeps` from `run.ts`; `refuseChmodOf` inside `apply.test.ts`.
 - **Produces:**
   - `writeSecretStore(home, store)` throws
     `Error('cannot save <home>/state/secrets.json: <faults>')`, naming keys, never values,
@@ -446,6 +509,8 @@ the question and a final newline reach the output.
   - `RUNBOOKS_URL`, `type Runbook = 'app-wont-start' | 'vpn-down' | 'wiring-failed'` and
     `runbookUrl(name: Runbook): string` in `runbooks.ts`, exported from the engine;
     `VPN_RUNBOOK` is now `runbookUrl('vpn-down')`;
+  - `codeOf(cause: unknown): string | undefined`, now exported from the engine;
+  - in `apply.test.ts`: `stoppedUntilUp(docker: Runtime, service: string): Runtime`;
   - in `packages/cli/src/folders.ts`: `homeProblem(home: string): Promise<string | undefined>`;
     `type DataFolder = 'created' | 'ready' | 'check' | 'unseen' | { blocked: string }`;
     `prepareDataFolder(path, home, inImage: boolean, user: { uid; gid }): Promise<DataFolder>`;
@@ -494,7 +559,8 @@ index eb1b458..f6989ac 100644
 
 Run: `pnpm vitest run packages/engine/src/secrets/store.test.ts`
 
-Expected: FAIL: the new test, "never saves a key it could not read back, and keeps the store it had" ("promise resolved \"undefined\" instead of rejecting"); the 15 others pass.
+Expected: FAIL: the new test, "never saves a key it could not read back, and keeps the
+store it had" ("promise resolved \"undefined\" instead of rejecting"); the 15 others pass.
 
 - [ ] **Step 3: Check the store before saving it, and move `redact`**
 
@@ -571,13 +637,367 @@ Run: `pnpm vitest run packages/engine/src/secrets packages/engine/src/runtime pa
 
 Expected: PASS.
 
-- [ ] **Step 5: B. Write the failing tests for `init`**
+- [ ] **Step 5: B. Write the failing tests for the hints and `.env`**
+
+**Change** `packages/engine/src/vpn/check.test.ts`:
+
+```diff
+diff --git a/packages/engine/src/vpn/check.test.ts b/packages/engine/src/vpn/check.test.ts
+index d0780dc..093bbd8 100644
+--- a/packages/engine/src/vpn/check.test.ts
++++ b/packages/engine/src/vpn/check.test.ts
+@@ -200,3 +200,3 @@ describe('vpnCheck', () => {
+         "qBittorrent's traffic leaves from 203.0.113.7, which is this host's own address: it does not go through the VPN",
+-      hint: 'see docs/runbooks/vpn-down.md',
++      hint: 'see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
+     });
+@@ -247,3 +247,3 @@ describe('vpnCheck', () => {
+       message: `qBittorrent's traffic got no answer from ${TRACE}: curl: (28) Connection timed out after 10002 milliseconds`,
+-      hint: 'the VPN is down, and nothing gets out (fail-closed); see docs/runbooks/vpn-down.md',
++      hint: 'the VPN is down, and nothing gets out (fail-closed); see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
+     });
+@@ -291,3 +291,3 @@ describe('vpnCheck', () => {
+       status: 'down',
+-      hint: 'the VPN is down; see docs/runbooks/vpn-down.md',
++      hint: 'the VPN is down; see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
+     });
+@@ -316,3 +316,3 @@ describe('vpnCheck', () => {
+       expect(result.ok && result.checks.at(-1)?.hint).toBe(
+-        'the VPN is down, and nothing gets out (fail-closed); see docs/runbooks/vpn-down.md',
++        'the VPN is down, and nothing gets out (fail-closed); see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
+       );
+@@ -334,3 +334,3 @@ describe('vpnCheck', () => {
+       message: "Mediaplane could not read qBittorrent's route: sh: ip: not found",
+-      hint: 'see docs/runbooks/vpn-down.md',
++      hint: 'see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
+     });
+@@ -545,3 +545,3 @@ describe('vpnCheck', () => {
+       status: 'down',
+-      hint: 'the VPN is down; see docs/runbooks/vpn-down.md',
++      hint: 'the VPN is down; see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
+     });
+@@ -630,2 +630,6 @@ describe('vpnCheck', () => {
+       );
++      // The first thing to do is plain, and comes before the link.
++      expect(result.ok && result.checks[1]?.hint).toBe(
++        'run "mediaplane apply" to start Gluetun again, then see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md if it stops again',
++      );
+       expect(calls).not.toContain('run qbittorrent sh as 65534:65534');
+@@ -656,3 +660,3 @@ describe('vpnCheck', () => {
+         message: `Gluetun is ${state}`,
+-        hint: 'see docs/runbooks/vpn-down.md',
++        hint: 'see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
+       });
+```
+
+**Change** `packages/cli/src/vpn-check.test.ts`:
+
+```diff
+diff --git a/packages/cli/src/vpn-check.test.ts b/packages/cli/src/vpn-check.test.ts
+index 418dbd9..c6d0d7d 100644
+--- a/packages/cli/src/vpn-check.test.ts
++++ b/packages/cli/src/vpn-check.test.ts
+@@ -34,3 +34,4 @@ const KEY = '0'.repeat(32);
+ const TRACE = 'https://1.1.1.1/cdn-cgi/trace';
+-const RUNBOOK = 'docs/runbooks/vpn-down.md';
++const RUNBOOK =
++  'https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md';
+ const COMPARED = 'Passed: qBittorrent reaches the internet only through the VPN.';
+```
+
+**Change** `packages/engine/src/apply/apply.test.ts`:
+
+```diff
+diff --git a/packages/engine/src/apply/apply.test.ts b/packages/engine/src/apply/apply.test.ts
+index 15bb367..2e75828 100644
+--- a/packages/engine/src/apply/apply.test.ts
++++ b/packages/engine/src/apply/apply.test.ts
+@@ -129,2 +129,18 @@ function options(
+ 
++/** `docker`, with `service` stopped by hand until up starts it again. */
++function stoppedUntilUp(docker: Runtime, service: string): Runtime {
++  let started = false;
++  return {
++    ...docker,
++    containers: async () =>
++      (await docker.containers()).map((c) =>
++        !started && c.service === service ? { ...c, state: 'exited', health: '' } : c,
++      ),
++    up: (seconds, values) => {
++      started = true;
++      return docker.up(seconds, values);
++    },
++  };
++}
++
+ describe('apply', () => {
+@@ -255,4 +271,5 @@ describe('apply', () => {
+     expect(result.plan.unhealthy).toEqual(['sonarr (starting)']);
+-    // compose.yaml was already current, so only .env was written.
+-    expect(result.actions[1]?.detail).toBe('wrote generated/.env');
++    // compose.yaml and .env were already current, as plan said: nothing was written.
++    expect(result.plan.files.filter((f) => f.status !== 'unchanged')).toEqual([]);
++    expect(result.actions[1]?.detail).toBe('none needed');
+     expect(result.actions.map((a) => [a.step, a.result])).toEqual([
+@@ -522,3 +539,3 @@ describe('apply', () => {
+         message: 'docker compose up failed: fake: port is already allocated',
+-        hint: 'run "mediaplane status" to see each app, fix the cause, then run apply again',
++        hint: 'run "mediaplane status" to see each app, fix the cause, then run apply again; see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/app-wont-start.md',
+       },
+@@ -640,2 +657,45 @@ describe('apply', () => {
+ 
++  it('writes no file on an apply that only starts a stopped app, as plan said', async () => {
++    const home = await makeHome();
++    const docker = fakeDocker(home);
++    expect((await apply(options(home, docker))).outcome).toBe('success');
++    const env = join(home, ENV_PATH);
++    const before = await stat(env);
++    // Plan's only change is to start Gluetun.
++    const result = await apply(options(home, stoppedUntilUp(docker, 'gluetun')));
++    expect(result.outcome).toBe('success');
++    expect(result.plan.containers).toContainEqual({
++      service: 'gluetun',
++      action: 'start',
++    });
++    expect(result.plan.files.filter((f) => f.status !== 'unchanged')).toEqual([]);
++    expect(result.actions[1]).toEqual({
++      step: 'files',
++      result: 'done',
++      detail: 'none needed',
++    });
++    const after = await stat(env);
++    expect([after.ino, after.mtimeMs]).toEqual([before.ino, before.mtimeMs]);
++    expect(await modeOf(env)).toBe(0o600);
++  });
++
++  it("rewrites an unchanged .env it can't make private, as apply did before", async () => {
++    const home = await makeHome();
++    const docker = fakeDocker(home);
++    expect((await apply(options(home, docker))).outcome).toBe('success');
++    const env = join(home, ENV_PATH);
++    const before = await stat(env);
++    // Another user's file, as after a run with sudo: chmod() is refused, a rename isn't.
++    refuseChmodOf(env);
++    const result = await apply(options(home, stoppedUntilUp(docker, 'gluetun')));
++    expect(result.outcome).toBe('success');
++    expect(result.actions[1]).toEqual({
++      step: 'files',
++      result: 'done',
++      detail: 'wrote generated/.env',
++    });
++    expect((await stat(env)).ino).not.toBe(before.ino);
++    expect(await modeOf(env)).toBe(0o600);
++  });
++
+   it('lets an unexpected error taking the lock through', async () => {
+@@ -654,3 +714,4 @@ describe('apply', () => {
+ 
+-    // Prowlarr brings Byparr, which has no appdata folder.
++    // Prowlarr brings Byparr, which has no appdata folder. Neither has a secret, so .env
++    // stays as it was.
+     await writeFile(join(home, 'stack.yaml'), `${STACK}  prowlarr: {}\n`);
+@@ -658,5 +719,3 @@ describe('apply', () => {
+     expect(second.outcome).toBe('success');
+-    expect(second.actions[1]?.detail).toBe(
+-      'wrote generated/compose.yaml and generated/.env',
+-    );
++    expect(second.actions[1]?.detail).toBe('wrote generated/compose.yaml');
+     expect(await readFile(join(home, COMPOSE_PREV_PATH), 'utf8')).toBe(first);
+```
+
+- [ ] **Step 6: Run them to verify they fail**
+
+Run: `pnpm vitest run packages/engine/src/vpn/check.test.ts packages/cli/src/vpn-check.test.ts packages/engine/src/apply/apply.test.ts`
+
+Expected: FAIL: the tests that expect a hint to give the runbook's URL (`see
+docs/runbooks/vpn-down.md` comes instead), Gluetun stopped to say `run "mediaplane apply"
+…` first, and an apply that changes no file to write none (`wrote generated/.env` comes
+instead of `none needed`). On the dev box: 3 files, 19 tests failed, 91 passed. The test
+of an unchanged `.env` whose `chmod` is refused passes already: the code before B rewrote
+`.env` every time.
+
+- [ ] **Step 7: Runbook URLs, `.env` only when it changed, and `codeOf`**
+
+**Create** `packages/engine/src/runbooks.ts`:
+
+```ts
+/**
+ * Where the runbooks are published. A hint gives this address, not a path in the repo:
+ * someone running Mediaplane's image has no copy of the repo.
+ */
+export const RUNBOOKS_URL =
+  'https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks';
+
+/** The runbooks (docs/runbooks/<name>.md). */
+export type Runbook = 'app-wont-start' | 'vpn-down' | 'wiring-failed';
+
+/** A runbook's address on GitHub. */
+export function runbookUrl(name: Runbook): string {
+  return `${RUNBOOKS_URL}/${name}.md`;
+}
+```
+
+**Change** `packages/engine/src/index.ts`:
+
+```diff
+diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
+index d9dd223..829c69e 100644
+--- a/packages/engine/src/index.ts
++++ b/packages/engine/src/index.ts
+@@ -2,4 +2,6 @@ export * from './diagnostics';
+ export * from './paths';
++export * from './runbooks';
+ export * from './util/atomic';
+ export * from './util/path';
++export * from './util/error-code';
+ export * from './state/lock';
+```
+
+**Change** `packages/engine/src/vpn/check.ts`:
+
+```diff
+diff --git a/packages/engine/src/vpn/check.ts b/packages/engine/src/vpn/check.ts
+index 4d57314..914b147 100644
+--- a/packages/engine/src/vpn/check.ts
++++ b/packages/engine/src/vpn/check.ts
+@@ -9,2 +9,3 @@ import { STACK_PATH } from '../paths';
+ import { resolveStack, type ResolvedApp } from '../resolver/resolve';
++import { runbookUrl } from '../runbooks';
+ import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
+@@ -24,3 +25,3 @@ import {
+ /** Where a failed check sends you. */
+-export const VPN_RUNBOOK = 'docs/runbooks/vpn-down.md';
++export const VPN_RUNBOOK = runbookUrl('vpn-down');
+ 
+@@ -354,3 +355,7 @@ function gluetunCheck(
+         : `Gluetun ${state}`,
+-      hint: `see ${VPN_RUNBOOK}`,
++      // A Gluetun with no process is started again by apply; a paused or restarting one
++      // needs looking at.
++      hint: gluetunStopped(gluetun)
++        ? `run "mediaplane apply" to start Gluetun again, then see ${VPN_RUNBOOK} if it stops again`
++        : `see ${VPN_RUNBOOK}`,
+     };
+```
+
+**Change** `packages/engine/src/apply/apply.ts`:
+
+```diff
+diff --git a/packages/engine/src/apply/apply.ts b/packages/engine/src/apply/apply.ts
+index c508447..13c4978 100644
+--- a/packages/engine/src/apply/apply.ts
++++ b/packages/engine/src/apply/apply.ts
+@@ -1 +1,2 @@
++import { chmod } from 'node:fs/promises';
+ import { join, resolve } from 'node:path';
+@@ -14,2 +15,3 @@ import { plan, planStack, type PlanOptions, type PlanResult } from '../plan/plan
+ import { renderEnvFile } from '../render/env';
++import { runbookUrl } from '../runbooks';
+ import { prestartFilesFor } from '../render/prestart';
+@@ -22,2 +24,3 @@ import { acquireLock, LockedError, type Lock } from '../state/lock';
+ import { writeFileAtomic } from '../util/atomic';
++import { codeOf } from '../util/error-code';
+ import { readIfExists } from '../util/fs';
+@@ -73,3 +76,3 @@ const STEP_HINTS: Record<ApplyStep, string> = {
+   ownership: "the error comes from the app's own image; run apply again to retry",
+-  start: 'run "mediaplane status" to see each app, fix the cause, then run apply again',
++  start: `run "mediaplane status" to see each app, fix the cause, then run apply again; see ${runbookUrl('app-wont-start')}`,
+   verify: 'run "mediaplane plan" to see what is still different',
+@@ -149,6 +152,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+     );
+-    return [
+-      `wrote ${written.join(' and ')}`,
++    const done = [
++      ...(written.length === 0 ? [] : [`wrote ${written.join(' and ')}`]),
+       ...(created.length === 0 ? [] : [`created ${created.join(', ')}`]),
+-    ].join('; ');
++    ];
++    return done.length === 0 ? NONE_NEEDED : done.join('; ');
+   });
+@@ -288,4 +292,5 @@ async function startFailure(runtime: Runtime, composeError: string): Promise<str
+ /**
+- * compose.yaml when it changed, keeping the previous one as compose.prev.yaml (spec §5
+- * step 6), and .env. Returns the paths it wrote, relative to the home.
++ * compose.yaml and .env, each only when it changed, as plan says, keeping the previous
++ * compose.yaml as compose.prev.yaml (spec §5 step 6). An unchanged .env is still made
++ * private again. Returns the paths it wrote, relative to the home.
+  */
+@@ -306,3 +311,7 @@ async function writeGenerated(
+   }
+-  await writeFileAtomic(join(home, ENV_PATH), env, 0o600);
++  const envPath = join(home, ENV_PATH);
++  if ((await readIfExists(envPath)) === env && (await madePrivate(envPath))) {
++    return written;
++  }
++  await writeFileAtomic(envPath, env, 0o600);
+   written.push(ENV_PATH);
+@@ -311,2 +320,16 @@ async function writeGenerated(
+ 
++/**
++ * chmod 0600, or false where only the owner may and this user isn't it (after a run with
++ * sudo): the rewrite, as before Slice 3b, makes it this user's and private.
++ */
++async function madePrivate(path: string): Promise<boolean> {
++  try {
++    await chmod(path, 0o600);
++    return true;
++  } catch (cause) {
++    if (codeOf(cause) === 'EPERM') return false;
++    throw cause;
++  }
++}
++
+ function succeeded(result: CommandResult, prefix = ''): void {
+```
+
+**Change** `docs/runbooks/app-wont-start.md`:
+
+```diff
+diff --git a/docs/runbooks/app-wont-start.md b/docs/runbooks/app-wont-start.md
+index 1fdae04..95d8e0c 100644
+--- a/docs/runbooks/app-wont-start.md
++++ b/docs/runbooks/app-wont-start.md
+@@ -11,3 +11,3 @@
+   error: these apps did not start healthy: sonarr (unhealthy). Compose said: …
+-    hint: run "mediaplane status" to see each app, fix the cause, then run apply again
++    hint: run "mediaplane status" to see each app, fix the cause, then run apply again; see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/app-wont-start.md
+ 
+```
+
+**Change** `docs/runbooks/vpn-down.md`:
+
+````diff
+diff --git a/docs/runbooks/vpn-down.md b/docs/runbooks/vpn-down.md
+index 2be2648..dab2562 100644
+--- a/docs/runbooks/vpn-down.md
++++ b/docs/runbooks/vpn-down.md
+@@ -21,5 +21,5 @@ failure, and worse: see [A leak](#a-leak).
+     DOWN  qBittorrent's traffic got no answer from https://1.1.1.1/cdn-cgi/trace: curl: (28) Connection timed out after 10002 milliseconds
+-          hint: the VPN is down, and nothing gets out (fail-closed); see docs/runbooks/vpn-down.md
++          hint: the VPN is down, and nothing gets out (fail-closed); see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md
+ 
+-  VPN down: qBittorrent can't reach the internet, and nothing leaks (fail-closed). See docs/runbooks/vpn-down.md.
++  VPN down: qBittorrent can't reach the internet, and nothing leaks (fail-closed). See https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md.
+   ```
+@@ -30,3 +30,3 @@ failure, and worse: see [A leak](#a-leak).
+   there was no route at all. Otherwise it says
+-  `VPN down: the checks marked DOWN say what failed. See docs/runbooks/vpn-down.md.`
++  `VPN down: the checks marked DOWN say what failed.`, then gives this runbook's address.
+ 
+````
+
+- [ ] **Step 8: Run them to verify they pass**
+
+Run: `pnpm vitest run packages/engine/src/vpn packages/engine/src/apply packages/cli`
+
+Expected: PASS.
+
+- [ ] **Step 9: C. Write the failing tests for `init`**
 
 `folders.test.ts` covers the data folder. `init.test.ts` covers the home check, the
-notes, the key and the data folder's next steps. The tests that need a folder this user
-can't write (`0o555`) skip as root, which can write anywhere. `prompt.test.ts` covers
-the hidden prompt. The test key is `'A'.repeat(43) + '='`, and the tests check it never
-shows in the output.
+notes, the key and the data folder's next steps. `prompt.test.ts` covers the hidden
+prompt. The test key is `'A'.repeat(43) + '='`, and the tests check it never shows in
+the output.
 
 **Create** `packages/cli/src/folders.test.ts`:
 
@@ -1040,19 +1460,23 @@ index 88aad73..53911be 100644
 +});
 ```
 
-- [ ] **Step 6: Run them to verify they fail**
+- [ ] **Step 10: Run them to verify they fail**
 
 Run: `pnpm vitest run packages/cli/src/folders.test.ts packages/cli/src/init.test.ts packages/cli/src/prompt.test.ts`
 
-Expected: FAIL: `folders.test.ts` can't load `./folders`; `prompt.test.ts`'s three `terminalAskSecret` tests ("terminalAskSecret is not a function"); and `init.test.ts`'s tests of the home, the notes, the key and the data folder. On the dev box, as a user that isn't root: 3 files, 15 tests failed, 76 passed.
+Expected: FAIL: `folders.test.ts` can't load `./folders`; `prompt.test.ts`'s three
+`terminalAskSecret` tests ("terminalAskSecret is not a function"); and `init.test.ts`'s
+tests of the home, the notes, the key and the data folder. On the dev box, as a user that
+isn't root: 3 files, 15 tests failed, 76 passed.
 
-- [ ] **Step 7: The home check, the data folder, the notes and the key**
+- [ ] **Step 11: The home check, the data folder, the notes and the key**
 
 **Create** `packages/cli/src/folders.ts`:
 
 ```ts
 import { access, constants, mkdir, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { codeOf } from '@mediaplane/engine';
 
 /** A failed filesystem call's code, in words. */
 const REASONS: Readonly<Record<string, string>> = {
@@ -1061,15 +1485,9 @@ const REASONS: Readonly<Record<string, string>> = {
   EROFS: 'a read-only filesystem',
 };
 
-function errorCode(cause: unknown): string | undefined {
-  return cause instanceof Error && 'code' in cause && typeof cause.code === 'string'
-    ? cause.code
-    : undefined;
-}
-
 /** A failed filesystem call, in words. */
 function reasonOf(cause: unknown): string {
-  const code = errorCode(cause);
+  const code = codeOf(cause);
   return (code === undefined ? undefined : REASONS[code]) ?? code ?? 'an error';
 }
 
@@ -1096,7 +1514,7 @@ export async function homeProblem(home: string): Promise<string | undefined> {
       }
       break;
     } catch (cause) {
-      if (errorCode(cause) !== 'ENOENT' || dirname(nearest) === nearest) {
+      if (codeOf(cause) !== 'ENOENT' || dirname(nearest) === nearest) {
         return homeBlocked(home, false, cause);
       }
       nearest = dirname(nearest);
@@ -1143,7 +1561,7 @@ export async function prepareDataFolder(
   try {
     isFolder = (await stat(path)).isDirectory();
   } catch (cause) {
-    if (errorCode(cause) !== 'ENOENT') return { blocked: reasonOf(cause) };
+    if (codeOf(cause) !== 'ENOENT') return { blocked: reasonOf(cause) };
     try {
       await mkdir(path, { recursive: true });
       return 'created';
@@ -1754,312 +2172,9 @@ index 73709a8..2e200fb 100644
 pnpm docs:generate
 ```
 
-- [ ] **Step 8: Run them to verify they pass**
-
-Run: `pnpm vitest run packages/cli`
-
-Expected: PASS.
-
-- [ ] **Step 9: C. Write the failing tests for the hints and `.env`**
-
-**Change** `packages/engine/src/vpn/check.test.ts`:
-
-```diff
-diff --git a/packages/engine/src/vpn/check.test.ts b/packages/engine/src/vpn/check.test.ts
-index d0780dc..093bbd8 100644
---- a/packages/engine/src/vpn/check.test.ts
-+++ b/packages/engine/src/vpn/check.test.ts
-@@ -200,3 +200,3 @@ describe('vpnCheck', () => {
-         "qBittorrent's traffic leaves from 203.0.113.7, which is this host's own address: it does not go through the VPN",
--      hint: 'see docs/runbooks/vpn-down.md',
-+      hint: 'see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
-     });
-@@ -247,3 +247,3 @@ describe('vpnCheck', () => {
-       message: `qBittorrent's traffic got no answer from ${TRACE}: curl: (28) Connection timed out after 10002 milliseconds`,
--      hint: 'the VPN is down, and nothing gets out (fail-closed); see docs/runbooks/vpn-down.md',
-+      hint: 'the VPN is down, and nothing gets out (fail-closed); see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
-     });
-@@ -291,3 +291,3 @@ describe('vpnCheck', () => {
-       status: 'down',
--      hint: 'the VPN is down; see docs/runbooks/vpn-down.md',
-+      hint: 'the VPN is down; see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
-     });
-@@ -316,3 +316,3 @@ describe('vpnCheck', () => {
-       expect(result.ok && result.checks.at(-1)?.hint).toBe(
--        'the VPN is down, and nothing gets out (fail-closed); see docs/runbooks/vpn-down.md',
-+        'the VPN is down, and nothing gets out (fail-closed); see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
-       );
-@@ -334,3 +334,3 @@ describe('vpnCheck', () => {
-       message: "Mediaplane could not read qBittorrent's route: sh: ip: not found",
--      hint: 'see docs/runbooks/vpn-down.md',
-+      hint: 'see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
-     });
-@@ -545,3 +545,3 @@ describe('vpnCheck', () => {
-       status: 'down',
--      hint: 'the VPN is down; see docs/runbooks/vpn-down.md',
-+      hint: 'the VPN is down; see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
-     });
-@@ -630,2 +630,6 @@ describe('vpnCheck', () => {
-       );
-+      // The first thing to do is plain, and comes before the link.
-+      expect(result.ok && result.checks[1]?.hint).toBe(
-+        'run "mediaplane apply" to start Gluetun again, then see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md if it stops again',
-+      );
-       expect(calls).not.toContain('run qbittorrent sh as 65534:65534');
-@@ -656,3 +660,3 @@ describe('vpnCheck', () => {
-         message: `Gluetun is ${state}`,
--        hint: 'see docs/runbooks/vpn-down.md',
-+        hint: 'see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md',
-       });
-```
-
-**Change** `packages/cli/src/vpn-check.test.ts`:
-
-```diff
-diff --git a/packages/cli/src/vpn-check.test.ts b/packages/cli/src/vpn-check.test.ts
-index 418dbd9..c6d0d7d 100644
---- a/packages/cli/src/vpn-check.test.ts
-+++ b/packages/cli/src/vpn-check.test.ts
-@@ -34,3 +34,4 @@ const KEY = '0'.repeat(32);
- const TRACE = 'https://1.1.1.1/cdn-cgi/trace';
--const RUNBOOK = 'docs/runbooks/vpn-down.md';
-+const RUNBOOK =
-+  'https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md';
- const COMPARED = 'Passed: qBittorrent reaches the internet only through the VPN.';
-```
-
-**Change** `packages/engine/src/apply/apply.test.ts`:
-
-```diff
-diff --git a/packages/engine/src/apply/apply.test.ts b/packages/engine/src/apply/apply.test.ts
-index 15bb367..83828fa 100644
---- a/packages/engine/src/apply/apply.test.ts
-+++ b/packages/engine/src/apply/apply.test.ts
-@@ -255,4 +255,5 @@ describe('apply', () => {
-     expect(result.plan.unhealthy).toEqual(['sonarr (starting)']);
--    // compose.yaml was already current, so only .env was written.
--    expect(result.actions[1]?.detail).toBe('wrote generated/.env');
-+    // compose.yaml and .env were already current, as plan said: nothing was written.
-+    expect(result.plan.files.filter((f) => f.status !== 'unchanged')).toEqual([]);
-+    expect(result.actions[1]?.detail).toBe('none needed');
-     expect(result.actions.map((a) => [a.step, a.result])).toEqual([
-@@ -522,3 +523,3 @@ describe('apply', () => {
-         message: 'docker compose up failed: fake: port is already allocated',
--        hint: 'run "mediaplane status" to see each app, fix the cause, then run apply again',
-+        hint: 'run "mediaplane status" to see each app, fix the cause, then run apply again; see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/app-wont-start.md',
-       },
-@@ -640,2 +641,38 @@ describe('apply', () => {
- 
-+  it('writes no file on an apply that only starts a stopped app, as plan said', async () => {
-+    const home = await makeHome();
-+    const docker = fakeDocker(home);
-+    expect((await apply(options(home, docker))).outcome).toBe('success');
-+    const env = join(home, ENV_PATH);
-+    const before = await stat(env);
-+    // Stopped by hand, until up starts it: plan's only change is to start it.
-+    let started = false;
-+    const stopped: Runtime = {
-+      ...docker,
-+      containers: async () =>
-+        (await docker.containers()).map((c) =>
-+          !started && c.service === 'gluetun' ? { ...c, state: 'exited', health: '' } : c,
-+        ),
-+      up: (seconds, values) => {
-+        started = true;
-+        return docker.up(seconds, values);
-+      },
-+    };
-+    const result = await apply(options(home, stopped));
-+    expect(result.outcome).toBe('success');
-+    expect(result.plan.containers).toContainEqual({
-+      service: 'gluetun',
-+      action: 'start',
-+    });
-+    expect(result.plan.files.filter((f) => f.status !== 'unchanged')).toEqual([]);
-+    expect(result.actions[1]).toEqual({
-+      step: 'files',
-+      result: 'done',
-+      detail: 'none needed',
-+    });
-+    const after = await stat(env);
-+    expect([after.ino, after.mtimeMs]).toEqual([before.ino, before.mtimeMs]);
-+    expect(await modeOf(env)).toBe(0o600);
-+  });
-+
-   it('lets an unexpected error taking the lock through', async () => {
-@@ -654,3 +691,4 @@ describe('apply', () => {
- 
--    // Prowlarr brings Byparr, which has no appdata folder.
-+    // Prowlarr brings Byparr, which has no appdata folder. Neither has a secret, so .env
-+    // stays as it was.
-     await writeFile(join(home, 'stack.yaml'), `${STACK}  prowlarr: {}\n`);
-@@ -658,5 +696,3 @@ describe('apply', () => {
-     expect(second.outcome).toBe('success');
--    expect(second.actions[1]?.detail).toBe(
--      'wrote generated/compose.yaml and generated/.env',
--    );
-+    expect(second.actions[1]?.detail).toBe('wrote generated/compose.yaml');
-     expect(await readFile(join(home, COMPOSE_PREV_PATH), 'utf8')).toBe(first);
-```
-
-- [ ] **Step 10: Run them to verify they fail**
-
-Run: `pnpm vitest run packages/engine/src/vpn/check.test.ts packages/cli/src/vpn-check.test.ts packages/engine/src/apply/apply.test.ts`
-
-Expected: FAIL: the tests that expect a hint to give the runbook's URL (`see docs/runbooks/vpn-down.md` comes instead), Gluetun stopped to say `run "mediaplane apply" …` first, and an apply that changes no file to write none (`wrote generated/.env` comes instead of `none needed`). On the dev box: 3 files, 19 tests failed, 90 passed.
-
-- [ ] **Step 11: Runbook URLs, and `.env` only when it changed**
-
-**Create** `packages/engine/src/runbooks.ts`:
-
-```ts
-/**
- * Where the runbooks are published. A hint gives this address, not a path in the repo:
- * someone running Mediaplane's image has no copy of the repo.
- */
-export const RUNBOOKS_URL =
-  'https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks';
-
-/** The runbooks (docs/runbooks/<name>.md). */
-export type Runbook = 'app-wont-start' | 'vpn-down' | 'wiring-failed';
-
-/** A runbook's address on GitHub. */
-export function runbookUrl(name: Runbook): string {
-  return `${RUNBOOKS_URL}/${name}.md`;
-}
-```
-
-**Change** `packages/engine/src/index.ts`:
-
-```diff
-diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
-index d9dd223..0dc86b5 100644
---- a/packages/engine/src/index.ts
-+++ b/packages/engine/src/index.ts
-@@ -2,2 +2,3 @@ export * from './diagnostics';
- export * from './paths';
-+export * from './runbooks';
- export * from './util/atomic';
-```
-
-**Change** `packages/engine/src/vpn/check.ts`:
-
-```diff
-diff --git a/packages/engine/src/vpn/check.ts b/packages/engine/src/vpn/check.ts
-index 4d57314..914b147 100644
---- a/packages/engine/src/vpn/check.ts
-+++ b/packages/engine/src/vpn/check.ts
-@@ -9,2 +9,3 @@ import { STACK_PATH } from '../paths';
- import { resolveStack, type ResolvedApp } from '../resolver/resolve';
-+import { runbookUrl } from '../runbooks';
- import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
-@@ -24,3 +25,3 @@ import {
- /** Where a failed check sends you. */
--export const VPN_RUNBOOK = 'docs/runbooks/vpn-down.md';
-+export const VPN_RUNBOOK = runbookUrl('vpn-down');
- 
-@@ -354,3 +355,7 @@ function gluetunCheck(
-         : `Gluetun ${state}`,
--      hint: `see ${VPN_RUNBOOK}`,
-+      // A Gluetun with no process is started again by apply; a paused or restarting one
-+      // needs looking at.
-+      hint: gluetunStopped(gluetun)
-+        ? `run "mediaplane apply" to start Gluetun again, then see ${VPN_RUNBOOK} if it stops again`
-+        : `see ${VPN_RUNBOOK}`,
-     };
-```
-
-**Change** `packages/engine/src/apply/apply.ts`:
-
-```diff
-diff --git a/packages/engine/src/apply/apply.ts b/packages/engine/src/apply/apply.ts
-index c508447..4820736 100644
---- a/packages/engine/src/apply/apply.ts
-+++ b/packages/engine/src/apply/apply.ts
-@@ -1 +1,2 @@
-+import { chmod } from 'node:fs/promises';
- import { join, resolve } from 'node:path';
-@@ -14,2 +15,3 @@ import { plan, planStack, type PlanOptions, type PlanResult } from '../plan/plan
- import { renderEnvFile } from '../render/env';
-+import { runbookUrl } from '../runbooks';
- import { prestartFilesFor } from '../render/prestart';
-@@ -73,3 +75,3 @@ const STEP_HINTS: Record<ApplyStep, string> = {
-   ownership: "the error comes from the app's own image; run apply again to retry",
--  start: 'run "mediaplane status" to see each app, fix the cause, then run apply again',
-+  start: `run "mediaplane status" to see each app, fix the cause, then run apply again; see ${runbookUrl('app-wont-start')}`,
-   verify: 'run "mediaplane plan" to see what is still different',
-@@ -149,6 +151,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
-     );
--    return [
--      `wrote ${written.join(' and ')}`,
-+    const done = [
-+      ...(written.length === 0 ? [] : [`wrote ${written.join(' and ')}`]),
-       ...(created.length === 0 ? [] : [`created ${created.join(', ')}`]),
--    ].join('; ');
-+    ];
-+    return done.length === 0 ? NONE_NEEDED : done.join('; ');
-   });
-@@ -288,4 +291,5 @@ async function startFailure(runtime: Runtime, composeError: string): Promise<str
- /**
-- * compose.yaml when it changed, keeping the previous one as compose.prev.yaml (spec §5
-- * step 6), and .env. Returns the paths it wrote, relative to the home.
-+ * compose.yaml and .env, each only when it changed, as plan says, keeping the previous
-+ * compose.yaml as compose.prev.yaml (spec §5 step 6). An unchanged .env is still made
-+ * private again. Returns the paths it wrote, relative to the home.
-  */
-@@ -306,4 +310,9 @@ async function writeGenerated(
-   }
--  await writeFileAtomic(join(home, ENV_PATH), env, 0o600);
--  written.push(ENV_PATH);
-+  const envPath = join(home, ENV_PATH);
-+  if ((await readIfExists(envPath)) === env) {
-+    await chmod(envPath, 0o600);
-+  } else {
-+    await writeFileAtomic(envPath, env, 0o600);
-+    written.push(ENV_PATH);
-+  }
-   return written;
-```
-
-**Change** `docs/runbooks/app-wont-start.md`:
-
-```diff
-diff --git a/docs/runbooks/app-wont-start.md b/docs/runbooks/app-wont-start.md
-index 1fdae04..95d8e0c 100644
---- a/docs/runbooks/app-wont-start.md
-+++ b/docs/runbooks/app-wont-start.md
-@@ -11,3 +11,3 @@
-   error: these apps did not start healthy: sonarr (unhealthy). Compose said: …
--    hint: run "mediaplane status" to see each app, fix the cause, then run apply again
-+    hint: run "mediaplane status" to see each app, fix the cause, then run apply again; see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/app-wont-start.md
- 
-```
-
-**Change** `docs/runbooks/vpn-down.md`:
-
-````diff
-diff --git a/docs/runbooks/vpn-down.md b/docs/runbooks/vpn-down.md
-index 2be2648..dab2562 100644
---- a/docs/runbooks/vpn-down.md
-+++ b/docs/runbooks/vpn-down.md
-@@ -21,5 +21,5 @@ failure, and worse: see [A leak](#a-leak).
-     DOWN  qBittorrent's traffic got no answer from https://1.1.1.1/cdn-cgi/trace: curl: (28) Connection timed out after 10002 milliseconds
--          hint: the VPN is down, and nothing gets out (fail-closed); see docs/runbooks/vpn-down.md
-+          hint: the VPN is down, and nothing gets out (fail-closed); see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md
- 
--  VPN down: qBittorrent can't reach the internet, and nothing leaks (fail-closed). See docs/runbooks/vpn-down.md.
-+  VPN down: qBittorrent can't reach the internet, and nothing leaks (fail-closed). See https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/vpn-down.md.
-   ```
-@@ -30,3 +30,3 @@ failure, and worse: see [A leak](#a-leak).
-   there was no route at all. Otherwise it says
--  `VPN down: the checks marked DOWN say what failed. See docs/runbooks/vpn-down.md.`
-+  `VPN down: the checks marked DOWN say what failed.`, then gives this runbook's address.
- 
-````
-
 - [ ] **Step 12: Run them to verify they pass**
 
-Run: `pnpm vitest run packages/engine/src/vpn packages/engine/src/apply packages/cli`
+Run: `pnpm vitest run packages/cli`
 
 Expected: PASS.
 
@@ -2091,6 +2206,10 @@ Decision: the services on the network are the apps with an `api`, or, for one in
 another app's namespace, that app (`wiredServices`): Gluetun, for qBittorrent behind it.
 A stack with none has no `networks:` at all, so every existing golden stays as it is: no
 fixture app has an API (`FIXTURE_API` is for tests that give one to an app).
+Decision: the catalog checks each API only for the apps that have one (a
+`describe.each` over them, so the test names say which), and lists those apps in a test
+of its own: no per-app test returns early for the eight that have none, asserting
+nothing (preflight M5).
 Decision: `webAddresses` moves from `credentials.ts` to the resolver, as
 `ResolvedStack.webAddresses` and `AppContext.webAddresses`, because Servarr's allowed
 hosts need it too (decision 10).
@@ -2309,10 +2428,10 @@ index 200c860..2fddec4 100644
 
 ```diff
 diff --git a/catalog/catalog.test.ts b/catalog/catalog.test.ts
-index 98143d4..3b110ce 100644
+index 98143d4..63b9c8a 100644
 --- a/catalog/catalog.test.ts
 +++ b/catalog/catalog.test.ts
-@@ -23,2 +23,11 @@ describe('catalog', () => {
+@@ -23,2 +23,24 @@ describe('catalog', () => {
  
 +  it('gives an API to the apps Mediaplane wires', () => {
 +    expect(catalog.filter((app) => app.api !== undefined).map((app) => app.id)).toEqual([
@@ -2323,18 +2442,20 @@ index 98143d4..3b110ce 100644
 +    ]);
 +  });
 +
-   describe.each(catalog.map((app) => [app.id, app] as const))('%s', (_id, app) => {
-@@ -63,2 +72,10 @@ describe('catalog', () => {
- 
-+    it('serves its API on a port it declares, with a key it declares', () => {
-+      if (app.api === undefined) return;
-+      expect(app.ports.map((port) => port.name)).toContain(app.api.port);
-+      expect(Object.keys(app.secrets)).toContain(app.api.key.secret);
-+      expect(app.api.ready).toMatch(/^\//);
-+      expect(app.api.check).toMatch(/^\/api\//);
++  describe.each(
++    catalog.flatMap((app) =>
++      app.api === undefined ? [] : [[app.id, app, app.api] as const],
++    ),
++  )("%s's API", (_id, app, api) => {
++    it('is served on a port it declares, with a key it declares', () => {
++      expect(app.ports.map((port) => port.name)).toContain(api.port);
++      expect(Object.keys(app.secrets)).toContain(api.key.secret);
++      expect(api.ready).toMatch(/^\//);
++      expect(api.check).toMatch(/^\/api\//);
 +    });
++  });
 +
-     it('only injects secrets it declares', () => {
+   describe.each(catalog.map((app) => [app.id, app] as const))('%s', (_id, app) => {
 ```
 
 **Change** `scripts/docs/catalog-facts.test.ts`:
@@ -2365,7 +2486,10 @@ index 3664b8d..00b9456 100644
 
 Run: `pnpm vitest run packages/engine/src/render packages/engine/src/resolver catalog scripts/docs`
 
-Expected: FAIL: 7 tests: no app has an `api` yet, no service is on a wiring network (`expected undefined to deeply equal { wiring: { internal: true } }`), the contexts have no `webAddresses`, Radarr's environment has no `RADARR__SERVER__ALLOWEDHOSTS`, and the facts have no "API" line. 5 files failed, 8 passed.
+Expected: FAIL: 7 tests: no app has an `api` yet, no service is on a wiring network
+(`expected undefined to deeply equal { wiring: { internal: true } }`), the contexts have
+no `webAddresses`, Radarr's environment has no `RADARR__SERVER__ALLOWEDHOSTS`, and the
+facts have no "API" line. 5 files failed, 8 passed.
 
 - [ ] **Step 3: The network, the API specs, and the allowed hosts**
 
@@ -2752,8 +2876,15 @@ container of another project is refused as in `inspect`. It never accepts anythi
 full container IDs, so no name or option reaches the command line.
 Decision: `stop(services, values)` is `compose stop <services>` on the written project,
 with its output redacted like `up`'s; it accepts only service names.
-Decision: the fake runtime gives every container `127.0.0.1` on the wiring network by
-default, so tests reach a fake app on the loopback, and records each new call.
+Decision: the fake runtime puts no container on the wiring network unless the test says
+where (`addresses`), so a test that forgets its fake apps gets `wire.not-on-network`,
+never a request to a real app listening on this host (preflight M10). Task 6's fake apps
+give the addresses to pass. It records each new call.
+Decision: `OVERRIDE_CALLS` keeps every line it had, `proxy-net/disconnect` included, so
+what an override needs stays pinned even if the engine's own calls change (preflight
+M9). The comment above the lists says what each new call is for, and that `compose
+stop` lists and stops containers, as `up` already does through the proxy when it
+recreates one; the trial that stops one runs from source (preflight M8).
 
 **Files:**
 - Modify: `packages/engine/src/runtime/types.ts`, `packages/engine/src/runtime/docker.ts`,
@@ -2773,8 +2904,8 @@ default, so tests reach a fake app on the loopback, and records each new call.
   - `Runtime.stop(services: readonly string[], values: Record<string, string>): Promise<CommandResult>`;
   - `ownContainerId(read?: () => Promise<string>): Promise<string | undefined>` and
     `DockerRuntimeOptions.ownId?: () => Promise<string | undefined>`, for tests;
-  - in the fakes: `FakeRuntimeOptions.addresses?: Record<string, string>` (default
-    `127.0.0.1` for every container),
+  - in the fakes: `FakeRuntimeOptions.addresses?: Record<string, string>` (by container
+    ID; none by default, so no container is on the wiring network),
     `join?: WiringJoin | (() => WiringJoin | Promise<WiringJoin>)` (default
     `not-needed`), and `stop?: CommandResult` (default `{ ok: true }`), recorded as
     `wiring-addresses <ids…>`, `join-wiring`, `leave-wiring` and `stop <services…>`.
@@ -3019,18 +3150,20 @@ index 453e06a..d270755 100644
 
 ```diff
 diff --git a/packages/engine/src/testing/fakes.ts b/packages/engine/src/testing/fakes.ts
-index 1d23cd8..9520cfe 100644
+index 1d23cd8..f191668 100644
 --- a/packages/engine/src/testing/fakes.ts
 +++ b/packages/engine/src/testing/fakes.ts
 @@ -19,2 +19,3 @@ import {
    type Runtime,
 +  type WiringJoin,
  } from '../runtime/types';
-@@ -99,2 +100,11 @@ export interface FakeRuntimeOptions {
+@@ -99,2 +100,13 @@ export interface FakeRuntimeOptions {
    details?: Record<string, Partial<Omit<ContainerDetails, 'id'>>>;
 +  /**
-+   * Each container's address on the wiring network, by ID. Without it, every container
-+   * asked about is at 127.0.0.1, where a test's fake app listens.
++   * Each container's address on the wiring network, by ID; one left out isn't on it.
++   * None by default, so a test that forgets its fake apps gets wire.not-on-network, and
++   * never a request to a real app on this host: fakeSonarr() and fakeStackApis() give
++   * the addresses to pass.
 +   */
 +  addresses?: Record<string, string>;
 +  /** What joinWiring answers; 'not-needed', as from source, unless the test says. */
@@ -3038,15 +3171,14 @@ index 1d23cd8..9520cfe 100644
 +  /** What stop answers. */
 +  stop?: CommandResult;
    /** Answers the host helper, given the parsed request; without it, the helper fails. */
-@@ -163,2 +173,28 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
+@@ -163,2 +175,27 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
      },
 +    wiringAddresses: (ids) => {
 +      record(`wiring-addresses ${ids.join(' ')}`);
 +      return Promise.resolve(
 +        Object.fromEntries(
 +          ids.flatMap((id) => {
-+            const address =
-+              options.addresses === undefined ? '127.0.0.1' : options.addresses[id];
++            const address = options.addresses?.[id];
 +            return address === undefined ? [] : [[id, address]];
 +          }),
 +        ),
@@ -3073,36 +3205,35 @@ index 1d23cd8..9520cfe 100644
 
 ```diff
 diff --git a/deploy/deploy.test.ts b/deploy/deploy.test.ts
-index a020828..ddb5699 100644
+index a020828..e29eaba 100644
 --- a/deploy/deploy.test.ts
 +++ b/deploy/deploy.test.ts
-@@ -65,3 +65,7 @@ const V = '/v1.51';
+@@ -65,3 +65,8 @@ const V = '/v1.51';
   * helper, its `container inspect` is `GET containers/{id}/json`, and its host side is the
 - * host helper.
 + * host helper. Slice 3b adds no permission either (ADR 0011): Compose attaches the apps to
 + * the wiring network when it creates them, Mediaplane joins and leaves it with the network
 + * connect and disconnect the list already allowed for an override's networks, and a
-+ * stranded qBittorrent is stopped, then started by `up`. deploy.e2e.test.ts and
-+ * vpn.e2e.test.ts in test/e2e run them through the real proxy.
++ * stranded qBittorrent is stopped, then started by `up`: `compose stop` lists and stops
++ * containers, as `up` already does when it recreates one. test/e2e/deploy.e2e.test.ts
++ * runs the join and the leave through the real proxy.
   */
-@@ -86,2 +90,6 @@ const ENGINE_CALLS: [string, string][] = [
+@@ -86,2 +91,6 @@ const ENGINE_CALLS: [string, string][] = [
    ['DELETE', `${V}/containers/${ID}`],
 +  // Mediaplane's own container on the stack's wiring network (Slice 3b).
 +  ['GET', `${V}/networks/mediaplane_wiring`],
 +  ['POST', `${V}/networks/mediaplane_wiring/connect`],
 +  ['POST', `${V}/networks/mediaplane_wiring/disconnect`],
  ];
-@@ -91,3 +99,2 @@ const OVERRIDE_CALLS: [string, string][] = [
-   ['POST', `${V}/networks/proxy-net/connect`],
--  ['POST', `${V}/networks/proxy-net/disconnect`],
-   ['POST', `${V}/volumes/create`],
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `pnpm vitest run packages/engine/src/runtime deploy`
 
-Expected: FAIL: the 14 new tests in `docker.test.ts` (`runtime.joinWiring is not a function`, `ownContainerId is not a function`, and so on). `deploy/deploy.test.ts` passes already: today's allow-list allows the new calls (decision 1). 1 file failed, 2 passed.
+Expected: FAIL: the 14 new tests in `docker.test.ts` (`runtime.joinWiring is not a
+function`, `ownContainerId is not a function`, and so on). `deploy/deploy.test.ts` passes
+already: today's allow-list allows the new calls (decision 1). 1 file failed, 2 passed.
 
 - [ ] **Step 3: Join, leave, addresses and stop**
 
@@ -3456,6 +3587,19 @@ Decision: an `AppApiError` says which app, where, what, the request's method and
 (`wire.<kind>`). `transient` and `reachedApp` drive the retries.
 Decision: no redirect is followed with the key: a 3xx to a call with the key fails
 ("answered HTTP 302, not a success"), so the key never goes to another address.
+Decision: an answer's message is redacted before anything changes it (preflight B1):
+`appMessage(body, clean)` redacts the raw body, then the message parsed out of JSON (a
+secret written with JSON escapes appears only once parsed), and only then collapses
+whitespace and cuts at 200 characters; the whole failure message is redacted again.
+Cut first, a key across the 200th character would keep its first part; collapsed
+first, a password with runs of spaces would no longer match.
+Decision: a size limit is named in the unit it is a whole number of (`1 KiB`, `5 MiB`),
+never rounded to `0 MiB` (preflight M17).
+Decision: the client reads a connection error's code with the engine's `codeOf`
+(preflight M3).
+Decision: the spawned test first sends a request through Node's own agent, which the
+proxy must see: on a Node that ignored `NODE_USE_ENV_PROXY`, the test would otherwise
+pass whatever the client did (preflight M5).
 Decision: tests pass a clock, a sleep and a random source (`RetryOptions`), so the
 backoff is checked exactly and no test waits for real.
 
@@ -3465,7 +3609,8 @@ backoff is checked exactly and no test waits for real.
 - Modify: `packages/engine/src/index.ts`, `packages/engine/src/testing/index.ts`
 
 **Interfaces:**
-- **Consumes:** `redact` from `util/redact.ts` (Task 1); `z` from Zod.
+- **Consumes:** `redact` from `util/redact.ts` and `codeOf` from `util/error-code.ts`
+  (Task 1); `z` from Zod.
 - **Produces:**
   - `HTTP_TIMEOUT_MS = 30_000`, `HTTP_MAX_BYTES = 5 * 1024 * 1024`,
     `APP_DEADLINE_MS = 120_000`;
@@ -3476,7 +3621,8 @@ backoff is checked exactly and no test waits for real.
   - `interface AppApiOptions { name; service; port; endpoint: Endpoint; key?: { scheme: 'x-api-key' | 'bearer'; value: string }; secrets: readonly string[]; timeoutMs?; maxBytes?; retry?: Partial<RetryOptions> }`;
   - `interface AppApi { name; where; get<T>(path, schema: z.ZodType<T>): Promise<T>; check(path): Promise<void>; put(path, body): Promise<void>; post<T>(path, body, schema): Promise<T>; login(path, fields): Promise<{ status: number; location: string | undefined }>; ready(path): Promise<void> }`;
   - `createAppApi(options: AppApiOptions): AppApi`;
-  - `appMessage(body: string): string | undefined`;
+  - `appMessage(body: string, clean?: (text: string) => string): string | undefined`,
+    which redacts with `clean` before it collapses or cuts;
   - from `@mediaplane/engine/testing`:
     `fakeHttpApp(handler: FakeHandler): Promise<FakeApp>`, where a handler returns
     `{ status, body?, headers? }` or `'hang'`, and `FakeApp` has `port` and `requests`
@@ -3724,6 +3870,31 @@ describe('createAppApi', () => {
     );
   });
 
+  it('never shows part of a secret that the cut would split', async () => {
+    // The key starts at character 190 of a 300-character answer, across the 200-character
+    // cut: cut first, its first characters would stay.
+    const body = `${'x'.repeat(190)}${KEY}${'y'.repeat(300 - 190 - KEY.length)}`;
+    const { api } = await sonarr(() => ({ status: 400, body }));
+    const error = await failure(api.get('/api/v3/system/status', STATUS));
+    expect(error.message).toContain('refused the request (HTTP 400): xxx');
+    for (let i = 0; i + 8 <= KEY.length; i++) {
+      expect(error.message).not.toContain(KEY.slice(i, i + 8));
+    }
+  });
+
+  it('never shows a password with runs of spaces, which the collapse would change', async () => {
+    const spaced = 'fake-one  fake-two   fake-three';
+    const { api } = await sonarr(
+      () => ({ status: 400, body: `the password ${spaced} is too weak` }),
+      { secrets: [KEY, spaced] },
+    );
+    const error = await failure(api.put('/api/v3/config/host/1', { password: spaced }));
+    expect(error.message).toContain(
+      'refused the request (HTTP 400): the password *** is too weak',
+    );
+    expect(error.message).not.toMatch(/fake-(one|two|three)/);
+  });
+
   it("gives Servarr's own validation message, and never the value it was given", async () => {
     const { api } = await sonarr(() => ({
       status: 400,
@@ -3826,7 +3997,7 @@ describe('createAppApi', () => {
       maxBytes: 1024,
     });
     expect((await failure(big.api.get('/x', STATUS))).message).toContain(
-      'answered more than 0 MiB',
+      'answered more than 1 KiB',
     );
     const text = await sonarr(() => ({ status: 200, body: 'not json' }));
     expect((await failure(text.api.get('/x', STATUS))).message).toContain(
@@ -3884,8 +4055,9 @@ describe('createAppApi', () => {
   });
 
   it('goes straight to the app, never through a proxy from the environment', async () => {
-    // Node's global agent would send it to HTTP_PROXY with NODE_USE_ENV_PROXY set: the
-    // proxy would see the key.
+    // Node's global agent sends a request to HTTP_PROXY with NODE_USE_ENV_PROXY set: the
+    // proxy would see the key. The child's first request, through that agent, shows the
+    // proxy is used; the client's, which must not be, comes next.
     const seen: string[] = [];
     const proxy = createServer((req, res) => {
       seen.push(String(req.headers['x-api-key']));
@@ -3903,12 +4075,17 @@ describe('createAppApi', () => {
     const app = await fakeHttpApp(() => ({ status: 200, body: { version: 'direct' } }));
     const client = fileURLToPath(new URL('./client.ts', import.meta.url));
     const script = `
+      const { get } = await import('node:http');
+      const control = await new Promise((done, fail) => {
+        get('http://127.0.0.1:${String(app.port)}/control', { headers: { 'x-api-key': 'control' } },
+          (res) => { res.resume(); res.on('end', () => done(res.statusCode)); }).on('error', fail);
+      });
       const { createAppApi } = await import(${JSON.stringify(client)});
       const api = createAppApi({ name: 'Sonarr', service: 'sonarr', port: 8989,
         endpoint: { host: '127.0.0.1', port: ${String(app.port)} },
         key: { scheme: 'x-api-key', value: 'fake-key-0123' }, secrets: [] });
       const any = { safeParse: (data) => ({ success: true, data }) };
-      console.log(JSON.stringify(await api.get('/status', any)));`;
+      console.log(JSON.stringify({ control, answer: await api.get('/status', any) }));`;
     const proxyUrl = `http://127.0.0.1:${String((proxy.address() as AddressInfo).port)}`;
     const output = await new Promise<string>((resolve, reject) => {
       const child = spawn(
@@ -3931,9 +4108,10 @@ describe('createAppApi', () => {
         resolve(out.trim());
       });
     });
-    expect(output).toBe('{"version":"direct"}');
-    expect(seen).toEqual([]);
-    expect(app.requests).toHaveLength(1);
+    expect(output).toBe('{"control":200,"answer":{"version":"direct"}}');
+    // The global agent's request went to the proxy; the client's went straight to the app.
+    expect(seen).toEqual(['control']);
+    expect(app.requests.map((r) => r.path)).toEqual(['/status']);
   });
 });
 ```
@@ -3942,7 +4120,8 @@ describe('createAppApi', () => {
 
 Run: `pnpm vitest run packages/engine/src/http`
 
-Expected: FAIL: `client.test.ts` can't load `./client` ("Cannot find module './client'"), so no test runs.
+Expected: FAIL: `client.test.ts` can't load `./client` ("Cannot find module './client'"),
+so no test runs.
 
 - [ ] **Step 3: The client**
 
@@ -3951,6 +4130,7 @@ Expected: FAIL: `client.test.ts` can't load `./client` ("Cannot find module './c
 ```ts
 import { Agent, request } from 'node:http';
 import type { z } from 'zod';
+import { codeOf } from '../util/error-code';
 import { redact } from '../util/redact';
 
 /** How long one request may take, in ms. */
@@ -4152,7 +4332,7 @@ export function createAppApi(options: AppApiOptions): AppApi {
             if (size > maxBytes) {
               res.destroy();
               reject(
-                failure(call, `answered more than ${mebibytes(maxBytes)}`, {
+                failure(call, `answered more than ${sizeOf(maxBytes)}`, {
                   kind: 'protocol',
                 }),
               );
@@ -4199,7 +4379,7 @@ export function createAppApi(options: AppApiOptions): AppApi {
         transient: true,
       });
     }
-    const code = cause instanceof Error && 'code' in cause ? String(cause.code) : '';
+    const code = codeOf(cause) ?? '';
     if (NOT_SENT.has(code)) {
       return failure(call, `could not be reached (${code})`, {
         kind: 'unreachable',
@@ -4217,7 +4397,7 @@ export function createAppApi(options: AppApiOptions): AppApi {
   /** What a non-2xx answer means. */
   function statusFailure(call: Call, answer: Answer): AppApiError {
     const { status } = answer;
-    const said = appMessage(answer.body);
+    const said = appMessage(answer.body, clean);
     const message = said === undefined ? '' : `: ${clean(said)}`;
     if (status === 401 || status === 403) {
       return failure(
@@ -4366,8 +4546,11 @@ function toValues(secrets: readonly string[]): Record<string, string> {
   return Object.fromEntries(secrets.map((value, index) => [String(index), value]));
 }
 
-function mebibytes(bytes: number): string {
-  return `${String(Math.round(bytes / 1024 / 1024))} MiB`;
+/** A size limit, in the largest unit it is a whole number of: MiB, KiB, or bytes. */
+function sizeOf(bytes: number): string {
+  if (bytes % (1024 * 1024) === 0) return `${String(bytes / 1024 / 1024)} MiB`;
+  if (bytes % 1024 === 0) return `${String(bytes / 1024)} KiB`;
+  return `${String(bytes)} bytes`;
 }
 
 /** At most this much of an app's own message is shown. */
@@ -4377,14 +4560,22 @@ const MESSAGE_LIMIT = 200;
  * What an app said about a refused request, from its answer's body: Servarr's validation
  * list (`[{propertyName, errorMessage}]`), ASP.NET's problem details (`{title, errors}`),
  * a `{message}`, or plain text such as qBittorrent's or an HTML error page. Never an
- * `attemptedValue`, which can be the very password that was refused.
+ * `attemptedValue`, which can be the very password that was refused. `clean` takes the
+ * secrets out before anything else changes the text: a secret that the whitespace
+ * collapse changed, or the cut split, would no longer be found whole.
  */
-export function appMessage(body: string): string | undefined {
+export function appMessage(
+  body: string,
+  clean: (text: string) => string = (text) => text,
+): string | undefined {
+  const raw = clean(body);
   let message: string | undefined;
   try {
-    message = jsonMessage(JSON.parse(body) as unknown);
+    const said = jsonMessage(JSON.parse(raw) as unknown);
+    // A secret written with JSON escapes, such as \" or \u0020, appears only once parsed.
+    message = said === undefined ? undefined : clean(said);
   } catch {
-    message = body
+    message = raw
       .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
       .replace(/<[^>]*>/g, ' ')
       .replace(/\s+/g, ' ')
@@ -4432,10 +4623,10 @@ function jsonMessage(data: unknown): string | undefined {
 
 ```diff
 diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
-index 0dc86b5..e48328c 100644
+index 829c69e..4730319 100644
 --- a/packages/engine/src/index.ts
 +++ b/packages/engine/src/index.ts
-@@ -30,2 +30,3 @@ export * from './secrets/values';
+@@ -31,2 +31,3 @@ export * from './secrets/values';
  export * from './secrets/admin';
 +export * from './http/client';
  export * from './runtime/types';
@@ -4445,7 +4636,8 @@ index 0dc86b5..e48328c 100644
 
 Run: `pnpm vitest run packages/engine/src/http`
 
-Expected: PASS, 17 tests, the spawned proxy test included.
+Expected: PASS, 19 tests, the spawned proxy test and the two of the redaction's order
+included.
 
 - [ ] **Step 5: Check, and commit**
 
@@ -4474,7 +4666,12 @@ empty. `create` and `update` change the app. `requires` names resources whose fa
 skips this one. An integration's `after` names apps whose resources go first; others are
 ignored.
 Decision: an address is `<app>.<resource>`, as override keys start (spec §4.2), checked
-by `RESOURCE_ADDRESS` in `resources.json`.
+by `RESOURCE_ADDRESS` in `resources.json` with the contract's own rule for a name,
+`[a-z][a-z0-9_]*`, so a name the catalog refuses is refused there too (preflight M22).
+Decision: the catalog checks each integration only for the apps that have one (a
+`describe.each` over them), and a test lists those apps: none in this task, the three
+Servarr apps from Task 7. No per-app test returns early asserting nothing (preflight
+M5).
 Decision: the placeholder `bootstrap-api create-admin` steps, which S3a added to say the
 admin would come, leave the three apps' `credentials`: the resource replaces them.
 
@@ -4570,6 +4767,14 @@ describe('resources.json', () => {
       JSON.stringify({ schema: 'mediaplane.resources/v1', resources: { sonarr: ADMIN } }),
     );
     await expect(readResources(odd)).rejects.toThrow('resources.sonarr:');
+    // A name the contract refuses: lower case, as in ResourceSpec.name.
+    const upper = await homeWith(
+      JSON.stringify({
+        schema: 'mediaplane.resources/v1',
+        resources: { 'sonarr.Admin': ADMIN },
+      }),
+    );
+    await expect(readResources(upper)).rejects.toThrow('resources.sonarr.Admin:');
     await expect(readResources(await homeWith('{'))).rejects.toThrow('is not valid JSON');
   });
 });
@@ -4737,10 +4942,10 @@ describe('servarrAdmin', () => {
 
 ```diff
 diff --git a/catalog/catalog.test.ts b/catalog/catalog.test.ts
-index 3b110ce..c2d93c3 100644
+index 63b9c8a..07f6dbc 100644
 --- a/catalog/catalog.test.ts
 +++ b/catalog/catalog.test.ts
-@@ -32,2 +32,11 @@ describe('catalog', () => {
+@@ -45,2 +45,42 @@ describe('catalog', () => {
  
 +  it('orders the integrations with no loop in their "after"', () => {
 +    const after = new Map(catalog.map((app) => [app.id, app.integration?.after ?? []]));
@@ -4751,12 +4956,18 @@ index 3b110ce..c2d93c3 100644
 +    for (const app of catalog) visit(app.id, []);
 +  });
 +
-   describe.each(catalog.map((app) => [app.id, app] as const))('%s', (_id, app) => {
-@@ -80,2 +89,23 @@ describe('catalog', () => {
- 
++  it('gives an integration to the apps Mediaplane wires so far', () => {
++    expect(
++      catalog.filter((app) => app.integration !== undefined).map((app) => app.id),
++    ).toEqual([]);
++  });
++
++  describe.each(
++    catalog.flatMap((app) =>
++      app.integration === undefined ? [] : [[app.id, app, app.integration] as const],
++    ),
++  )("%s's integration", (_id, app, integration) => {
 +    it('wires itself only through an API, with resources named and checked as the contract says', () => {
-+      const { integration } = app;
-+      if (integration === undefined) return;
 +      expect(app.api).toBeDefined();
 +      for (const other of integration.after) {
 +        expect(catalog.map((def) => def.id)).toContain(other);
@@ -4774,8 +4985,9 @@ index 3b110ce..c2d93c3 100644
 +      const names = integration.resources.map((r) => r.name);
 +      expect(new Set(names).size).toBe(names.length);
 +    });
++  });
 +
-     it('only injects secrets it declares', () => {
+   describe.each(catalog.map((app) => [app.id, app] as const))('%s', (_id, app) => {
 ```
 
 **Change** `scripts/docs/catalog-facts.test.ts`:
@@ -4808,7 +5020,10 @@ index 00b9456..a112ce8 100644
 
 Run: `pnpm vitest run packages/engine/src/integrations catalog scripts/docs`
 
-Expected: FAIL: `resources.test.ts` can't load `./resources`, `servarr.test.ts` stops at `servarrAdmin is not a function`, and the facts test of "Managed in the app" fails. `catalog.test.ts`'s new checks pass, and check nothing yet: no app has an integration until Task 7, when they apply to the three. 3 files failed, 7 passed.
+Expected: FAIL: `resources.test.ts` can't load `./resources`, `servarr.test.ts` stops at
+`servarrAdmin is not a function`, and the facts test of "Managed in the app" fails.
+`catalog.test.ts`'s new checks pass: its list of the apps with an integration is empty
+until Task 7, and so its check of each runs for none yet. 3 files failed, 7 passed.
 
 - [ ] **Step 3: The contract, the file, and the admin resource**
 
@@ -4915,8 +5130,11 @@ import { compare } from '../util/sort';
 
 export const RESOURCES_SCHEMA = 'mediaplane.resources/v1';
 
-/** "<app>.<resource>", as override keys start (spec §4.2). */
-export const RESOURCE_ADDRESS = /^[a-z0-9-]+\.[A-Za-z0-9_]+$/;
+/**
+ * "<app>.<resource>", as override keys start (spec §4.2): a resource's name is what the
+ * contract allows (catalog.test.ts checks every one).
+ */
+export const RESOURCE_ADDRESS = /^[a-z0-9-]+\.[a-z][a-z0-9_]*$/;
 
 const knownSchema = z.strictObject({
   /** The app's id for it; null for a singleton. */
@@ -5019,10 +5237,10 @@ index 62679f9..4da3923 100644
 
 ```diff
 diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
-index e48328c..913f18b 100644
+index 4730319..264837a 100644
 --- a/packages/engine/src/index.ts
 +++ b/packages/engine/src/index.ts
-@@ -31,2 +31,4 @@ export * from './secrets/admin';
+@@ -32,2 +32,4 @@ export * from './secrets/admin';
  export * from './http/client';
 +export * from './integrations/types';
 +export * from './integrations/resources';
@@ -5294,6 +5512,17 @@ Decision: `apply`'s verify step fails while any wiring other than `unchanged` re
 because `plan`'s `changed` now counts it. Task 7 wires them.
 Decision: the CLI tests' apps are one fake server for the whole real catalog
 (`fakeStackApis`), told apart by their `Host` header, through `CliDeps.wiring`.
+Each fake app returns the `addresses` to give the fake runtime, which has none by
+default (Task 3, preflight M10): the engine's tests pass them, and the CLI's `deps()`
+puts its runtime's containers there (`onWiring`).
+Decision: the fake Sonarr repeats a key it refuses (`Unauthorized: <key>`), as an app
+may, so the "no secret" checks fail if the client is ever made without the stack's
+secrets (preflight M5).
+Decision: the shared pieces are one each (preflight M1, M2, M4): `notOnNetwork(app)`
+says why an app can't be asked, for `plan` here and the wire step in Task 7;
+`wiringLine(change)` is the one wiring line the CLI prints, for `plan` here and
+`history` in Task 7; and the wiring tests' stack and containers come from
+`testing/wiring.ts` (`WIRING_STACK`, `wiringStack()`, `WIRING_RUNNING`).
 
 **Files:**
 - Create: `packages/engine/src/integrations/wiring.ts`,
@@ -5315,6 +5544,7 @@ Decision: the CLI tests' apps are one fake server for the whole real catalog
   - `interface WiringSeams { endpoint?: (app: ResolvedApp, address: string, port: number) => Endpoint; retry?: Partial<RetryOptions>; timeoutMs?: number }`;
   - `wiringOrder(stack): ResolvedApp[]` (throws on a loop);
     `resourceAddress(app, spec): string`; `wiringTargets(app): string[]`;
+    `notOnNetwork(app): string`;
     `settled(app, current, changing): boolean`;
     `reachApps(apps, options): Promise<Map<string, ReachedApp>>`, where
     `ReachedApp = { app: ResolvedApp; api: AppApi }`;
@@ -5326,8 +5556,11 @@ Decision: the CLI tests' apps are one fake server for the whole real catalog
     `PlanContext.known: KnownResources`; `CliDeps.wiring?: WiringSeams`;
   - from `@mediaplane/engine/testing`: `FAKE_LOGIN` (a resource like the Servarr admin,
     `sonarr.login`), `WIRED_CATALOG` (the fixture catalog, with an API and `FAKE_LOGIN`
-    for Sonarr), `fakeStackApis(): Promise<{ app; apps: Map<string, FakeAppState>; seams }>`,
-    and `fakeSonarr(state?): Promise<{ app; state; seams }>`.
+    for Sonarr), `fakeStackApis(): Promise<{ app; apps: Map<string, FakeAppState>; seams; addresses }>`,
+    `fakeSonarr(state?): Promise<{ app; state; seams; addresses }>`, where `addresses`
+    is a `Record<string, string>` by the fakes' container IDs (`fake-<service>`), and
+    `WIRING_STACK`, `wiringStack(catalog?, source?): ResolvedStack`, `WIRING_RUNNING`;
+  - in the CLI's `output.ts`: `wiringLine(change: WiringChange): string`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5338,8 +5571,50 @@ import { z } from 'zod';
 import type { Catalog } from '../catalog/types';
 import type { WiringSeams } from '../integrations/wiring';
 import type { ResourceSpec } from '../integrations/types';
-import { fixtureCatalog, FIXTURE_API } from './fixtures';
+import { resolveStack, type ResolvedStack } from '../resolver/resolve';
+import { fakeContainer } from './fakes';
+import { FIXTURE_API, FIXTURE_HOST, fixtureCatalog, fixtureConfig } from './fixtures';
 import { fakeHttpApp, type FakeApp } from './http';
+
+/** The stack of the wiring tests: Sonarr, and qBittorrent behind Gluetun. */
+export const WIRING_STACK = `version: 1
+paths: { data: /srv/data }
+network: { bind: localhost }
+media_server: jellyfin
+vpn: { provider: mullvad, private_key: { file: secrets/wg.key } }
+apps:
+  sonarr: {}
+  qbittorrent: {}
+`;
+
+/** `source` resolved against `catalog`, WIRED_CATALOG by default. */
+export function wiringStack(
+  catalog: Catalog = WIRED_CATALOG,
+  source = WIRING_STACK,
+): ResolvedStack {
+  const result = resolveStack(
+    fixtureConfig(source),
+    catalog,
+    FIXTURE_HOST,
+    '/opt/mediaplane',
+  );
+  if (result.stack === undefined) throw new Error(JSON.stringify(result.diagnostics));
+  return result.stack;
+}
+
+/** WIRING_STACK's containers, running and healthy, with the fakes' IDs (fake-<service>). */
+export const WIRING_RUNNING = ['gluetun', 'jellyfin', 'qbittorrent', 'sonarr'].map(
+  (service) => fakeContainer(service, `fake-${service}`),
+);
+
+/**
+ * Where the fake apps' containers are on the wiring network, by the fakes' container IDs
+ * (fake-<service>): pass it as fakeRuntime's or fakeDocker's `addresses`. The seams send
+ * the calls to the fake app whatever the address.
+ */
+function onWiring(services: readonly string[]): Record<string, string> {
+  return Object.fromEntries(services.map((service) => [`fake-${service}`, '127.0.0.1']));
+}
 
 /**
  * A resource for engine tests, shaped like the Servarr admin: "sonarr.login", whose `user`
@@ -5399,6 +5674,7 @@ export async function fakeStackApis(): Promise<{
   app: FakeApp;
   apps: Map<string, FakeAppState>;
   seams: WiringSeams;
+  addresses: Record<string, string>;
 }> {
   const apps = new Map<string, FakeAppState>();
   const stateOf = (service: string) => {
@@ -5455,6 +5731,7 @@ export async function fakeStackApis(): Promise<{
       endpoint: () => ({ host: '127.0.0.1', port: app.port }),
       retry: { deadlineMs: 0 },
     },
+    addresses: onWiring(['gluetun', 'prowlarr', 'qbittorrent', 'radarr', 'sonarr']),
   };
 }
 
@@ -5470,11 +5747,15 @@ export interface FakeSonarrState {
 
 /**
  * A fake Sonarr for WIRED_CATALOG: /ping, its key check, and the FAKE_LOGIN resource. The
- * seams send every app's calls to it, and never wait.
+ * seams send every app's calls to it, and never wait. It answers a key it refuses by
+ * repeating it, so a test sees whether the key is kept out of what Mediaplane says.
  */
-export async function fakeSonarr(
-  state: Partial<FakeSonarrState> = {},
-): Promise<{ app: FakeApp; state: FakeSonarrState; seams: WiringSeams }> {
+export async function fakeSonarr(state: Partial<FakeSonarrState> = {}): Promise<{
+  app: FakeApp;
+  state: FakeSonarrState;
+  seams: WiringSeams;
+  addresses: Record<string, string>;
+}> {
   const held: FakeSonarrState = { user: '', password: '', key: '', up: true, ...state };
   const keyed = (headers: Record<string, unknown>) => headers['x-api-key'] === held.key;
   const app = await fakeHttpApp((request) => {
@@ -5485,7 +5766,9 @@ export async function fakeSonarr(
       const ok = held.user !== '' && password === held.password;
       return { status: 302, headers: { Location: ok ? '/' : '/login?loginFailed=true' } };
     }
-    if (!keyed(headers)) return { status: 401, body: 'Unauthorized' };
+    if (!keyed(headers)) {
+      return { status: 401, body: `Unauthorized: ${String(headers['x-api-key'])}` };
+    }
     if (path === '/api/v3/system/status') return { status: 200, body: { version: '4' } };
     if (path === '/api/v3/login' && method === 'GET') {
       return { status: 200, body: { user: held.user } };
@@ -5505,6 +5788,7 @@ export async function fakeSonarr(
       endpoint: () => ({ host: '127.0.0.1', port: app.port }),
       retry: { deadlineMs: 0 },
     },
+    addresses: onWiring(['sonarr']),
   };
 }
 ```
@@ -5526,15 +5810,13 @@ index 3dea8d5..3b0e6ac 100644
 ```ts
 import { describe, expect, it } from 'vitest';
 import type { Catalog } from '../catalog/types';
-import { resolveStack, type ResolvedStack } from '../resolver/resolve';
-import { fakeContainer, fakeRuntime } from '../testing/fakes';
+import { fakeRuntime } from '../testing/fakes';
+import { FIXTURE_API, fixtureCatalog } from '../testing/fixtures';
 import {
-  FIXTURE_API,
-  FIXTURE_HOST,
-  fixtureCatalog,
-  fixtureConfig,
-} from '../testing/fixtures';
-import { fakeSonarr, WIRED_CATALOG } from '../testing/wiring';
+  fakeSonarr,
+  WIRING_RUNNING as RUNNING,
+  wiringStack as stackOf,
+} from '../testing/wiring';
 import type { KnownResources } from './resources';
 import {
   planWiring,
@@ -5546,41 +5828,20 @@ import {
 
 const KEY = '0'.repeat(32);
 const PASSWORD = 'fake-admin-password';
-const STACK = `version: 1
-paths: { data: /srv/data }
-network: { bind: localhost }
-media_server: jellyfin
-vpn: { provider: mullvad, private_key: { file: secrets/wg.key } }
-apps:
-  sonarr: {}
-  qbittorrent: {}
-`;
-
-function stackOf(catalog: Catalog = WIRED_CATALOG, source = STACK): ResolvedStack {
-  const result = resolveStack(
-    fixtureConfig(source),
-    catalog,
-    FIXTURE_HOST,
-    '/opt/mediaplane',
-  );
-  if (result.stack === undefined) throw new Error(JSON.stringify(result.diagnostics));
-  return result.stack;
+/** A fake app's seams, and where its container is on the wiring network. */
+interface Fake {
+  seams: WiringSeams;
+  addresses: Record<string, string>;
 }
 
-const RUNNING = ['gluetun', 'jellyfin', 'qbittorrent', 'sonarr'].map((service) =>
-  fakeContainer(service, `id-${service}`),
-);
-
-function options(
-  seams: WiringSeams,
-  extra: Partial<PlanWiringOptions> = {},
-): PlanWiringOptions {
+function options(fake: Fake, extra: Partial<PlanWiringOptions> = {}): PlanWiringOptions {
+  const { seams, addresses } = fake;
   return {
     stack: stackOf(),
     current: RUNNING,
     changing: new Set(),
     onNetwork: true,
-    runtime: fakeRuntime(),
+    runtime: fakeRuntime({ addresses }),
     keys: { sonarr: { apiKey: KEY } },
     admin: { username: 'admin', password: PASSWORD },
     secrets: [KEY, PASSWORD],
@@ -5603,7 +5864,7 @@ const RECORDED: KnownResources = {
 describe('planWiring', () => {
   it('would create a resource the app has none of, and changes nothing itself', async () => {
     const sonarr = await fakeSonarr({ key: KEY });
-    const planned = await planWiring(options(sonarr.seams));
+    const planned = await planWiring(options(sonarr));
     expect(planned).toEqual({
       changes: [{ resource: 'sonarr.login', action: 'create' }],
       diagnostics: [],
@@ -5617,25 +5878,23 @@ describe('planWiring', () => {
 
   it('adopts one already as wanted that resources.json lacks, and leaves a recorded one', async () => {
     const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
-    expect((await planWiring(options(sonarr.seams))).changes).toEqual([
+    expect((await planWiring(options(sonarr))).changes).toEqual([
       { resource: 'sonarr.login', action: 'adopt' },
     ]);
-    expect(
-      (await planWiring(options(sonarr.seams, { known: RECORDED }))).changes,
-    ).toEqual([{ resource: 'sonarr.login', action: 'unchanged' }]);
+    expect((await planWiring(options(sonarr, { known: RECORDED }))).changes).toEqual([
+      { resource: 'sonarr.login', action: 'unchanged' },
+    ]);
   });
 
   it('would update a field that differs, and a secret the app refuses, by name only', async () => {
     const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: 'other' });
-    expect(
-      (await planWiring(options(sonarr.seams, { known: RECORDED }))).changes,
-    ).toEqual([
+    expect((await planWiring(options(sonarr, { known: RECORDED }))).changes).toEqual([
       { resource: 'sonarr.login', action: 'update', changes: ['user', 'password'] },
     ]);
     sonarr.state.user = 'admin';
-    expect(
-      (await planWiring(options(sonarr.seams, { known: RECORDED }))).changes,
-    ).toEqual([{ resource: 'sonarr.login', action: 'update', changes: ['password'] }]);
+    expect((await planWiring(options(sonarr, { known: RECORDED }))).changes).toEqual([
+      { resource: 'sonarr.login', action: 'update', changes: ['password'] },
+    ]);
   });
 
   it('checks after the start an app whose container apply changes, or that is not ready', async () => {
@@ -5652,7 +5911,7 @@ describe('planWiring', () => {
       // Not on the wiring network yet: there is none.
       { onNetwork: false },
     ]) {
-      expect((await planWiring(options(sonarr.seams, extra))).changes).toEqual(after);
+      expect((await planWiring(options(sonarr, extra))).changes).toEqual(after);
     }
     expect(sonarr.app.requests).toEqual([]);
   });
@@ -5660,7 +5919,7 @@ describe('planWiring', () => {
   it('says so when an app that stays as it is has no address on the wiring network', async () => {
     const sonarr = await fakeSonarr({ key: KEY });
     const planned = await planWiring(
-      options(sonarr.seams, { runtime: fakeRuntime({ addresses: {} }) }),
+      options(sonarr, { runtime: fakeRuntime({ addresses: {} }) }),
     );
     expect(planned.changes).toEqual([
       {
@@ -5675,13 +5934,14 @@ describe('planWiring', () => {
 
   it('says what stopped it from asking an app, with no secret, and goes on to the next', async () => {
     const sonarr = await fakeSonarr({ key: 'f'.repeat(32) });
-    const planned = await planWiring(options(sonarr.seams));
+    const planned = await planWiring(options(sonarr));
     expect(planned.changes).toEqual([
       {
         resource: 'sonarr.login',
         action: 'unknown',
+        // The app repeated the key it refused: the redaction took it out.
         reason: expect.stringContaining(
-          "refused Mediaplane's API key (HTTP 401)",
+          "refused Mediaplane's API key (HTTP 401): Unauthorized: ***",
         ) as string,
       },
     ]);
@@ -5701,11 +5961,11 @@ describe('planWiring', () => {
     );
     const sonarr = await fakeSonarr({ key: KEY });
     const stack = stackOf(catalog);
-    expect((await planWiring(options(sonarr.seams, { stack }))).changes).toEqual([
+    expect((await planWiring(options(sonarr, { stack }))).changes).toEqual([
       { resource: 'sonarr', action: 'unchanged' },
     ]);
     sonarr.state.up = false;
-    expect((await planWiring(options(sonarr.seams, { stack }))).changes).toEqual([
+    expect((await planWiring(options(sonarr, { stack }))).changes).toEqual([
       {
         resource: 'sonarr',
         action: 'unknown',
@@ -5770,7 +6030,7 @@ describe('settled', () => {
 
 ```diff
 diff --git a/packages/engine/src/plan/plan.test.ts b/packages/engine/src/plan/plan.test.ts
-index 267a2fe..2ebe726 100644
+index 267a2fe..f722af6 100644
 --- a/packages/engine/src/plan/plan.test.ts
 +++ b/packages/engine/src/plan/plan.test.ts
 @@ -15,4 +15,7 @@ import {
@@ -5801,7 +6061,7 @@ index 267a2fe..2ebe726 100644
 +    ...(wiring === undefined ? {} : { wiring }),
 +  });
  }
-@@ -788 +801,117 @@ describe('plan', () => {
+@@ -788 +801,118 @@ describe('plan', () => {
  });
 +
 +describe('plan: the wiring', () => {
@@ -5814,17 +6074,18 @@ index 267a2fe..2ebe726 100644
 +    await writeCurrentEnv(home);
 +    return home;
 +  }
-+  const current = (calls: string[]) =>
++  const current = (calls: string[], addresses: Record<string, string>) =>
 +    fakeRuntime({
 +      hashes: { ok: true, hashes: HASHES },
 +      containers: running(HASHES),
++      addresses,
 +      calls,
 +    });
 +
 +  it('joins the wiring network, then plans each resource of a running app', async () => {
 +    const sonarr = await fakeSonarr({ key: '0'.repeat(32) });
 +    const calls: string[] = [];
-+    const runtime = current(calls);
++    const runtime = current(calls, sonarr.addresses);
 +    const home = await wiredHome(runtime, sonarr.seams);
 +    calls.length = 0;
 +    const result = await planFor(home, {
@@ -5850,7 +6111,7 @@ index 267a2fe..2ebe726 100644
 +      user: 'admin',
 +      password: 'fake-admin-password',
 +    });
-+    const runtime = current([]);
++    const runtime = current([], sonarr.addresses);
 +    const home = await wiredHome(runtime, sonarr.seams);
 +    await writeResources(home, {
 +      'sonarr.login': {
@@ -5979,7 +6240,7 @@ index ad6c6b4..a66020e 100644
 
 ```diff
 diff --git a/packages/cli/src/run.test.ts b/packages/cli/src/run.test.ts
-index e1549ad..95dfc3f 100644
+index e1549ad..5e7ebef 100644
 --- a/packages/cli/src/run.test.ts
 +++ b/packages/cli/src/run.test.ts
 @@ -27,2 +27,3 @@ import {
@@ -5991,11 +6252,14 @@ index e1549ad..95dfc3f 100644
 -import { describe, expect, it, vi } from 'vitest';
 +import { beforeEach, describe, expect, it, vi } from 'vitest';
  import { PromptCancelled } from './prompt';
-@@ -72,2 +73,3 @@ async function currentHome(
+@@ -70,4 +71,5 @@ async function currentHome(
+     env: {},
+-    runtime,
++    runtime: onWiring(runtime),
      probe: fakeProbe(),
 +    wiring: apis.seams,
    });
-@@ -105,2 +107,8 @@ function expectNoSecrets(output: string, secrets: readonly string[]): void {
+@@ -105,2 +107,24 @@ function expectNoSecrets(output: string, secrets: readonly string[]): void {
  
 +/** The apps' APIs, faked anew for each test: the test stack's Sonarr and qBittorrent. */
 +let apis: Awaited<ReturnType<typeof fakeStackApis>>;
@@ -6003,22 +6267,41 @@ index e1549ad..95dfc3f 100644
 +  apis = await fakeStackApis();
 +});
 +
++/** `runtime`, with the stack's containers on the wiring network, where `apis` are. */
++function onWiring(runtime: Runtime): Runtime {
++  return {
++    ...runtime,
++    wiringAddresses: (ids) =>
++      Promise.resolve(
++        Object.fromEntries(
++          ids.flatMap((id) => {
++            const address = apis.addresses[id];
++            return address === undefined ? [] : [[id, address]];
++          }),
++        ),
++      ),
++  };
++}
++
  function deps(runtime: Runtime = fakeRuntime()): Partial<CliDeps> {
-@@ -110,2 +118,3 @@ function deps(runtime: Runtime = fakeRuntime()): Partial<CliDeps> {
+@@ -108,4 +132,5 @@ function deps(runtime: Runtime = fakeRuntime()): Partial<CliDeps> {
+     host: () => Promise.resolve(FIXTURE_HOST),
+-    runtime: () => runtime,
++    runtime: () => onWiring(runtime),
      probe: () => fakeProbe(),
 +    wiring: apis.seams,
    };
-@@ -182,3 +191,3 @@ describe('mediaplane plan', () => {
+@@ -182,3 +207,3 @@ describe('mediaplane plan', () => {
      expect(term.stdout()).toContain(
 -      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate.',
 +      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 2 wiring checks after the start.',
      );
-@@ -243,3 +252,3 @@ describe('mediaplane plan', () => {
+@@ -243,3 +268,3 @@ describe('mediaplane plan', () => {
      expect(term.stdout()).toBe(
 -      'Not healthy yet: sonarr (unhealthy)\nPlan: 1 app to wait for.\n',
 +      'Not healthy yet: sonarr (unhealthy)\nWiring:\n  > after start sonarr\nPlan: 1 app to wait for, 1 wiring check after the start.\n',
      );
-@@ -440,3 +449,3 @@ describe('mediaplane apply', () => {
+@@ -440,3 +465,3 @@ describe('mediaplane apply', () => {
      expect(first.stdout()).toContain(
 -      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate.',
 +      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 2 wiring checks after the start.',
@@ -6029,7 +6312,10 @@ index e1549ad..95dfc3f 100644
 
 Run: `pnpm vitest run packages/engine/src/integrations packages/engine/src/plan packages/cli/src/output.test.ts packages/cli/src/run.test.ts`
 
-Expected: FAIL: `wiring.test.ts` can't load `./wiring`; `plan.test.ts`'s five "plan: the wiring" tests (the plan has no `wiring`); the output test of the "Wiring:" section ("No changes." comes instead); and three `run.test.ts` tests whose summary now counts the wiring checks. 4 files, 9 tests failed, 122 passed.
+Expected: FAIL: `wiring.test.ts` can't load `./wiring`; `plan.test.ts`'s five "plan: the
+wiring" tests (the plan has no `wiring`); the output test of the "Wiring:" section ("No
+changes." comes instead); and three `run.test.ts` tests whose summary now counts the
+wiring checks. 4 files, 9 tests failed, 122 passed.
 
 - [ ] **Step 3: The wiring in `plan`**
 
@@ -6136,6 +6422,11 @@ export function wiringTargets(app: ResolvedApp): string[] {
   return resources.length === 0
     ? [app.def.id]
     : resources.map((spec) => resourceAddress(app, spec));
+}
+
+/** Why Mediaplane can't ask `app`: its container isn't on the stack's wiring network. */
+export function notOnNetwork(app: ResolvedApp): string {
+  return `${app.def.name}'s container is not on the stack's wiring network, so Mediaplane can't reach it`;
 }
 
 /** The service whose container serves the app's API: Gluetun's, for qBittorrent. */
@@ -6322,7 +6613,7 @@ export async function planWiring(
     const client = reached.get(app.def.id);
     if (client === undefined && ready.includes(app)) {
       // Running, and apply leaves it as it is, but it isn't on the network.
-      const reason = `${app.def.name}'s container is not on the stack's wiring network, so Mediaplane can't reach it`;
+      const reason = notOnNetwork(app);
       diagnostics.push(
         warning('wire.not-on-network', reason, {
           hint: `see ${WIRING_RUNBOOK}`,
@@ -6507,16 +6798,16 @@ index c30b614..ccdc965 100644
 
 ```diff
 diff --git a/packages/engine/src/apply/apply.ts b/packages/engine/src/apply/apply.ts
-index 4820736..6513a5b 100644
+index 13c4978..6ed452a 100644
 --- a/packages/engine/src/apply/apply.ts
 +++ b/packages/engine/src/apply/apply.ts
-@@ -332,2 +332,5 @@ function remaining(result: PlanResult): string {
+@@ -346,2 +346,5 @@ function remaining(result: PlanResult): string {
      ...result.unhealthy,
 +    ...result.wiring
 +      .filter((w) => w.action !== 'unchanged')
 +      .map((w) => `${w.resource} (${w.action})`),
    ].join(', ');
-@@ -357,2 +360,3 @@ function emptyPlan(): PlanResult {
+@@ -371,2 +374,3 @@ function emptyPlan(): PlanResult {
      unhealthy: [],
 +    wiring: [],
      diagnostics: [],
@@ -6526,10 +6817,10 @@ index 4820736..6513a5b 100644
 
 ```diff
 diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
-index 913f18b..750e986 100644
+index 264837a..19a5b71 100644
 --- a/packages/engine/src/index.ts
 +++ b/packages/engine/src/index.ts
-@@ -33,2 +33,3 @@ export * from './integrations/types';
+@@ -34,2 +34,3 @@ export * from './integrations/types';
  export * from './integrations/resources';
 +export * from './integrations/wiring';
  export * from './runtime/types';
@@ -6539,14 +6830,15 @@ index 913f18b..750e986 100644
 
 ```diff
 diff --git a/packages/cli/src/output.ts b/packages/cli/src/output.ts
-index 84a983c..0a0afee 100644
+index 84a983c..8fe46b2 100644
 --- a/packages/cli/src/output.ts
 +++ b/packages/cli/src/output.ts
-@@ -12,2 +12,3 @@ import {
+@@ -12,2 +12,4 @@ import {
    type StepEvent,
 +  type WiringAction,
++  type WiringChange,
  } from '@mediaplane/engine';
-@@ -29,2 +30,11 @@ const MARKS: Record<ContainerAction, string> = {
+@@ -29,2 +31,17 @@ const MARKS: Record<ContainerAction, string> = {
  
 +const WIRING_MARKS: Record<WiringAction, string> = {
 +  create: '+',
@@ -6557,34 +6849,37 @@ index 84a983c..0a0afee 100644
 +  unchanged: ' ',
 +};
 +
++/** One resource's line, as plan and history show it: "  + create      sonarr.admin". */
++function wiringLine(change: WiringChange): string {
++  const what = change.changes === undefined ? '' : ` (${change.changes.join(', ')})`;
++  return `  ${WIRING_MARKS[change.action]} ${change.action.replace('-', ' ').padEnd(11)} ${change.resource}${what}`;
++}
++
  export function formatDiagnostic(diagnostic: Diagnostic): string {
-@@ -97,2 +107,14 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
+@@ -97,2 +114,11 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
    if (unhealthy.length > 0) io.stdout(`Not healthy yet: ${unhealthy.join(', ')}\n`);
 +  const wiring = result.wiring.filter((change) => change.action !== 'unchanged');
 +  if (wiring.length > 0) {
 +    io.stdout('Wiring:\n');
 +    for (const change of wiring) {
-+      const what = change.changes === undefined ? '' : ` (${change.changes.join(', ')})`;
-+      io.stdout(
-+        `  ${WIRING_MARKS[change.action]} ${change.action.replace('-', ' ').padEnd(11)} ${change.resource}${what}\n`,
-+      );
++      io.stdout(`${wiringLine(change)}\n`);
 +    }
 +  }
 +  const tally = (...actions: WiringAction[]) =>
 +    wiring.filter((change) => actions.includes(change.action)).length;
    const parts = [
-@@ -102,2 +124,5 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
+@@ -102,2 +128,5 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
      count(unhealthy.length, 'app', 'to wait for'),
 +    count(tally('create', 'update', 'adopt'), 'resource', 'to wire'),
 +    count(tally('after-start'), 'wiring check', 'after the start'),
 +    count(tally('unknown'), 'wiring check', 'that could not be made'),
    ].filter((part): part is string => part !== undefined);
-@@ -149,3 +174,3 @@ export function printApply(
+@@ -149,3 +178,3 @@ export function printApply(
    if (options.json) {
 -    const { files, containers, secrets, unhealthy } = result.plan;
 +    const { files, containers, secrets, unhealthy, wiring } = result.plan;
      io.stdout(
-@@ -162,2 +187,3 @@ export function printApply(
+@@ -162,2 +191,3 @@ export function printApply(
              unhealthy,
 +            wiring,
            },
@@ -6656,7 +6951,13 @@ actions gain an optional `resource`, the plan an optional `wiring`. A record wri
 before this slice still reads.
 Decision: the CLI shows each resource's action ("done    wiring sonarr.admin: created")
 and counts "N resource(s) wired" in `history`. A failed wire step is counted once per
-resource, not once more for the step.
+resource, not once more for the step. `history <id>` prints the plan's wiring with
+`wiringLine`, the same line as `plan`'s ("> after start sonarr.admin") (preflight M2).
+Decision: the wire step takes an app's targets and the "not on the stack's wiring
+network" message from `wiring.ts` (`wiringTargets`, `notOnNetwork`), and its tests the
+shared stack and containers from `testing/wiring.ts` (preflight M1, M4).
+Decision: the catalog's list of the apps with an integration becomes Sonarr, Radarr and
+Prowlarr, so its per-integration checks now run for each (Task 5).
 Decision: Sonarr, Radarr and Prowlarr say `login: 'shared'` now, so `credentials` lists
 them with the shared login.
 
@@ -6670,11 +6971,12 @@ them with the shared login.
   `catalog/prowlarr/README.md` (what each manages)
 - Test: `packages/engine/src/apply/apply.test.ts`, `packages/engine/src/testing/wiring.ts`,
   `packages/cli/src/output.test.ts`, `packages/cli/src/run.test.ts`,
-  `packages/cli/src/credentials.test.ts`
+  `packages/cli/src/credentials.test.ts`, `catalog/catalog.test.ts`
 
 **Interfaces:**
 - **Consumes:** `wiringOrder`, `reachApps`, `checkApp`, `examine`, `knownSecrets`,
-  `resourceAddress`, `WIRING_RUNBOOK`, `WiringSeams` (Task 6); `writeResources` (Task 5);
+  `resourceAddress`, `wiringTargets`, `notOnNetwork`, `WIRING_RUNBOOK`, `WiringSeams`,
+  `wiringLine`, and the shared fixture in `testing/wiring.ts` (Task 6); `writeResources` (Task 5);
   `APP_DEADLINE_MS`, `AppApiError` (Task 4); `Runtime.joinWiring`, `Runtime.leaveWiring`
   (Task 3); `adminLogin`; `servarrIntegration` through each app's `integration.ts`
   (Task 5).
@@ -6693,15 +6995,15 @@ them with the shared login.
 
 ```diff
 diff --git a/packages/engine/src/testing/wiring.ts b/packages/engine/src/testing/wiring.ts
-index 9b0a086..91c6cf2 100644
+index 4137ee8..560ac9f 100644
 --- a/packages/engine/src/testing/wiring.ts
 +++ b/packages/engine/src/testing/wiring.ts
-@@ -128,3 +128,3 @@ export interface FakeSonarrState {
+@@ -172,3 +172,3 @@ export interface FakeSonarrState {
    password: string;
 -  /** Its API key: anything else gets 401. */
 +  /** Its API key: anything else gets 401. Empty: any key will do. */
    key: string;
-@@ -142,3 +142,6 @@ export async function fakeSonarr(
+@@ -190,3 +190,6 @@ export async function fakeSonarr(state: Partial<FakeSonarrState> = {}): Promise<
    const held: FakeSonarrState = { user: '', password: '', key: '', up: true, ...state };
 -  const keyed = (headers: Record<string, unknown>) => headers['x-api-key'] === held.key;
 +  const keyed = (headers: Record<string, unknown>) =>
@@ -6718,15 +7020,18 @@ import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import type { Catalog } from '../catalog/types';
 import type { ActionResult } from '../history/records';
 import { RESOURCES_PATH } from '../paths';
-import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import type { WiringJoin } from '../runtime/types';
-import { fakeContainer, fakeRuntime } from '../testing/fakes';
-import { FIXTURE_HOST, fixtureConfig } from '../testing/fixtures';
+import { fakeRuntime } from '../testing/fakes';
 import { tempDir } from '../testing/temp';
-import { FAKE_LOGIN, fakeSonarr, WIRED_CATALOG } from '../testing/wiring';
+import {
+  FAKE_LOGIN,
+  fakeSonarr,
+  WIRED_CATALOG,
+  WIRING_RUNNING as RUNNING,
+  wiringStack as stackOf,
+} from '../testing/wiring';
 import { readResources, type KnownResources } from './resources';
 import type { ResourceSpec } from './types';
 import { wire, WiringFailed, type WireOptions } from './wire';
@@ -6735,35 +7040,18 @@ import type { WiringSeams } from './wiring';
 const KEY = '0'.repeat(32);
 const PASSWORD = 'fake-admin-password';
 const AT = new Date('2026-10-10T12:00:00.000Z');
-const STACK = `version: 1
-paths: { data: /srv/data }
-network: { bind: localhost }
-media_server: jellyfin
-vpn: { provider: mullvad, private_key: { file: secrets/wg.key } }
-apps:
-  sonarr: {}
-  qbittorrent: {}
-`;
 
-function stackOf(catalog: Catalog = WIRED_CATALOG): ResolvedStack {
-  const result = resolveStack(
-    fixtureConfig(STACK),
-    catalog,
-    FIXTURE_HOST,
-    '/opt/mediaplane',
-  );
-  if (result.stack === undefined) throw new Error(JSON.stringify(result.diagnostics));
-  return result.stack;
+/** A fake app's seams, and where its container is on the wiring network. */
+interface Fake {
+  seams: WiringSeams;
+  addresses: Record<string, string>;
 }
 
-const RUNNING = ['gluetun', 'jellyfin', 'qbittorrent', 'sonarr'].map((service) =>
-  fakeContainer(service, `id-${service}`),
-);
-
 async function wireWith(
-  seams: WiringSeams,
+  fake: Fake,
   extra: Partial<WireOptions> & { join?: WiringJoin } = {},
 ) {
+  const { seams, addresses } = fake;
   const home = await tempDir('mediaplane-wire-');
   const actions: ActionResult[] = [];
   const calls: string[] = [];
@@ -6778,7 +7066,7 @@ async function wireWith(
     },
     values: {},
     env: {},
-    runtime: fakeRuntime({ containers: RUNNING, calls, join: joined }),
+    runtime: fakeRuntime({ containers: RUNNING, addresses, calls, join: joined }),
     known: {},
     now: () => AT,
     record: (action) => actions.push(action),
@@ -6801,7 +7089,7 @@ const RECORDED: KnownResources = {
 describe('wire', () => {
   it('joins the network, creates what is missing, and records it at once, privately', async () => {
     const sonarr = await fakeSonarr({ key: KEY });
-    const { run, home, actions, calls } = await wireWith(sonarr.seams);
+    const { run, home, actions, calls } = await wireWith(sonarr);
     expect(await run).toEqual(['sonarr.login created']);
     expect(sonarr.state).toMatchObject({ user: 'admin', password: PASSWORD });
     expect(actions).toEqual([
@@ -6816,12 +7104,12 @@ describe('wire', () => {
 
   it('updates what differs, saying what, and adopts what is already right', async () => {
     const wrong = await fakeSonarr({ key: KEY, user: 'someone', password: 'other' });
-    const updated = await wireWith(wrong.seams, { known: RECORDED });
+    const updated = await wireWith(wrong, { known: RECORDED });
     expect(await updated.run).toEqual(['sonarr.login updated user, password']);
     expect(wrong.state).toMatchObject({ user: 'admin', password: PASSWORD });
 
     const right = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
-    const adopted = await wireWith(right.seams);
+    const adopted = await wireWith(right);
     expect(await adopted.run).toEqual(['sonarr.login adopted']);
     expect(right.app.requests.some((r) => r.method === 'PUT')).toBe(false);
     expect(await readResources(adopted.home)).toEqual(RECORDED);
@@ -6829,7 +7117,7 @@ describe('wire', () => {
 
   it('changes nothing, and writes nothing, when all is as wanted', async () => {
     const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
-    const { run, home, actions } = await wireWith(sonarr.seams, { known: RECORDED });
+    const { run, home, actions } = await wireWith(sonarr, { known: RECORDED });
     expect(await run).toEqual([]);
     expect(actions).toEqual([
       { step: 'wire', resource: 'sonarr.login', result: 'done', detail: 'unchanged' },
@@ -6839,7 +7127,7 @@ describe('wire', () => {
 
   it("fails each resource of an app that refuses the key, with the app's message and no secret", async () => {
     const sonarr = await fakeSonarr({ key: 'f'.repeat(32) });
-    const { run, home, actions } = await wireWith(sonarr.seams);
+    const { run, home, actions } = await wireWith(sonarr);
     const failure = await run.catch((cause: unknown) => cause);
     expect(failure).toBeInstanceOf(WiringFailed);
     expect((failure as WiringFailed).message).toBe('the wiring failed for sonarr.login');
@@ -6850,8 +7138,13 @@ describe('wire', () => {
         hint: 'see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md',
       }),
     ]);
+    // The app repeated the key it refused: the redaction took it out.
     expect(actions).toEqual([
-      expect.objectContaining({ resource: 'sonarr.login', result: 'failed' }),
+      expect.objectContaining({
+        resource: 'sonarr.login',
+        result: 'failed',
+        error: expect.stringContaining('Unauthorized: ***') as string,
+      }),
     ]);
     expect(JSON.stringify([failure, actions])).not.toContain(KEY);
     await expect(stat(join(home, RESOURCES_PATH))).rejects.toThrow();
@@ -6881,7 +7174,7 @@ describe('wire', () => {
         : def,
     );
     const sonarr = await fakeSonarr({ key: KEY });
-    const { run, actions } = await wireWith(sonarr.seams, { stack: stackOf(wired) });
+    const { run, actions } = await wireWith(sonarr, { stack: stackOf(wired) });
     await expect(run).rejects.toBeInstanceOf(WiringFailed);
     expect(
       actions.map((a) => `${a.resource ?? ''} ${a.result} ${a.detail ?? ''}`),
@@ -6894,7 +7187,7 @@ describe('wire', () => {
 
   it('says so when there is no wiring network after the start', async () => {
     const sonarr = await fakeSonarr({ key: KEY });
-    const { run } = await wireWith(sonarr.seams, { join: 'no-network' });
+    const { run } = await wireWith(sonarr, { join: 'no-network' });
     await expect(run).rejects.toThrow(
       'the stack has no wiring network, though apply has just started it',
     );
@@ -6906,7 +7199,7 @@ describe('wire', () => {
 
 ```diff
 diff --git a/packages/engine/src/apply/apply.test.ts b/packages/engine/src/apply/apply.test.ts
-index 83828fa..463c86b 100644
+index 2e75828..c7b5671 100644
 --- a/packages/engine/src/apply/apply.test.ts
 +++ b/packages/engine/src/apply/apply.test.ts
 @@ -16,2 +16,3 @@ import type { AppDefinition, Catalog } from '../catalog/types';
@@ -6917,50 +7210,50 @@ index 83828fa..463c86b 100644
  import { FIXTURE_HOST, fixtureApp, fixtureCatalog } from '../testing/fixtures';
 +import { fakeSonarr, WIRED_CATALOG } from '../testing/wiring';
  import { apply, unhealthyServices, type ApplyOptions } from './apply';
-@@ -147,2 +149,3 @@ describe('apply', () => {
+@@ -163,2 +165,3 @@ describe('apply', () => {
        ['start', 'done'],
 +      ['wire', 'done'],
        ['verify', 'done'],
-@@ -264,2 +267,3 @@ describe('apply', () => {
+@@ -280,2 +283,3 @@ describe('apply', () => {
        ['start', 'done'],
 +      ['wire', 'done'],
        ['verify', 'done'],
-@@ -352,2 +356,3 @@ describe('apply', () => {
+@@ -368,2 +372,3 @@ describe('apply', () => {
        ['start', 'skipped'],
 +      ['wire', 'skipped'],
        ['verify', 'skipped'],
-@@ -400,2 +405,3 @@ describe('apply', () => {
+@@ -416,2 +421,3 @@ describe('apply', () => {
        ['start', 'skipped'],
 +      ['wire', 'skipped'],
        ['verify', 'skipped'],
-@@ -435,2 +441,3 @@ describe('apply', () => {
+@@ -451,2 +457,3 @@ describe('apply', () => {
        ['start', 'done'],
 +      ['wire', 'done'],
        ['verify', 'done'],
-@@ -461,2 +468,3 @@ describe('apply', () => {
+@@ -477,2 +484,3 @@ describe('apply', () => {
        ['start', 'skipped'],
 +      ['wire', 'skipped'],
        ['verify', 'skipped'],
-@@ -567,2 +575,3 @@ describe('apply', () => {
+@@ -583,2 +591,3 @@ describe('apply', () => {
        ['start', 'skipped'],
 +      ['wire', 'skipped'],
        ['verify', 'skipped'],
-@@ -591,2 +600,3 @@ describe('apply', () => {
+@@ -607,2 +616,3 @@ describe('apply', () => {
        ['start', 'skipped'],
 +      ['wire', 'skipped'],
        ['verify', 'skipped'],
-@@ -953,2 +963,3 @@ describe('apply', () => {
+@@ -976,2 +986,3 @@ describe('apply', () => {
        ['start', 'skipped'],
 +      ['wire', 'skipped'],
        ['verify', 'skipped'],
-@@ -979 +990,74 @@ describe('unhealthyServices', () => {
+@@ -1002 +1013,74 @@ describe('unhealthyServices', () => {
  });
 +
 +describe('apply: the wiring', () => {
 +  it('steps off the wiring network for up, wires each app after it, and records it', async () => {
 +    const home = await makeHome();
-+    const docker = fakeDocker(home);
 +    const sonarr = await fakeSonarr();
++    const docker = fakeDocker(home, { addresses: sonarr.addresses });
 +    const wired = { catalog: WIRED_CATALOG, wiring: sonarr.seams };
 +    const first = await apply(options(home, docker, wired));
 +    expect(first.outcome).toBe('success');
@@ -7002,8 +7295,8 @@ index 83828fa..463c86b 100644
 +
 +  it("fails the wire step with the app's own message, and skips verify", async () => {
 +    const home = await makeHome();
-+    const docker = fakeDocker(home);
 +    const sonarr = await fakeSonarr({ key: 'f'.repeat(32) });
++    const docker = fakeDocker(home, { addresses: sonarr.addresses });
 +    const result = await apply(
 +      options(home, docker, { catalog: WIRED_CATALOG, wiring: sonarr.seams }),
 +    );
@@ -7034,7 +7327,7 @@ index 83828fa..463c86b 100644
 
 ```diff
 diff --git a/packages/cli/src/output.test.ts b/packages/cli/src/output.test.ts
-index a66020e..27eee85 100644
+index a66020e..c44a1a2 100644
 --- a/packages/cli/src/output.test.ts
 +++ b/packages/cli/src/output.test.ts
 @@ -1,4 +1,9 @@
@@ -7049,7 +7342,7 @@ index a66020e..27eee85 100644
 -import { printPlan } from './output';
 +import { printApply, printHistory, printPlan, printRecord, printStep } from './output';
  import type { Io } from './run';
-@@ -100 +105,81 @@ describe('printPlan', () => {
+@@ -100 +105,82 @@ describe('printPlan', () => {
  });
 +
 +describe('the wire step, as apply shows it', () => {
@@ -7122,7 +7415,8 @@ index a66020e..27eee85 100644
 +      actions: ACTIONS,
 +    };
 +    printRecord(record, { json: false }, term.io);
-+    expect(term.stdout()).toContain('  > after-start sonarr.admin\nSteps:\n');
++    // The same line as plan's.
++    expect(term.stdout()).toContain('  > after start sonarr.admin\nSteps:\n');
 +    expect(term.stdout()).toContain('  done    wiring sonarr.admin: created\n');
 +    expect(term.stdout()).not.toContain('radarr.admin\nSteps');
 +    printHistory({ records: [record], unreadable: [] }, { json: false }, term.io);
@@ -7137,7 +7431,7 @@ index a66020e..27eee85 100644
 
 ```diff
 diff --git a/packages/cli/src/run.test.ts b/packages/cli/src/run.test.ts
-index 95dfc3f..d39732f 100644
+index 5e7ebef..d329d06 100644
 --- a/packages/cli/src/run.test.ts
 +++ b/packages/cli/src/run.test.ts
 @@ -17,2 +17,3 @@ import {
@@ -7159,17 +7453,17 @@ index 95dfc3f..d39732f 100644
 +    },
 +  });
    return home;
-@@ -252,3 +265,3 @@ describe('mediaplane plan', () => {
+@@ -268,3 +281,3 @@ describe('mediaplane plan', () => {
      expect(term.stdout()).toBe(
 -      'Not healthy yet: sonarr (unhealthy)\nWiring:\n  > after start sonarr\nPlan: 1 app to wait for, 1 wiring check after the start.\n',
 +      'Not healthy yet: sonarr (unhealthy)\nWiring:\n  > after start sonarr.admin\nPlan: 1 app to wait for, 1 wiring check after the start.\n',
      );
-@@ -509,3 +522,3 @@ describe('mediaplane apply', () => {
+@@ -525,3 +538,3 @@ describe('mediaplane apply', () => {
        plan: { files: Record<string, unknown>[] };
 -      actions: { step: string; result: string }[];
 +      actions: { step: string; resource?: string; result: string }[];
      };
-@@ -524,9 +537,11 @@ describe('mediaplane apply', () => {
+@@ -540,9 +553,11 @@ describe('mediaplane apply', () => {
      });
 -    expect(json.actions.map((a) => a.result)).toEqual([
 -      'done',
@@ -7188,22 +7482,22 @@ index 95dfc3f..d39732f 100644
 +      ['wire', '', 'done'],
 +      ['verify', '', 'done'],
      ]);
-@@ -581,3 +596,3 @@ describe('mediaplane apply', () => {
+@@ -597,3 +612,3 @@ describe('mediaplane apply', () => {
      expect(term.stderr()).toContain(
 -      'Apply failed: 2 done, 1 failed, 3 skipped. Run apply again to retry.',
 +      'Apply failed: 2 done, 1 failed, 4 skipped. Run apply again to retry.',
      );
-@@ -627,3 +642,3 @@ describe('mediaplane apply', () => {
+@@ -643,3 +658,3 @@ describe('mediaplane apply', () => {
      expect(term.stderr()).toMatch(
 -      /\nApply failed: 2 done, 1 failed, 3 skipped\. Run apply again to retry\.\n$/,
 +      /\nApply failed: 2 done, 1 failed, 4 skipped\. Run apply again to retry\.\n$/,
      );
-@@ -791,3 +806,3 @@ describe('mediaplane history', () => {
+@@ -807,3 +822,3 @@ describe('mediaplane history', () => {
      expect(list.stdout()).toBe(
 -      `${id}  success  5 files written, 4 containers changed, 4 secrets generated\n`,
 +      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 1 resource wired\n`,
      );
-@@ -799,2 +814,3 @@ describe('mediaplane history', () => {
+@@ -815,2 +830,3 @@ describe('mediaplane history', () => {
      );
 +    expect(one.stdout()).toContain('  done    wiring sonarr.admin: created\n');
    });
@@ -7229,11 +7523,31 @@ index 7410011..08c04d9 100644
          },
 ```
 
+**Change** `catalog/catalog.test.ts`:
+
+```diff
+diff --git a/catalog/catalog.test.ts b/catalog/catalog.test.ts
+index 07f6dbc..f128dfc 100644
+--- a/catalog/catalog.test.ts
++++ b/catalog/catalog.test.ts
+@@ -57,3 +57,3 @@ describe('catalog', () => {
+       catalog.filter((app) => app.integration !== undefined).map((app) => app.id),
+-    ).toEqual([]);
++    ).toEqual(['prowlarr', 'radarr', 'sonarr']);
+   });
+```
+
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `pnpm vitest run packages/engine/src/integrations packages/engine/src/apply packages/cli/src`
+Run: `pnpm vitest run packages/engine/src/integrations packages/engine/src/apply packages/cli/src catalog/catalog.test.ts`
 
-Expected: FAIL: `wire.test.ts` can't load `./wire`; `apply.test.ts`'s step lists have no `wire` step (`expected [ [ 'keys', 'done' ], …(5) ] to deeply equal [ [ 'keys', 'done' ], …(6) ]`), and its two "apply: the wiring" tests fail; the output tests of the wire step; `credentials.test.ts`, which expects Sonarr, Radarr and Prowlarr with the shared login; and `run.test.ts`'s apply and history tests, which count the wire step. 5 files, 21 tests failed, 281 passed.
+Expected: FAIL: `wire.test.ts` can't load `./wire`; `apply.test.ts`'s step lists have no
+`wire` step (`expected [ [ 'keys', 'done' ], …(5) ] to deeply equal [ [ 'keys', 'done' ],
+…(6) ]`), and its two "apply: the wiring" tests fail; the output tests of the wire step;
+`credentials.test.ts`, which expects Sonarr, Radarr and Prowlarr with the shared login;
+`run.test.ts`'s apply and history tests, which count the wire step; and
+`catalog.test.ts`'s list of the apps with an integration. 6 files, 22 tests failed, 410
+passed.
 
 - [ ] **Step 3: The wire step, and the apps' integrations**
 
@@ -7253,10 +7567,12 @@ import {
   checkApp,
   examine,
   knownSecrets,
+  notOnNetwork,
   reachApps,
   resourceAddress,
   WIRING_RUNBOOK,
   wiringOrder,
+  wiringTargets,
   type WiringSeams,
 } from './wiring';
 
@@ -7314,14 +7630,11 @@ export async function wire(options: WireOptions): Promise<string[]> {
   };
   for (const app of order) {
     const resources = app.def.integration?.resources ?? [];
-    const targets =
-      resources.length === 0
-        ? [app.def.id]
-        : resources.map((r) => resourceAddress(app, r));
+    const targets = wiringTargets(app);
     const client = reached.get(app.def.id);
     if (client === undefined) {
-      const message = `${app.def.name}'s container is not on the stack's wiring network, so Mediaplane can't reach it`;
-      for (const target of targets) fail(target, message, 'wire.not-on-network');
+      for (const target of targets)
+        fail(target, notOnNetwork(app), 'wire.not-on-network');
       continue;
     }
     try {
@@ -7444,24 +7757,24 @@ index 1b9a3e6..5154047 100644
 
 ```diff
 diff --git a/packages/engine/src/apply/apply.ts b/packages/engine/src/apply/apply.ts
-index 6513a5b..bff512e 100644
+index 6ed452a..91fb9f1 100644
 --- a/packages/engine/src/apply/apply.ts
 +++ b/packages/engine/src/apply/apply.ts
-@@ -34,2 +34,3 @@ import { writePrestartFiles } from './prestart';
+@@ -35,2 +35,3 @@ import { writePrestartFiles } from './prestart';
  import { pullImages } from './pull';
 +import { wire, WiringFailed } from '../integrations/wire';
  
-@@ -76,2 +77,3 @@ const STEP_HINTS: Record<ApplyStep, string> = {
+@@ -77,2 +78,3 @@ const STEP_HINTS: Record<ApplyStep, string> = {
    start: `run "mediaplane status" to see each app, fix the cause, then run apply again; see ${runbookUrl('app-wont-start')}`,
 +  wire: `the apps' own messages are above; fix what they say, then run apply again. See ${runbookUrl('wiring-failed')}`,
    verify: 'run "mediaplane plan" to see what is still different',
-@@ -171,2 +173,5 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+@@ -172,2 +174,5 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
    await steps.run('start', async () => {
 +    // Compose can't recreate the wiring network while another project's container is on
 +    // it, so Mediaplane steps off before up, and back on in the wire step (ADR 0011).
 +    await runtime.leaveWiring();
      const result = await runtime.up(options.waitSeconds ?? DEFAULT_WAIT_SECONDS, values);
-@@ -175,2 +180,25 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+@@ -176,2 +181,25 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
    });
 +  await steps.run('wire', async () => {
 +    try {
@@ -7487,11 +7800,11 @@ index 6513a5b..bff512e 100644
 +    }
 +  });
    await steps.run('verify', async () => {
-@@ -199,2 +227,3 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+@@ -200,2 +228,3 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
        secrets: shown.secrets,
 +      wiring: shown.wiring,
      },
-@@ -263,2 +292,7 @@ class Steps {
+@@ -264,2 +293,7 @@ class Steps {
  
 +  /** One result inside the step that runs: the wire step's, for each resource. */
 +  record(action: ActionResult): void {
@@ -7505,18 +7818,18 @@ index 6513a5b..bff512e 100644
 
 ```diff
 diff --git a/packages/cli/src/output.ts b/packages/cli/src/output.ts
-index 0a0afee..4b703f7 100644
+index 8fe46b2..f4edfd5 100644
 --- a/packages/cli/src/output.ts
 +++ b/packages/cli/src/output.ts
-@@ -141,2 +141,3 @@ const STEP_LABELS: Record<ApplyStep, string> = {
+@@ -145,2 +145,3 @@ const STEP_LABELS: Record<ApplyStep, string> = {
    start: 'containers',
 +  wire: 'wiring',
    verify: 'verify',
-@@ -147,2 +148,3 @@ const SLOW_STEPS: Partial<Record<ApplyStep, string>> = {
+@@ -151,2 +152,3 @@ const SLOW_STEPS: Partial<Record<ApplyStep, string>> = {
    start: 'Starting containers and waiting until every app is healthy…',
 +  wire: 'Wiring the apps…',
  };
-@@ -157,4 +159,24 @@ export function printStep(event: StepEvent, io: Io): void {
+@@ -161,4 +163,24 @@ export function printStep(event: StepEvent, io: Io): void {
    const { action } = event;
 -  const detail = action.detail === undefined ? '' : `: ${action.detail}`;
 -  io.stdout(`  ${action.result.padEnd(7)} ${STEP_LABELS[action.step]}${detail}\n`);
@@ -7543,12 +7856,12 @@ index 0a0afee..4b703f7 100644
 +    (a) => !(byResource && a.step === 'wire' && a.resource === undefined),
 +  );
  }
-@@ -230,3 +252,3 @@ export function printApply(
+@@ -234,3 +256,3 @@ export function printApply(
        const tally = (outcome: ActionResult['result']) =>
 -        result.actions.filter((a) => a.result === outcome).length;
 +        tallied(result.actions).filter((a) => a.result === outcome).length;
        if (result.recordId === undefined && tally('failed') === 0) {
-@@ -254,2 +276,10 @@ function summary(record: ChangeRecord) {
+@@ -258,2 +280,10 @@ function summary(record: ChangeRecord) {
        secrets: record.plan.secrets.generate.length,
 +      // What the wire step changed in the apps; the plan only knew it after the start.
 +      wiring: record.actions.filter(
@@ -7559,28 +7872,25 @@ index 0a0afee..4b703f7 100644
 +          a.detail !== 'unchanged',
 +      ).length,
      },
-@@ -346,2 +376,3 @@ export function printHistory(
+@@ -350,2 +380,3 @@ export function printHistory(
        count(changes.secrets, 'secret', 'generated'),
 +      count(changes.wiring, 'resource', 'wired'),
      ].filter((part): part is string => part !== undefined);
-@@ -374,9 +405,13 @@ export function printRecord(
+@@ -378,8 +409,10 @@ export function printRecord(
    }
--  io.stdout('Steps:\n');
--  for (const action of record.actions) {
--    const detail = action.detail ?? action.error;
 +  for (const change of (record.plan.wiring ?? []).filter(
 +    (w) => w.action !== 'unchanged',
 +  )) {
-     io.stdout(
--      `  ${action.result.padEnd(7)} ${STEP_LABELS[action.step]}${detail === undefined ? '' : `: ${detail}`}\n`,
-+      `  ${WIRING_MARKS[change.action]} ${change.action.padEnd(9)} ${change.resource}\n`,
-     );
-   }
-+  io.stdout('Steps:\n');
-+  for (const action of record.actions) {
-+    io.stdout(`  ${action.result.padEnd(7)} ${describeAction(action)}\n`);
++    io.stdout(`${wiringLine(change)}\n`);
 +  }
- }
+   io.stdout('Steps:\n');
+   for (const action of record.actions) {
+-    const detail = action.detail ?? action.error;
+-    io.stdout(
+-      `  ${action.result.padEnd(7)} ${STEP_LABELS[action.step]}${detail === undefined ? '' : `: ${detail}`}\n`,
+-    );
++    io.stdout(`  ${action.result.padEnd(7)} ${describeAction(action)}\n`);
+   }
 ```
 
 **Change** `catalog/sonarr/app.ts`:
@@ -7691,6 +8001,11 @@ and the topology (qBittorrent in Gluetun's namespace, the route into the tunnel,
 control server's status, the start times) is checked as spec §6.4 asks. A `leak` or
 `down` fails verify with the failing check's own message and hint.
 Decision: `vpnCheck` and `strandedGuests` share `startedBefore`, so the two always agree.
+Decision: vpn-check's hint for a stranded qBittorrent puts the plain first step first,
+as the runbook and the READMEs do: `run "mediaplane apply", which restarts it (or
+"docker restart <container>")` (preflight M20, decision 16). The kill-switch e2e test
+checks that hint too, so its expectation changes here; Task 9 runs it.
+Decision: the trial's test stops Gluetun with Task 1's `stoppedUntilUp` (preflight M4).
 Decision: the fixture Gluetun gets its `controlApiKey` secret, as the real one has since
 S3a, so verify's check can run against the fakes, whose `run` now answers a healthy
 probe (`HEALTHY_PROBE`) and whose `inspect` reports a guest in its host's network.
@@ -7702,11 +8017,14 @@ probe (`HEALTHY_PROBE`) and whose `inspect` reports a guest in its host's networ
   `packages/engine/src/vpn/check.ts`, `packages/cli/src/output.ts`, `packages/cli/src/run.ts`
 - Test: `packages/engine/src/testing/fixtures.ts`, `packages/engine/src/testing/fakes.ts`,
   `packages/engine/src/plan/plan.test.ts`, `packages/engine/src/apply/apply.test.ts`,
-  `packages/engine/src/secrets/values.test.ts`, `packages/cli/src/output.test.ts`
+  `packages/engine/src/secrets/values.test.ts`, `packages/engine/src/vpn/check.test.ts`,
+  `packages/cli/src/output.test.ts`, `packages/cli/src/vpn-check.test.ts`,
+  `test/e2e/vpn.e2e.test.ts` (the hint's expectation only)
 
 **Interfaces:**
 - **Consumes:** `Runtime.inspect`, `ContainerDetails` (S3d); `Runtime.stop` (Task 3);
-  `vpnCheck`, `VPN_RUNBOOK`; `PROJECT_NAME`; `probeOutput`, `ProbeAnswers` in the fakes.
+  `vpnCheck`, `VPN_RUNBOOK`; `PROJECT_NAME`; `probeOutput`, `ProbeAnswers` in the fakes;
+  `stoppedUntilUp` in `apply.test.ts` (Task 1).
 - **Produces:**
   - `startedBefore(guest: ContainerDetails | undefined, host: ContainerDetails | undefined): boolean | undefined`;
   - `strandedGuests(stack, current, changes: readonly ContainerChange[], runtime): Promise<string[]>`;
@@ -7846,16 +8164,16 @@ index ed37fd3..833bde1 100644
 
 ```diff
 diff --git a/packages/engine/src/testing/fakes.ts b/packages/engine/src/testing/fakes.ts
-index 9520cfe..a68c5ee 100644
+index f191668..edc4600 100644
 --- a/packages/engine/src/testing/fakes.ts
 +++ b/packages/engine/src/testing/fakes.ts
-@@ -218,3 +218,4 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
+@@ -219,3 +219,4 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
   * compose.yaml and .env. Like Compose, it hashes a guest (`network_mode: service:<host>`)
 - * as `container:<host's id>`.
 + * as `container:<host's id>`, and inspect says it is in its host's network. A vpn-check
 + * probe in qBittorrent's network finds a healthy tunnel, unless `run` says otherwise.
   */
-@@ -225,4 +226,13 @@ export function fakeDocker(
+@@ -226,4 +227,13 @@ export function fakeDocker(
    const calls: string[] = [];
 -  const base = fakeRuntime({ ...options, calls });
 +  const base = fakeRuntime({
@@ -7870,7 +8188,7 @@ index 9520cfe..a68c5ee 100644
 +  /** Guest container ID → its host's, from the compose.yaml up started. */
 +  const hosts = new Map<string, string>();
    return {
-@@ -234,2 +244,10 @@ export function fakeDocker(
+@@ -235,2 +245,10 @@ export function fakeDocker(
      },
 +    inspect: async (ids) =>
 +      (await base.inspect(ids)).map((details) => {
@@ -7881,7 +8199,7 @@ index 9520cfe..a68c5ee 100644
 +          : { ...details, networkMode: `container:${host}` };
 +      }),
      up: async (waitSeconds, values) => {
-@@ -246,2 +264,8 @@ export function fakeDocker(
+@@ -247,2 +265,8 @@ export function fakeDocker(
        }
 +      hosts.clear();
 +      for (const [service, config] of Object.entries(compose.services)) {
@@ -7890,7 +8208,7 @@ index 9520cfe..a68c5ee 100644
 +          hosts.set(`fake-${service}`, mode.slice('container:'.length));
 +      }
        const env = parseEnvFile(await readFile(join(home, ENV_PATH), 'utf8'));
-@@ -295,2 +319,13 @@ export type ProbeAnswers = Partial<Record<ProbeCheck, readonly [number, string]>
+@@ -296,2 +320,13 @@ export type ProbeAnswers = Partial<Record<ProbeCheck, readonly [number, string]>
  
 +/**
 + * A probe of a healthy tunnel, without the egress check: the route goes into tun0, and
@@ -7910,7 +8228,7 @@ index 9520cfe..a68c5ee 100644
 
 ```diff
 diff --git a/packages/engine/src/plan/plan.test.ts b/packages/engine/src/plan/plan.test.ts
-index 2ebe726..1c77580 100644
+index f722af6..5e0f412 100644
 --- a/packages/engine/src/plan/plan.test.ts
 +++ b/packages/engine/src/plan/plan.test.ts
 @@ -61,3 +61,6 @@ async function makeHome({
@@ -7934,7 +8252,7 @@ index 2ebe726..1c77580 100644
 
 ```diff
 diff --git a/packages/engine/src/apply/apply.test.ts b/packages/engine/src/apply/apply.test.ts
-index 463c86b..ce9992e 100644
+index c7b5671..3a1d589 100644
 --- a/packages/engine/src/apply/apply.test.ts
 +++ b/packages/engine/src/apply/apply.test.ts
 @@ -25,3 +25,3 @@ import {
@@ -7942,14 +8260,14 @@ index 463c86b..ce9992e 100644
 -import { fakeDocker, fakeProbe } from '../testing/fakes';
 +import { fakeDocker, fakeProbe, HEALTHY_PROBE, probeOutput } from '../testing/fakes';
  import { FIXTURE_HOST, fixtureApp, fixtureCatalog } from '../testing/fixtures';
-@@ -152,3 +152,5 @@ describe('apply', () => {
+@@ -168,3 +168,5 @@ describe('apply', () => {
      ]);
 -    expect(result.actions[0]?.detail).toBe('generated admin.password, sonarr.apiKey');
 +    expect(result.actions[0]?.detail).toBe(
 +      'generated admin.password, gluetun.controlApiKey, sonarr.apiKey',
 +    );
      expect(events.slice(0, 4)).toEqual([
-@@ -166,3 +168,6 @@ describe('apply', () => {
+@@ -182,3 +184,6 @@ describe('apply', () => {
        version: 1,
 -      apps: { sonarr: { apiKey: 'ab'.repeat(16) } },
 +      apps: {
@@ -7957,11 +8275,11 @@ index 463c86b..ce9992e 100644
 +        sonarr: { apiKey: 'ab'.repeat(16) },
 +      },
        shared: { adminPassword: 'l'.repeat(24) },
-@@ -190,2 +195,3 @@ describe('apply', () => {
+@@ -206,2 +211,3 @@ describe('apply', () => {
        'admin.password',
 +      'gluetun.controlApiKey',
        'sonarr.apiKey',
-@@ -717,3 +723,6 @@ describe('apply', () => {
+@@ -740,3 +746,6 @@ describe('apply', () => {
        version: 1,
 -      apps: { sonarr: { apiKey: '0'.repeat(32) } },
 +      apps: {
@@ -7969,7 +8287,7 @@ index 463c86b..ce9992e 100644
 +        sonarr: { apiKey: '0'.repeat(32) },
 +      },
        shared: { adminPassword: 'fake-admin-password' },
-@@ -991,2 +1000,74 @@ describe('unhealthyServices', () => {
+@@ -1014,2 +1023,62 @@ describe('unhealthyServices', () => {
  
 +describe('apply: qBittorrent behind Gluetun', () => {
 +  it('restarts qBittorrent when it starts a Gluetun stopped by hand, and verifies the VPN', async () => {
@@ -7978,20 +8296,8 @@ index 463c86b..ce9992e 100644
 +    const home = await makeHome();
 +    const docker = fakeDocker(home);
 +    expect((await apply(options(home, docker))).outcome).toBe('success');
-+    let started = false;
-+    const stopped: Runtime = {
-+      ...docker,
-+      containers: async () =>
-+        (await docker.containers()).map((c) =>
-+          !started && c.service === 'gluetun' ? { ...c, state: 'exited', health: '' } : c,
-+        ),
-+      up: (seconds, values) => {
-+        started = true;
-+        return docker.up(seconds, values);
-+      },
-+    };
 +    docker.calls.length = 0;
-+    const result = await apply(options(home, stopped));
++    const result = await apply(options(home, stoppedUntilUp(docker, 'gluetun')));
 +    expect(result.outcome).toBe('success');
 +    expect(result.plan.containers).toEqual(
 +      expect.arrayContaining([
@@ -8071,11 +8377,25 @@ index 6d81793..b48e036 100644
        'sonarr.apiKey',
 ```
 
+**Change** `packages/engine/src/vpn/check.test.ts`:
+
+```diff
+diff --git a/packages/engine/src/vpn/check.test.ts b/packages/engine/src/vpn/check.test.ts
+index 093bbd8..e520006 100644
+--- a/packages/engine/src/vpn/check.test.ts
++++ b/packages/engine/src/vpn/check.test.ts
+@@ -526,3 +526,3 @@ describe('vpnCheck', () => {
+       status: 'down',
+-      hint: 'restart qBittorrent: "docker restart mediaplane-dev-qbittorrent-1"',
++      hint: 'run "mediaplane apply", which restarts it (or "docker restart mediaplane-dev-qbittorrent-1")',
+     });
+```
+
 **Change** `packages/cli/src/output.test.ts`:
 
 ```diff
 diff --git a/packages/cli/src/output.test.ts b/packages/cli/src/output.test.ts
-index 27eee85..e05e2ec 100644
+index c44a1a2..0a17115 100644
 --- a/packages/cli/src/output.test.ts
 +++ b/packages/cli/src/output.test.ts
 @@ -81,2 +81,14 @@ describe('printPlan: the wiring', () => {
@@ -8095,11 +8415,48 @@ index 27eee85..e05e2ec 100644
    it('shows a pre-start file as written before first start, without its content', () => {
 ```
 
+**Change** `packages/cli/src/vpn-check.test.ts`:
+
+```diff
+diff --git a/packages/cli/src/vpn-check.test.ts b/packages/cli/src/vpn-check.test.ts
+index c6d0d7d..28fba7e 100644
+--- a/packages/cli/src/vpn-check.test.ts
++++ b/packages/cli/src/vpn-check.test.ts
+@@ -389,3 +389,3 @@ describe('mediaplane vpn-check', () => {
+     expect(term.stdout()).toContain(
+-      '        hint: restart qBittorrent: "docker restart mediaplane-dev-qbittorrent-1"\n',
++      '        hint: run "mediaplane apply", which restarts it (or "docker restart mediaplane-dev-qbittorrent-1")\n',
+     );
+@@ -398,3 +398,3 @@ describe('mediaplane vpn-check', () => {
+     expect(plain.stdout()).toContain(
+-      '        hint: restart qBittorrent: "docker restart mediaplane-qbittorrent-1"\n',
++      '        hint: run "mediaplane apply", which restarts it (or "docker restart mediaplane-qbittorrent-1")\n',
+     );
+```
+
+**Change** `test/e2e/vpn.e2e.test.ts`:
+
+```diff
+diff --git a/test/e2e/vpn.e2e.test.ts b/test/e2e/vpn.e2e.test.ts
+index c485c50..1301091 100644
+--- a/test/e2e/vpn.e2e.test.ts
++++ b/test/e2e/vpn.e2e.test.ts
+@@ -465,3 +465,3 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
+       expect(itemOf(open, 'network').hint).toBe(
+-        `restart qBittorrent: "docker restart ${PROJECT}-qbittorrent-1"`,
++        `run "mediaplane apply", which restarts it (or "docker restart ${PROJECT}-qbittorrent-1")`,
+       );
+```
+
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `pnpm vitest run packages/engine/src/plan packages/engine/src/apply packages/engine/src/secrets packages/cli/src/output.test.ts`
+Run: `pnpm vitest run packages/engine/src/plan packages/engine/src/apply packages/engine/src/secrets packages/engine/src/vpn packages/cli/src/output.test.ts packages/cli/src/vpn-check.test.ts`
 
-Expected: FAIL: `stranded.test.ts` can't load `./stranded`; the two "apply: qBittorrent behind Gluetun" tests (no `restart`, and a VPN down that verify doesn't catch: `expected 'success' to be 'failed'`); and the output test of the `restart` line. 3 files, 3 tests failed, 215 passed.
+Expected: FAIL: `stranded.test.ts` can't load `./stranded`; the two "apply: qBittorrent
+behind Gluetun" tests (no `restart`, and a VPN down that verify doesn't catch: `expected
+'success' to be 'failed'`); the output test of the `restart` line; and the stranded hint
+in `check.test.ts` and `vpn-check.test.ts`, which doesn't put `mediaplane apply` first
+yet. 5 files, 5 tests failed, 311 passed.
 
 - [ ] **Step 3: `restart`, the stop before `up`, and verify's VPN check**
 
@@ -8221,15 +8578,15 @@ index ccdc965..cfc2b77 100644
 
 ```diff
 diff --git a/packages/engine/src/apply/apply.ts b/packages/engine/src/apply/apply.ts
-index bff512e..a3c42d8 100644
+index 91fb9f1..5968166 100644
 --- a/packages/engine/src/apply/apply.ts
 +++ b/packages/engine/src/apply/apply.ts
-@@ -32,2 +32,4 @@ import {
+@@ -33,2 +33,4 @@ import {
  } from './ownership';
 +import { PROJECT_NAME } from '../render/compose';
 +import { vpnCheck, VPN_RUNBOOK } from '../vpn/check';
  import { writePrestartFiles } from './prestart';
-@@ -56,2 +58,7 @@ export interface ApplyOptions extends PlanOptions {
+@@ -57,2 +59,7 @@ export interface ApplyOptions extends PlanOptions {
    sleep?: (ms: number) => Promise<unknown>;
 +  /**
 +   * The Compose project `runtime` manages ("mediaplane" by default): verify's VPN check
@@ -8237,7 +8594,7 @@ index bff512e..a3c42d8 100644
 +   */
 +  project?: string;
  }
-@@ -176,5 +183,13 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+@@ -177,5 +184,13 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
      await runtime.leaveWiring();
 +    // A guest whose host up starts again (strandedGuests): stopped now, up starts it in
 +    // the host's new network.
@@ -8252,7 +8609,7 @@ index bff512e..a3c42d8 100644
 +      ? 'every app is running and healthy'
 +      : `every app is running and healthy; restarted ${restart.join(', ')}`;
    });
-@@ -210,3 +225,33 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+@@ -211,3 +226,33 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
      if (after.changed) throw new Error(`changes remain after apply: ${remaining(after)}`);
 -    return 'no changes remain';
 +    // The VPN's topology too (spec §6.4, §7.2(6)): vpn-check's checks, without egress.
@@ -8287,7 +8644,7 @@ index bff512e..a3c42d8 100644
 +    }
 +    return "no changes remain, and qBittorrent's network is Gluetun's, with the VPN up";
    });
-@@ -260,2 +305,12 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+@@ -261,2 +306,12 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
  
 +/** A step that failed, and what to do about it, better said than the step's own hint. */
 +class StepError extends Error {
@@ -8300,7 +8657,7 @@ index bff512e..a3c42d8 100644
 +}
 +
  /** Runs apply's steps in order; after a failure the rest are skipped (ADR 0004). */
-@@ -286,3 +341,5 @@ class Steps {
+@@ -287,3 +342,5 @@ class Steps {
        const hint =
 -        cause instanceof AppdataNotPrivateError ? cause.hint : STEP_HINTS[step];
 +        cause instanceof AppdataNotPrivateError || cause instanceof StepError
@@ -8327,7 +8684,7 @@ index 5154047..b820482 100644
 
 ```diff
 diff --git a/packages/engine/src/vpn/check.ts b/packages/engine/src/vpn/check.ts
-index 914b147..533dd3c 100644
+index 914b147..13cfd7c 100644
 --- a/packages/engine/src/vpn/check.ts
 +++ b/packages/engine/src/vpn/check.ts
 @@ -8,2 +8,3 @@ import { dockerUnavailable, hostFactsOrFailure } from '../host/failure';
@@ -8348,16 +8705,22 @@ index 914b147..533dd3c 100644
 -    if (gluetun.state === 'running' && ours < gluetuns) {
 +    if (gluetun.state === 'running' && before === true) {
        return {
+@@ -286,3 +286,4 @@ async function networkCheck(
+           'qBittorrent started before Gluetun last did, so it still holds the network Gluetun had then, which is gone: it has none',
+-        hint: `restart qBittorrent: "${restart}"`,
++        // Apply restarts it (strandedGuests), which says what it does; docker as well.
++        hint: `run "mediaplane apply", which restarts it (or "${restart}")`,
+       };
 ```
 
 **Change** `packages/cli/src/output.ts`:
 
 ```diff
 diff --git a/packages/cli/src/output.ts b/packages/cli/src/output.ts
-index 4b703f7..4e5709a 100644
+index f4edfd5..dc429ea 100644
 --- a/packages/cli/src/output.ts
 +++ b/packages/cli/src/output.ts
-@@ -26,2 +26,3 @@ const MARKS: Record<ContainerAction, string> = {
+@@ -27,2 +27,3 @@ const MARKS: Record<ContainerAction, string> = {
    start: '>',
 +  restart: '>',
    remove: '-',
@@ -8386,7 +8749,7 @@ Expected: PASS.
 
 ```bash
 pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check
-git add packages/engine/src packages/cli/src
+git add packages/engine/src packages/cli/src test/e2e/vpn.e2e.test.ts
 git commit -m "feat(engine): apply restarts a stranded qBittorrent, and verify checks the VPN" \
   -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -8420,33 +8783,80 @@ Decision: the deploy test (`deploy.e2e.test.ts`) adds: from the image, `apply` c
 `sonarr.admin` and the login works; the Mediaplane container is on exactly two
 networks, both internal (`<stack>_wiring` and `<system>_docker-api`), and has no
 default route (`ip route`); and an `apply` that recreates Sonarr (an env change) runs
-the disconnect and connect through the proxy. Its teardown brings the system down
-before the stack, which would otherwise leave the wiring network behind (Global
-Constraints).
+the disconnect and connect through the proxy, which Docker's own events show
+(`docker events --since … --until … --filter network=<stack>_wiring`), not only where
+the container ends up (preflight M5). Its teardown brings the system down before the
+stack, which would otherwise leave the wiring network behind, and runs every removal
+whatever the one before it did, collecting the failures (preflight M7, as `vpn.e2e`'s
+`removeAll` does).
 Decision: the VPN test (`vpn.e2e.test.ts`) adds: verify's detail says qBittorrent's
 network is Gluetun's; the wiring network holds only Gluetun; from the image,
 `plan --json` reaches qBittorrent's API through Gluetun (`qbittorrent` `unchanged`);
 and, last, `docker stop` Gluetun, then `apply`: Gluetun `start`, qBittorrent `restart`,
 the start step's "restarted qbittorrent", verify done, `vpn-check --no-egress` with
-five `ok` checks, and then no changes.
+five `ok` checks, and then no changes. The trial runs from source only: from the image,
+its `compose stop` makes only calls `up` already makes through the proxy (decision 1).
+Decision: the apply and VPN tests read the wiring network with one helper,
+`wiringMembers(project)` in `test/e2e/helpers.ts` (preflight M4).
+Decision: the kill-switch test's check that, without `tun0`, the route leaves by
+Gluetun's own network accepts either interface (`/ dev eth\d+ /`). Gluetun is on two
+networks now, and Docker names their interfaces in no fixed order: the replay saw the
+stack's network as `eth1` once, which `/ dev eth0 /` failed. What it checks, that only
+Gluetun's firewall stands in the way, doesn't change.
 
 **Files:**
-- Modify: `test/e2e/apply.e2e.test.ts`, `test/e2e/deploy.e2e.test.ts`,
-  `test/e2e/vpn.e2e.test.ts`
+- Modify: `test/e2e/helpers.ts`, `test/e2e/apply.e2e.test.ts`,
+  `test/e2e/deploy.e2e.test.ts`, `test/e2e/vpn.e2e.test.ts`
 
 **Interfaces:**
 - **Consumes:** `mediaplane plan --json`, `apply --json`, `vpn-check`, `credentials`;
   `ApplyOptions.project` (Task 8); `startWireGuard`, `deployMediaplane`, `buildImage`,
   `nodeExec` and `REPO` from `test/e2e/helpers.ts` and `wireguard.ts`.
-- **Produces:** nothing for other tasks.
+- **Produces:** `wiringMembers(project: string): Promise<{ internal: boolean; members: string[] }>`
+  in `test/e2e/helpers.ts` (the names on `<project>_wiring`, sorted).
 
-- [ ] **Step 1: The apply test**
+- [ ] **Step 1: The apply test, and the helper it shares with the VPN test**
+
+**Change** `test/e2e/helpers.ts`:
+
+```diff
+diff --git a/test/e2e/helpers.ts b/test/e2e/helpers.ts
+index a8dedd8..de44f70 100644
+--- a/test/e2e/helpers.ts
++++ b/test/e2e/helpers.ts
+@@ -57,2 +57,25 @@ export async function makeHome(): Promise<string> {
+ 
++/**
++ * The stack's wiring network (`<project>_wiring`): whether it is internal, and the names
++ * of the containers on it, sorted.
++ */
++export async function wiringMembers(
++  project: string,
++): Promise<{ internal: boolean; members: string[] }> {
++  const inspect = await nodeExec(
++    'docker',
++    [
++      'network',
++      'inspect',
++      '--format',
++      '{{.Internal}}{{range $id, $c := .Containers}} {{$c.Name}}{{end}}',
++      `${project}_wiring`,
++    ],
++    { cwd: '/' },
++  );
++  expect(inspect.code, inspect.stderr).toBe(0);
++  const [internal, ...members] = inspect.stdout.trim().split(' ');
++  return { internal: internal === 'true', members: members.sort() };
++}
++
+ /**
+```
 
 **Change** `test/e2e/apply.e2e.test.ts`:
 
 ```diff
 diff --git a/test/e2e/apply.e2e.test.ts b/test/e2e/apply.e2e.test.ts
-index 7196d54..517fc62 100644
+index 7196d54..bfc696d 100644
 --- a/test/e2e/apply.e2e.test.ts
 +++ b/test/e2e/apply.e2e.test.ts
 @@ -1,2 +1,3 @@
@@ -8454,7 +8864,19 @@ index 7196d54..517fc62 100644
 +import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 +import { request } from 'node:http';
  import { join } from 'node:path';
-@@ -32,2 +33,86 @@ function mediaplane(...args: string[]): Promise<ExecResult> {
+@@ -17,3 +18,10 @@ import { tempDir } from '@mediaplane/engine/testing';
+ import { describe, expect, it } from 'vitest';
+-import { BUSYBOX, composeDown, ejectArguments, makeHome, REPO } from './helpers';
++import {
++  BUSYBOX,
++  composeDown,
++  ejectArguments,
++  makeHome,
++  REPO,
++  wiringMembers,
++} from './helpers';
+ 
+@@ -32,2 +40,75 @@ function mediaplane(...args: string[]): Promise<ExecResult> {
  
 +/** What the video stack wires, in the order apply wires it (Prowlarr after the arrs). */
 +const WIRED = ['radarr.admin', 'sonarr.admin', 'prowlarr.admin', 'qbittorrent'];
@@ -8478,22 +8900,11 @@ index 7196d54..517fc62 100644
 + * Run from source, Mediaplane itself is not on it: the host reaches it.
 + */
 +async function expectWiringNetwork(containers: readonly { service: string }[]) {
-+  const inspect = await nodeExec(
-+    'docker',
-+    [
-+      'network',
-+      'inspect',
-+      '--format',
-+      '{{.Internal}}{{range $id, $c := .Containers}} {{$c.Name}}{{end}}',
-+      `${PROJECT}_wiring`,
-+    ],
-+    { cwd: '/' },
-+  );
-+  expect(inspect.code, inspect.stderr).toBe(0);
-+  const [internal, ...members] = inspect.stdout.trim().split(' ');
-+  expect(internal).toBe('true');
 +  const wired = ['prowlarr', 'qbittorrent', 'radarr', 'sonarr'];
-+  expect(members.sort()).toEqual(wired.map((service) => `${PROJECT}-${service}-1`));
++  expect(await wiringMembers(PROJECT)).toEqual({
++    internal: true,
++    members: wired.map((service) => `${PROJECT}-${service}-1`),
++  });
 +  expect(containers.map((c) => c.service)).toEqual(expect.arrayContaining(wired));
 +}
 +
@@ -8541,7 +8952,7 @@ index 7196d54..517fc62 100644
 +}
 +
  /** The pre-start files every apply of the video stack plans. */
-@@ -43,2 +128,7 @@ describe('apply against real Docker', () => {
+@@ -43,2 +124,7 @@ describe('apply against real Docker', () => {
      const home = await makeHome();
 +    const stack = (await readFile(join(home, 'stack.yaml'), 'utf8')).replace(
 +      '  sonarr: {}',
@@ -8549,7 +8960,7 @@ index 7196d54..517fc62 100644
 +    );
 +    await writeFile(join(home, 'stack.yaml'), stack);
      const runtime = createDockerRuntime({ home, project: PROJECT });
-@@ -150,2 +240,51 @@ describe('apply against real Docker', () => {
+@@ -150,2 +236,51 @@ describe('apply against real Docker', () => {
  
 +      // Slice 3b: the wiring network, and the shared login through each app's API.
 +      await expectWiringNetwork(containers);
@@ -8601,7 +9012,7 @@ index 7196d54..517fc62 100644
 +      expect(trustedNetworks).toBe(TRUSTED.join(','));
 +
        // Ejectable: the command printed in compose.yaml's header recreates nothing. An
-@@ -161,2 +300,26 @@ describe('apply against real Docker', () => {
+@@ -161,2 +296,26 @@ describe('apply against real Docker', () => {
        expect((await runtime.containers()).map((c) => c.id).sort()).toEqual(ids);
 +
 +      // Without a login for local addresses, the Servarr apps take only the Host names
@@ -8636,10 +9047,10 @@ index 7196d54..517fc62 100644
 
 ```diff
 diff --git a/test/e2e/deploy.e2e.test.ts b/test/e2e/deploy.e2e.test.ts
-index 9adf464..02b39db 100644
+index 9adf464..46b4ecc 100644
 --- a/test/e2e/deploy.e2e.test.ts
 +++ b/test/e2e/deploy.e2e.test.ts
-@@ -101,2 +101,28 @@ async function composeVersion(where: 'host' | 'image'): Promise<string> {
+@@ -101,2 +101,61 @@ async function composeVersion(where: 'host' | 'image'): Promise<string> {
  
 +/** The networks a container is on, as "<name> internal=<true|false>", sorted. */
 +async function networksOf(container: string): Promise<string[]> {
@@ -8667,17 +9078,85 @@ index 9adf464..02b39db 100644
 +  return described.sort();
 +}
 +
++/**
++ * What happened to `container` on the stack's wiring network since `since` (a Unix time,
++ * in seconds), as Docker's events say: "connect" and "disconnect", in order.
++ */
++async function wiringEvents(container: string, since: string): Promise<string[]> {
++  const id = await nodeExec('docker', ['inspect', '--format', '{{.Id}}', container], {
++    cwd: '/',
++  });
++  expect(id.code, id.stderr).toBe(0);
++  const events = await nodeExec(
++    'docker',
++    [
++      'events',
++      '--since',
++      since,
++      '--until',
++      (Date.now() / 1000 + 1).toFixed(3),
++      '--filter',
++      'type=network',
++      '--filter',
++      `network=${STACK}_wiring`,
++      '--format',
++      '{{.Action}} {{index .Actor.Attributes "container"}}',
++    ],
++    { cwd: '/' },
++  );
++  expect(events.code, events.stderr).toBe(0);
++  return events.stdout
++    .split('\n')
++    .filter((line) => line.endsWith(` ${id.stdout.trim()}`))
++    .map((line) => line.split(' ')[0] ?? '');
++}
++
  function codesIn(stdout: string): string[] {
-@@ -148,5 +174,7 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
+@@ -148,20 +207,28 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
    afterAll(async () => {
 -    const stackDown = await composeDown(STACK);
+-    const systemDown =
+-      override === '' ? undefined : await system('down', '--remove-orphans');
+-    // Each removal runs even if one before it throws, and so do the image removal (last,
+-    // once no container uses the image) and the checks.
+-    try {
+-      if (override !== '') await rm(dirname(override), { recursive: true, force: true });
+-      if (home !== '') await removeHome(home);
+-    } finally {
++    // Each removal runs whether or not the one before it worked; then what failed.
++    const failures: unknown[] = [];
++    const attempt = async (removal: () => Promise<unknown>) => {
+       try {
+-        if (data !== '') await removeAsRoot(data);
+-      } finally {
+-        const image = await nodeExec('docker', ['image', 'rm', TAG], { cwd: '/' });
+-        expect(stackDown.code, stackDown.stderr).toBe(0);
+-        if (systemDown !== undefined) expect(systemDown.code, systemDown.stderr).toBe(0);
+-        expect(image.code, image.stderr).toBe(0);
++        await removal();
++      } catch (failure) {
++        failures.push(failure);
+       }
++    };
++    const succeeds = async (command: Promise<ExecResult>) => {
++      const result = await command;
++      expect(result.code, result.stderr).toBe(0);
++    };
 +    // Mediaplane first: while its container is on the stack's wiring network, the
 +    // stack's down leaves that network behind ("Resource is still in use").
-     const systemDown =
-       override === '' ? undefined : await system('down', '--remove-orphans');
-+    const stackDown = await composeDown(STACK);
-     // Each removal runs even if one before it throws, and so do the image removal (last,
-@@ -266,2 +294,55 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
++    if (override !== '')
++      await attempt(() => succeeds(system('down', '--remove-orphans')));
++    await attempt(() => succeeds(composeDown(STACK)));
++    if (override !== '') {
++      await attempt(() => rm(dirname(override), { recursive: true, force: true }));
+     }
++    if (home !== '') await attempt(() => removeHome(home));
++    if (data !== '') await attempt(() => removeAsRoot(data));
++    // Last, once no container uses the image.
++    await attempt(() => succeeds(nodeExec('docker', ['image', 'rm', TAG], { cwd: '/' })));
++    if (failures.length > 0) throw new AggregateError(failures, 'teardown failed');
+   }, 300_000);
+@@ -266,2 +333,57 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
  
 +    // Slice 3b, through the proxy: Mediaplane joined the stack's wiring network to set
 +    // the shared login in Sonarr, and checked qBittorrent's key there. Its container is on
@@ -8710,6 +9189,7 @@ index 9adf464..02b39db 100644
 +    expect(routes.stdout).not.toMatch(/^default /m);
 +    // An apply that recreates an app steps off the network for up, and back on after:
 +    // network disconnect and connect, through the proxy.
++    const since = (Date.now() / 1000).toFixed(3);
 +    await writeFile(
 +      join(home, 'stack.yaml'),
 +      smallStack(data).replace(
@@ -8729,15 +9209,16 @@ index 9adf464..02b39db 100644
 +      action: 'recreate',
 +    });
 +    expect(await networksOf(CONTAINER)).toContain(`${STACK}_wiring internal=true`);
++    expect(await wiringEvents(CONTAINER, since)).toEqual(['disconnect', 'connect']);
 +    const settled = await mediaplane('plan', '--json');
 +    expect(settled.code, settled.stdout).toBe(0);
 +
      // Ejectable (success criterion 6): the header's command, run on the host, runs the
-@@ -272,2 +353,3 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
+@@ -272,2 +394,3 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
      const header = await readFile(join(home, COMPOSE_PATH), 'utf8');
 +    const before = await runtime.containers();
      const eject = await nodeExec('docker', ejectArguments(header, STACK), { cwd: '/' });
-@@ -278,3 +360,3 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
+@@ -278,3 +401,3 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
        // recreated.
 -      expect(ejected.map((c) => c.id).sort()).toEqual(containers.map((c) => c.id).sort());
 +      expect(ejected.map((c) => c.id).sort()).toEqual(before.map((c) => c.id).sort());
@@ -8750,19 +9231,23 @@ index 9adf464..02b39db 100644
 
 ```diff
 diff --git a/test/e2e/vpn.e2e.test.ts b/test/e2e/vpn.e2e.test.ts
-index c485c50..e156dd3 100644
+index 1301091..43b4ba9 100644
 --- a/test/e2e/vpn.e2e.test.ts
 +++ b/test/e2e/vpn.e2e.test.ts
 @@ -10,2 +10,3 @@ import {
    readSecretStore,
 +  type ApplyOptions,
    type ExecResult,
-@@ -215,3 +216,3 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
+@@ -19,2 +20,3 @@ import {
+   REPO,
++  wiringMembers,
+   type DeployedMediaplane,
+@@ -215,3 +217,3 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
        const runtime = createDockerRuntime({ home, project: PROJECT });
 -      const applied = await apply({
 +      const options: ApplyOptions = {
          home,
-@@ -222,6 +223,25 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
+@@ -222,6 +224,17 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
          probe: nodeProbe,
 +        project: PROJECT,
          confirm: () => Promise.resolve(true),
@@ -8776,20 +9261,12 @@ index c485c50..e156dd3 100644
 +      expect(applied.actions.find((a) => a.step === 'verify')?.detail).toBe(
 +        "no changes remain, and qBittorrent's network is Gluetun's, with the VPN up",
 +      );
-+      const gluetunOnWiring = await nodeExec(
-+        'docker',
-+        [
-+          'network',
-+          'inspect',
-+          '--format',
-+          '{{.Internal}}{{range $id, $c := .Containers}} {{$c.Name}}{{end}}',
-+          `${PROJECT}_wiring`,
-+        ],
-+        { cwd: '/' },
-+      );
-+      expect(gluetunOnWiring.stdout.trim()).toBe(`true ${PROJECT}-gluetun-1`);
++      expect(await wiringMembers(PROJECT)).toEqual({
++        internal: true,
++        members: [`${PROJECT}-gluetun-1`],
++      });
  
-@@ -328,2 +348,10 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
+@@ -328,2 +341,10 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
        expect(itemOf(inImage, 'egress').message).toBe(bothAddresses);
 +      // Gluetun's firewall lets the wiring network reach qBittorrent's port: from its
 +      // image, behind the proxy, Mediaplane checks qBittorrent's key through Gluetun.
@@ -8800,7 +9277,7 @@ index c485c50..e156dd3 100644
 +        wiring: [{ resource: 'qbittorrent', action: 'unchanged' }],
 +      });
        // Cleared first, so the teardown below doesn't try a failed removal again.
-@@ -333,2 +361,33 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
+@@ -333,2 +354,33 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
  
 +      // The owner's trial: Gluetun stopped by hand, then apply. Compose would only start
 +      // Gluetun, leaving qBittorrent with the network the old one had; apply restarts
@@ -8834,6 +9311,34 @@ index c485c50..e156dd3 100644
 +      expect((await apply(options)).outcome).toBe('no-changes');
 +
        // The tunnel goes down. At once, with the route still into tun0, vpn-check finds the
+@@ -336,4 +388,4 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
+       // Gluetun's health check restarts the dead tunnel every few seconds, and for a moment
+-      // in each restart the route can leave by eth0. That is not the state under test, so
+-      // a `route down` caught in it is asked again; a leak never is.
++      // in each restart the route can leave by Gluetun's own network. That is not the
++      // state under test, so a `route down` caught in it is asked again; a leak never is.
+       await wg.stop();
+@@ -373,3 +425,5 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
+       // works. Take tun0 away, as if the VPN had lost its interface: the route now
+-      // leaves by eth0 (the control), and only Gluetun's firewall stands in the way.
++      // leaves by one of Gluetun's own networks (the control), and only Gluetun's
++      // firewall stands in the way. Gluetun is on two, the stack's and the wiring one,
++      // and Docker names their interfaces (eth0, eth1) in no fixed order.
+       const deleted = await busyboxWith(
+@@ -383,4 +437,4 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
+       expect(deleted.code, deleted.stderr).toBe(0);
+-      const viaEth0 = await busybox(inGluetun, 'ip', 'route', 'get', wg.gateway);
+-      expect(viaEth0.stdout, viaEth0.stderr).toMatch(/ dev eth0 /);
++      const viaEth = await busybox(inGluetun, 'ip', 'route', 'get', wg.gateway);
++      expect(viaEth.stdout, viaEth.stderr).toMatch(/ dev eth\d+ /);
+       expect((await fetchFrom(inGluetun, leak)).code).not.toBe(0);
+@@ -389,4 +443,4 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
+       // health check may have rebuilt tun0 by now, so it says that nothing leaks only as
+-      // the route it reports allows: into the tunnel or nowhere, yes; by eth0, where only
+-      // the firewall stands in the way and nothing measured it, no.
++      // the route it reports allows: into the tunnel or nowhere, yes; by Gluetun's own
++      // network, where only the firewall stands in the way and nothing measured it, no.
+       const tunnelDown = await vpnCheck(home, toEcho);
 ```
 
 - [ ] **Step 4: Run them, and check nothing is left behind**
@@ -8853,7 +9358,7 @@ docker volume ls -q | wc -l
 ls -d "$(node -p 'require("os").tmpdir()')"/mediaplane-e2e-* 2>/dev/null | wc -l
 ```
 
-Expected: the whole suite passes: 5 files, 19 tests, in about 4 minutes (229 s) on the dev
+Expected: the whole suite passes: 5 files, 19 tests, in about 4 minutes (224 s) on the dev
 box with the images cached. The four listings print nothing, and both counts equal
 those before the run. If a call from the image fails with `Forbidden`, the proxy refused
 it: read `docker logs <PROJECT>-system-socket-proxy-1` before anything else, and do not
@@ -8894,12 +9399,27 @@ Decision: the spec changes where S3b differs from it: §5.2's `init` row (decisi
 Decision: the roadmap marks S3b done and records what it found for later: the S3c list,
 two S4 items (a wiring network whose settings change, and `partial`), and one item not
 scheduled (restrict what the proxy lets Mediaplane create).
+Decision: what the preflight scan found in the docs (M11 to M15, M21):
+- the lines that still said what S3b changed: the deploy guide's "Mediaplane's
+  network", the architecture's `mediaplane-system` and `plan` lines, the README's flow,
+  which gains the wire step, and the spec's §5.2 `plan` row ("no changes to the stack");
+- claims cut to what is checked: "(only without the proxy)" for making the network anew;
+  ADR 0011 says CI confirms Docker 28 on the slice PR's first run, and drops "exits 0";
+- the spec's §11 entry gains the runtime's new calls (§3.2) and where the wiring takes
+  an app's port (the resolver's container ports, not Compose's effective config: §5);
+- T14 says what "offline" means: no route of its own, while the apps on the network can
+  fetch for it (qBittorrent's add-by-URL, the Servarr apps' tests, Gluetun's HTTP proxy
+  or Shadowsocks when turned on);
+- table cells stay short: the README's capability row, the spec's §5.2 `init` cell and
+  the roadmap's `TRUSTEDNETWORKS` row point to the lists that hold the detail;
+- `CONTRIBUTING.md` says the unit tests also run fake HTTP apps on `127.0.0.1`, and one
+  spawns a Node process.
 
 **Files:**
 - Create: `docs/adr/0011-a-private-wiring-network.md`, `docs/runbooks/wiring-failed.md`
 - Modify: `docs/adr/0008-docker-socket-proxy-on-by-default.md`,
   `docs/security/threat-model.md`, `docs/architecture.md`, `docs/runbooks/vpn-down.md`,
-  `README.md`, `deploy/README.md`, `catalog/sonarr/README.md`,
+  `README.md`, `deploy/README.md`, `CONTRIBUTING.md`, `catalog/sonarr/README.md`,
   `catalog/radarr/README.md`, `catalog/prowlarr/README.md`,
   `catalog/qbittorrent/README.md`, `catalog/gluetun/README.md`,
   `packages/engine/src/config/schema.ts` (the `admin` description),
@@ -8966,7 +9486,7 @@ network with containers that have one. The owner chose how to reach the apps on
 - **Run from source, nothing joins.** The host reaches every container on a bridge
   network at its address, internal ones too, as long as the bridge has an address on
   the host, which Docker gives it by default. The end-to-end tests check it on Docker
-  29.8, and in CI on Docker 28.
+  29.8; CI confirms it on Docker 28 (the slice PR's first run).
 - **The apps are reached at their container's address on the wiring network,** found
   with `docker container inspect`, from source and from the image alike. Each request
   carries `Host: <service>:<port>`, as the other apps' requests do, which Servarr's
@@ -8989,7 +9509,7 @@ network with containers that have one. The owner chose how to reach the apps on
 - **Like any Docker network, the wiring network reaches the host** at its gateway
   address, where the host's own services listen.
 - **`docker compose down` on the stack leaves the wiring network** while Mediaplane is on
-  it ("Resource is still in use"), and exits 0. Bring `mediaplane-system` down first, or
+  it ("Resource is still in use"). Bring `mediaplane-system` down first, or
   take Mediaplane off with `docker network disconnect <project>_wiring mediaplane`.
 - **A Mediaplane update recreates its container,** which then is on the proxy's network
   only, until the next `plan` or `apply` joins the wiring network again.
@@ -9044,7 +9564,7 @@ index 1ecc312..eba9cdd 100644
 
 ```diff
 diff --git a/docs/security/threat-model.md b/docs/security/threat-model.md
-index 9362a1d..8424155 100644
+index 9362a1d..5a6a49a 100644
 --- a/docs/security/threat-model.md
 +++ b/docs/security/threat-model.md
 @@ -3,3 +3,3 @@
@@ -9176,7 +9696,7 @@ index 9362a1d..8424155 100644
 -  restarts too. That fails closed, and vpn-check reports it, but `apply` doesn't.
 +- vpn-check runs only when you run it, or `apply` does. Alerts come in M3.
  - The address comparison asks one IP-echo service; one that answers wrongly could hide a
-@@ -394,2 +435,28 @@ What remains:
+@@ -394,2 +435,32 @@ What remains:
  
 +### T14. Mediaplane's container gets a way out, or a way in
 +
@@ -9200,12 +9720,16 @@ index 9362a1d..8424155 100644
 +  host can.
 +- Like any Docker network, the wiring network reaches the host at its gateway address,
 +  where the host's own services listen.
++- "Offline" means no route of its own. Mediaplane holds the apps' keys, and the apps on
++  the wiring network can fetch for it: qBittorrent's add-by-URL, the Servarr apps' test
++  endpoints, and Gluetun's HTTP proxy or Shadowsocks, if `apps.gluetun.env` turns them
++  on (they listen on every Gluetun interface).
 +- Docker answers a name from every network a container is on. Only your
 +  `compose.override.yaml` could put a container called `socket-proxy` on the wiring
 +  network; it would then compete with the proxy for that name.
 +
  ## What the proxy does not stop
-@@ -410,4 +477,5 @@ exception: it reads bind mounts, and nothing else. So:
+@@ -410,4 +481,5 @@ exception: it reads bind mounts, and nothing else. So:
  - **An allowed call works on any container.** Stop and delete reach every container on
 -  the host, not just the stack's. The runtime's project check is what keeps Mediaplane to
 -  its own project.
@@ -9221,7 +9745,7 @@ index 9362a1d..8424155 100644
 
 ````diff
 diff --git a/docs/architecture.md b/docs/architecture.md
-index bc2c621..c2879fd 100644
+index bc2c621..f3d8dd0 100644
 --- a/docs/architecture.md
 +++ b/docs/architecture.md
 @@ -3,3 +3,3 @@
@@ -9229,12 +9753,26 @@ index bc2c621..c2879fd 100644
 -covering what is built so far (Slices 1 to 3a, and 3d). The design describes the whole
 +covering what is built so far (Slices 1 to 3a, 3d and 3b). The design describes the whole
  of M1; this page describes what exists.
-@@ -32,2 +32,4 @@ host (Docker)
+@@ -11,3 +11,4 @@ You describe the stack you want in one file, `stack.yaml`. Mediaplane then works
+ 
+-- `plan` works out what would change, and changes nothing;
++- `plan` works out what would change, and changes nothing in your stack (in the image,
++  it joins the stack's wiring network, to ask the apps: see [The wiring](#the-wiring));
+ - `apply` makes those changes, then plans again to check that nothing is left.
+@@ -32,2 +33,4 @@ host (Docker)
  │    Radarr, Jellyfin, …
 +│    and its wiring network,
 +│    which mediaplane joins
  │
-@@ -46,4 +48,6 @@ host (Docker)
+@@ -39,4 +42,5 @@ host (Docker)
+ - **`mediaplane-system`** is Mediaplane's own Compose project. Apply never manages it,
+-  and the runtime refuses to. [`deploy/README.md`](../deploy/README.md) shows how to start
+-  it.
++  and the runtime refuses to, but for one thing: it puts Mediaplane's own container on
++  the stack's wiring network, and takes it off for `up` ([The wiring](#the-wiring)).
++  [`deploy/README.md`](../deploy/README.md) shows how to start it.
+ - **The Mediaplane container** has a read-only root, no capabilities and
+@@ -46,4 +50,6 @@ host (Docker)
      `stack.yaml` is the host's own file at that path (`preflight.home-path`).
 -  - Its network is internal: it reaches the socket proxy and nothing else. Image pulls
 -    happen in the Docker daemon, which has the host's network.
@@ -9243,25 +9781,25 @@ index bc2c621..c2879fd 100644
 +    ([ADR 0011](adr/0011-a-private-wiring-network.md)). Image pulls happen in the Docker
 +    daemon, which has the host's network.
  - **The socket proxy** is the only container with Docker's socket. It forwards only the
-@@ -67,3 +71,4 @@ host (Docker)
+@@ -67,3 +73,4 @@ host (Docker)
    unset. There is no container and no host helper: the CLI runs under Node on the host,
 -  and looks at the host itself.
 +  and looks at the host itself. It reaches the apps on the wiring network from the host,
 +  which reaches every container on a Docker bridge network.
  
-@@ -103,2 +108,6 @@ Each part, and where its code is:
+@@ -103,2 +110,6 @@ Each part, and where its code is:
    where each app's web UI is.
 +- **http** (`packages/engine/src/http`): the client for the apps' APIs (see
 +  [The wiring](#the-wiring)).
 +- **integrations** (`packages/engine/src/integrations`, and `catalog/<app>/integration.ts`):
 +  what Mediaplane manages in each app, and how `plan` and `apply` wire it.
  - **vpn** (`packages/engine/src/vpn`): `vpn-check`. It reads the containers, runs a probe
-@@ -111,3 +120,3 @@ Not built yet:
+@@ -111,3 +122,3 @@ Not built yet:
  
 -- the integrations, which wire the apps together through their APIs (Slices 3b to 7);
 +- the links between the apps, through their APIs (Slices 3c to 7);
  - drift detection, with Keep mine (Slice 4).
-@@ -136,5 +145,10 @@ render
+@@ -136,5 +147,10 @@ render
  diff
 -  files, containers,
 -  keys to generate,
@@ -9275,14 +9813,14 @@ index bc2c621..c2879fd 100644
 +  update, adopt, unchanged,
 +  or after the start
  ```
-@@ -142,3 +156,5 @@ diff
+@@ -142,3 +158,5 @@ diff
  `plan` writes nothing. Its exit code is 0 when nothing would change, 2 when something
 -would (or an app is still waiting for its health check), and 1 on an error.
 +would (or an app is still waiting for its health check), and 1 on an error. In the
 +image, it joins Mediaplane's container to the stack's wiring network, to ask the apps;
 +that changes no app and no file.
  
-@@ -167,4 +183,9 @@ lock
+@@ -167,4 +185,9 @@ lock
   → set appdata owners
 + → step off the wiring
 +   network; stop a
@@ -9293,7 +9831,7 @@ index bc2c621..c2879fd 100644
 + → plan again, and
 +   vpn-check's checks
   → write change record
-@@ -192,2 +213,9 @@ lock
+@@ -192,2 +215,9 @@ lock
    unhealthy, and gives up after 10 minutes.
 +- **A stranded qBittorrent is restarted.** qBittorrent joins Gluetun's network when it
 +  starts. When Gluetun starts again on its own, or `apply` starts a stopped one, Compose
@@ -9303,11 +9841,11 @@ index bc2c621..c2879fd 100644
 +- **Verify** plans again, and nothing may be left to do. With qBittorrent behind
 +  Gluetun, it also runs vpn-check's checks, without the address comparison.
  - **The lock** records the process and the host name. That is why the Mediaplane
-@@ -210,2 +238,3 @@ lock
+@@ -210,2 +240,3 @@ lock
  │  ├─ secrets.json   0600
 +│  ├─ resources.json 0600
  │  ├─ history/
-@@ -244,2 +273,56 @@ exist, are on the same filesystem as the folder itself.
+@@ -244,2 +275,56 @@ exist, are on the same filesystem as the folder itself.
  
 +## The wiring
 +
@@ -9335,8 +9873,8 @@ index bc2c621..c2879fd 100644
 +  apps are reached at their container's address on it, with
 +  `Host: <service>:<port>`, as the other apps reach them. In the image, `plan` and
 +  `apply` join Mediaplane's container to it, and it stays; `apply` steps off for `up`,
-+  so that Compose can make the network anew if it must
-+  ([ADR 0011](adr/0011-a-private-wiring-network.md)).
++  so that Compose can make the network anew if it must (only without the proxy, which
++  lets no one delete a network: [ADR 0011](adr/0011-a-private-wiring-network.md)).
 +- **Each app's integration** (`catalog/<app>/integration.ts`) lists the resources
 +  Mediaplane manages in it, such as `sonarr.admin`. For each, it says how to read it
 +  from the app, which of its fields are managed, which secrets it holds, and how to
@@ -9364,7 +9902,7 @@ index bc2c621..c2879fd 100644
 +  every secret replaced.
 +
  ## `vpn-check`
-@@ -301,3 +384,3 @@ The [roadmap](plans/m1-roadmap.md) has the order:
+@@ -301,3 +386,3 @@ The [roadmap](plans/m1-roadmap.md) has the order:
  
 -- the wiring, app by app (Slices 3b to 7);
 +- the wiring, app by app (Slices 3c to 7);
@@ -9520,13 +10058,13 @@ index dab2562..d80c053 100644
  - **Leave qBittorrent's network alone** in `compose.override.yaml`: anything about its
 ```
 
-- [ ] **Step 5: The READMEs, and the `admin` description**
+- [ ] **Step 5: The READMEs, `CONTRIBUTING.md`, and the `admin` description**
 
 **Change** `README.md`:
 
 ````diff
 diff --git a/README.md b/README.md
-index b722572..18b35db 100644
+index b722572..97f7a75 100644
 --- a/README.md
 +++ b/README.md
 @@ -11,12 +11,11 @@ Compose and wires the apps together for you.**
@@ -9569,26 +10107,50 @@ index b722572..18b35db 100644
 -| Wire the apps together (download clients, indexers, root folders, media server)       | Planned      |
 -| Detect manual changes and offer Re-apply or "Keep mine"                               | Planned      |
 -| Web panel with a setup wizard                                                         | Planned (M2) |
-+| Capability                                                                              | Status       |
-+| --------------------------------------------------------------------------------------- | ------------ |
-+| Validate `stack.yaml`, with errors that say what to change                              | Done         |
-+| Render a readable Compose project with images pinned by tag and digest                  | Done         |
-+| Check the host first: Docker versions, disk, data folder, ports, the VPN device         | Done         |
-+| Refuse to publish web UIs on a cloud VM's private address by mistake                    | Done         |
-+| Predict exactly which containers will change, using Compose's own config hashes         | Done         |
-+| Generate keys and start the stack (`mediaplane apply`)                                  | Done         |
-+| See each app's health and every past apply (`status`, `history`)                        | Done         |
-+| Write a starter `stack.yaml` (`init`)                                                   | Done         |
-+| One admin login, generated, in qBittorrent, Sonarr, Radarr and Prowlarr (`credentials`) | Done         |
-+| Reach the apps' APIs over a private network with no route out                           | Done         |
-+| A VPN kill switch, tested against a real WireGuard server, and `vpn-check`              | Done         |
-+| Run in a hardened container, behind a Docker socket proxy                               | Done         |
-+| Documentation generated from code: the `stack.yaml` and CLI references, app facts       | Done         |
-+| Wire the apps together (download clients, indexers, root folders, media server)         | Planned      |
-+| Detect manual changes and offer Re-apply or "Keep mine"                                 | Planned      |
-+| Web panel with a setup wizard                                                           | Planned (M2) |
++| Capability                                                                        | Status       |
++| --------------------------------------------------------------------------------- | ------------ |
++| Validate `stack.yaml`, with errors that say what to change                        | Done         |
++| Render a readable Compose project with images pinned by tag and digest            | Done         |
++| Check the host first: Docker versions, disk, data folder, ports, the VPN device   | Done         |
++| Refuse to publish web UIs on a cloud VM's private address by mistake              | Done         |
++| Predict exactly which containers will change, using Compose's own config hashes   | Done         |
++| Generate keys and start the stack (`mediaplane apply`)                            | Done         |
++| See each app's health and every past apply (`status`, `history`)                  | Done         |
++| Write a starter `stack.yaml` (`init`)                                             | Done         |
++| One admin login, generated, for qBittorrent and the Servarr apps (`credentials`)  | Done         |
++| Reach the apps' APIs over a private network with no route out                     | Done         |
++| A VPN kill switch, tested against a real WireGuard server, and `vpn-check`        | Done         |
++| Run in a hardened container, behind a Docker socket proxy                         | Done         |
++| Documentation generated from code: the `stack.yaml` and CLI references, app facts | Done         |
++| Wire the apps together (download clients, indexers, root folders, media server)   | Planned      |
++| Detect manual changes and offer Re-apply or "Keep mine"                           | Planned      |
++| Web panel with a setup wizard                                                     | Planned (M2) |
  
-@@ -213,7 +213,7 @@ Admin login for the apps:
+@@ -101,3 +101,4 @@ Mediaplane works like `terraform plan` and `apply`. `plan` validates `stack.yaml
+ the host, renders the Compose project and diffs it against what is running. It shows you
+-the changes and touches nothing. `apply` does the same, then makes those changes.
++the changes and touches nothing in your stack. `apply` does the same, then makes those
++changes.
+ 
+@@ -110,4 +111,5 @@ mediaplane plan
+   │  ports, the data folder
+-  │  compares with what is running
+-  │  changes nothing
++  │  compares with what is running,
++  │  and asks the apps
++  │  changes nothing in the stack
+   ▼
+@@ -120,2 +122,4 @@ mediaplane apply
+   ├─ waits until every app is healthy
++  ├─ wires the apps through their
++  │  APIs (the shared login, so far)
+   ├─ plans again: nothing left to do
+@@ -124,3 +128,3 @@ mediaplane apply
+ 
+-Next, `apply` will also wire the apps together through their own APIs.
++Next, `apply` will wire the apps to each other through the same APIs (Slices 3c to 7).
+ 
+@@ -213,7 +217,7 @@ Admin login for the apps:
  Jellyfin     http://127.0.0.1:8096  (its login arrives in Slice 6)
 -Prowlarr     http://127.0.0.1:9696  (its login arrives in Slice 3b)
 +Prowlarr     http://127.0.0.1:9696
@@ -9599,7 +10161,7 @@ index b722572..18b35db 100644
 -Sonarr       http://127.0.0.1:8989  (its login arrives in Slice 3b)
 +Sonarr       http://127.0.0.1:8989
  ```
-@@ -377,6 +377,6 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
+@@ -377,6 +381,6 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
  - **Merged:** S1 (the pure core), S2a (`plan` against a real host), S2b (`apply`), S2c
 -  (packaging), S3a (the shared admin and pre-start files) and S3d (the VPN's kill-switch
 -  test and `vpn-check`).
@@ -9616,7 +10178,7 @@ index b722572..18b35db 100644
 
 ```diff
 diff --git a/deploy/README.md b/deploy/README.md
-index 2e200fb..3111e70 100644
+index 2e200fb..f8c9462 100644
 --- a/deploy/README.md
 +++ b/deploy/README.md
 @@ -13,14 +13,10 @@ never touch Mediaplane itself.
@@ -9660,7 +10222,16 @@ index 2e200fb..3111e70 100644
 +  sets it in Sonarr, Radarr and Prowlarr through their API once they run, and sets it
 +  again whenever it changes.
    - qBittorrent gets the login only at its first start, from a file Mediaplane never
-@@ -375,7 +370,21 @@ Each item is a message you may see, then what to do.
+@@ -221,4 +216,6 @@ host
+ 
+-- **Mediaplane's network** is internal: the container reaches the proxy and nothing else.
+-  Image pulls happen in the Docker daemon, which has the host's network.
++- **Mediaplane's networks** are internal: the proxy's, and the stack's wiring network
++  ([How Mediaplane reaches the apps](#how-mediaplane-reaches-the-apps)). The container
++  has no route out. Image pulls happen in the Docker daemon, which has the host's
++  network.
+ - **vpn-check's probe** is a throwaway container of qBittorrent's image, in Gluetun's
+@@ -375,7 +372,21 @@ Each item is a message you may see, then what to do.
  
 +## How Mediaplane reaches the apps
 +
@@ -9685,6 +10256,24 @@ index 2e200fb..3111e70 100644
 +command in the header of `/opt/mediaplane/generated/compose.yaml` manages it without
 +Mediaplane.
  
+```
+
+**Change** `CONTRIBUTING.md`:
+
+```diff
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+index 8657a38..ba0ba04 100644
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -28,3 +28,7 @@ what it writes. CI fails while the generated docs are stale.
+ 
+-The unit tests use in-memory fakes for Docker and the host. The spawned-CLI tests in
++The unit tests use in-memory fakes for Docker and the host. The apps' APIs are fake
++HTTP servers on 127.0.0.1 (`fakeHttpApp` in `@mediaplane/engine/testing`, §8.1(2) of the
++spec), which the CLI's tests reach through `CliDeps.wiring`; no unit test reaches a real
++app. One client test spawns a Node process, to check that no proxy sees a key. The
++spawned-CLI tests in
+ `packages/cli/src/main.test.ts` and `pnpm test:e2e` use the real Docker, under their own
 ```
 
 **Change** `catalog/sonarr/README.md`:
@@ -9902,21 +10491,23 @@ pnpm docs:generate
 
 ```diff
 diff --git a/docs/design/m1-engine-cli.md b/docs/design/m1-engine-cli.md
-index e446b47..936fb9a 100644
+index e446b47..8e3ab32 100644
 --- a/docs/design/m1-engine-cli.md
 +++ b/docs/design/m1-engine-cli.md
-@@ -541,3 +541,3 @@ in `compose.override.yaml` is therefore wired automatically.
+@@ -541,4 +541,4 @@ in `compose.override.yaml` is therefore wired automatically.
  |---|---|
 -| `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt, including the format of `--vpn-addresses` (on a terminal, only the refusal of `--vpn-addresses` without `--vpn-provider`, and whether `--lan-subnet` fits this host, wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file |
-+| `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt, including the format of `--vpn-addresses` (on a terminal, only the refusal of `--vpn-addresses` without `--vpn-provider`, and whether `--lan-subnet` fits this host, wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file. It checks first that it can write the home, creates the data folder when it can, says before each question what it is for, and on a terminal takes the VPN's WireGuard private key on a hidden prompt (§11, Slice 3b) |
- | `plan` | Show what `apply` would change, including drift. Makes no changes |
+-| `plan` | Show what `apply` would change, including drift. Makes no changes |
++| `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt, including the format of `--vpn-addresses` (on a terminal, only the refusal of `--vpn-addresses` without `--vpn-provider`, and whether `--lan-subnet` fits this host, wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file (more in §11, Slice 3b) |
++| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (§11, Slice 3b) |
+ | `apply` | Converge on `stack.yaml` (§5) |
 @@ -755,3 +755,4 @@ full threat model goes in `docs/security/threat-model.md`.
     - Mediaplane refuses to act on resources outside the managed `mediaplane`
 -     Compose project (its own `mediaplane-system` project is read-only to it).
 +     Compose project (its own `mediaplane-system` project is read-only to it, but for
 +     its own container's membership of the stack's wiring network: §11, Slice 3b).
       That is enforced in code.
-@@ -1124 +1125,84 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
+@@ -1124 +1125,93 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
    separated by commas without spaces, as Gluetun's `WIREGUARD_ADDRESSES` takes them.
 +
 +### Slice 3b: the wiring framework (2026-10-10)
@@ -9967,7 +10558,8 @@ index e446b47..936fb9a 100644
 +  `resources.json` doesn't say so: re-adoption by name, §6.3), or `unchanged`. A resource
 +  of any other app is checked `after-start`. One Mediaplane couldn't ask is `unknown`,
 +  with a warning, and makes the plan changed. `plan` waits up to 15 seconds for an app;
-+  it changes nothing in the apps.
++  it changes nothing in the apps. In the image it joins the wiring network to ask them:
++  the one change `plan` makes, to Docker and not to the stack (the §5.2 row).
 +- **The wire step** (§5 step 10) runs after `start`. It waits up to two minutes for each
 +  app, checks its key, and makes each resource what the stack wants, in the order of
 +  `after`. A resource that fails doesn't stop the others; one that requires it is
@@ -9979,7 +10571,15 @@ index e446b47..936fb9a 100644
 +  own message: Servarr's validation list, ASP.NET's problem details, or plain text, cut
 +  to 200 characters, and never an `attemptedValue`. It reads at most 5 MiB of an answer,
 +  and checks its shape with Zod, naming only the paths that don't fit. Every message has
-+  each key and password replaced with `***`.
++  each key and password replaced with `***`, before an answer is collapsed or cut, and
++  again after.
++- **The runtime** (§3.2) gains, as `compose run` and `inspect` were added before:
++  `docker network inspect`, `connect` and `disconnect` for Mediaplane's own container
++  and the wiring network, each container's address on that network (from
++  `docker container inspect`), and `compose stop`.
++- **An integration's ports** (§5) come from the resolver's container ports, after
++  `apps.<id>.port`, not from Compose's effective config: an override that changes a
++  wired app's port is not followed yet.
 +- **Verify** (§5 step 11, §6.4, §7.2(6)) also runs vpn-check's checks, without the
 +  address comparison, when qBittorrent is behind Gluetun.
 +- **A stranded qBittorrent is restarted** (§6.4). `plan` lists it as `restart` when it
@@ -10007,7 +10607,7 @@ index e446b47..936fb9a 100644
 
 ```diff
 diff --git a/docs/plans/m1-roadmap.md b/docs/plans/m1-roadmap.md
-index 3e74302..c944744 100644
+index 3e74302..352ea89 100644
 --- a/docs/plans/m1-roadmap.md
 +++ b/docs/plans/m1-roadmap.md
 @@ -19,2 +19,3 @@ Detailed plans so far:
@@ -10023,12 +10623,20 @@ index 3e74302..c944744 100644
 +- **Next:** S3c.
 +- **After that:** S4 to S8.
  
-@@ -129,3 +130,3 @@ each one, or corrects it in the catalog:
+@@ -129,5 +130,11 @@ each one, or corrects it in the catalog:
  | qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`: with `apps.qbittorrent.port: 8090` and `bind: localhost`, the web UI answers on `127.0.0.1:8090`. It runs in CI from Slice 3d | S3d (done) |
 -| The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs) | S3b |
-+| The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs). **Verified on 2026-10-10** by `test/e2e/apply.e2e.test.ts`: two subnets, given through `apps.sonarr.env`, come back from Sonarr's own settings as the same comma-separated list. It runs in CI from Slice 3b | S3b (done) |
++| The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs). Verified in S3b: see below | S3b (done) |
  | Seerr running as uid 1000 with `init: true`. **Verified on 2026-10-09** by `test/e2e/apply.e2e.test.ts` and `test/e2e/deploy.e2e.test.ts`: Seerr, rendered with `init: true`, runs healthy after apply's ownership step gives its appdata to uid 1000 | S2b (done) |
-@@ -141,4 +142,5 @@ four S8 items. Slice 3a (2026-10-10) added three S3 items, the S3d list, three
+ 
++Verified in S3b (2026-10-10):
++
++- **`SERVER__TRUSTEDNETWORKS`**: `test/e2e/apply.e2e.test.ts` gives two subnets through
++  `apps.sonarr.env`, and Sonarr's own settings show them back as the same
++  comma-separated list. It runs in CI from Slice 3b.
++
+ ## Inputs for later slices from the reviews
+@@ -141,4 +148,5 @@ four S8 items. Slice 3a (2026-10-10) added three S3 items, the S3d list, three
  S4 items, two S6 items, an S8 item and an M2 item. Slice 3d (2026-10-10) added the last
 -S3 item, the unscheduled list and extended two S8 items. Each slice plan must address the
 -items for that slice.
@@ -10036,32 +10644,32 @@ index 3e74302..c944744 100644
 +S3c list, two S4 items and one unscheduled item. Each slice plan must address the items
 +for that slice.
  
-@@ -223,3 +225,4 @@ items for that slice.
+@@ -223,3 +231,4 @@ items for that slice.
  **S3:** S3a handles the first five, except Mediaplane's network in TRUSTEDNETWORKS,
 -which moved to M2. The rest are for S3b and S3c.
 +which moved to M2. S3b handles the rest, except qBittorrent's settings and admin
 +password, which are S3c's (and listed again below).
  
-@@ -250,2 +253,5 @@ which moved to M2. The rest are for S3b and S3c.
+@@ -250,2 +259,5 @@ which moved to M2. The rest are for S3b and S3c.
    - S3b writes ADR 0011 on it.
 +  - **Done in S3b:** as decided, with the end-to-end tests proving the login from source
 +    and from the image behind the real proxy, Gluetun letting the wiring network reach
 +    qBittorrent's port, and Mediaplane's container having no default route.
  - **qBittorrent's settings after its first start.** `admin.username`,
-@@ -256,3 +262,4 @@ which moved to M2. The rest are for S3b and S3c.
+@@ -256,3 +268,4 @@ which moved to M2. The rest are for S3b and S3c.
    (S3b for Sonarr, Radarr and Prowlarr, S3c for qBittorrent). Today `credentials` shows
 -  the new password while qBittorrent keeps the one from its first start.
 +  the new password while qBittorrent keeps the one from its first start. **Done in S3b
 +  for Sonarr, Radarr and Prowlarr:** the `<app>.admin` resource.
  - **Keys an app creates must fit the secrets store (S3b).** `state/secrets.json` takes
-@@ -261,3 +268,5 @@ which moved to M2. The rest are for S3b and S3c.
+@@ -261,3 +274,5 @@ which moved to M2. The rest are for S3b and S3c.
    store, so its value must fit too, or the check must apply only to the keys Mediaplane
 -  generates. Otherwise the next `plan` can't read the store.
 +  generates. Otherwise the next `plan` can't read the store. **Done in S3b:** the rule
 +  stays for every key, and the store refuses to save one it couldn't read back, naming
 +  the key. Jellyfin's (S6) is 32 hex characters, which fits.
  - **qBittorrent stranded by a Gluetun started again on its own (S3b).** When Gluetun
-@@ -268,3 +277,15 @@ which moved to M2. The rest are for S3b and S3c.
+@@ -268,3 +283,15 @@ which moved to M2. The rest are for S3b and S3c.
    VPN topology check (spec §6.4) catch it too, by reusing `vpnCheck` without the egress
 -  check, and have `apply` restart qBittorrent then.
 +  check, and have `apply` restart qBittorrent then. **Done in S3b:** `plan` lists such a
@@ -10078,7 +10686,7 @@ index 3e74302..c944744 100644
 +  contract has `requires`).
 +- **`after` for the arrs.** Sonarr and Radarr come after qBittorrent once they link to it.
  
-@@ -312,2 +333,8 @@ which moved to M2. The rest are for S3b and S3c.
+@@ -312,2 +339,8 @@ which moved to M2. The rest are for S3b and S3c.
    yet. Add one, which reaches every app through its API.
 +- **A wiring network whose settings change.** Compose must make it anew then, and
 +  through the socket proxy it can't delete a network (S3b). The wiring failed runbook
@@ -10087,7 +10695,7 @@ index 3e74302..c944744 100644
 +  Apply records `failed` when part of the wiring failed (S3b). Decide whether drift's
 +  re-apply needs `partial`.
  
-@@ -376,2 +403,6 @@ which moved to M2. The rest are for S3b and S3c.
+@@ -376,2 +409,6 @@ which moved to M2. The rest are for S3b and S3c.
  
 +- **Restrict what the proxy lets Mediaplane create.** The wiring network keeps
 +  Mediaplane's container offline, but the proxy still lets it create containers with any
@@ -10117,7 +10725,7 @@ for (const f of process.argv.slice(1)) {
 git grep -n -e '```mermaid' -- '*.md' ':!docs/plans' || true
 git grep -n -E "Slice 3b creates|follow in Slice 3b|comingIn: 'Slice 3b'" \
   -- '*.md' 'catalog/*.ts' ':!docs/plans/m1-s*' ':!docs/design' || true
-git add README.md deploy/README.md catalog docs packages/engine/src/config/schema.ts
+git add README.md deploy/README.md CONTRIBUTING.md catalog docs packages/engine/src/config/schema.ts
 git commit -m "docs: ADR 0011, the wiring failed runbook, the threat model, architecture, READMEs, spec and roadmap" \
   -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -10137,10 +10745,12 @@ no doc still says the admin login is to come in Slice 3b.
   Coverage stays at or above 90% on lines, functions, branches and statements.
 - [ ] `pnpm test:e2e` leaves no `mediaplane-e2e-*` container, network or image, no host
   helper, and no new volume or `mediaplane-e2e-*` folder (Task 9, Step 4).
-- [ ] The socket proxy's allow-list is unchanged: `git diff main --
+- [ ] The socket proxy's allow-list is unchanged: `git diff 4125ce1 --
   deploy/mediaplane.compose.yaml` shows comment lines only, and in
-  `deploy/deploy.test.ts` only `ENGINE_CALLS`, `OVERRIDE_CALLS` and the comment above
-  them changed (decision 1).
+  `deploy/deploy.test.ts` only the comment above the lists and three new calls in
+  `ENGINE_CALLS` (with a comment line) changed, with `OVERRIDE_CALLS` as it was
+  (decision 1). `4125ce1` is
+  `origin/main` after S3d; the local `main` may be older (preflight M16).
 - [ ] No secret shows: the tests that check it pass (the client's "never repeats a
   secret the app echoes", `resources.json`'s "no secret value", the wire step's "no
   secret", `init`'s key that never shows), and so does the apply e2e's check that
@@ -10149,7 +10759,8 @@ no doc still says the admin login is to come in Slice 3b.
   machine: `git grep -n -i -e cyclopsgd -e '/home/' -- ':!docs/plans'` prints nothing
   outside the GitHub URLs (`https://github.com/cyclopsgd/Mediaplane/…`).
 - [ ] Every commit ends with the single `Co-Authored-By` line, and none has a
-  `Claude-Session` line: `git log --format=%B main.. | grep -c Claude-Session` prints `0`.
+  `Claude-Session` line: `git log --format=%B 4125ce1.. | grep -c Claude-Session` prints
+  `0`.
 - [ ] Every task is committed, and `git status` is clean.
 - [ ] Nothing has been pushed. Report to the controller:
   - that decision 18 (the host reaching an internal network's containers from source on
