@@ -1,5 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
@@ -18,6 +17,7 @@ import {
   fakeProbe,
   fakeRuntime,
   running,
+  tempDir,
 } from '@mediaplane/engine/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { EXIT_CODES, run, type CliDeps, type Io } from './run';
@@ -37,7 +37,7 @@ const SERVICES = ['gluetun', 'jellyfin', 'qbittorrent', 'sonarr'];
 const HASHES = Object.fromEntries(SERVICES.map((s, i) => [s, String(i).repeat(64)]));
 
 async function makeHome(stack = STACK): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), 'mediaplane-cli-'));
+  const home = await tempDir('mediaplane-cli-');
   await mkdir(join(home, 'secrets'));
   await writeFile(join(home, 'secrets', 'wg.key'), 'fake-wireguard-key-for-tests\n');
   await writeFile(join(home, 'stack.yaml'), stack);
@@ -289,7 +289,7 @@ describe('mediaplane plan', () => {
   });
 
   it('reports unexpected I/O errors as a one-line error naming the file', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-cli-'));
+    const home = await tempDir('mediaplane-cli-');
     await mkdir(join(home, 'stack.yaml'));
     const term = capture();
     expect(await run(['plan', '--home', home], term.io, deps())).toBe(1);
@@ -398,7 +398,7 @@ describe('mediaplane plan', () => {
   });
 
   it('reports unexpected errors as a JSON envelope with --json', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-cli-'));
+    const home = await tempDir('mediaplane-cli-');
     await mkdir(join(home, 'stack.yaml'));
     const term = capture();
     expect(await run(['plan', '--home', home, '--json'], term.io, deps())).toBe(1);
@@ -783,7 +783,7 @@ describe('mediaplane history', () => {
 
 describe('mediaplane host-report', () => {
   it('prints what it sees for a request, and is not listed in --help', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-report-'));
+    const dir = await tempDir('mediaplane-report-');
     const term = capture();
     const request = JSON.stringify({
       facts: false,

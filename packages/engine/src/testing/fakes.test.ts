@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { COMPOSE_PATH, ENV_PATH } from '../paths';
 import { fakeDocker, fakeHash, fakeRuntime } from './fakes';
+import { tempDir } from './temp';
 
 const COMPOSE = `services:
   gluetun:
@@ -15,7 +15,7 @@ const COMPOSE = `services:
 
 describe('fakeDocker', () => {
   it('starts what is written, hashing guests the way Compose does', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-fakes-'));
+    const home = await tempDir('mediaplane-fakes-');
     await mkdir(join(home, 'generated'));
     await writeFile(join(home, COMPOSE_PATH), COMPOSE);
     await writeFile(join(home, ENV_PATH), "MP_X='fake-x'\n");
@@ -35,7 +35,7 @@ describe('fakeDocker', () => {
   });
 
   it('can fail a step or leave the containers as they were', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-fakes-'));
+    const home = await tempDir('mediaplane-fakes-');
     const failing = fakeDocker(home, {
       pull: { ok: false, error: 'fake registry down' },
     });

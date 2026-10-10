@@ -2,7 +2,6 @@ import { spawnSync } from 'node:child_process';
 import {
   link,
   mkdir,
-  mkdtemp,
   open,
   readdir,
   readFile,
@@ -12,11 +11,12 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import type * as FsPromises from 'node:fs/promises';
-import { hostname, tmpdir } from 'node:os';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCK_PATH } from '../paths';
 import { acquireLock, LockedError } from './lock';
+import { tempDir } from '../testing/temp';
 
 // open(), link() and rename() pass straight through, except where a test makes one call
 // misbehave at an exact moment (the failures and races below can't be provoked reliably
@@ -43,7 +43,7 @@ const failure = (code: string) => Object.assign(new Error(`fake: ${code}`), { co
 const NOW = () => new Date('2026-10-09T09:43:12.000Z');
 
 async function homeWithLock(content: string): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+  const home = await tempDir('mediaplane-lock-');
   await mkdir(join(home, 'state'));
   await writeFile(join(home, LOCK_PATH), content);
   return home;
@@ -57,7 +57,7 @@ function deadPid(): number {
 
 describe('acquireLock', () => {
   it('records who holds the lock, with private modes, and releases it', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+    const home = await tempDir('mediaplane-lock-');
     const lock = await acquireLock(home, NOW);
     expect(JSON.parse(await readFile(join(home, LOCK_PATH), 'utf8'))).toEqual({
       pid: process.pid,
@@ -117,7 +117,7 @@ describe('acquireLock', () => {
   });
 
   it('refuses when the lock is not a file', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+    const home = await tempDir('mediaplane-lock-');
     await mkdir(join(home, LOCK_PATH), { recursive: true });
     await expect(acquireLock(home, NOW)).rejects.toThrow(
       'state/lock exists but cannot be read',
@@ -127,7 +127,7 @@ describe('acquireLock', () => {
 
 describe('acquireLock, when things go wrong', () => {
   it('refuses a second acquire in the same process until the first is released', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+    const home = await tempDir('mediaplane-lock-');
     const first = await acquireLock(home, NOW);
     const second = acquireLock(home, NOW);
     await expect(second).rejects.toBeInstanceOf(LockedError);
@@ -137,7 +137,7 @@ describe('acquireLock, when things go wrong', () => {
   });
 
   it('never leaves a lock behind when writing it fails', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+    const home = await tempDir('mediaplane-lock-');
     vi.mocked(open).mockImplementationOnce(async (...args) => {
       const handle = await real.open(...args);
       vi.spyOn(handle, 'writeFile').mockRejectedValueOnce(
@@ -151,7 +151,7 @@ describe('acquireLock, when things go wrong', () => {
   });
 
   it('flushes the lock to disk before linking it into place', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+    const home = await tempDir('mediaplane-lock-');
     const events: string[] = [];
     vi.mocked(open).mockImplementationOnce(async (...args) => {
       const handle = await real.open(...args);
@@ -176,7 +176,7 @@ describe('acquireLock, when things go wrong', () => {
   });
 
   it('explains a filesystem without hard links, leaving nothing behind', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+    const home = await tempDir('mediaplane-lock-');
     vi.mocked(link).mockRejectedValueOnce(failure('EPERM'));
     await expect(acquireLock(home, NOW)).rejects.toThrow(
       `cannot create ${join(home, LOCK_PATH)} (EPERM): the Mediaplane home must be on a filesystem that supports hard links`,
@@ -185,7 +185,7 @@ describe('acquireLock, when things go wrong', () => {
   });
 
   it('names the lock file for any other failure to create it', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+    const home = await tempDir('mediaplane-lock-');
     vi.mocked(link).mockRejectedValueOnce(failure('EIO'));
     await expect(acquireLock(home, NOW)).rejects.toThrow(
       `cannot create ${join(home, LOCK_PATH)} (EIO)`,
@@ -193,7 +193,7 @@ describe('acquireLock, when things go wrong', () => {
   });
 
   it('gives up when the lock keeps vanishing between its tries', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-lock-'));
+    const home = await tempDir('mediaplane-lock-');
     // Each time, another run holds the lock when we try, and has let go when we look.
     vi.mocked(link).mockRejectedValue(failure('EEXIST'));
     const attempt = acquireLock(home, NOW);

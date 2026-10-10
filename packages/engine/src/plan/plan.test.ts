@@ -1,5 +1,4 @@
-import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { HostFacts } from '../host/facts';
@@ -16,6 +15,7 @@ import {
 import { fakeHash, fakeProbe, fakeRuntime, running } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureCatalog } from '../testing/fixtures';
 import { plan, planStack } from './plan';
+import { tempDir } from '../testing/temp';
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -35,7 +35,7 @@ async function makeHome({
   withSecret = true,
   withStore = false,
 } = {}): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), 'mediaplane-plan-'));
+  const home = await tempDir('mediaplane-plan-');
   await writeFile(join(home, 'stack.yaml'), stack);
   if (withSecret) {
     await mkdir(join(home, 'secrets'));
@@ -412,7 +412,7 @@ describe('plan', () => {
     expect(await planWith(home, facts)).toMatchObject({ ok: true, changed: true });
     expect(asked).toEqual(['facts']);
     // No stack to plan: the host helper is not run at all.
-    const empty = await mkdtemp(join(tmpdir(), 'mediaplane-plan-'));
+    const empty = await tempDir('mediaplane-plan-');
     expect(await planWith(empty, facts)).toMatchObject({ ok: false });
     expect(asked).toEqual(['facts']);
 
@@ -491,7 +491,7 @@ describe('plan', () => {
   });
 
   it('fails with the config error when stack.yaml is missing', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-plan-'));
+    const home = await tempDir('mediaplane-plan-');
     expect(await planFor(home)).toMatchObject({
       ok: false,
       changed: false,

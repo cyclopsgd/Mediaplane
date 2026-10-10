@@ -1,15 +1,15 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CHANGE_SCHEMA, writeRecord, type ChangeRecord } from './history/records';
 import { HISTORY_DIR } from './paths';
 import { status } from './status';
 import { fakeRuntime, running } from './testing/fakes';
+import { tempDir } from './testing/temp';
 
 describe('status', () => {
   it('lists containers by service and the newest change record', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-status-'));
+    const home = await tempDir('mediaplane-status-');
     const record: Omit<ChangeRecord, 'id'> = {
       schema: CHANGE_SCHEMA,
       trigger: 'cli',
@@ -30,7 +30,7 @@ describe('status', () => {
   });
 
   it('still lists the containers when the change history cannot be read', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-status-'));
+    const home = await tempDir('mediaplane-status-');
     // A file where the history folder should be: listing it fails (ENOTDIR).
     await mkdir(join(home, 'state'));
     await writeFile(join(home, HISTORY_DIR), 'not a folder');
@@ -42,7 +42,7 @@ describe('status', () => {
   });
 
   it('has no last apply before the first one', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-status-'));
+    const home = await tempDir('mediaplane-status-');
     expect(await status(home, fakeRuntime())).toEqual({
       containers: [],
       lastApply: undefined,

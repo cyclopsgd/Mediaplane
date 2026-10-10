@@ -1,6 +1,5 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import type { NetworkInterfaceInfo } from 'node:os';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,6 +12,7 @@ import {
   readDmi,
   toArch,
 } from './facts';
+import { tempDir } from '../testing/temp';
 
 function nic(
   address: string,
@@ -147,7 +147,7 @@ describe('detectCloud', () => {
 
 describe('readDmi', () => {
   it('reads the identifying fields and skips missing or empty ones', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-dmi-'));
+    const dir = await tempDir('mediaplane-dmi-');
     await writeFile(join(dir, 'sys_vendor'), 'QEMU\n');
     await writeFile(join(dir, 'chassis_asset_tag'), 'OracleCloud.com\n');
     await writeFile(join(dir, 'product_name'), '\n');
@@ -175,13 +175,13 @@ describe('inSubnet', () => {
 
 describe('detectHostFacts', () => {
   it('reports the cloud named by the firmware', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-dmi-'));
+    const dir = await tempDir('mediaplane-dmi-');
     await writeFile(join(dir, 'chassis_asset_tag'), 'OracleCloud.com\n');
     expect(detectHostFacts(dir).cloud).toBe('Oracle Cloud');
   });
 
   it('reports no cloud when the firmware is not a known cloud', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-dmi-'));
+    const dir = await tempDir('mediaplane-dmi-');
     await writeFile(join(dir, 'sys_vendor'), 'QEMU\n');
     expect(detectHostFacts(dir)).not.toHaveProperty('cloud');
   });

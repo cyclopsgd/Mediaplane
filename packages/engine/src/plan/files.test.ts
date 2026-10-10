@@ -1,12 +1,12 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { diffFiles } from './files';
+import { tempDir } from '../testing/temp';
 
 describe('diffFiles', () => {
   it('marks files as new, changed or unchanged, with a unified diff', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-files-'));
+    const home = await tempDir('mediaplane-files-');
     await mkdir(join(home, 'generated'));
     await writeFile(join(home, 'generated', 'same.yaml'), 'a: 1\n');
     await writeFile(join(home, 'generated', 'old.yaml'), 'a: 1\n');
@@ -30,7 +30,7 @@ describe('diffFiles', () => {
   });
 
   it('compares a sensitive file without ever diffing or keeping its content', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-files-'));
+    const home = await tempDir('mediaplane-files-');
     await mkdir(join(home, 'generated'));
     const file = {
       path: 'generated/.env',

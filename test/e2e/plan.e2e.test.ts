@@ -1,6 +1,5 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
@@ -14,6 +13,7 @@ import {
   type ComposeFile,
   type ExecResult,
 } from '@mediaplane/engine';
+import { tempDir } from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { BUSYBOX, composeDown, makeHome } from './helpers';
 
@@ -92,7 +92,7 @@ describe('plan against real Docker', () => {
   });
 
   it('predicts the config hash Compose records on the container it creates', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-'));
+    const home = await tempDir('mediaplane-e2e-');
     const compose = [
       'services:',
       '  probe:',
@@ -125,7 +125,7 @@ describe('plan against real Docker', () => {
   });
 
   it("predicts a guest in another service's network namespace", async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-'));
+    const home = await tempDir('mediaplane-e2e-');
     const project = `${PROJECT}-ns`;
     // ComposeService has no command: these containers are only created, never started,
     // so busybox's default command doesn't matter. The name matches -p as well.

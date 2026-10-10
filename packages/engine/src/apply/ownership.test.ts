@@ -1,5 +1,4 @@
-import { mkdtemp, readdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Catalog } from '../catalog/types';
@@ -13,6 +12,7 @@ import {
   fixtureConfig,
 } from '../testing/fixtures';
 import { ensureAppdataDirs, ownershipFixes, requiredOwner } from './ownership';
+import { tempDir } from '../testing/temp';
 
 const CATALOG: Catalog = [
   ...fixtureCatalog,
@@ -110,7 +110,7 @@ describe('ownershipFixes', () => {
 
 describe('ensureAppdataDirs', () => {
   it("creates every app's appdata folder", async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-ownership-'));
+    const home = await tempDir('mediaplane-ownership-');
     await ensureAppdataDirs(stackIn(home));
     expect((await readdir(join(home, 'appdata'))).sort()).toEqual([
       'jellyfin',

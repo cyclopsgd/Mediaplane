@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nodeExec, type ExecResult } from '@mediaplane/engine';
-import { expect } from 'vitest';
+import { expect, onTestFinished } from 'vitest';
 
 export const BUSYBOX =
   'busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e';
@@ -41,19 +41,30 @@ apps:
 `;
 }
 
-/** A new temporary Mediaplane home holding the video stack's `stack.yaml` and a data folder. */
+/**
+ * A new temporary Mediaplane home holding the video stack's `stack.yaml` and a data
+ * folder. It is removed when the test finishes, files the apps wrote as other users
+ * included, so a test that starts containers must bring its project down
+ * (`composeDown`) in its own `finally`, which runs first.
+ */
 export async function makeHome(): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-'));
+  onTestFinished(() => removeHome(home));
   await mkdir(join(home, 'data'));
   await writeFile(join(home, 'stack.yaml'), stackFor(join(home, 'data')));
   return home;
 }
 
-/** Remove a test project's containers and network, whatever it contains. */
+/**
+ * Remove a test project's containers, network and anonymous volumes, whatever it
+ * contains. `-v` is the short form of `--volumes` in Compose v2 and v5.
+ */
 export function composeDown(project: string): Promise<ExecResult> {
-  return nodeExec('docker', ['compose', '-p', project, 'down', '--remove-orphans'], {
-    cwd: '/',
-  });
+  return nodeExec(
+    'docker',
+    ['compose', '-p', project, 'down', '--remove-orphans', '-v'],
+    { cwd: '/' },
+  );
 }
 
 /**

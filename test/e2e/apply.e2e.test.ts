@@ -1,5 +1,4 @@
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
@@ -12,8 +11,9 @@ import {
   renderEnvFile,
   type ApplyOptions,
 } from '@mediaplane/engine';
+import { tempDir } from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
-import { BUSYBOX, composeDown, ejectArguments, makeHome, removeHome } from './helpers';
+import { BUSYBOX, composeDown, ejectArguments, makeHome } from './helpers';
 
 const PROJECT = `mediaplane-e2e-${process.pid}-apply`;
 
@@ -67,13 +67,12 @@ describe('apply against real Docker', () => {
       expect((await runtime.containers()).map((c) => c.id).sort()).toEqual(ids);
     } finally {
       const down = await composeDown(PROJECT);
-      await removeHome(home);
       expect(down.code, down.stderr).toBe(0);
     }
   }, 1_200_000);
 
   it('writes .env values that Compose reads back exactly', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-'));
+    const dir = await tempDir('mediaplane-e2e-');
     const values = {
       MP_A: 'it\'s "q" $X \\b',
       MP_B: 'line1\nline2\ttab',

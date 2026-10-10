@@ -1,9 +1,9 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Diagnostic } from '../diagnostics';
 import { loadConfigFile, parseConfig } from './load';
+import { tempDir } from '../testing/temp';
 
 const MINIMAL = `version: 1
 paths: { data: /srv/data }
@@ -314,7 +314,7 @@ describe('loadConfigFile', () => {
   });
 
   it('reads and parses a file', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-config-'));
+    const dir = await tempDir('mediaplane-config-');
     await writeFile(join(dir, 'stack.yaml'), MINIMAL);
     expect((await loadConfigFile(join(dir, 'stack.yaml'))).ok).toBe(true);
   });

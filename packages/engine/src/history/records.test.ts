@@ -1,5 +1,4 @@
-import { mkdir, mkdtemp, readdir, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { HISTORY_DIR, STATE_DIR } from '../paths';
@@ -12,6 +11,7 @@ import {
   writeRecord,
   type ChangeRecord,
 } from './records';
+import { tempDir } from '../testing/temp';
 
 function record(id: string, outcome: ChangeRecord['outcome'] = 'success'): ChangeRecord {
   return {
@@ -55,7 +55,7 @@ describe('stackSha256', () => {
 
 describe('history records', () => {
   it('writes private records and reads them back, newest first', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-history-'));
+    const home = await tempDir('mediaplane-history-');
     await writeRecord(home, record('20261009T094312Z-00000001'));
     await writeRecord(home, record('20261010T080000Z-00000002', 'failed'));
     const { records, unreadable } = await listRecords(home);
@@ -75,12 +75,12 @@ describe('history records', () => {
   });
 
   it('has no records before the first apply', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-history-'));
+    const home = await tempDir('mediaplane-history-');
     expect(await listRecords(home)).toEqual({ records: [], unreadable: [] });
   });
 
   it('lists files it cannot read instead of failing', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-history-'));
+    const home = await tempDir('mediaplane-history-');
     await mkdir(join(home, HISTORY_DIR), { recursive: true });
     await writeFile(join(home, HISTORY_DIR, '20261009T094312Z-00000001.json'), '{"oops"');
     expect(await listRecords(home)).toEqual({
@@ -90,7 +90,7 @@ describe('history records', () => {
   });
 
   it('lists an entry it cannot read as unreadable, and still lists the rest', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-history-'));
+    const home = await tempDir('mediaplane-history-');
     await writeRecord(home, record('20261009T094312Z-00000001'));
     // Reading a directory fails (EISDIR); it must not take the whole listing down.
     await mkdir(join(home, HISTORY_DIR, '20261009T094312Z-00000003.json'));
@@ -100,7 +100,7 @@ describe('history records', () => {
   });
 
   it('lists a JSON file that is not a change record as unreadable', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-history-'));
+    const home = await tempDir('mediaplane-history-');
     await writeRecord(home, record('20261009T094312Z-00000001'));
     await writeFile(join(home, HISTORY_DIR, '20261009T094312Z-00000002.json'), '{}\n');
     const { records, unreadable } = await listRecords(home);
@@ -109,19 +109,19 @@ describe('history records', () => {
   });
 
   it('fails when the history folder itself cannot be read', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-history-'));
+    const home = await tempDir('mediaplane-history-');
     await mkdir(join(home, 'state'));
     await writeFile(join(home, HISTORY_DIR), 'not a folder');
     await expect(listRecords(home)).rejects.toMatchObject({ code: 'ENOTDIR' });
   });
 
   it('finds nothing for an unknown id', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-history-'));
+    const home = await tempDir('mediaplane-history-');
     expect(await readRecord(home, '20261009T094312Z-ffffffff')).toBeUndefined();
   });
 
   it('does not follow an id out of the history folder', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-history-'));
+    const home = await tempDir('mediaplane-history-');
     // A valid record just outside state/history: only the id check keeps it unreachable.
     await mkdir(join(home, STATE_DIR), { recursive: true });
     await writeFile(
@@ -145,7 +145,7 @@ describe('history records', () => {
         /startedAt/,
       ],
     ])('rejects %s before writing anything', async (_label, change, message) => {
-      const home = await mkdtemp(join(tmpdir(), 'mediaplane-history-'));
+      const home = await tempDir('mediaplane-history-');
       const bad = { ...record('20261009T094312Z-00000001'), ...change };
       await expect(writeRecord(home, bad)).rejects.toThrow(message);
       expect(await readdir(home)).toEqual([]);

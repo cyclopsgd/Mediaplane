@@ -1,5 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,6 +12,7 @@ import {
 } from './docker';
 import type { Exec, ExecOptions, ExecResult } from './exec';
 import { HelperError, RuntimeError } from './types';
+import { tempDir } from '../testing/temp';
 
 interface Call {
   args: readonly string[];
@@ -139,7 +139,7 @@ describe('createDockerRuntime', () => {
   });
 
   it('hashes an unwritten compose file from stdin, with secret values in the environment', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-runtime-'));
+    const dir = await tempDir('mediaplane-runtime-');
     const { exec, calls } = recorder(() =>
       ok(`sonarr ${HASH}\nradarr ${'b'.repeat(64)}\n`),
     );
@@ -177,7 +177,7 @@ describe('createDockerRuntime', () => {
   });
 
   it("adds the user's compose.override.yaml when it exists", async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-runtime-'));
+    const dir = await tempDir('mediaplane-runtime-');
     await writeFile(join(dir, 'compose.override.yaml'), 'services: {}\n');
     const { exec, calls } = recorder(() => ok(''));
     await createDockerRuntime({
@@ -275,7 +275,7 @@ describe('createDockerRuntime', () => {
   ];
 
   it('pulls missing images for the written project', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-runtime-'));
+    const dir = await tempDir('mediaplane-runtime-');
     const { exec, calls } = recorder(() => ok(''));
     const runtime = createDockerRuntime({ home: dir, project: 'mediaplane-test', exec });
     expect(await runtime.pull({})).toEqual({ ok: true });
@@ -290,7 +290,7 @@ describe('createDockerRuntime', () => {
   });
 
   it('starts the project and waits for it to be healthy', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-runtime-'));
+    const dir = await tempDir('mediaplane-runtime-');
     await writeFile(join(dir, 'compose.override.yaml'), 'services: {}\n');
     const { exec, calls } = recorder(() => ok(''));
     const runtime = createDockerRuntime({ home: dir, project: 'mediaplane-test', exec });
@@ -319,7 +319,7 @@ describe('createDockerRuntime', () => {
   });
 
   it('runs chown as root in a throwaway container of the service', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-runtime-'));
+    const dir = await tempDir('mediaplane-runtime-');
     const { exec, calls } = recorder(() => ok(''));
     const runtime = createDockerRuntime({ home: dir, project: 'mediaplane-test', exec });
     expect(

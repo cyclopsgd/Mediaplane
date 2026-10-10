@@ -1,5 +1,5 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { hostname, tmpdir } from 'node:os';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Catalog } from '../catalog/types';
@@ -15,6 +15,7 @@ import { RuntimeError, type ContainerState, type Runtime } from '../runtime/type
 import { fakeDocker, fakeProbe } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureApp, fixtureCatalog } from '../testing/fixtures';
 import { apply, unhealthyServices, type ApplyOptions } from './apply';
+import { tempDir } from '../testing/temp';
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -32,7 +33,7 @@ const now = () => new Date('2026-10-09T09:43:12.000Z');
 const modeOf = async (path: string) => (await stat(path)).mode & 0o777;
 
 async function makeHome(stack = STACK): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), 'mediaplane-apply-'));
+  const home = await tempDir('mediaplane-apply-');
   await writeFile(join(home, 'stack.yaml'), stack);
   await mkdir(join(home, 'secrets'));
   await writeFile(join(home, 'secrets', 'wg.key'), 'fake-wireguard-key-for-tests\n');
@@ -253,7 +254,7 @@ describe('apply', () => {
   });
 
   it("doesn't create state/ in a folder without a stack.yaml", async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-apply-'));
+    const home = await tempDir('mediaplane-apply-');
     const result = await apply(options(home, fakeDocker(home)));
     expect(result.outcome).toBe('invalid');
     expect(result.diagnostics).toContainEqual(

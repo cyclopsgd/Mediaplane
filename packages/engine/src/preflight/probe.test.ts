@@ -1,14 +1,13 @@
 import { createSocket } from 'node:dgram';
-import { mkdtemp } from 'node:fs/promises';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { nodeProbe } from './probe';
+import { tempDir } from '../testing/temp';
 
 describe('nodeProbe.stat', () => {
   it('describes a directory', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'mediaplane-probe-'));
+    const dir = await tempDir('mediaplane-probe-');
     expect(await nodeProbe.stat(dir)).toMatchObject({
       isDirectory: true,
       isCharacterDevice: false,

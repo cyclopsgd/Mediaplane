@@ -1,13 +1,13 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseConfig } from './load';
 import type { StackConfig } from './schema';
 import { checkSecretRefs, readSecret, secretRefs } from './secrets';
+import { tempDir } from '../testing/temp';
 
 async function homeWith(files: Record<string, string>): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), 'mediaplane-secrets-'));
+  const home = await tempDir('mediaplane-secrets-');
   await mkdir(join(home, 'secrets'));
   for (const [name, content] of Object.entries(files)) {
     await writeFile(join(home, 'secrets', name), content);

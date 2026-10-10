@@ -1,12 +1,12 @@
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SECRETS_PATH } from '../paths';
 import { emptySecretStore, readSecretStore, writeSecretStore } from './store';
+import { tempDir } from '../testing/temp';
 
 async function homeWithStore(content: string): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), 'mediaplane-store-'));
+  const home = await tempDir('mediaplane-store-');
   await mkdir(join(home, 'state'));
   await writeFile(join(home, SECRETS_PATH), content);
   return home;
@@ -14,7 +14,7 @@ async function homeWithStore(content: string): Promise<string> {
 
 describe('readSecretStore', () => {
   it('is empty when the file does not exist', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-store-'));
+    const home = await tempDir('mediaplane-store-');
     expect(await readSecretStore(home)).toEqual(emptySecretStore());
   });
 
@@ -44,7 +44,7 @@ describe('readSecretStore', () => {
 
 describe('writeSecretStore', () => {
   it('writes a sorted, private store that reads back', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'mediaplane-store-'));
+    const home = await tempDir('mediaplane-store-');
     const store = {
       version: 1 as const,
       apps: {

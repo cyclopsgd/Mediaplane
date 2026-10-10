@@ -1,9 +1,13 @@
-import { mkdtemp, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import type * as FsPromises from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invokingUser, parseConfig } from '@mediaplane/engine';
-import { FIXTURE_HOST, fakeProbe, fakeRuntime } from '@mediaplane/engine/testing';
+import {
+  FIXTURE_HOST,
+  fakeProbe,
+  fakeRuntime,
+  tempDir,
+} from '@mediaplane/engine/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { run, type CliDeps, type Io } from './run';
 
@@ -68,7 +72,7 @@ const deps = (cloud?: string): Partial<CliDeps> => ({
   probe: () => fakeProbe(),
 });
 
-const newHome = () => mkdtemp(join(tmpdir(), 'mediaplane-init-'));
+const newHome = () => tempDir('mediaplane-init-');
 
 async function stackIn(home: string) {
   const result = parseConfig(await readFile(join(home, 'stack.yaml'), 'utf8'));

@@ -1,5 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,6 +12,7 @@ import { fakeProbe, fakeRuntime } from '../testing/fakes';
 import { FIXTURE_HOST } from '../testing/fixtures';
 import { helperHostFacts, helperMountSources, helperProbe, isInside } from './helper';
 import { collectHostReport, HOST_REPORT_SCHEMA, type HostRequest } from './report';
+import { tempDir } from '../testing/temp';
 
 const IMAGE = 'mediaplane:test';
 const USER = { uid: 1000, gid: 1000 };
@@ -67,7 +67,7 @@ function thisMachine() {
 }
 
 async function homeWithStack(): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), 'mediaplane-helper-'));
+  const home = await tempDir('mediaplane-helper-');
   await writeFile(join(home, 'stack.yaml'), 'version: 1\n');
   return home;
 }

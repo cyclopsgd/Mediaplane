@@ -1,11 +1,11 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
 import { emptySecretStore, type SecretStore } from './store';
 import { missingGeneratedSecrets, secretsToGenerate, secretValues } from './values';
+import { tempDir } from '../testing/temp';
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -25,7 +25,7 @@ apps:
 const STACK_WITH_GLUETUN_ENV = `${STACK}  gluetun: { env: { FAKE_EXTRA: { env: FAKE_EXTRA_VAR } } }\n`;
 
 async function stackIn(source = STACK): Promise<ResolvedStack> {
-  const home = await mkdtemp(join(tmpdir(), 'mediaplane-values-'));
+  const home = await tempDir('mediaplane-values-');
   await mkdir(join(home, 'secrets'));
   await writeFile(join(home, 'secrets', 'wg.key'), 'fake-wireguard-key-for-tests\n');
   const result = resolveStack(fixtureConfig(source), fixtureCatalog, FIXTURE_HOST, home);

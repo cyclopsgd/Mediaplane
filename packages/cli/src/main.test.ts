@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { createServer, type AddressInfo, type Server } from 'node:net';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tempDirSync } from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { VERSION } from './version';
 
@@ -75,7 +75,7 @@ function spawnMain(...args: string[]) {
 }
 
 function freshHome(): string {
-  const home = mkdtempSync(join(tmpdir(), 'mediaplane-main-'));
+  const home = tempDirSync('mediaplane-main-');
   mkdirSync(join(home, 'data'));
   writeFileSync(join(home, 'stack.yaml'), stackFor(join(home, 'data')));
   return home;
@@ -91,7 +91,7 @@ describe('main', { timeout: 60_000 }, () => {
   });
 
   it('exits 1 for a plan that fails, with nothing on stdout', () => {
-    const home = mkdtempSync(join(tmpdir(), 'mediaplane-main-'));
+    const home = tempDirSync('mediaplane-main-');
     const result = spawnMain('plan', '--home', home);
     expect(result.status).toBe(1);
     expect(result.stdout).toBe('');
