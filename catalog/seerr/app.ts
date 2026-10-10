@@ -48,5 +48,6 @@ export default defineApp({
   }),
   env: () => ({ LOG_LEVEL: 'info' }),
   extras: () => ({ init: true }),
+  login: { comingIn: 'Slice 7' },
   experimental: false,
 });

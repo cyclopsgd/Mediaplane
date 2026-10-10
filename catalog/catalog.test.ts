@@ -49,6 +49,11 @@ describe('catalog', () => {
       );
     });
 
+    it('says how you sign in, exactly when it publishes a web UI', () => {
+      const published = app.ports.some((port) => port.publish !== false);
+      expect(app.login !== undefined).toBe(published);
+    });
+
     it('only injects secrets it declares', () => {
       for (const step of app.credentials) {
         if (step.step === 'env') expect(Object.keys(app.secrets)).toContain(step.secret);

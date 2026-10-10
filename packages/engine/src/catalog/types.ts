@@ -128,6 +128,12 @@ export interface AppDefinition<Options = Record<string, unknown>> {
   validate?(ctx: AppContext<Options>): Diagnostic[];
   /** Files to write into its appdata folder before its first start, if absent. Pure. */
   configFiles?(ctx: ConfigFileContext<Options>): ConfigFile[];
+  /**
+   * How you sign in to its web UI: 'shared' once the shared admin login works there, or
+   * the slice that brings a login. Every app with a published web UI says, and
+   * `mediaplane credentials` lists them.
+   */
+  login?: 'shared' | { comingIn: string };
   experimental: boolean;
 }
 

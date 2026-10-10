@@ -87,6 +87,29 @@ Exit codes:
 - 0: the records were listed or shown
 - 1: an error, or no such record
 
+## `mediaplane credentials`
+
+Show the shared admin login and each app's web address.
+
+```text
+mediaplane credentials [options] [app]
+```
+
+| Argument | Description        |
+| -------- | ------------------ |
+| `app`    | show only this app |
+
+| Option         | Description                                                                     |
+| -------------- | ------------------------------------------------------------------------------- |
+| `--home <dir>` | Mediaplane home directory (default: "/opt/mediaplane")                          |
+| `--reveal`     | show the password in --json output, and show your own password (admin.password) |
+| `--json`       | print machine-readable JSON, without the password unless --reveal               |
+
+Exit codes:
+
+- 0: the login was shown
+- 1: an error: no stack.yaml, no password yet, or no such app
+
 ## `mediaplane init`
 
 Write a starter stack.yaml and a secrets/ folder (never overwrites).

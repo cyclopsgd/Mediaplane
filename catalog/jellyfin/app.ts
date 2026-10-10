@@ -25,5 +25,6 @@ export default defineApp({
     test: ['CMD', 'curl', '-fsS', 'http://localhost:8096/health'],
     startPeriod: '120s',
   },
+  login: { comingIn: 'Slice 6' },
   experimental: false,
 });

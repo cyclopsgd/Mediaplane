@@ -25,5 +25,6 @@ export default defineApp({
   implies: () => ['byparr'],
   env: (ctx) => servarrEnv('PROWLARR', ctx),
   configFiles: servarrConfigFiles,
+  login: { comingIn: 'Slice 3b' },
   experimental: false,
 });

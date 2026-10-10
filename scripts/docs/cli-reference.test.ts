@@ -5,7 +5,7 @@ describe('renderCliReference', () => {
   const text = renderCliReference();
 
   it('documents every command with its options and exit codes', () => {
-    for (const name of ['plan', 'apply', 'status', 'history', 'init']) {
+    for (const name of ['plan', 'apply', 'status', 'history', 'init', 'credentials']) {
       expect(text).toContain(`## \`mediaplane ${name}\``);
     }
     expect(text).toContain(

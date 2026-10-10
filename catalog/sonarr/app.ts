@@ -24,5 +24,6 @@ export default defineApp({
   health: { test: ['CMD', 'curl', '-fsS', 'http://localhost:8989/ping'] },
   env: (ctx) => servarrEnv('SONARR', ctx),
   configFiles: servarrConfigFiles,
+  login: { comingIn: 'Slice 3b' },
   experimental: false,
 });

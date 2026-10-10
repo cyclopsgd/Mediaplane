@@ -4,6 +4,7 @@ import {
   apply,
   collectHostReport,
   createDockerRuntime,
+  credentials,
   detectHostFacts,
   helperHostFacts,
   helperProbe,
@@ -20,6 +21,7 @@ import {
   type Runtime,
 } from '@mediaplane/engine';
 import { Command, CommanderError, Option } from 'commander';
+import { printCredentials } from './credentials';
 import { init, type InitOptions } from './init';
 import {
   printApply,
@@ -65,6 +67,10 @@ export const EXIT_CODES: Readonly<Record<string, readonly string[]>> = {
   ],
   status: ['0: the containers were listed', '1: an error, or no container for that app'],
   history: ['0: the records were listed or shown', '1: an error, or no such record'],
+  credentials: [
+    '0: the login was shown',
+    '1: an error: no stack.yaml, no password yet, or no such app',
+  ],
   init: [
     '0: stack.yaml and secrets/ were written',
     '1: an error; an existing stack.yaml is never overwritten',
@@ -272,6 +278,42 @@ export function createProgram(
       }
       printRecord(record, { json: asJson }, io);
     });
+
+  program
+    .command('credentials')
+    .description("Show the shared admin login and each app's web address")
+    .argument('[app]', 'show only this app')
+    .option('--home <dir>', 'Mediaplane home directory', defaultHome)
+    .option(
+      '--reveal',
+      'show the password in --json output, and show your own password (admin.password)',
+    )
+    .option('--json', 'print machine-readable JSON, without the password unless --reveal')
+    .addHelpText('after', exitCodesHelp('credentials'))
+    .action(
+      async (
+        app: string | undefined,
+        options: { home: string; json?: boolean; reveal?: boolean },
+      ) => {
+        const home = resolve(options.home);
+        const runtime = deps.runtime(home, project);
+        const result = await credentials({
+          home,
+          catalog,
+          // In the image, the host helper: needed for the LAN addresses.
+          host: () => deps.host(runtime),
+          env: io.env,
+        });
+        setExitCode(
+          printCredentials(
+            result,
+            app,
+            { json: options.json === true, reveal: options.reveal === true },
+            io,
+          ),
+        );
+      },
+    );
 
   program
     .command('init')

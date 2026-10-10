@@ -24,5 +24,6 @@ export default defineApp({
   health: { test: ['CMD', 'curl', '-fsS', 'http://localhost:7878/ping'] },
   env: (ctx) => servarrEnv('RADARR', ctx),
   configFiles: servarrConfigFiles,
+  login: { comingIn: 'Slice 3b' },
   experimental: false,
 });

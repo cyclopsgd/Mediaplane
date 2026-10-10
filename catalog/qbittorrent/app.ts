@@ -71,5 +71,6 @@ export default defineApp({
       seeded: /^WebUI\\APIKey=.+$/m,
     },
   ],
+  login: 'shared',
   experimental: false,
 });
