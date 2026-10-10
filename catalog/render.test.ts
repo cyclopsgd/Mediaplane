@@ -196,6 +196,19 @@ describe('the real catalog', () => {
     );
   });
 
+  it("warns once about the missing LAN subnet behind the VPN, with Gluetun's warning", () => {
+    // The LAN can't reach qBittorrent through Gluetun's firewall, so its login is moot.
+    const source = SPEC_EXAMPLE.replace(
+      'network: { bind: lan }',
+      'network: { bind: all }\nsecurity: { login_on_lan: false }',
+    );
+    const { diagnostics } = render(source, { ...HOST, cloud: 'Oracle Cloud' });
+    expect(codes(diagnostics)).toEqual(['network.no-lan-subnet', 'network.bind-all']);
+    expect(diagnostics[0]?.message).toBe(
+      "the web UIs are published on the LAN, but Mediaplane knows no LAN subnet, so Gluetun's firewall keeps your LAN out of qBittorrent's web UI",
+    );
+  });
+
   it('runs Seerr with init and its own fixed user', () => {
     const seerr = render(SPEC_EXAMPLE).compose.services.seerr;
     expect(seerr?.init).toBe(true);

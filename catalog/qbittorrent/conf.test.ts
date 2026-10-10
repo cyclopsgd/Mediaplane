@@ -89,6 +89,18 @@ describe('qBittorrent.conf', () => {
     );
   });
 
+  it.each([
+    ['the default login_on_lan', ''],
+    ['login_on_lan: true', 'security: { login_on_lan: true }\n'],
+  ])(
+    'asks the LAN to sign in with %s, even with the web UI on the LAN',
+    (_name, security) => {
+      const file = confFile(`network: { bind: lan }\n${security}`);
+      expect(file.content).toContain('WebUI\\AuthSubnetWhitelistEnabled=false\n');
+      expect(file.content).not.toContain('WebUI\\AuthSubnetWhitelist=');
+    },
+  );
+
   it('joins several subnets with a comma and no space', () => {
     const twoLans: HostFacts = {
       arch: 'arm64',
@@ -130,13 +142,9 @@ describe('qBittorrent.conf', () => {
     const { stack } = resolveWith('network: { bind: localhost }\n');
     if (stack === undefined) throw new Error('the stack did not resolve');
     const admin = { username: 'media-admin', password: 'fake-admin-password' };
-    let message = '';
-    try {
-      renderPrestartFiles(stack, emptySecretStore(), admin, ones);
-    } catch (error) {
-      message = (error as Error).message;
-    }
-    expect(message).toBe('qbittorrent.apiKey has not been generated yet');
+    expect(() => renderPrestartFiles(stack, emptySecretStore(), admin, ones)).toThrow(
+      /^qbittorrent\.apiKey has not been generated yet$/,
+    );
   });
 
   it('warns that the LAN must sign in when Mediaplane knows no LAN subnet', () => {
@@ -152,5 +160,28 @@ describe('qBittorrent.conf', () => {
       path: 'network.lan_subnet',
       hint: 'set network.lan_subnet to your LAN, such as 192.168.1.0/24',
     });
+  });
+
+  it.each([
+    [
+      'the login stays on for the LAN (the default)',
+      'network: { bind: all }\n',
+      { ...HOST, cloud: 'Oracle Cloud' },
+    ],
+    [
+      'the web UI is only on this machine',
+      'network: { bind: localhost }\nsecurity: { login_on_lan: false }\n',
+      { ...HOST, cloud: 'Oracle Cloud' },
+    ],
+    [
+      'Mediaplane knows the LAN subnet',
+      'network: { bind: lan }\nsecurity: { login_on_lan: false }\n',
+      HOST,
+    ],
+  ])('does not warn about the LAN subnet when %s', (_name, lines, host) => {
+    const { diagnostics } = resolveWith(lines, host);
+    expect(diagnostics.map((diagnostic) => diagnostic.code)).not.toContain(
+      'network.no-lan-subnet',
+    );
   });
 });

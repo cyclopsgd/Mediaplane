@@ -45,7 +45,10 @@ export default defineApp({
             },
           ),
         ]),
-    ...(!ctx.config.security.login_on_lan &&
+    // Behind the VPN, Gluetun's warning of the same code covers it: the LAN can't reach
+    // the web UI through Gluetun's firewall, so who must log in is moot.
+    ...(!ctx.options.vpn &&
+    !ctx.config.security.login_on_lan &&
     ctx.publishesOnLan &&
     ctx.lanClientSubnets.length === 0
       ? [
