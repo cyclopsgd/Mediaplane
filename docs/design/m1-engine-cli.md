@@ -281,7 +281,9 @@ generated compose file.
 │   ├── resources.json      per managed resource: app-assigned ID + last-applied snapshot of managed fields
 │   ├── history/            one JSON change record per apply
 │   └── lock                single-writer lock
-└── appdata/<app>/          APPS: each app's config dir (sensitive; backed up in M3)
+└── appdata/                MEDIAPLANE (0700): only this folder; apply keeps it private
+    └── <app>/              APPS: each app's config dir (sensitive; backed up in M3),
+                            with the modes its image gives it
 ```
 
 The data root, for example `/srv/data`, is chosen by the user. It uses a single
@@ -759,6 +761,12 @@ full threat model goes in `docs/security/threat-model.md`.
    - Generated with a cryptographic RNG.
    - `state/secrets.json` and `generated/.env` are `0600`, and `state/` is
      `0700`.
+   - `appdata/` itself is `0700` too. The apps rewrite their own files readable by
+     all, and those files hold their keys, so only Mediaplane's user may enter the
+     folder. Docker resolves bind mounts as root, so no app needs to pass through
+     it. Each app's folder inside it keeps the modes its image gives it. Apply
+     makes an existing `appdata/` private again on every run that goes ahead,
+     including one with nothing else to change.
    - Secrets are redacted in logs and change records.
    - They are not encrypted at rest, because a key on the same disk adds nothing.
      The docs recommend full-disk encryption and flag `appdata/` as sensitive.
@@ -969,6 +977,20 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   the app's appdata folder. `plan` lists them as created "before first start", and
   never shows their content. It renders them from the secrets apply would generate, in
   memory only, to learn their paths.
+- **`appdata/` is private, and `plan` says what apply will do to it (§4.1, §7.2(4)).**
+  Only `appdata/` itself is `0700`; each app's folder keeps the modes its image gives
+  it. Apply creates `appdata/` as `0700` and, on every run that goes ahead, makes an
+  existing one `0700` again, even when nothing else would change (no change record is
+  written for that).
+  - **Another user owns it:** `chmod` fails, and apply stops with
+    `apply.appdata-not-private` (`apply.files-failed` in the files step), naming the
+    owner's uid and the uid Mediaplane runs as. The hint is to give `appdata/` itself,
+    not what is in it, to Mediaplane's user (`MEDIAPLANE_UID` in its container).
+  - **`plan` looks first, with `stat()` only.** It warns `appdata.not-owned` for that
+    case, with the same hint. For any other mode than `0700` it notes
+    `appdata.not-private` (a warning). Neither makes the plan "changed", because apply
+    already does this without a change record; a missing `appdata/` gets no note,
+    because apply creates it.
 - **Installs from before Slice 3a are reported, never overwritten.** A `config.xml`
   without `ApiKey`, a `qBittorrent.conf` without `WebUI\APIKey`, or Gluetun's
   `auth/config.toml` without Mediaplane's role (`name = "mediaplane"`) fails `plan`

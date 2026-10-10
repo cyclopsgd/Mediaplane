@@ -130,9 +130,9 @@ design gaps below, which only matter once Mediaplane writes files or deploys.
 The Slice 2a final review (2026-10-09) added the S2b list and two S3 items.
 The Slice 2b final review (2026-10-09) added the S2c list, two S4 items and an
 M2 item. Slice 2c (2026-10-09) added the last S3 item, the S6 list and the last
-four S8 items. Slice 3a (2026-10-10) added the last two S3 items, the S3d list, three
-S4 items, two S6 items and an M2 item. Each slice plan must address the items for that
-slice.
+four S8 items. Slice 3a (2026-10-10) added the last three S3 items, the S3d list, three
+S4 items, two S6 items, an S8 item and an M2 item. Each slice plan must address the
+items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -236,6 +236,11 @@ which moved to M2. The rest are for S3b and S3c.
   API, qBittorrent included, so that a change to `admin.password` reaches every app
   (S3b for Sonarr, Radarr and Prowlarr, S3c for qBittorrent). Today `credentials` shows
   the new password while qBittorrent keeps the one from its first start.
+- **Keys an app creates must fit the secrets store (S3b).** `state/secrets.json` takes
+  only letters, digits and `_` in an app's key (`^[A-Za-z0-9_]+$`), because the keys go
+  into the apps' files unescaped. A secret with `createdBy: 'app'` is kept in the same
+  store, so its value must fit too, or the check must apply only to the keys Mediaplane
+  generates. Otherwise the next `plan` can't read the store.
 
 **S3d:**
 
@@ -250,6 +255,11 @@ which moved to M2. The rest are for S3b and S3c.
   regressed.
 - **Validate `vpn.addresses`.** The schema takes any non-empty string today. Check it
   as comma-separated IPv4 or IPv6 CIDRs.
+- **`vpn-check` and a Gluetun that wasn't restarted.** A Gluetun that started before
+  Slice 3a, and hasn't been restarted since, has not read the key file Mediaplane
+  wrote: it reads the file only when it starts (its README says to restart it once).
+  `vpn-check` can get a 401 from it. Say so in `vpn-check`'s error, with the fix
+  (restart Gluetun, then qBittorrent), or detect it.
 
 **S4:**
 
@@ -297,6 +307,9 @@ which moved to M2. The rest are for S3b and S3c.
   SPDX `license` field.
 - **Docs:** make the `--json` contract explicit (pin its fields and document
   `mediaplane.plan/v1`). Drop the internal "Slice 1" wording from the README.
+- **`credentials --json` has no `ok` field.** `init`, `plan`, `apply` and the error
+  envelope all carry one, and the success output of `mediaplane.credentials/v1` doesn't.
+  Align it in the `--json` pass: adding `ok: true` is additive within v1.
 - **Tests:** tighten the catalog tag test, and add Renovate.
 - **Pins outside the catalog.** Renovate must also bump the images pinned in:
   - `Dockerfile` (`node`, `docker:*-cli`);
