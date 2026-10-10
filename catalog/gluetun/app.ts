@@ -17,7 +17,7 @@ export default defineApp({
   provides: ['vpn'],
   requires: [],
   secrets: {
-    // Mediaplane's key to the control server, for reading the VPN's status (Slice 3d).
+    // Mediaplane's key to the control server: vpn-check reads the VPN's status with it.
     controlApiKey: { generate: 'hex32' },
     wireguardKey: { userProvided: 'vpn.private_key' },
   },

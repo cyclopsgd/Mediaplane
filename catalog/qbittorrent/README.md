@@ -26,10 +26,14 @@ unmodified, and by default puts it behind Gluetun's VPN.
 - **Behind the VPN** (`apps.qbittorrent.vpn: true`, the default):
   - qBittorrent uses Gluetun's network (`network_mode: service:gluetun`), so its traffic
     leaves through Gluetun's VPN tunnel and firewall;
-  - it starts only once Gluetun is healthy, and Compose restarts it when it updates
+  - it starts only once Gluetun is healthy, and Compose restarts it when it recreates
     Gluetun;
   - its web UI is published on Gluetun's service;
-  - `stack.yaml` needs a `vpn:` block, or `plan` reports an error.
+  - `stack.yaml` needs a `vpn:` block, or `plan` reports an error;
+  - an end-to-end test checks that it has no way out when the VPN is down, against a
+    WireGuard server of its own, and `mediaplane vpn-check` checks the same on your host
+    (see [Gluetun's README](../gluetun/README.md)). vpn-check runs its probe in
+    qBittorrent's own image, as nobody: a throwaway container that writes nothing.
 - **Without the VPN** (`vpn: false`), it has its own network, and `plan` warns every time.
 - **One port, inside and out.** qBittorrent checks the `Host` header, so the published
   port and its own port must match. `apps.qbittorrent.port` changes both, through
@@ -58,8 +62,6 @@ unmodified, and by default puts it behind Gluetun's VPN.
 
 - **Slice 3c:** the `tv` and `movies` categories, with save paths under
   `/data/torrents/`, and the settings above managed through qBittorrent's API.
-- **Slice 3d:** the automated kill-switch test, which checks that qBittorrent has no
-  network when the VPN is down, and `mediaplane vpn-check`.
 
 See the [roadmap](../../docs/plans/m1-roadmap.md).
 
@@ -75,6 +77,9 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Known issues
 
+- **After Gluetun restarts on its own, qBittorrent has no network.** It keeps the network
+  the old Gluetun had, until it restarts too. `mediaplane vpn-check` reports it; see
+  [Gluetun's README](../gluetun/README.md).
 - **`stack.yaml` reaches qBittorrent only at its first start.** Mediaplane never
   rewrites `qBittorrent.conf`, so changing any of these afterwards doesn't change
   qBittorrent: `admin.username`, `admin.password`, `security.login_on_lan`,

@@ -34,7 +34,7 @@ upstream image, unmodified. It is turned on whenever qBittorrent runs behind the
   `all`), `FIREWALL_OUTBOUND_SUBNETS` lists your LAN subnet, so that your own network can
   reach qBittorrent's web UI. With `bind: localhost` it is left out: Docker on this
   machine reaches the web UI from the stack's own network, which Gluetun already lets
-  through (Slice 3d's end-to-end test checks this). If the web UIs are on your LAN but
+  through (the kill-switch test checks this). If the web UIs are on your LAN but
   Mediaplane knows no LAN subnet, such as on a cloud VM without `network.lan_subnet`,
   `plan` warns (`network.no-lan-subnet`).
 - **What it needs from the host.** It gets `NET_ADMIN` and `/dev/net/tun`, and `plan`
@@ -44,16 +44,25 @@ upstream image, unmodified. It is turned on whenever qBittorrent runs behind the
 - **A key for the control server, before its first start.** Mediaplane writes
   `appdata/gluetun/auth/config.toml`, only if it doesn't exist. It lets a generated key
   (`controlApiKey`, kept in `state/secrets.json`) read `GET /v1/vpn/status` and
-  `GET /v1/publicip/ip`, and nothing else. Requests without the key are refused
-  (Slice 3d's end-to-end test checks this). Without the file, Gluetun answers anyone on
-  the stack's network. Slice 3d's `mediaplane vpn-check` uses the key.
+  `GET /v1/publicip/ip`, and nothing else. Requests without the key are refused, and so
+  are other routes with it (the kill-switch test checks both). Without the file, Gluetun
+  answers anyone on the stack's network.
+- **The kill switch, tested.** qBittorrent has no network but Gluetun's. An end-to-end
+  test, which CI runs on amd64 and arm64, runs Gluetun against a WireGuard server of its
+  own, through Gluetun's `custom` provider, and checks that:
+  - qBittorrent's traffic leaves through the tunnel, from the server's address;
+  - with the server stopped, nothing gets out of qBittorrent's network, while an
+    ordinary container on the stack's network still reaches the same target;
+  - with Gluetun stopped, qBittorrent has nothing but loopback.
+- **`mediaplane vpn-check`** checks the same on your host: qBittorrent's network,
+  Gluetun's health, what its control server says (with the key), the route into the
+  tunnel, and where qBittorrent's traffic leaves from, compared with this host's address.
+  It measures IPv4 only. It warns when the control server answers without the key. The
+  [VPN down runbook](../../docs/runbooks/vpn-down.md) explains each failure.
 
 ## Not built yet
 
-- **Slice 3d:** the automated kill-switch test, against a local WireGuard server, and
-  `mediaplane vpn-check`, which compares qBittorrent's public address with the host's.
-
-See the [roadmap](../../docs/plans/m1-roadmap.md).
+Nothing for Gluetun itself. See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Changing it
 
@@ -72,8 +81,33 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
         WIREGUARD_PRESHARED_KEY: { file: secrets/wg-psk }
   ```
 
+- **A WireGuard server of your own,** or a provider Gluetun doesn't list, goes through
+  Gluetun's `custom` provider. Copy the values from the server's WireGuard file: its
+  `Endpoint` and `PublicKey` from `[Peer]`, and your `Address`. The kill-switch test runs
+  this way.
+
+  ```yaml
+  vpn:
+    provider: custom
+    private_key: { file: secrets/wg.key }
+    addresses: 10.66.0.2/32
+  apps:
+    gluetun:
+      env:
+        WIREGUARD_ENDPOINT_IP: 203.0.113.10
+        WIREGUARD_ENDPOINT_PORT: '51820'
+        WIREGUARD_PUBLIC_KEY: the server's public key
+  ```
+
 ## Known issues
 
+- **Restarting Gluetun on its own leaves qBittorrent without a network.** A container
+  joins Gluetun's network when it starts. When Gluetun restarts alone, by hand or after a
+  crash, it gets a new network, and qBittorrent keeps the old one, which has nothing but
+  loopback. Nothing leaks, but nothing downloads either, and `mediaplane apply` doesn't
+  notice: Compose restarts qBittorrent only when it recreates Gluetun. `mediaplane
+vpn-check` does notice. Restart qBittorrent after Gluetun:
+  `docker restart mediaplane-qbittorrent-1`.
 - **A wrong key never connects.** Gluetun's health check needs a working tunnel. With a
   wrong or fake key, Gluetun never becomes healthy and keeps retrying. `apply` then fails
   within about half a minute, naming `gluetun` as unhealthy, and qBittorrent does not
