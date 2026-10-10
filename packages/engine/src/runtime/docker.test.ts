@@ -407,6 +407,30 @@ describe('createDockerRuntime', () => {
     expect(calls[0]?.options?.timeoutMs).toBe(300_000);
   });
 
+  it('runs a one-off only in a service named like a Compose service', async () => {
+    const { exec, calls } = recorder(() => ok(''));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    const command = {
+      user: { uid: 65534, gid: 65534 },
+      entrypoint: 'true',
+      args: [],
+      values: {},
+    };
+    // A leading dash would be read as a Compose option, ahead of the service.
+    for (const service of ['--project-name=x', '-p', '', 'Qbit', 'a b', 'a/b', '_x']) {
+      await expect(runtime.run(service, command)).rejects.toThrow(
+        `not a service name: ${JSON.stringify(service)}`,
+      );
+    }
+    await expect(
+      runtime.chown('--project-name=x', '/data', { uid: 1000, gid: 1000 }, {}),
+    ).rejects.toThrow('not a service name: "--project-name=x"');
+    expect(calls).toEqual([]);
+    await runtime.run('qbittorrent', command);
+    await runtime.run('svc_1.a-b', command);
+    expect(calls).toHaveLength(2);
+  });
+
   it("reads containers' network mode and start time", async () => {
     const other = 'e'.repeat(64);
     const { exec, calls } = recorder(() =>
@@ -445,6 +469,16 @@ describe('createDockerRuntime', () => {
     }
   });
 
+  it('refuses a container with no project label, which docker prints as "<no value>"', async () => {
+    const { exec } = recorder(() =>
+      ok(`${SONARR_ID} bridge 0001-01-01T00:00:00Z <no value>\n`),
+    );
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    await expect(runtime.inspect([SONARR_ID])).rejects.toThrow(
+      'container d5a2f5c9b82d is not in the Compose project "mediaplane"',
+    );
+  });
+
   it('inspects container IDs only, and asks nothing for none', async () => {
     const { exec, calls } = recorder(() => ok(''));
     const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
@@ -453,6 +487,74 @@ describe('createDockerRuntime', () => {
     );
     expect(await runtime.inspect([])).toEqual([]);
     expect(calls).toEqual([]);
+  });
+
+  it('inspects full container IDs only', async () => {
+    const { exec, calls } = recorder(() => ok(''));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    for (const short of [
+      SONARR_ID.slice(0, 12),
+      SONARR_ID.slice(0, 63),
+      `${SONARR_ID}0`,
+    ]) {
+      await expect(runtime.inspect([short])).rejects.toThrow(
+        `not a container ID: "${short}"`,
+      );
+    }
+    await expect(runtime.inspect([SONARR_ID.toUpperCase()])).rejects.toThrow(
+      'not a container ID',
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses a line that does not have exactly four fields, without printing it', async () => {
+    const lines = [
+      `${SONARR_ID} bridge 2026-10-10T10:00:00Z`,
+      `${SONARR_ID} bridge`,
+      `${SONARR_ID} bridge 2026-10-10T10:00:00Z mediaplane extra-field`,
+      `${SONARR_ID} bridge 2026-10-10T10:00:00Z label with spaces`,
+      `${SONARR_ID}  bridge 2026-10-10T10:00:00Z mediaplane`,
+    ];
+    for (const line of lines) {
+      const { exec } = recorder(() => ok(`${line}\n`));
+      const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+      const failure = await runtime.inspect([SONARR_ID]).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(RuntimeError);
+      expect((failure as Error).message).toBe(
+        'docker container inspect printed a line that is not "<id> <network mode> <started at> <project>"',
+      );
+    }
+  });
+
+  it('refuses an answer that does not cover each requested container exactly once', async () => {
+    const other = 'e'.repeat(64);
+    const line = (id: string) => `${id} bridge 2026-10-10T10:00:00Z mediaplane\n`;
+    const answers: [string, string[]][] = [
+      ['', [SONARR_ID]],
+      [line(SONARR_ID), [SONARR_ID, other]],
+      [line(SONARR_ID) + line(SONARR_ID), [SONARR_ID]],
+      [line(SONARR_ID) + line(other), [SONARR_ID]],
+      [line(SONARR_ID) + line('f'.repeat(64)), [SONARR_ID, other]],
+    ];
+    for (const [stdout, ids] of answers) {
+      const { exec } = recorder(() => ok(stdout));
+      const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+      await expect(runtime.inspect(ids)).rejects.toThrow(
+        /^docker container inspect did not answer once for each of the \d+ containers asked about$/,
+      );
+    }
+  });
+
+  it('asks about a container once, however often it is named', async () => {
+    const { exec, calls } = recorder(() =>
+      ok(`${SONARR_ID} bridge 2026-10-10T10:00:00Z mediaplane\n`),
+    );
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    expect(await runtime.inspect([SONARR_ID, SONARR_ID])).toEqual([
+      { id: SONARR_ID, networkMode: 'bridge', startedAt: '2026-10-10T10:00:00Z' },
+    ]);
+    expect(calls[0]?.args.slice(-1)).toEqual([SONARR_ID]);
+    expect(calls[0]?.args.filter((arg) => arg === SONARR_ID)).toHaveLength(1);
   });
 
   it('explains an inspect docker could not do', async () => {

@@ -93,8 +93,9 @@ export interface Runtime {
    */
   run(service: string, command: OneOffCommand): Promise<ExecResult>;
   /**
-   * Details of the containers `ids`, as `containers()` gives their IDs, in that order.
-   * Throws a `RuntimeError` when docker fails.
+   * Details of the containers `ids` (full IDs, as `containers()` gives them). Match the
+   * answers by `id`, never by position. Throws a `RuntimeError` for anything that isn't a
+   * container ID, for a container outside the managed project, or when docker fails.
    */
   inspect(ids: readonly string[]): Promise<ContainerDetails[]>;
   /**

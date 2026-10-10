@@ -132,6 +132,10 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
   }
 
   async function run(service: string, command: OneOffCommand): Promise<ExecResult> {
+    // A name that starts with a dash would be read as a Compose option, ahead of the service.
+    if (!/^[a-z0-9][a-z0-9_.-]*$/.test(service)) {
+      throw new RuntimeError(`not a service name: ${JSON.stringify(service)}`);
+    }
     const result = await docker(
       'compose run',
       [
@@ -256,25 +260,37 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
     run,
 
     async inspect(ids) {
-      // IDs, never names or options: they come from containers().
-      const bad = ids.find((id) => !/^[0-9a-f]{12,64}$/.test(id));
+      // Full IDs, never names or options: they come from containers(), and `{{.Id}}`
+      // prints all 64 characters, which is what callers match the answers by.
+      const bad = ids.find((id) => !/^[0-9a-f]{64}$/.test(id));
       if (bad !== undefined) {
         throw new RuntimeError(`not a container ID: ${JSON.stringify(bad)}`);
       }
-      if (ids.length === 0) return [];
+      const asked = [...new Set(ids)];
+      if (asked.length === 0) return [];
       const result = await docker('container inspect', [
         'container',
         'inspect',
         '--format',
         '{{.Id}} {{.HostConfig.NetworkMode}} {{.State.StartedAt}} {{index .Config.Labels "com.docker.compose.project"}}',
-        ...ids,
+        ...asked,
       ]);
       if (result.code !== 0) {
         throw new RuntimeError(
           `docker container inspect failed: ${firstLine(result.stderr)}`,
         );
       }
-      return parseDetails(result.stdout, options.project);
+      const details = parseDetails(result.stdout, options.project);
+      // A container that goes unanswered must not read as a container that is fine.
+      if (
+        details.length !== asked.length ||
+        !asked.every((id) => details.filter((answer) => answer.id === id).length === 1)
+      ) {
+        throw new RuntimeError(
+          `docker container inspect did not answer once for each of the ${String(asked.length)} containers asked about`,
+        );
+      }
+      return details;
     },
 
     async chown(service, path, owner, values) {
@@ -396,23 +412,35 @@ export function bindMount(mount: HelperMount): string {
 
 /**
  * `docker container inspect` lines of "<id> <network mode> <started at> <project>". A
- * container of any other Compose project is refused: Mediaplane acts on its own project
- * only (spec §7.2(2)).
+ * line without exactly those four fields is refused, and so is a container of any other
+ * Compose project, or of none (its project is empty): Mediaplane acts on its own project
+ * only (spec §7.2(2)). The errors never repeat a line, which holds the container's label.
  */
 export function parseDetails(stdout: string, project: string): ContainerDetails[] {
   return stdout
     .split('\n')
-    .map((line) => line.trim().split(/\s+/))
-    .flatMap(([id, networkMode, startedAt, owner]) => {
-      if (id === undefined || networkMode === undefined || startedAt === undefined) {
-        return [];
+    .filter((line) => line.trim() !== '')
+    .map((line) => {
+      // The project is the one field that may be empty, so the separators are single
+      // spaces. Docker prints "<no value>" for a container without the label.
+      const match = /^(\S+) (\S+) (\S+) (<no value>|\S*)$/.exec(line);
+      const [, id, networkMode, startedAt, owner] = match ?? [];
+      if (
+        id === undefined ||
+        networkMode === undefined ||
+        startedAt === undefined ||
+        owner === undefined
+      ) {
+        throw new RuntimeError(
+          'docker container inspect printed a line that is not "<id> <network mode> <started at> <project>"',
+        );
       }
       if (owner !== project) {
         throw new RuntimeError(
           `container ${id.slice(0, 12)} is not in the Compose project "${project}"`,
         );
       }
-      return [{ id, networkMode, startedAt }];
+      return { id, networkMode, startedAt };
     });
 }
 
