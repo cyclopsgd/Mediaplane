@@ -62,8 +62,24 @@ async function docker(...args: string[]): Promise<string> {
 
 /** The host port Docker chose for a container's `port` (such as "51820/udp"). */
 async function publishedPort(container: string, port: string): Promise<number> {
-  const [first] = (await docker('port', container, port)).split('\n');
-  return Number(first?.split(':').at(-1));
+  const output = await docker('port', container, port);
+  const [first] = output.split('\n');
+  const published = Number(first?.split(':').at(-1));
+  if (!Number.isInteger(published) || published < 1 || published > 65535) {
+    throw new Error(`docker port ${container} ${port} gave no host port:\n${output}`);
+  }
+  return published;
+}
+
+/**
+ * A removal that must not fail silently: a non-zero exit is an error, unless stderr says
+ * the thing was already gone ("No such container", or "network … not found").
+ */
+async function removeOrIgnoreMissing(...args: string[]): Promise<void> {
+  const result = await nodeExec('docker', args, { cwd: '/', timeoutMs: 120_000 });
+  if (result.code !== 0 && !/No such|not found/.test(result.stderr)) {
+    throw new Error(`docker ${args.slice(0, 2).join(' ')} failed:\n${result.stderr}`);
+  }
 }
 
 async function addressOn(container: string, network: string): Promise<string> {
@@ -97,12 +113,26 @@ export async function startWireGuard(id: string): Promise<WireGuardServer> {
   const remove = async () => {
     if (removed) return;
     removed = true;
-    await nodeExec('docker', ['rm', '-f', '-v', server, echoName], {
-      cwd: '/',
-    });
-    await nodeExec('docker', ['network', 'rm', network], { cwd: '/' });
-    // The server's image writes into its /config as root.
-    await removeAsRoot(dir);
+    // Every removal runs, even when one before it fails; the failures are reported after.
+    const failures: unknown[] = [];
+    for (const step of [
+      () => removeOrIgnoreMissing('rm', '-f', '-v', server, echoName),
+      () => removeOrIgnoreMissing('network', 'rm', network),
+      // The server's image writes into its /config as root.
+      () => removeAsRoot(dir),
+    ]) {
+      try {
+        await step();
+      } catch (failure) {
+        failures.push(failure);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `could not remove all of ${id}'s WireGuard server`,
+      );
+    }
   };
   try {
     const serverKeys = wireguardKeys();
@@ -225,7 +255,15 @@ export async function startWireGuard(id: string): Promise<WireGuardServer> {
       remove,
     };
   } catch (cause) {
-    await remove();
+    try {
+      await remove();
+    } catch (cleanup) {
+      throw new AggregateError(
+        [cause, cleanup],
+        'the WireGuard server failed to start, and cleaning up failed too',
+        { cause: cleanup },
+      );
+    }
     throw cause;
   }
 }
