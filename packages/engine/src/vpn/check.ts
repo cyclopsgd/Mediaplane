@@ -457,16 +457,26 @@ function routeCheck(probe: ProbeOutput, tunnel: string): VpnCheckItem {
 }
 
 /**
- * curl's exit codes that need a server at the other end, so something got out: 18 (a
- * partial body), 35 (a TLS handshake that failed), 52 (an empty reply), 56 (a receive
- * error), 60 (a certificate it can't trust) and 63 (a body over --max-filesize).
+ * curl's exit codes that need a server at the other end, so something got out: 8 (a reply
+ * it can't parse), 16 (HTTP/2 framing), 18 (a partial body), 35 (a TLS handshake that
+ * failed), 52 (an empty reply), 55 (a send error once connected), 56 (a receive error),
+ * 60 (a certificate it can't trust), 63 (a body over --max-filesize) and 92 (an HTTP/2
+ * stream that broke).
  */
-const AFTER_AN_ANSWER: ReadonlySet<number> = new Set([18, 35, 52, 56, 60, 63]);
+const AFTER_AN_ANSWER: ReadonlySet<number> = new Set([
+  8, 16, 18, 35, 52, 55, 56, 60, 63, 92,
+]);
 
 /**
  * curl's message for a timeout once it was connected, whatever it received ("Operation
  * timed out after 2002 milliseconds with 0 bytes received"). One while it resolved or
  * connected says "Resolving timed out" or "Connection timed out".
+ *
+ * An accepted limit: curl 8 does the TLS handshake while it connects, so a TCP connection
+ * that is up but whose handshake stalls also says "Connection timed out", and counts as
+ * no answer. That can only word a `down` as fail-closed, or show a leak through an eth0
+ * route as `down`. Both still exit 1, and neither can give a false pass. Telling them
+ * apart (curl's `-w %{time_connect}`) would need a change to the probe's script.
  */
 const TIMED_OUT_CONNECTED = /Operation timed out after \d+ milliseconds with /;
 

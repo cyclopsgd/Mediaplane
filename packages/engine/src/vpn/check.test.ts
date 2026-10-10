@@ -305,6 +305,15 @@ describe('vpnCheck', () => {
     // server answered, so the tunnel's way out isn't shut.
     await expectUnreadAnswer(63, 'curl: (63) Maximum file size exceeded');
     await expectUnreadAnswer(52, 'curl: (52) Empty reply from server');
+    // A reply curl can't parse (8), HTTP/2 framing (16) or a stream (92) that broke, and a
+    // send that failed once connected (55): each needs a server at the other end.
+    await expectUnreadAnswer(8, 'curl: (8) Weird server reply');
+    await expectUnreadAnswer(16, 'curl: (16) Error in the HTTP2 framing layer');
+    await expectUnreadAnswer(55, 'curl: (55) Send failure: Connection reset by peer');
+    await expectUnreadAnswer(
+      92,
+      'curl: (92) HTTP/2 stream 1 was not closed cleanly: PROTOCOL_ERROR (err 1)',
+    );
   });
 
   it('counts a timeout once curl was connected as an answer, wherever its error line falls', async () => {
