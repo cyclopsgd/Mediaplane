@@ -17,7 +17,7 @@ folder, only its own config folder.
 - **Health check:** `curl -fsS http://localhost:9696/ping`, every 30s (timeout 10s, 5 retries, 60s to start)
 - **Secrets:** `apiKey`: 32 random hex characters, generated once and kept in `state/secrets.json`
 - **API:** on its `web` port, which Mediaplane reaches over the stack's wiring network, with `apiKey` in the `X-Api-Key` header
-- **Managed in the app:** nothing yet
+- **Managed in the app:** `prowlarr.admin`: fields `prowlarr.admin.username`; the secret `password`, checked and never shown
 - **Needs:** nothing
 - **Provides:** `indexer-manager`
 - **Also turns on:** `byparr`, with the default settings
@@ -36,6 +36,18 @@ folder, only its own config folder.
   `Enabled`, or `DisabledForLocalAddresses` when `security.login_on_lan` is `false`. In
   that case, while the web UI is published on your LAN (`network.bind` `lan` or `all`),
   `PROWLARR__SERVER__TRUSTEDNETWORKS` lists your LAN subnet, when Mediaplane knows it.
+- **The shared admin login.** Once Prowlarr runs, `apply` sets the login that
+  `mediaplane credentials` shows, through Prowlarr's API, and checks it by signing in. It
+  is the resource `prowlarr.admin`: its user name is managed, and its password is a secret,
+  which `state/resources.json` names but never holds. Prowlarr needs no restart for
+  it. Mediaplane reaches Prowlarr's API over the stack's wiring network, with its API key.
+- **The names a browser may use, without a login on the LAN.** With
+  `security.login_on_lan: false`, Prowlarr takes only the Host names in
+  `PROWLARR__SERVER__ALLOWEDHOSTS`, and refuses to save its settings without them:
+  Mediaplane lists `prowlarr`, which the other apps and Mediaplane use, and the addresses its
+  web UI is published on. `localhost` and `127.0.0.1` always work. To use another name,
+  such as your host's, set the variable yourself in `apps.prowlarr.env`, keeping `prowlarr` in
+  the list.
 - **Byparr.** Listing Prowlarr also turns on Byparr, the Cloudflare challenge solver,
   unless you list FlareSolverr instead or set `byparr: { enabled: false }`.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its
@@ -48,8 +60,6 @@ to Sonarr and Radarr.
 
 ## Not built yet
 
-- **Slice 3b:** the shared admin login. Until then, `mediaplane credentials` lists
-  Prowlarr with `its login arrives in Slice 3b`.
 - **Slice 5:**
   - the links to Sonarr and Radarr, with full sync;
   - Byparr registered as Prowlarr's indexer proxy, with the tag `cloudflare`. Tag your
@@ -85,17 +95,6 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Known issues
 
-- **No one can sign in yet.** Mediaplane turns the forms login on, but no user exists
-  until Slice 3b creates the shared admin login.
-  - With the default `security.login_on_lan: true`, Prowlarr shows a login page that has
-    no account to sign in to.
-  - With `security.login_on_lan: false`, anyone who reaches Prowlarr from a local address
-    (a private network such as your LAN) gets in without a login.
-  - To get in today, set `security.login_on_lan: false`, run `apply`, and set a user name
-    and password under Settings, General, Security. Then set `login_on_lan` back to
-    `true` and run `apply` again. While `login_on_lan` is `false`, anyone on your network
-    gets in, so do this straight away, or keep `network.bind: localhost` while you do.
-    From Slice 3b, `apply` sets the shared admin login instead.
 - **Set up before Slice 3a.** If Prowlarr first started before Mediaplane wrote its
   `config.xml`, the file has no API key, and `plan` stops with `prowlarr.not-seeded`. To
   fix it, stop Prowlarr, move the file aside, and apply again: Mediaplane writes a new

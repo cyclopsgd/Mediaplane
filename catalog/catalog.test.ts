@@ -55,7 +55,7 @@ describe('catalog', () => {
   it('gives an integration to the apps Mediaplane wires so far', () => {
     expect(
       catalog.filter((app) => app.integration !== undefined).map((app) => app.id),
-    ).toEqual([]);
+    ).toEqual(['prowlarr', 'radarr', 'sonarr']);
   });
 
   describe.each(
@@ -76,6 +76,8 @@ describe('catalog', () => {
         for (const field of resource.fields) expect(field).toMatch(/^[a-z][A-Za-z0-9]*$/);
         // A secret is applied and checked, never compared: something must check it.
         if (resource.secrets.length > 0) expect(typeof resource.verify).toBe('function');
+        // resources.json keeps the fields, and only the secrets' names: none is both.
+        expect(resource.fields.filter((f) => resource.secrets.includes(f))).toEqual([]);
         for (const needed of resource.requires ?? []) expect(addresses).toContain(needed);
       }
       const names = integration.resources.map((r) => r.name);

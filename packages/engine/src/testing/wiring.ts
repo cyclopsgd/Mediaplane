@@ -170,7 +170,7 @@ export async function fakeStackApis(): Promise<{
 export interface FakeSonarrState {
   user: string;
   password: string;
-  /** Its API key: anything else gets 401. */
+  /** Its API key: anything else gets 401. Empty: any key will do. */
   key: string;
   /** false: /ping answers 503, as while it starts. */
   up: boolean;
@@ -188,7 +188,10 @@ export async function fakeSonarr(state: Partial<FakeSonarrState> = {}): Promise<
   addresses: Record<string, string>;
 }> {
   const held: FakeSonarrState = { user: '', password: '', key: '', up: true, ...state };
-  const keyed = (headers: Record<string, unknown>) => headers['x-api-key'] === held.key;
+  const keyed = (headers: Record<string, unknown>) =>
+    held.key === ''
+      ? headers['x-api-key'] !== undefined
+      : headers['x-api-key'] === held.key;
   const app = await fakeHttpApp((request) => {
     const { method, path, headers } = request;
     if (path === '/ping') return { status: held.up ? 200 : 503 };

@@ -1,5 +1,6 @@
 import { defineApp } from '@mediaplane/engine';
 import { servarrApi, servarrConfigFiles, servarrEnv } from '../_shared/servarr';
+import integration from './integration';
 
 export default defineApp({
   id: 'sonarr',
@@ -20,8 +21,9 @@ export default defineApp({
   credentials: [{ step: 'env', var: 'SONARR__AUTH__APIKEY', secret: 'apiKey' }],
   health: { test: ['CMD', 'curl', '-fsS', 'http://localhost:8989/ping'] },
   api: servarrApi('v3'),
+  integration,
   env: (ctx) => servarrEnv('SONARR', ctx),
   configFiles: servarrConfigFiles,
-  login: { comingIn: 'Slice 3b' },
+  login: 'shared',
   experimental: false,
 });

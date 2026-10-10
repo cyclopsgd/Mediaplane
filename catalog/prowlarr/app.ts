@@ -1,5 +1,6 @@
 import { defineApp } from '@mediaplane/engine';
 import { servarrApi, servarrConfigFiles, servarrEnv } from '../_shared/servarr';
+import integration from './integration';
 
 export default defineApp({
   id: 'prowlarr',
@@ -20,9 +21,10 @@ export default defineApp({
   credentials: [{ step: 'env', var: 'PROWLARR__AUTH__APIKEY', secret: 'apiKey' }],
   health: { test: ['CMD', 'curl', '-fsS', 'http://localhost:9696/ping'] },
   api: servarrApi('v1'),
+  integration,
   implies: () => ['byparr'],
   env: (ctx) => servarrEnv('PROWLARR', ctx),
   configFiles: servarrConfigFiles,
-  login: { comingIn: 'Slice 3b' },
+  login: 'shared',
   experimental: false,
 });

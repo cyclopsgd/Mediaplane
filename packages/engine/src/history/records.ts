@@ -14,7 +14,9 @@ export const CHANGE_SCHEMA = 'mediaplane.change/v1';
 const RECORD_ID = /^\d{8}T\d{6}Z-[0-9a-f]{8}$/;
 
 const actionSchema = z.strictObject({
-  step: z.enum(['keys', 'files', 'pull', 'ownership', 'start', 'verify']),
+  step: z.enum(['keys', 'files', 'pull', 'ownership', 'start', 'wire', 'verify']),
+  /** The wire step's actions name the resource ("sonarr.admin"). Added in Slice 3b. */
+  resource: z.string().optional(),
   result: z.enum(['done', 'failed', 'skipped']),
   detail: z.string().optional(),
   error: z.string().optional(),
@@ -44,6 +46,24 @@ export const changeRecordSchema = z.strictObject({
       }),
     ),
     secrets: z.strictObject({ generate: z.array(z.string()) }),
+    /** What the plan said of each managed resource. Added in Slice 3b. */
+    wiring: z
+      .array(
+        z.strictObject({
+          resource: z.string(),
+          action: z.enum([
+            'create',
+            'update',
+            'adopt',
+            'unchanged',
+            'after-start',
+            'unknown',
+          ]),
+          changes: z.array(z.string()).optional(),
+          reason: z.string().optional(),
+        }),
+      )
+      .optional(),
   }),
   actions: z.array(actionSchema),
 });

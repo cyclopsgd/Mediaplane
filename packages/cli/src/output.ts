@@ -143,12 +143,14 @@ const STEP_LABELS: Record<ApplyStep, string> = {
   pull: 'images',
   ownership: 'appdata ownership',
   start: 'containers',
+  wire: 'wiring',
   verify: 'verify',
 };
 
 const SLOW_STEPS: Partial<Record<ApplyStep, string>> = {
   pull: 'Pulling images (the first time can take several minutes)…',
   start: 'Starting containers and waiting until every app is healthy…',
+  wire: 'Wiring the apps…',
 };
 
 /** Progress lines while apply runs. A failure's message comes once, at the end. */
@@ -159,8 +161,28 @@ export function printStep(event: StepEvent, io: Io): void {
     return;
   }
   const { action } = event;
-  const detail = action.detail === undefined ? '' : `: ${action.detail}`;
-  io.stdout(`  ${action.result.padEnd(7)} ${STEP_LABELS[action.step]}${detail}\n`);
+  io.stdout(`  ${action.result.padEnd(7)} ${describeAction(action)}\n`);
+}
+
+/** "wiring sonarr.admin: created", or "files: wrote generated/.env". */
+function describeAction(action: ActionResult): string {
+  const said = action.detail ?? action.error;
+  const what =
+    action.resource === undefined
+      ? STEP_LABELS[action.step]
+      : `${STEP_LABELS[action.step]} ${action.resource}`;
+  return said === undefined ? what : `${what}: ${said}`;
+}
+
+/**
+ * The actions to count in a summary: every step's, except a wire step whose resources
+ * were counted one by one, which would count each failure twice.
+ */
+function tallied(actions: readonly ActionResult[]): ActionResult[] {
+  const byResource = actions.some((a) => a.resource !== undefined);
+  return actions.filter(
+    (a) => !(byResource && a.step === 'wire' && a.resource === undefined),
+  );
 }
 
 /** A step that ran and changed the stack: verify only checks, and NONE_NEEDED did nothing. */
@@ -232,7 +254,7 @@ export function printApply(
       return;
     case 'failed': {
       const tally = (outcome: ActionResult['result']) =>
-        result.actions.filter((a) => a.result === outcome).length;
+        tallied(result.actions).filter((a) => a.result === outcome).length;
       if (result.recordId === undefined && tally('failed') === 0) {
         // Every step worked, so "run apply again" would only say "No changes."
         io.stderr('\nApply finished, but its change record could not be saved.\n');
@@ -256,6 +278,14 @@ function summary(record: ChangeRecord) {
       files: record.plan.files.filter((f) => f.status !== 'unchanged').length,
       containers: record.plan.containers.filter((c) => c.action !== 'unchanged').length,
       secrets: record.plan.secrets.generate.length,
+      // What the wire step changed in the apps; the plan only knew it after the start.
+      wiring: record.actions.filter(
+        (a) =>
+          a.step === 'wire' &&
+          a.resource !== undefined &&
+          a.result === 'done' &&
+          a.detail !== 'unchanged',
+      ).length,
     },
   };
 }
@@ -348,6 +378,7 @@ export function printHistory(
       count(changes.files, 'file', 'written'),
       count(changes.containers, 'container', 'changed'),
       count(changes.secrets, 'secret', 'generated'),
+      count(changes.wiring, 'resource', 'wired'),
     ].filter((part): part is string => part !== undefined);
     io.stdout(
       `${record.id}  ${record.outcome.padEnd(7)}  ${parts.length === 0 ? 'no changes' : parts.join(', ')}\n`,
@@ -376,11 +407,13 @@ export function printRecord(
   if (record.plan.secrets.generate.length > 0) {
     io.stdout(`  secrets generated: ${record.plan.secrets.generate.join(', ')}\n`);
   }
+  for (const change of (record.plan.wiring ?? []).filter(
+    (w) => w.action !== 'unchanged',
+  )) {
+    io.stdout(`${wiringLine(change)}\n`);
+  }
   io.stdout('Steps:\n');
   for (const action of record.actions) {
-    const detail = action.detail ?? action.error;
-    io.stdout(
-      `  ${action.result.padEnd(7)} ${STEP_LABELS[action.step]}${detail === undefined ? '' : `: ${detail}`}\n`,
-    );
+    io.stdout(`  ${action.result.padEnd(7)} ${describeAction(action)}\n`);
   }
 }

@@ -15,6 +15,7 @@ import {
   secretValues,
   withGeneratedSecrets,
   writePrestartFiles,
+  writeResources,
   writeSecretStore,
   type ContainerState,
   type HostRequest,
@@ -86,6 +87,18 @@ async function currentHome(
     const files = await prestartFilesFor(context.stack, store, {}, zeros);
     await writePrestartFiles(home, files);
   }
+  // Sonarr holds the shared login, as resources.json records.
+  const password = store.shared?.adminPassword ?? '';
+  apis.apps.set('sonarr', { user: 'admin', password, up: true });
+  await writeResources(home, {
+    'sonarr.admin': {
+      id: null,
+      name: 'admin',
+      fields: { username: 'admin' },
+      secrets: ['password'],
+      appliedAt: '2026-10-10T12:00:00.000Z',
+    },
+  });
   return home;
 }
 
@@ -266,7 +279,7 @@ describe('mediaplane plan', () => {
     const term = capture();
     expect(await run(['plan', '--home', home], term.io, deps(runtime))).toBe(2);
     expect(term.stdout()).toBe(
-      'Not healthy yet: sonarr (unhealthy)\nWiring:\n  > after start sonarr\nPlan: 1 app to wait for, 1 wiring check after the start.\n',
+      'Not healthy yet: sonarr (unhealthy)\nWiring:\n  > after start sonarr.admin\nPlan: 1 app to wait for, 1 wiring check after the start.\n',
     );
     const json = capture();
     expect(await run(['plan', '--home', home, '--json'], json.io, deps(runtime))).toBe(2);
@@ -523,7 +536,7 @@ describe('mediaplane apply', () => {
     ).toBe(0);
     const json = JSON.parse(term.stdout()) as Record<string, unknown> & {
       plan: { files: Record<string, unknown>[] };
-      actions: { step: string; result: string }[];
+      actions: { step: string; resource?: string; result: string }[];
     };
     expect(json).toMatchObject({
       schema: 'mediaplane.apply/v1',
@@ -538,13 +551,15 @@ describe('mediaplane apply', () => {
       diff: '',
       sensitive: true,
     });
-    expect(json.actions.map((a) => a.result)).toEqual([
-      'done',
-      'done',
-      'done',
-      'done',
-      'done',
-      'done',
+    expect(json.actions.map((a) => [a.step, a.resource ?? '', a.result])).toEqual([
+      ['keys', '', 'done'],
+      ['files', '', 'done'],
+      ['pull', '', 'done'],
+      ['ownership', '', 'done'],
+      ['start', '', 'done'],
+      ['wire', 'sonarr.admin', 'done'],
+      ['wire', '', 'done'],
+      ['verify', '', 'done'],
     ]);
     expectNoSecrets(term.stdout() + term.stderr(), await secretsIn(home));
   });
@@ -595,7 +610,7 @@ describe('mediaplane apply', () => {
     expect(term.stderr()).toContain('error: fake registry unreachable');
     expect(term.stderr()).toContain('hint: check the network connection');
     expect(term.stderr()).toContain(
-      'Apply failed: 2 done, 1 failed, 3 skipped. Run apply again to retry.',
+      'Apply failed: 2 done, 1 failed, 4 skipped. Run apply again to retry.',
     );
   });
 
@@ -641,7 +656,7 @@ describe('mediaplane apply', () => {
     expect(term.stderr()).toContain('error: fake registry unreachable');
     expect(term.stderr()).toContain('error: the change record could not be saved:');
     expect(term.stderr()).toMatch(
-      /\nApply failed: 2 done, 1 failed, 3 skipped\. Run apply again to retry\.\n$/,
+      /\nApply failed: 2 done, 1 failed, 4 skipped\. Run apply again to retry\.\n$/,
     );
   });
 
@@ -805,7 +820,7 @@ describe('mediaplane history', () => {
     const list = capture();
     expect(await run(['history', '--home', home], list.io, deps(docker))).toBe(0);
     expect(list.stdout()).toBe(
-      `${id}  success  5 files written, 4 containers changed, 4 secrets generated\n`,
+      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 1 resource wired\n`,
     );
     const one = capture();
     expect(await run(['history', id, '--home', home], one.io, deps(docker))).toBe(0);
@@ -813,6 +828,7 @@ describe('mediaplane history', () => {
     expect(one.stdout()).toContain(
       '  done    containers: every app is running and healthy\n',
     );
+    expect(one.stdout()).toContain('  done    wiring sonarr.admin: created\n');
   });
 
   it('prints versioned JSON', async () => {

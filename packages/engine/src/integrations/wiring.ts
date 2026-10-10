@@ -290,6 +290,21 @@ export function joinFailure(cause: RuntimeError, env: NodeJS.ProcessEnv): Diagno
   return dockerUnavailable(cause, env);
 }
 
+/**
+ * The error for a state/resources.json that doesn't parse (plan, and apply's wire step),
+ * which Mediaplane never writes over. The file holds no secret, so the message may name
+ * what is wrong in it.
+ */
+export function resourcesInvalid(cause: unknown): Diagnostic {
+  return error(
+    'resources.invalid',
+    cause instanceof Error ? cause.message : String(cause),
+    {
+      hint: `move it aside and run plan again: Mediaplane finds what it made by name, and adopts it (${WIRING_RUNBOOK})`,
+    },
+  );
+}
+
 export interface PlanWiringOptions {
   stack: ResolvedStack;
   current: readonly ContainerState[];

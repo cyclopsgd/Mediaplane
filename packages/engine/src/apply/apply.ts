@@ -10,6 +10,7 @@ import {
   type ApplyStep,
   type ChangeRecord,
 } from '../history/records';
+import { wire, WiringFailed } from '../integrations/wire';
 import { COMPOSE_PATH, COMPOSE_PREV_PATH, ENV_PATH, STACK_PATH } from '../paths';
 import { plan, planStack, type PlanOptions, type PlanResult } from '../plan/plan';
 import { renderEnvFile } from '../render/env';
@@ -75,6 +76,7 @@ const STEP_HINTS: Record<ApplyStep, string> = {
   pull: 'check the network connection and that the image registries are reachable, then run apply again',
   ownership: "the error comes from the app's own image; run apply again to retry",
   start: `run "mediaplane status" to see each app, fix the cause, then run apply again; see ${runbookUrl('app-wont-start')}`,
+  wire: `the apps' own messages are above; fix what they say, then run apply again. See ${runbookUrl('wiring-failed')}`,
   verify: 'run "mediaplane plan" to see what is still different',
 };
 
@@ -170,9 +172,34 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       : fixes.map((f) => `${f.service} → ${String(f.uid)}:${String(f.gid)}`).join(', ');
   });
   await steps.run('start', async () => {
+    // Compose can't recreate the wiring network while another project's container is on
+    // it, so Mediaplane steps off before up, and back on in the wire step (ADR 0011).
+    await runtime.leaveWiring();
     const result = await runtime.up(options.waitSeconds ?? DEFAULT_WAIT_SECONDS, values);
     if (!result.ok) throw new Error(await startFailure(runtime, result.error));
     return 'every app is running and healthy';
+  });
+  await steps.run('wire', async () => {
+    try {
+      const done = await wire({
+        home,
+        stack,
+        store,
+        values,
+        env: options.env,
+        runtime,
+        now,
+        record: (action) => {
+          steps.record(action);
+        },
+        ...(options.wiring === undefined ? {} : { seams: options.wiring }),
+      });
+      return done.length === 0 ? NONE_NEEDED : done.join('; ');
+    } catch (cause) {
+      // Each failure's own message, as well as the step's.
+      if (cause instanceof WiringFailed) steps.diagnostics.push(...cause.diagnostics);
+      throw cause;
+    }
   });
   await steps.run('verify', async () => {
     const after = await plan(options);
@@ -198,6 +225,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       files: shown.files.map(({ path, status }) => ({ path, status })),
       containers: shown.containers,
       secrets: shown.secrets,
+      wiring: shown.wiring,
     },
     actions: steps.actions,
   };
@@ -260,6 +288,11 @@ class Steps {
       this.diagnostics.push(error(`apply.${step}-failed`, message, { hint }));
       this.#finish({ step, result: 'failed', error: message });
     }
+  }
+
+  /** One result inside the step that runs: the wire step's, for each resource. */
+  record(action: ActionResult): void {
+    this.#finish(action);
   }
 
   #finish(action: ActionResult): void {

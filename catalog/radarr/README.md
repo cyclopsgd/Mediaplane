@@ -17,7 +17,7 @@ LinuxServer.io image, unmodified.
 - **Health check:** `curl -fsS http://localhost:7878/ping`, every 30s (timeout 10s, 5 retries, 60s to start)
 - **Secrets:** `apiKey`: 32 random hex characters, generated once and kept in `state/secrets.json`
 - **API:** on its `web` port, which Mediaplane reaches over the stack's wiring network, with `apiKey` in the `X-Api-Key` header
-- **Managed in the app:** nothing yet
+- **Managed in the app:** `radarr.admin`: fields `radarr.admin.username`; the secret `password`, checked and never shown
 - **Needs:** `download-client`
 - **Provides:** `pvr:movies`
 - **Also turns on:** nothing
@@ -36,6 +36,18 @@ LinuxServer.io image, unmodified.
   `Enabled`, or `DisabledForLocalAddresses` when `security.login_on_lan` is `false`. In
   that case, while the web UI is published on your LAN (`network.bind` `lan` or `all`),
   `RADARR__SERVER__TRUSTEDNETWORKS` lists your LAN subnet, when Mediaplane knows it.
+- **The shared admin login.** Once Radarr runs, `apply` sets the login that
+  `mediaplane credentials` shows, through Radarr's API, and checks it by signing in. It
+  is the resource `radarr.admin`: its user name is managed, and its password is a secret,
+  which `state/resources.json` names but never holds. Radarr needs no restart for
+  it. Mediaplane reaches Radarr's API over the stack's wiring network, with its API key.
+- **The names a browser may use, without a login on the LAN.** With
+  `security.login_on_lan: false`, Radarr takes only the Host names in
+  `RADARR__SERVER__ALLOWEDHOSTS`, and refuses to save its settings without them:
+  Mediaplane lists `radarr`, which the other apps and Mediaplane use, and the addresses its
+  web UI is published on. `localhost` and `127.0.0.1` always work. To use another name,
+  such as your host's, set the variable yourself in `apps.radarr.env`, keeping `radarr` in
+  the list.
 - **What it needs.** A download client. Listing Radarr does not turn one on: list
   `qbittorrent` too, or `plan` reports an error.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its
@@ -43,10 +55,8 @@ LinuxServer.io image, unmodified.
 
 ## Not built yet
 
-The wiring arrives in Slices 3b to 7 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
+The rest of the wiring arrives in Slices 3c to 7 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
 
-- **Slice 3b:** the shared admin login. Until then, `mediaplane credentials` lists
-  Radarr with `its login arrives in Slice 3b`.
 - **Slice 3c:** qBittorrent as its download client, and the `/data/media/movies` root
   folder.
 - **Slice 5:** Prowlarr's link to it.
@@ -82,17 +92,6 @@ The wiring arrives in Slices 3b to 7 (see the [roadmap](../../docs/plans/m1-road
 
 ## Known issues
 
-- **No one can sign in yet.** Mediaplane turns the forms login on, but no user exists
-  until Slice 3b creates the shared admin login.
-  - With the default `security.login_on_lan: true`, Radarr shows a login page that has
-    no account to sign in to.
-  - With `security.login_on_lan: false`, anyone who reaches Radarr from a local address
-    (a private network such as your LAN) gets in without a login.
-  - To get in today, set `security.login_on_lan: false`, run `apply`, and set a user name
-    and password under Settings, General, Security. Then set `login_on_lan` back to
-    `true` and run `apply` again. While `login_on_lan` is `false`, anyone on your network
-    gets in, so do this straight away, or keep `network.bind: localhost` while you do.
-    From Slice 3b, `apply` sets the shared admin login instead.
 - **Set up before Slice 3a.** If Radarr first started before Mediaplane wrote its
   `config.xml`, the file has no API key, and `plan` stops with `radarr.not-seeded`. To
   fix it, stop Radarr, move the file aside, and apply again: Mediaplane writes a new

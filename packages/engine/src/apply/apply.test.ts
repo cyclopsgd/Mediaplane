@@ -14,17 +14,19 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppDefinition, Catalog } from '../catalog/types';
 import { listRecords } from '../history/records';
+import { readResources } from '../integrations/resources';
 import {
   COMPOSE_PATH,
   COMPOSE_PREV_PATH,
   ENV_PATH,
   LOCK_PATH,
+  RESOURCES_PATH,
   SECRETS_PATH,
 } from '../paths';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { fakeDocker, fakeProbe } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureApp, fixtureCatalog } from '../testing/fixtures';
-import { WIRED_CATALOG } from '../testing/wiring';
+import { fakeSonarr, WIRED_CATALOG } from '../testing/wiring';
 import { apply, unhealthyServices, type ApplyOptions } from './apply';
 import { tempDir } from '../testing/temp';
 
@@ -162,6 +164,7 @@ describe('apply', () => {
       ['pull', 'done'],
       ['ownership', 'done'],
       ['start', 'done'],
+      ['wire', 'done'],
       ['verify', 'done'],
     ]);
     expect(result.actions[0]?.detail).toBe('generated admin.password, sonarr.apiKey');
@@ -279,6 +282,7 @@ describe('apply', () => {
       ['pull', 'done'],
       ['ownership', 'done'],
       ['start', 'done'],
+      ['wire', 'done'],
       ['verify', 'done'],
     ]);
   });
@@ -307,21 +311,44 @@ describe('apply', () => {
   });
 
   it('names the wiring left after the start, and why what could not be checked was not', async () => {
-    const verifyFailure = async (runtime: (home: string) => Runtime) => {
+    // The wire step reaches a fake Sonarr; what verify finds after it is the runtime's.
+    const verifyFailure = async (
+      runtime: (home: string, addresses: Record<string, string>) => Runtime,
+    ) => {
       const home = await makeHome();
+      const sonarr = await fakeSonarr();
       const result = await apply(
-        options(home, runtime(home), { catalog: WIRED_CATALOG }),
+        options(home, runtime(home, sonarr.addresses), {
+          catalog: WIRED_CATALOG,
+          wiring: sonarr.seams,
+        }),
       );
       expect(result.outcome).toBe('failed');
+      expect(result.actions.find((a) => a.resource === 'sonarr.login')?.result).toBe(
+        'done',
+      );
       return result.diagnostics.find((d) => d.code === 'apply.verify-failed')?.message;
     };
-    // Sonarr runs, but no container is on the wiring network: nothing can ask it.
-    expect(await verifyFailure((home) => fakeDocker(home))).toBe(
+    // Sonarr's container leaves the wiring network once it is wired: verify can't ask it.
+    const leaving = (home: string, addresses: Record<string, string>): Runtime => {
+      const docker = fakeDocker(home, { addresses });
+      let wired = false;
+      return {
+        ...docker,
+        wiringAddresses: async (ids) => {
+          if (wired) return {};
+          const found = await docker.wiringAddresses(ids);
+          wired = Object.keys(found).length > 0;
+          return found;
+        },
+      };
+    };
+    expect(await verifyFailure(leaving)).toBe(
       "changes remain after apply: sonarr.login (unknown: sonarr's container is not on the stack's wiring network, so Mediaplane can't reach it)",
     );
     // Sonarr isn't healthy after the start: its wiring waits for it.
-    const relapsing = (home: string): Runtime => {
-      const docker = fakeDocker(home);
+    const relapsing = (home: string, addresses: Record<string, string>): Runtime => {
+      const docker = fakeDocker(home, { addresses });
       let started = false;
       return {
         ...docker,
@@ -402,6 +429,7 @@ describe('apply', () => {
       ['pull', 'failed'],
       ['ownership', 'skipped'],
       ['start', 'skipped'],
+      ['wire', 'skipped'],
       ['verify', 'skipped'],
     ]);
     expect(result.diagnostics).toContainEqual(
@@ -450,6 +478,7 @@ describe('apply', () => {
       ['pull', 'failed'],
       ['ownership', 'skipped'],
       ['start', 'skipped'],
+      ['wire', 'skipped'],
       ['verify', 'skipped'],
     ]);
     expect(result.diagnostics).toContainEqual(
@@ -485,6 +514,7 @@ describe('apply', () => {
       ['pull', 'done'],
       ['ownership', 'done'],
       ['start', 'done'],
+      ['wire', 'done'],
       ['verify', 'done'],
     ]);
     const failure = result.diagnostics.find((d) => d.code === 'apply.record-failed');
@@ -511,6 +541,7 @@ describe('apply', () => {
       ['pull', 'failed'],
       ['ownership', 'skipped'],
       ['start', 'skipped'],
+      ['wire', 'skipped'],
       ['verify', 'skipped'],
     ]);
     expect(result.diagnostics.map((d) => d.code)).toEqual([
@@ -617,6 +648,7 @@ describe('apply', () => {
       ['pull', 'skipped'],
       ['ownership', 'skipped'],
       ['start', 'skipped'],
+      ['wire', 'skipped'],
       ['verify', 'skipped'],
     ]);
     expect(result.diagnostics).toContainEqual(
@@ -641,6 +673,7 @@ describe('apply', () => {
       ['pull', 'skipped'],
       ['ownership', 'skipped'],
       ['start', 'skipped'],
+      ['wire', 'skipped'],
       ['verify', 'skipped'],
     ]);
     expect(result.diagnostics.find((d) => d.code === 'apply.files-failed')?.hint).toBe(
@@ -1010,6 +1043,7 @@ describe('apply', () => {
       ['pull', 'skipped'],
       ['ownership', 'skipped'],
       ['start', 'skipped'],
+      ['wire', 'skipped'],
       ['verify', 'skipped'],
     ]);
     const failed = result.diagnostics.find((d) => d.code === 'apply.files-failed');
@@ -1034,5 +1068,148 @@ describe('unhealthyServices', () => {
         { ...base, service: 'gluetun', state: 'running', health: '' },
       ]),
     ).toEqual(['byparr (starting)', 'seerr (exited)']);
+  });
+});
+
+describe('apply: the wiring', () => {
+  it('steps off the wiring network for up, wires each app after it, and records it', async () => {
+    const home = await makeHome();
+    const sonarr = await fakeSonarr();
+    const docker = fakeDocker(home, { addresses: sonarr.addresses });
+    const wired = { catalog: WIRED_CATALOG, wiring: sonarr.seams };
+    const first = await apply(options(home, docker, wired));
+    expect(first.outcome).toBe('success');
+    expect(first.plan.wiring).toEqual([
+      { resource: 'sonarr.login', action: 'after-start' },
+    ]);
+    expect(first.actions.map((a) => [a.step, a.resource ?? '', a.result])).toEqual([
+      ['keys', '', 'done'],
+      ['files', '', 'done'],
+      ['pull', '', 'done'],
+      ['ownership', '', 'done'],
+      ['start', '', 'done'],
+      ['wire', 'sonarr.login', 'done'],
+      ['wire', '', 'done'],
+      ['verify', '', 'done'],
+    ]);
+    expect(
+      first.actions.find((a) => a.step === 'wire' && a.resource === undefined)?.detail,
+    ).toBe('sonarr.login created');
+    const leave = docker.calls.indexOf('leave-wiring');
+    expect(leave).toBeGreaterThan(-1);
+    expect(leave).toBeLessThan(docker.calls.indexOf('up'));
+    expect(docker.calls.lastIndexOf('join-wiring')).toBeGreaterThan(
+      docker.calls.indexOf('up'),
+    );
+    expect(sonarr.state.user).toBe('admin');
+    expect(Object.keys(await readResources(home))).toEqual(['sonarr.login']);
+    const [record] = (await listRecords(home)).records;
+    expect(record?.plan.wiring).toEqual([
+      { resource: 'sonarr.login', action: 'after-start' },
+    ]);
+    // Sonarr was sent its key and the password; nothing Mediaplane keeps or shows holds them.
+    const kept = [
+      JSON.stringify(first),
+      JSON.stringify(record),
+      await readFile(join(home, RESOURCES_PATH), 'utf8'),
+    ].join('\n');
+    expect(sonarr.state.password).not.toBe('');
+    for (const secret of [sonarr.state.password, 'ab'.repeat(16)]) {
+      expect(kept).not.toContain(secret);
+    }
+
+    const second = await apply(options(home, docker, wired));
+    expect(second.outcome).toBe('no-changes');
+    expect(second.plan.wiring).toEqual([
+      { resource: 'sonarr.login', action: 'unchanged' },
+    ]);
+  });
+
+  it("fails the wire step with the app's own message, and skips verify", async () => {
+    const home = await makeHome();
+    const sonarr = await fakeSonarr({ key: 'f'.repeat(32) });
+    const docker = fakeDocker(home, { addresses: sonarr.addresses });
+    const result = await apply(
+      options(home, docker, { catalog: WIRED_CATALOG, wiring: sonarr.seams }),
+    );
+    expect(result.outcome).toBe('failed');
+    expect(
+      result.actions.slice(-3).map((a) => [a.step, a.resource ?? '', a.result]),
+    ).toEqual([
+      ['wire', 'sonarr.login', 'failed'],
+      ['wire', '', 'failed'],
+      ['verify', '', 'skipped'],
+    ]);
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      'wire.auth',
+      'apply.wire-failed',
+    ]);
+    expect(result.diagnostics[0]?.message).toContain(
+      "refused Mediaplane's API key (HTTP 401)",
+    );
+    expect(result.diagnostics[1]).toMatchObject({
+      message: 'the wiring failed for sonarr.login',
+      hint: "the apps' own messages are above; fix what they say, then run apply again. See https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md",
+    });
+    // The fake Sonarr repeated the key it refused: neither the result nor the record has it.
+    const { records } = await listRecords(home);
+    expect(JSON.stringify(records)).toContain('Unauthorized: ***');
+    expect(JSON.stringify([result, records])).not.toContain('ab'.repeat(16));
+  });
+});
+
+describe("apply: a resources.json it can't read", () => {
+  const UNREADABLE = '{"schema": "mediaplane.resources/v1", "resources": {';
+
+  async function withUnreadable(home: string): Promise<string> {
+    await mkdir(join(home, 'state'), { recursive: true });
+    const path = join(home, RESOURCES_PATH);
+    await writeFile(path, UNREADABLE);
+    return path;
+  }
+
+  it('stops before changing anything, and leaves the file as it is', async () => {
+    const home = await makeHome();
+    const path = await withUnreadable(home);
+    const sonarr = await fakeSonarr();
+    const docker = fakeDocker(home, { addresses: sonarr.addresses });
+    const result = await apply(
+      options(home, docker, { catalog: WIRED_CATALOG, wiring: sonarr.seams }),
+    );
+    expect(result.outcome).toBe('invalid');
+    expect(result.diagnostics.map((d) => d.code)).toContain('resources.invalid');
+    expect(result.actions).toEqual([]);
+    expect(await readFile(path, 'utf8')).toBe(UNREADABLE);
+    expect(sonarr.app.requests).toEqual([]);
+  });
+
+  it('fails the wire step when it stops parsing during the start, and never writes over it', async () => {
+    const home = await makeHome();
+    const sonarr = await fakeSonarr();
+    const docker = fakeDocker(home, { addresses: sonarr.addresses });
+    let path = '';
+    const breaking: Runtime = {
+      ...docker,
+      up: async (seconds, values) => {
+        path = await withUnreadable(home);
+        return docker.up(seconds, values);
+      },
+    };
+    const result = await apply(
+      options(home, breaking, { catalog: WIRED_CATALOG, wiring: sonarr.seams }),
+    );
+    expect(result.outcome).toBe('failed');
+    expect(
+      result.actions.slice(-2).map((a) => [a.step, a.resource ?? '', a.result]),
+    ).toEqual([
+      ['wire', '', 'failed'],
+      ['verify', '', 'skipped'],
+    ]);
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      'resources.invalid',
+      'apply.wire-failed',
+    ]);
+    expect(await readFile(path, 'utf8')).toBe(UNREADABLE);
+    expect(sonarr.app.requests).toEqual([]);
   });
 });

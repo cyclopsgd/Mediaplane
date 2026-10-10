@@ -22,8 +22,8 @@ import {
   joinFailure,
   knownSecrets,
   planWiring,
+  resourcesInvalid,
   settled,
-  WIRING_RUNBOOK,
   wiringOrder,
   type WiringChange,
   type WiringSeams,
@@ -84,8 +84,6 @@ export interface PlanContext {
   compose: ComposeFile;
   store: SecretStore;
   current: ContainerState[];
-  /** state/resources.json, as plan read it. */
-  known: KnownResources;
 }
 
 /** Everything apply would do, without doing it. Writes nothing. */
@@ -189,22 +187,13 @@ export async function planStack(
   const unhealthy = notYetHealthy(current, containers);
 
   let wiring: WiringChange[] = [];
-  let known: KnownResources = {};
   const order = wiringOrder(stack);
   if (order.length > 0) {
+    let known: KnownResources;
     try {
       known = await readResources(home);
     } catch (cause) {
-      return failed([
-        ...diagnostics,
-        error(
-          'resources.invalid',
-          cause instanceof Error ? cause.message : String(cause),
-          {
-            hint: `move it aside and run plan again: Mediaplane finds what it made by name, and adopts it (${WIRING_RUNBOOK})`,
-          },
-        ),
-      ]);
+      return failed([...diagnostics, resourcesInvalid(cause)]);
     }
     // In memory: the secrets apply would generate, so that a first plan can say what it
     // would set. Apply sets the ones it saves. Read before the join, so that no failure
@@ -260,7 +249,7 @@ export async function planStack(
       wiring,
       diagnostics,
     },
-    context: { stack, compose, store, current, known },
+    context: { stack, compose, store, current },
   };
 }
 
