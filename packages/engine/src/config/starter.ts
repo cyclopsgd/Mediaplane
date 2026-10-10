@@ -6,11 +6,19 @@ export interface StarterAnswers {
   dataPath: string;
   /** Gluetun VPN provider, e.g. "mullvad"; undefined for no VPN. */
   vpnProvider: string | undefined;
+  /** The WireGuard address, for providers that need one; undefined to leave it out. */
+  vpnAddresses: string | undefined;
   loginOnLan: boolean;
   timezone: string;
   /** The user and group the apps run as. */
   user: { uid: number; gid: number };
   bind: 'lan' | 'localhost';
+  /** Your LAN, such as 192.168.1.0/24; undefined to detect it when plan runs. */
+  lanSubnet: string | undefined;
+  /** The shared admin login's user name. */
+  adminUser: string;
+  /** A file in the home with your own admin password; undefined to have one generated. */
+  adminPasswordFile: string | undefined;
 }
 
 /** A YAML scalar for any user-supplied string: JSON strings are valid YAML. */
@@ -34,9 +42,20 @@ export function starterStack(answers: StarterAnswers): string {
       ? '  # localhost keeps the web UIs on this machine; lan publishes them on your network.'
       : "  # lan publishes the web UIs on this machine's private address; localhost keeps them local.",
     `  bind: ${answers.bind}`,
+    ...(answers.lanSubnet === undefined
+      ? []
+      : [`  lan_subnet: ${scalar(answers.lanSubnet)}`]),
     'security:',
     '  # Ask for a login even from your own network.',
     `  login_on_lan: ${String(answers.loginOnLan)}`,
+    'admin:',
+    '  # The login for the web UIs of the apps. "mediaplane credentials" shows it.',
+    `  username: ${scalar(answers.adminUser)}`,
+    ...(answers.adminPasswordFile === undefined
+      ? [
+          '  # Mediaplane generates the password. For your own, add password: { file: … }.',
+        ]
+      : [`  password: { file: ${scalar(answers.adminPasswordFile)} }`]),
     `media_server: ${answers.mediaServer}`,
     ...(answers.mediaServer === 'plex'
       ? ['plex:', '  token: { file: secrets/plex-token }']
@@ -47,6 +66,9 @@ export function starterStack(answers: StarterAnswers): string {
           'vpn:',
           `  provider: ${scalar(vpn)}`,
           '  private_key: { file: secrets/wg.key }',
+          ...(answers.vpnAddresses === undefined
+            ? []
+            : [`  addresses: ${scalar(answers.vpnAddresses)}`]),
         ]),
     'apps:',
     '  sonarr: {}',

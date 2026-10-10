@@ -1,7 +1,8 @@
 import { chmod, mkdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, normalize, resolve } from 'node:path';
 import {
   invokingUser,
+  networkOf,
   parseConfig,
   STACK_PATH,
   starterStack,
@@ -9,17 +10,25 @@ import {
   type HostFacts,
   type StarterAnswers,
 } from '@mediaplane/engine';
-import { formatDiagnostic, printError } from './output';
+import { printDiagnostics, printError } from './output';
 import type { Io } from './run';
 
 export const INIT_JSON_SCHEMA = 'mediaplane.init/v1';
+
+/** Where init suggests you keep your own admin password, inside the home. */
+export const DEFAULT_PASSWORD_FILE = 'secrets/admin-password';
 
 export interface InitOptions {
   home: string;
   mediaServer?: string;
   data?: string;
   vpnProvider?: string;
+  vpnAddresses?: string;
+  bind?: string;
+  lanSubnet?: string;
   loginOnLan: boolean;
+  adminUser?: string;
+  adminPasswordFile?: string;
   timezone: string;
   json?: boolean;
 }
@@ -41,11 +50,7 @@ export async function init(
   const text = starterStack(answers);
   const parsed = parseConfig(text);
   if (!parsed.ok) {
-    if (asJson)
-      printError(parsed.diagnostics.map((d) => d.message).join('; '), { json: true }, io);
-    else
-      for (const diagnostic of parsed.diagnostics)
-        io.stderr(formatDiagnostic(diagnostic));
+    printDiagnostics(parsed.diagnostics, { json: asJson }, io);
     return 1;
   }
   await mkdir(home, { recursive: true });
@@ -69,8 +74,14 @@ export async function init(
     ...(answers.mediaServer === 'plex'
       ? [`Save your Plex token in ${join(secrets, 'plex-token')}.`]
       : []),
+    ...(answers.adminPasswordFile === undefined
+      ? []
+      : [
+          `Put your admin password, at least 12 characters, in ${join(home, answers.adminPasswordFile)}.`,
+        ]),
     `Create ${answers.dataPath} and make sure uid ${String(answers.user.uid)} (gid ${String(answers.user.gid)}) can write to it.`,
     'Run "mediaplane plan" to check everything, then "mediaplane apply".',
+    'Then "mediaplane credentials" shows the admin login and where each app is.',
   ];
   if (asJson) {
     io.stdout(
@@ -79,7 +90,7 @@ export async function init(
     return 0;
   }
   io.stdout(`Wrote ${stackPath}.\n`);
-  if (host.cloud !== undefined) {
+  if (host.cloud !== undefined && answers.bind === 'localhost') {
     io.stdout(
       `This looks like a VM on ${host.cloud}, so the web UIs stay on localhost (network.bind).\n`,
     );
@@ -87,6 +98,8 @@ export async function init(
   io.stdout(`\nNext steps:\n${next.map((step) => `  - ${step}\n`).join('')}`);
   return 0;
 }
+
+type Ask = (question: string) => Promise<string>;
 
 async function gatherAnswers(
   options: InitOptions,
@@ -96,7 +109,13 @@ async function gatherAnswers(
   let mediaServer = options.mediaServer;
   let dataPath = options.data;
   let vpnProvider = options.vpnProvider;
+  let vpnAddresses = options.vpnAddresses;
+  let bind = options.bind;
+  let lanSubnet = options.lanSubnet;
   let loginOnLan = options.loginOnLan;
+  let adminUser = options.adminUser;
+  let adminPasswordFile = options.adminPasswordFile;
+  const defaultBind = host.cloud === undefined ? 'lan' : 'localhost';
   const ask = options.json === true ? undefined : io.ask;
   if (ask !== undefined) {
     mediaServer ??=
@@ -110,10 +129,38 @@ async function gatherAnswers(
       ).trim();
       vpnProvider = answer === '' ? undefined : answer;
     }
+    if (vpnProvider !== undefined && vpnAddresses === undefined) {
+      const answer = (
+        await ask(
+          "Your provider's WireGuard address, if its config file has one, e.g. 10.64.0.2/32 (empty to skip): ",
+        )
+      ).trim();
+      vpnAddresses = answer === '' ? undefined : answer;
+    }
+    bind ??=
+      (
+        await ask(
+          `Publish the web UIs on your LAN, or keep them on this machine? lan or localhost [${defaultBind}]: `,
+        )
+      ).trim() || defaultBind;
+    if (bind === 'lan' && lanSubnet === undefined)
+      lanSubnet = await askLanSubnet(ask, host);
     if (loginOnLan) {
       loginOnLan = !/^n/i.test(
         (await ask('Ask for a login from your own network too? [Y/n] ')).trim(),
       );
+    }
+    adminUser ??= (await ask('Admin user name for the apps [admin]: ')).trim() || 'admin';
+    if (
+      adminPasswordFile === undefined &&
+      /^n/i.test((await ask('Generate the admin password? [Y/n] ')).trim())
+    ) {
+      adminPasswordFile =
+        (
+          await ask(
+            `File holding your password, inside the Mediaplane home [${DEFAULT_PASSWORD_FILE}]: `,
+          )
+        ).trim() || DEFAULT_PASSWORD_FILE;
     }
   }
   if (mediaServer === undefined || dataPath === undefined) {
@@ -122,13 +169,51 @@ async function gatherAnswers(
   if (mediaServer !== 'jellyfin' && mediaServer !== 'plex') {
     return `--media-server must be jellyfin or plex, not "${mediaServer}"`;
   }
+  bind ??= defaultBind;
+  if (bind !== 'lan' && bind !== 'localhost') {
+    return `--bind must be lan or localhost, not "${bind}"`;
+  }
+  if (bind === 'lan' && host.cloud !== undefined && lanSubnet === undefined) {
+    return `this looks like a VM on ${host.cloud}, where bind: lan needs your LAN subnet: add --lan-subnet, or use --bind localhost`;
+  }
+  if (adminPasswordFile !== undefined && !insideHome(adminPasswordFile)) {
+    return `--admin-password-file must be a path inside the Mediaplane home, such as ${DEFAULT_PASSWORD_FILE}`;
+  }
+  // The starter writes the address only in a vpn: block, so say so rather than drop it.
+  if (vpnAddresses !== undefined && vpnProvider === undefined) {
+    return '--vpn-addresses needs --vpn-provider';
+  }
   return {
     mediaServer,
     dataPath,
     vpnProvider,
+    vpnAddresses,
     loginOnLan,
     timezone: options.timezone,
     user: invokingUser(),
-    bind: host.cloud === undefined ? 'lan' : 'localhost',
+    bind,
+    lanSubnet,
+    adminUser: adminUser ?? 'admin',
+    adminPasswordFile,
   };
+}
+
+/**
+ * The LAN subnet: the one this host is on, if there is exactly one and you agree. A cloud
+ * VM's private network is not a LAN, so there you always type it.
+ */
+async function askLanSubnet(ask: Ask, host: HostFacts): Promise<string | undefined> {
+  const seen = [...new Set(host.privateAddresses.map((a) => networkOf(a.cidr)))];
+  const [only] = seen;
+  if (host.cloud === undefined && seen.length === 1 && only !== undefined) {
+    const answer = (await ask(`Your LAN looks like ${only}. Use it? [Y/n] `)).trim();
+    if (!/^n/i.test(answer)) return only;
+  }
+  const typed = (await ask('Your LAN subnet, e.g. 192.168.1.0/24: ')).trim();
+  return typed === '' ? undefined : typed;
+}
+
+/** Whether `path` names a file inside the home, which is all the container sees. */
+function insideHome(path: string): boolean {
+  return !isAbsolute(path) && normalize(path).split('/')[0] !== '..';
 }

@@ -8,6 +8,7 @@ import {
   detectHostFacts,
   helperHostFacts,
   helperProbe,
+  hostFactsOrFailure,
   invokingUser,
   listRecords,
   nodeProbe,
@@ -25,6 +26,7 @@ import { printCredentials } from './credentials';
 import { init, type InitOptions } from './init';
 import {
   printApply,
+  printDiagnostics,
   printError,
   printHistory,
   printPlan,
@@ -327,7 +329,24 @@ export function createProgram(
       '--vpn-provider <name>',
       'Gluetun VPN provider, e.g. mullvad; leave out for no VPN',
     )
+    .option(
+      '--vpn-addresses <cidr>',
+      "your VPN provider's WireGuard address, if its config file has one, e.g. 10.64.0.2/32",
+    )
+    .option(
+      '--bind <where>',
+      'lan or localhost: publish the web UIs on your LAN, or keep them on this machine (default lan, or localhost on a cloud VM)',
+    )
+    .option(
+      '--lan-subnet <cidr>',
+      'your LAN with --bind lan, e.g. 192.168.1.0/24 (default: detected when plan runs)',
+    )
     .option('--no-login-on-lan', "don't ask for a login from your own network")
+    .option('--admin-user <name>', 'the admin user name for the apps (default admin)')
+    .option(
+      '--admin-password-file <path>',
+      'a file inside the home holding your own admin password, at least 12 characters (default: Mediaplane generates one)',
+    )
     .addOption(
       new Option('--timezone <zone>', 'timezone, e.g. Europe/London').default(
         Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -338,7 +357,18 @@ export function createProgram(
     .addHelpText('after', exitCodesHelp('init'))
     .action(async (options: InitOptions) => {
       const runtime = deps.runtime(resolve(options.home), project);
-      setExitCode(await init(options, io, await deps.host(runtime)));
+      // In the image, the host helper looks at the network. As for plan, one that fails
+      // is explained, with its hint, not crashed on.
+      const host = await hostFactsOrFailure(() => deps.host(runtime), {
+        runtime,
+        env: io.env,
+      });
+      if (!host.ok) {
+        printDiagnostics([host.diagnostic], { json: options.json === true }, io);
+        setExitCode(1);
+        return;
+      }
+      setExitCode(await init(options, io, host.host));
     });
 
   // What the host helper container runs (spec §4.2); not for people, so not in --help.

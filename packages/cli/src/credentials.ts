@@ -1,5 +1,5 @@
 import type { AppLogin, CredentialsResult } from '@mediaplane/engine';
-import { formatDiagnostic, printError } from './output';
+import { printDiagnostics, printError } from './output';
 import type { Io } from './run';
 
 export const CREDENTIALS_JSON_SCHEMA = 'mediaplane.credentials/v1';
@@ -17,12 +17,7 @@ export function printCredentials(
   io: Io,
 ): number {
   if (!result.ok) {
-    if (options.json) {
-      printError(result.diagnostics.map((d) => d.message).join('; '), { json: true }, io);
-    } else {
-      for (const diagnostic of result.diagnostics)
-        io.stderr(formatDiagnostic(diagnostic));
-    }
+    printDiagnostics(result.diagnostics, options, io);
     return 1;
   }
   const apps = app === undefined ? result.apps : result.apps.filter((a) => a.app === app);

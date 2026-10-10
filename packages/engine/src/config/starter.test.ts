@@ -7,10 +7,14 @@ const ANSWERS: StarterAnswers = {
   mediaServer: 'jellyfin',
   dataPath: '/srv/data',
   vpnProvider: 'mullvad',
+  vpnAddresses: undefined,
   loginOnLan: true,
   timezone: 'Europe/London',
   user: { uid: 1000, gid: 1000 },
   bind: 'lan',
+  lanSubnet: undefined,
+  adminUser: 'admin',
+  adminPasswordFile: undefined,
 };
 
 function configOf(answers: StarterAnswers) {
@@ -81,6 +85,34 @@ describe('starterStack', () => {
     expect(config.paths.data).toBe('/srv/my data #1');
     expect(config.network.bind).toBe('localhost');
     expect(config.security.login_on_lan).toBe(false);
+  });
+
+  it('writes the admin user, and leaves the password to Mediaplane', () => {
+    const config = configOf(ANSWERS);
+    expect(config.admin).toEqual({ username: 'admin' });
+    expect(starterStack(ANSWERS)).toContain('# Mediaplane generates the password.');
+  });
+
+  it('points at your own password file when you have one', () => {
+    const config = configOf({
+      ...ANSWERS,
+      adminUser: 'media-admin',
+      adminPasswordFile: 'secrets/admin-password',
+    });
+    expect(config.admin).toEqual({
+      username: 'media-admin',
+      password: { file: 'secrets/admin-password' },
+    });
+  });
+
+  it('writes the LAN subnet and the WireGuard address when given', () => {
+    const config = configOf({
+      ...ANSWERS,
+      lanSubnet: '192.168.1.0/24',
+      vpnAddresses: '10.64.0.2/32',
+    });
+    expect(config.network).toEqual({ bind: 'lan', lan_subnet: '192.168.1.0/24' });
+    expect(config.vpn?.addresses).toBe('10.64.0.2/32');
   });
 });
 

@@ -118,15 +118,20 @@ Write a starter stack.yaml and a secrets/ folder (never overwrites).
 mediaplane init [options]
 ```
 
-| Option                  | Description                                                     |
-| ----------------------- | --------------------------------------------------------------- |
-| `--home <dir>`          | Mediaplane home directory (default: "/opt/mediaplane")          |
-| `--media-server <name>` | jellyfin or plex                                                |
-| `--data <path>`         | the data folder for downloads and media (absolute)              |
-| `--vpn-provider <name>` | Gluetun VPN provider, e.g. mullvad; leave out for no VPN        |
-| `--no-login-on-lan`     | don't ask for a login from your own network                     |
-| `--timezone <zone>`     | timezone, e.g. Europe/London (default: this machine's timezone) |
-| `--json`                | print machine-readable JSON                                     |
+| Option                         | Description                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `--home <dir>`                 | Mediaplane home directory (default: "/opt/mediaplane")                                                                    |
+| `--media-server <name>`        | jellyfin or plex                                                                                                          |
+| `--data <path>`                | the data folder for downloads and media (absolute)                                                                        |
+| `--vpn-provider <name>`        | Gluetun VPN provider, e.g. mullvad; leave out for no VPN                                                                  |
+| `--vpn-addresses <cidr>`       | your VPN provider's WireGuard address, if its config file has one, e.g. 10.64.0.2/32                                      |
+| `--bind <where>`               | lan or localhost: publish the web UIs on your LAN, or keep them on this machine (default lan, or localhost on a cloud VM) |
+| `--lan-subnet <cidr>`          | your LAN with --bind lan, e.g. 192.168.1.0/24 (default: detected when plan runs)                                          |
+| `--no-login-on-lan`            | don't ask for a login from your own network                                                                               |
+| `--admin-user <name>`          | the admin user name for the apps (default admin)                                                                          |
+| `--admin-password-file <path>` | a file inside the home holding your own admin password, at least 12 characters (default: Mediaplane generates one)        |
+| `--timezone <zone>`            | timezone, e.g. Europe/London (default: this machine's timezone)                                                           |
+| `--json`                       | print machine-readable JSON                                                                                               |
 
 Exit codes:
 

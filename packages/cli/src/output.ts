@@ -32,6 +32,22 @@ export function formatDiagnostic(diagnostic: Diagnostic): string {
   return `${diagnostic.severity}: ${diagnostic.message}${hint}\n`;
 }
 
+/**
+ * Diagnostics that stopped a command: each as an error line with its hint, or, with
+ * --json, one error envelope that joins their messages.
+ */
+export function printDiagnostics(
+  diagnostics: readonly Diagnostic[],
+  options: { json: boolean },
+  io: Io,
+): void {
+  if (options.json) {
+    printError(diagnostics.map((d) => d.message).join('; '), options, io);
+    return;
+  }
+  for (const diagnostic of diagnostics) io.stderr(formatDiagnostic(diagnostic));
+}
+
 export function printError(message: string, options: { json: boolean }, io: Io): void {
   if (options.json) {
     io.stdout(

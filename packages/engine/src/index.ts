@@ -12,6 +12,7 @@ export * from './catalog/types';
 export * from './host/facts';
 export * from './host/report';
 export * from './host/helper';
+export * from './host/failure';
 export * from './resolver/resolve';
 export * from './render/compose';
 export * from './render/env';
