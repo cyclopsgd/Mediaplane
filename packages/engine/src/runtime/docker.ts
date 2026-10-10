@@ -85,8 +85,12 @@ export interface DockerRuntimeOptions {
 
 /**
  * The ID of the container this process runs in: Docker mounts the container's own
- * hostname file from /var/lib/docker/containers/<id>/, and /proc/self/mountinfo shows
- * where it came from. Undefined outside a Docker container.
+ * hostname file at /etc/hostname, from <data-root>/containers/<id>/hostname, and
+ * /proc/self/mountinfo shows where it came from. Its root field is that path inside the
+ * filesystem it is on: the whole path under a data-root on the root filesystem, or
+ * "/containers/<id>/hostname" when the data-root is a mount of its own. Only the
+ * /etc/hostname mount counts, so no other file that looks like one is taken for it.
+ * Undefined outside a Docker container.
  */
 export async function ownContainerId(
   read: () => Promise<string> = () => readFile('/proc/self/mountinfo', 'utf8'),
@@ -97,7 +101,12 @@ export async function ownContainerId(
   } catch {
     return undefined;
   }
-  return /\/containers\/([0-9a-f]{64})\/hostname /.exec(mounts)?.[1];
+  for (const line of mounts.split('\n')) {
+    const source = /^\d+ \d+ \d+:\d+ (\S+) \/etc\/hostname /.exec(line)?.[1];
+    const id = /\/containers\/([0-9a-f]{64})\/hostname$/.exec(source ?? '')?.[1];
+    if (id !== undefined) return id;
+  }
+  return undefined;
 }
 
 export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
@@ -168,40 +177,68 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
   }
 
   /**
-   * The wiring network: whether it is internal, whether this project's Compose made it
-   * as its wiring network, and the IDs of the containers on it. Undefined when there is
-   * none yet.
+   * The wiring network: its ID, whether it is internal, its driver, whether this
+   * project's Compose made it as its wiring network, and the IDs of the containers on it.
+   * Undefined when there is none yet.
    */
-  async function wiringState(): Promise<
-    { internal: boolean; ours: boolean; members: string[] } | undefined
-  > {
+  async function wiringState(): Promise<WiringNetwork | undefined> {
     const result = await docker('network inspect', [
       'network',
       'inspect',
       '--format',
-      '{{.Internal}} {{index .Labels "com.docker.compose.project"}} {{index .Labels "com.docker.compose.network"}}{{range $id, $c := .Containers}} {{$id}}{{end}}',
+      NETWORK_FORMAT,
       wiringNetwork,
     ]);
     if (result.code !== 0) {
-      // Docker 28 and 29 say "network … not found"; older ones "No such network".
-      if (/not found|No such network/i.test(result.stderr)) return undefined;
+      // Docker 28 and 29 say "network … not found"; older ones "No such network". Another
+      // "not found" (a missing context, say) is a failure, not an absent network.
+      if (/network .*not found|No such network/i.test(result.stderr)) return undefined;
       throw new RuntimeError(
         `docker network inspect failed: ${firstLine(result.stderr)}`,
       );
     }
-    const [internal, project, key, ...members] = result.stdout.trim().split(' ');
-    return {
-      internal: internal === 'true',
-      ours: project === options.project && key === WIRING_NETWORK,
-      members,
-    };
+    return parseWiringNetwork(result.stdout, options.project);
+  }
+
+  /**
+   * `docker container inspect --format` on each of `ids`: refused unless every one is a
+   * full container ID, and unless the answer has one line for each (`parse` has already
+   * refused a container of another project). A container that goes unanswered must not
+   * read as a container that is fine.
+   */
+  async function inspectEach<T extends { id: string }>(
+    ids: readonly string[],
+    format: string,
+    parse: (stdout: string) => T[],
+  ): Promise<T[]> {
+    const asked = fullIds(ids);
+    if (asked.length === 0) return [];
+    const result = await docker('container inspect', [
+      'container',
+      'inspect',
+      '--format',
+      format,
+      ...asked,
+    ]);
+    if (result.code !== 0) {
+      throw new RuntimeError(
+        `docker container inspect failed: ${firstLine(result.stderr)}`,
+      );
+    }
+    const answers = parse(result.stdout);
+    if (
+      answers.length !== asked.length ||
+      !asked.every((id) => answers.filter((answer) => answer.id === id).length === 1)
+    ) {
+      throw new RuntimeError(
+        `docker container inspect did not answer once for each of the ${String(asked.length)} containers asked about`,
+      );
+    }
+    return answers;
   }
 
   async function run(service: string, command: OneOffCommand): Promise<ExecResult> {
-    // A name that starts with a dash would be read as a Compose option, ahead of the service.
-    if (!/^[a-z0-9][a-z0-9_.-]*$/.test(service)) {
-      throw new RuntimeError(`not a service name: ${JSON.stringify(service)}`);
-    }
+    const name = serviceName(service);
     const result = await docker(
       'compose run',
       [
@@ -215,7 +252,7 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
         `${String(command.user.uid)}:${String(command.user.gid)}`,
         '--entrypoint',
         command.entrypoint,
-        service,
+        name,
         ...command.args,
       ],
       { input: command.input, timeoutMs: DOCKER_TIMEOUTS.run },
@@ -325,60 +362,22 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
 
     run,
 
-    async inspect(ids) {
-      const asked = fullIds(ids);
-      if (asked.length === 0) return [];
-      const result = await docker('container inspect', [
-        'container',
-        'inspect',
-        '--format',
+    inspect(ids) {
+      return inspectEach(
+        ids,
         '{{.Id}} {{.HostConfig.NetworkMode}} {{.State.StartedAt}} {{index .Config.Labels "com.docker.compose.project"}}',
-        ...asked,
-      ]);
-      if (result.code !== 0) {
-        throw new RuntimeError(
-          `docker container inspect failed: ${firstLine(result.stderr)}`,
-        );
-      }
-      const details = parseDetails(result.stdout, options.project);
-      // A container that goes unanswered must not read as a container that is fine.
-      if (
-        details.length !== asked.length ||
-        !asked.every((id) => details.filter((answer) => answer.id === id).length === 1)
-      ) {
-        throw new RuntimeError(
-          `docker container inspect did not answer once for each of the ${String(asked.length)} containers asked about`,
-        );
-      }
-      return details;
+        (stdout) => parseDetails(stdout, options.project),
+      );
     },
 
     async wiringAddresses(ids) {
-      const asked = fullIds(ids);
-      if (asked.length === 0) return {};
       // The network's name is the project's, which isManagedProject has checked: no quote
       // can end the template's string early.
-      const result = await docker('container inspect', [
-        'container',
-        'inspect',
-        '--format',
+      const addresses = await inspectEach(
+        ids,
         `{{.Id}} {{with index .NetworkSettings.Networks "${wiringNetwork}"}}{{if .IPAddress}}{{.IPAddress}}{{else}}-{{end}}{{else}}-{{end}} {{index .Config.Labels "com.docker.compose.project"}}`,
-        ...asked,
-      ]);
-      if (result.code !== 0) {
-        throw new RuntimeError(
-          `docker container inspect failed: ${firstLine(result.stderr)}`,
-        );
-      }
-      const addresses = parseAddresses(result.stdout, options.project);
-      if (
-        addresses.length !== asked.length ||
-        !asked.every((id) => addresses.filter((answer) => answer.id === id).length === 1)
-      ) {
-        throw new RuntimeError(
-          `docker container inspect did not answer once for each of the ${String(asked.length)} containers asked about`,
-        );
-      }
+        (stdout) => parseAddresses(stdout, options.project),
+      );
       return Object.fromEntries(
         addresses.flatMap(({ id, address }) =>
           address === undefined ? [] : [[id, address]],
@@ -392,20 +391,25 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
       const network = await wiringState();
       if (network === undefined) return 'no-network';
       // Never a network with a route out, nor one another project made: Mediaplane's
-      // own container would then have a way out, or a way into another stack.
-      if (!network.internal || !network.ours) {
-        throw new RuntimeError(
-          network.ours
-            ? `refusing to join ${wiringNetwork}: it is not internal, so Mediaplane's container would get a route out`
-            : `refusing to join ${wiringNetwork}: it is not the wiring network of the Compose project "${options.project}"`,
-        );
+      // own container would then have a way out, or a way into another stack. Nor one
+      // that isn't a plain bridge: an overlay or a plugin's network has rules of its own.
+      const refusal = !network.ours
+        ? `it is not the wiring network of the Compose project "${options.project}"`
+        : !network.internal
+          ? "it is not internal, so Mediaplane's container would get a route out"
+          : network.driver !== 'bridge'
+            ? `its driver is ${JSON.stringify(network.driver)}, not "bridge"`
+            : undefined;
+      if (refusal !== undefined) {
+        throw new RuntimeError(`refusing to join ${wiringNetwork}: ${refusal}`);
       }
       const self = await requireOwnId();
       if (network.members.includes(self)) return 'already';
+      // By the ID inspect read, not the name: it joins the network it has just checked.
       const joined = await docker('network connect', [
         'network',
         'connect',
-        wiringNetwork,
+        network.id,
         self,
       ]);
       if (joined.code !== 0) {
@@ -418,14 +422,15 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
 
     async leaveWiring() {
       if (!inImage(baseEnv)) return;
+      // A container whose ID Mediaplane can't read can't have joined: joinWiring needs it.
+      const self = await findOwnId();
+      if (self === undefined) return;
       const network = await wiringState();
-      if (network === undefined) return;
-      const self = await requireOwnId();
-      if (!network.members.includes(self)) return;
+      if (network === undefined || !network.members.includes(self)) return;
       const left = await docker('network disconnect', [
         'network',
         'disconnect',
-        wiringNetwork,
+        network.id,
         self,
       ]);
       if (left.code !== 0) {
@@ -436,15 +441,12 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
     },
 
     async stop(services, values) {
-      const bad = services.find((service) => !/^[a-z0-9][a-z0-9_.-]*$/.test(service));
-      if (bad !== undefined) {
-        throw new RuntimeError(`not a service name: ${JSON.stringify(bad)}`);
-      }
-      if (services.length === 0) return { ok: true };
+      const names = services.map((service) => serviceName(service));
+      if (names.length === 0) return { ok: true };
       const result = await docker('compose stop', [
         ...(await projectArgs()),
         'stop',
-        ...services,
+        ...names,
       ]);
       return commandResult(result, values);
     },
@@ -599,6 +601,74 @@ export function parseDetails(stdout: string, project: string): ContainerDetails[
       }
       return { id, networkMode, startedAt };
     });
+}
+
+/**
+ * `service`, if it is a Compose service name. A name that starts with a dash would be read
+ * as a Compose option, ahead of the service.
+ */
+function serviceName(service: string): string {
+  if (!/^[a-z0-9][a-z0-9_.-]*$/.test(service)) {
+    throw new RuntimeError(`not a service name: ${JSON.stringify(service)}`);
+  }
+  return service;
+}
+
+/**
+ * A label's value as `%q` writes it: in quotes, with a Go string's escapes. A missing label
+ * is `""` (a bare `index` prints "<no value>", and `%q` of that is an error). Quoted, a
+ * value with a space in it stays one field.
+ */
+const quotedLabel = (key: string): string =>
+  `{{with index .Labels "${key}"}}{{printf "%q" .}}{{else}}""{{end}}`;
+
+/**
+ * What `docker network inspect --format` prints, in one line: "<id> <internal> <driver>
+ * <project> <network> <member IDs…>", the project and the network being the Compose labels.
+ */
+const NETWORK_FORMAT = `{{.Id}} {{.Internal}} {{.Driver}} ${quotedLabel('com.docker.compose.project')} ${quotedLabel('com.docker.compose.network')}{{range $id, $c := .Containers}} {{$id}}{{end}}`;
+
+interface WiringNetwork {
+  /** The network's full ID, which join and leave act on. */
+  id: string;
+  internal: boolean;
+  driver: string;
+  /** Whether this project's Compose made it as its wiring network (by its labels). */
+  ours: boolean;
+  /** The IDs of the containers on it. */
+  members: string[];
+}
+
+/**
+ * A NETWORK_FORMAT line, refused unless it is exactly that shape: a 64-character ID, true
+ * or false, a driver, the two quoted labels, and then full container IDs and nothing else.
+ */
+function parseWiringNetwork(stdout: string, project: string): WiringNetwork {
+  const match =
+    /^([0-9a-f]{64}) (true|false) (\S+) "((?:[^"\\]|\\.)*)" "((?:[^"\\]|\\.)*)"((?: [0-9a-f]{64})*)$/.exec(
+      stdout.replace(/\r?\n$/, ''),
+    );
+  const [, id, internal, driver, owner, key, members] = match ?? [];
+  if (
+    id === undefined ||
+    internal === undefined ||
+    driver === undefined ||
+    owner === undefined ||
+    key === undefined ||
+    members === undefined
+  ) {
+    throw new RuntimeError(
+      'docker network inspect printed a line that is not "<id> <internal> <driver> <project> <network> <member IDs…>"',
+    );
+  }
+  return {
+    id,
+    internal: internal === 'true',
+    driver,
+    // Compared as written: a label with an escape in it is never the project's name.
+    ours: owner === project && key === WIRING_NETWORK,
+    members: members === '' ? [] : members.trim().split(' '),
+  };
 }
 
 /**

@@ -769,8 +769,30 @@ describe('the wiring network', () => {
   const home = '/opt/mediaplane';
   const SELF = 'c'.repeat(64);
   const IN_IMAGE = { MEDIAPLANE_IMAGE: 'mediaplane:local' };
+  const NETWORK_ID = 'b'.repeat(64);
+  const NETWORK_FORMAT =
+    '{{.Id}} {{.Internal}} {{.Driver}} {{with index .Labels "com.docker.compose.project"}}{{printf "%q" .}}{{else}}""{{end}} {{with index .Labels "com.docker.compose.network"}}{{printf "%q" .}}{{else}}""{{end}}{{range $id, $c := .Containers}} {{$id}}{{end}}';
+  /** What `docker network inspect --format` prints: labels come quoted, as `%q` writes them. */
+  const networkLine = (
+    fields: {
+      id?: string;
+      internal?: string;
+      driver?: string;
+      project?: string;
+      key?: string;
+    },
+    members: string[] = [],
+  ) =>
+    [
+      fields.id ?? NETWORK_ID,
+      fields.internal ?? 'true',
+      fields.driver ?? 'bridge',
+      `"${fields.project ?? 'mediaplane'}"`,
+      `"${fields.key ?? 'wiring'}"`,
+      ...members,
+    ].join(' ');
   const network = (internal: string, project: string, ...members: string[]) =>
-    ok(`${[`${internal} ${project} wiring`, ...members].join(' ')}\n`);
+    ok(`${networkLine({ internal, project }, members)}\n`);
   const runtimeWith = (
     respond: (args: readonly string[]) => ExecResult,
     env: NodeJS.ProcessEnv = IN_IMAGE,
@@ -823,6 +845,17 @@ describe('the wiring network', () => {
     expect(calls).toEqual([]);
   });
 
+  it('says so when docker cannot inspect the containers', async () => {
+    const { runtime } = runtimeWith(() => ({
+      code: 1,
+      stdout: '',
+      stderr: 'Error response from daemon: No such container\n',
+    }));
+    await expect(runtime.wiringAddresses([SONARR_ID])).rejects.toThrow(
+      'docker container inspect failed: Error response from daemon: No such container',
+    );
+  });
+
   it('needs no join run from source, and asks Docker nothing', async () => {
     const { runtime, calls } = runtimeWith(() => ok(''), {});
     expect(await runtime.joinWiring()).toBe('not-needed');
@@ -836,14 +869,9 @@ describe('the wiring network', () => {
     );
     expect(await runtime.joinWiring()).toBe('joined');
     expect(calls.map((call) => call.args)).toEqual([
-      [
-        'network',
-        'inspect',
-        '--format',
-        '{{.Internal}} {{index .Labels "com.docker.compose.project"}} {{index .Labels "com.docker.compose.network"}}{{range $id, $c := .Containers}} {{$id}}{{end}}',
-        'mediaplane_wiring',
-      ],
-      ['network', 'connect', 'mediaplane_wiring', SELF],
+      ['network', 'inspect', '--format', NETWORK_FORMAT, 'mediaplane_wiring'],
+      // By the ID inspect read, so it joins the network it checked.
+      ['network', 'connect', NETWORK_ID, SELF],
     ]);
   });
 
@@ -864,18 +892,86 @@ describe('the wiring network', () => {
     expect(calls.map((call) => call.args[1])).toEqual(['inspect', 'inspect']);
   });
 
-  it("never joins a network with a route out, or another project's", async () => {
+  it('reads the older "No such network" as no network too', async () => {
+    const { runtime } = runtimeWith(() => ({
+      code: 1,
+      stdout: '',
+      stderr: 'Error: No such network: mediaplane_wiring\n',
+    }));
+    expect(await runtime.joinWiring()).toBe('no-network');
+  });
+
+  it('does not read any other failure as no network', async () => {
+    for (const stderr of [
+      'Error response from daemon: permission denied\n',
+      'context "remote" not found\n',
+    ]) {
+      const { runtime } = runtimeWith(() => ({ code: 1, stdout: '', stderr }));
+      await expect(runtime.joinWiring()).rejects.toThrow(
+        `docker network inspect failed: ${stderr.trim()}`,
+      );
+      await expect(runtime.leaveWiring()).rejects.toThrow(
+        'docker network inspect failed',
+      );
+    }
+  });
+
+  it("never joins a network with a route out, another project's, or another driver's", async () => {
     for (const [answer, message] of [
-      [network('false', 'mediaplane'), 'it is not internal'],
-      [network('true', 'mediaplane-other'), 'it is not the wiring network of'],
-      [network('true', '<no value>'), 'it is not the wiring network of'],
+      [networkLine({ internal: 'false' }), 'it is not internal'],
+      [networkLine({ project: 'mediaplane-other' }), 'it is not the wiring network of'],
+      [networkLine({ project: '' }), 'it is not the wiring network of'],
+      // The right project, the wrong network of it.
+      [networkLine({ key: 'default' }), 'it is not the wiring network of'],
+      [networkLine({ key: '' }), 'it is not the wiring network of'],
+      [networkLine({ driver: 'overlay' }), 'its driver is "overlay", not "bridge"'],
     ] as const) {
-      const { runtime, calls } = runtimeWith(() => answer);
+      const { runtime, calls } = runtimeWith(() => ok(`${answer}\n`));
       await expect(runtime.joinWiring()).rejects.toThrow(
         `refusing to join mediaplane_wiring: ${message}`,
       );
       expect(calls.map((call) => call.args[1])).toEqual(['inspect']);
+      expect(calls.some((call) => call.args[1] === 'connect')).toBe(false);
     }
+  });
+
+  it('reads a label with a space as one value: it cannot shift the fields', async () => {
+    // Quoted, "mediaplane wiring" is the project; read by spaces, it would be the project
+    // "mediaplane" and the network "wiring", with the network label as a member.
+    const line = `${NETWORK_ID} true bridge "mediaplane wiring" "${'d'.repeat(64)}"`;
+    const { runtime, calls } = runtimeWith(() => ok(`${line}\n`));
+    await expect(runtime.joinWiring()).rejects.toThrow(
+      'refusing to join mediaplane_wiring: it is not the wiring network of',
+    );
+    expect(calls.map((call) => call.args[1])).toEqual(['inspect']);
+  });
+
+  it('refuses an answer that is not the shape it asked for', async () => {
+    const member = 'd'.repeat(64);
+    const good = networkLine({});
+    for (const answer of [
+      '',
+      `${NETWORK_ID} yes bridge "mediaplane" "wiring"`,
+      `${NETWORK_ID.slice(1)} true bridge "mediaplane" "wiring"`,
+      `${NETWORK_ID} true bridge "mediaplane"`,
+      `${NETWORK_ID} true bridge mediaplane wiring`,
+      `${NETWORK_ID} true bridge "mediaplane" "wiring" sonarr`,
+      `${good} ${member.slice(1)}`,
+      `${good} ${member} junk`,
+      `${good}  ${member}`,
+      `${good}\n${good}`,
+      `${NETWORK_ID} true "mediaplane" "wiring"`,
+    ]) {
+      const { runtime, calls } = runtimeWith(() => ok(`${answer}\n`));
+      await expect(runtime.joinWiring()).rejects.toThrow(
+        'docker network inspect printed a line that is not "<id> <internal> <driver> <project> <network> <member IDs…>"',
+      );
+      expect(calls.some((call) => call.args[1] === 'connect')).toBe(false);
+    }
+    // Quotes and backslashes in a label are `%q`-escaped: still one field, never ours.
+    const escaped = `${NETWORK_ID} true bridge "a \\"b\\" c" "wiring"`;
+    const { runtime } = runtimeWith(() => ok(`${escaped}\n`));
+    await expect(runtime.joinWiring()).rejects.toThrow('it is not the wiring network of');
   });
 
   it("says so when it can't tell which container it runs in", async () => {
@@ -890,6 +986,19 @@ describe('the wiring network', () => {
     await expect(runtime.joinWiring()).rejects.toThrow(
       "Mediaplane can't tell which container it runs in",
     );
+  });
+
+  it('leaves quietly when it cannot tell which container it is: it cannot have joined', async () => {
+    const { exec, calls } = recorder(() => network('true', 'mediaplane', SELF));
+    const runtime = createDockerRuntime({
+      home,
+      project: 'mediaplane',
+      exec,
+      env: IN_IMAGE,
+      ownId: () => Promise.resolve(undefined),
+    });
+    await runtime.leaveWiring();
+    expect(calls.some((call) => call.args[1] === 'disconnect')).toBe(false);
   });
 
   it('explains a join or a leave Docker refused', async () => {
@@ -916,12 +1025,7 @@ describe('the wiring network', () => {
       args[1] === 'inspect' ? network('true', 'mediaplane', SONARR_ID, SELF) : ok(''),
     );
     await on.runtime.leaveWiring();
-    expect(on.calls.at(-1)?.args).toEqual([
-      'network',
-      'disconnect',
-      'mediaplane_wiring',
-      SELF,
-    ]);
+    expect(on.calls.at(-1)?.args).toEqual(['network', 'disconnect', NETWORK_ID, SELF]);
     const off = runtimeWith(() => network('true', 'mediaplane', SONARR_ID));
     await off.runtime.leaveWiring();
     expect(off.calls.map((call) => call.args[1])).toEqual(['inspect']);
@@ -929,13 +1033,44 @@ describe('the wiring network', () => {
 });
 
 describe('ownContainerId', () => {
+  const id = 'c'.repeat(64);
+  const root = '1 0 0:1 / / ro,relatime - overlay overlay rw';
+  const hostname = (source: string, mountPoint = '/etc/hostname') =>
+    `2 1 8:1 ${source} ${mountPoint} rw - ext4 /dev/sda1 rw`;
+  const idIn = (...lines: string[]) =>
+    ownContainerId(() => Promise.resolve(lines.join('\n')));
+
   it("finds the ID in where the container's hostname file comes from", async () => {
-    const id = 'c'.repeat(64);
-    const mountinfo = [
-      '1 0 0:1 / / ro,relatime - overlay overlay rw',
-      `2 1 8:1 /var/lib/docker/containers/${id}/hostname /etc/hostname rw - ext4 /dev/sda1 rw`,
-    ].join('\n');
-    expect(await ownContainerId(() => Promise.resolve(mountinfo))).toBe(id);
+    expect(await idIn(root, hostname(`/var/lib/docker/containers/${id}/hostname`))).toBe(
+      id,
+    );
+  });
+
+  it("finds it under a Docker data-root that isn't the default", async () => {
+    expect(await idIn(root, hostname(`/srv/docker/containers/${id}/hostname`))).toBe(id);
+  });
+
+  it('finds it when the data-root is a partition of its own', async () => {
+    // mountinfo's root field is then relative to that partition.
+    expect(await idIn(root, hostname(`/containers/${id}/hostname`))).toBe(id);
+  });
+
+  it('reads only the /etc/hostname mount, not any file that looks like one', async () => {
+    const other = 'e'.repeat(64);
+    const elsewhere = hostname(`/var/lib/docker/containers/${other}/hostname`, '/mnt/x');
+    expect(await idIn(root, elsewhere)).toBe(undefined);
+    expect(
+      await idIn(
+        root,
+        elsewhere,
+        hostname(`/containers/${id}/hostname`, '/etc/hostname'),
+      ),
+    ).toBe(id);
+    // The right mount point, but a file that is not a container's hostname file.
+    expect(await idIn(root, hostname(`/containers/${id}/hosts`))).toBe(undefined);
+    expect(await idIn(root, hostname(`/data/containers/${id}/hostname.bak`))).toBe(
+      undefined,
+    );
   });
 
   it('finds none outside a container, or when it cannot read the file', async () => {

@@ -19,6 +19,7 @@ interface Service {
   read_only?: boolean;
   cap_drop?: string[];
   security_opt?: string[];
+  sysctls?: Record<string, string>;
   command?: string[];
   environment?: Record<string, string>;
   volumes?: unknown[];
@@ -89,10 +90,12 @@ const ENGINE_CALLS: [string, string][] = [
   ['POST', `${V}/images/create`],
   ['POST', `${V}/networks/create`],
   ['DELETE', `${V}/containers/${ID}`],
-  // Mediaplane's own container on the stack's wiring network (Slice 3b).
+  // Mediaplane's own container on the stack's wiring network (Slice 3b): it reads the
+  // network by name, then joins and leaves it by the ID it read, so it acts on the network
+  // it checked.
   ['GET', `${V}/networks/mediaplane_wiring`],
-  ['POST', `${V}/networks/mediaplane_wiring/connect`],
-  ['POST', `${V}/networks/mediaplane_wiring/disconnect`],
+  ['POST', `${V}/networks/${ID}/connect`],
+  ['POST', `${V}/networks/${ID}/disconnect`],
 ];
 
 /** What Compose also calls when compose.override.yaml adds a network or a named volume. */
@@ -181,6 +184,15 @@ describe('mediaplane.compose.yaml', () => {
       TZ: '${TZ:-UTC}',
     });
     expect(mediaplane.ports).toBeUndefined();
+  });
+
+  it('does not forward packets: on two networks, it must not route between them', () => {
+    // Joined to the stack's wiring network as well as docker-api, Mediaplane would
+    // otherwise be a router for a container on wiring that has NET_ADMIN.
+    expect(mediaplane.sysctls).toEqual({
+      'net.ipv4.ip_forward': '0',
+      'net.ipv6.conf.all.forwarding': '0',
+    });
   });
 
   it('gives only the proxy the Docker socket, read-only, and publishes nothing', () => {

@@ -66,6 +66,12 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ['no-new-privileges:true']
+    # Mediaplane is on docker-api and, to wire the apps, on the stack's wiring network too.
+    # It must never route between them: a container on wiring with NET_ADMIN could
+    # otherwise reach the socket proxy through it.
+    sysctls:
+      net.ipv4.ip_forward: '0'
+      net.ipv6.conf.all.forwarding: '0'
     environment:
       MEDIAPLANE_HOME: '${MEDIAPLANE_HOME:-/opt/mediaplane}'
       MEDIAPLANE_IMAGE: *mediaplane-image
