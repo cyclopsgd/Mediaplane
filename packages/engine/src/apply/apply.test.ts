@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppDefinition, Catalog } from '../catalog/types';
 import { listRecords } from '../history/records';
 import { readResources } from '../integrations/resources';
+import { runbookUrl } from '../runbooks';
 import {
   COMPOSE_PATH,
   COMPOSE_PREV_PATH,
@@ -23,11 +24,12 @@ import {
   RESOURCES_PATH,
   SECRETS_PATH,
 } from '../paths';
+import { WiringRefused } from '../runtime/docker';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { fakeDocker, fakeProbe } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureApp, fixtureCatalog } from '../testing/fixtures';
-import { fakeSonarr, WIRED_CATALOG } from '../testing/wiring';
-import { apply, unhealthyServices, type ApplyOptions } from './apply';
+import { FAKE_LOGIN, fakeSonarr, WIRED_CATALOG } from '../testing/wiring';
+import { apply, unhealthyServices, type ApplyOptions, type StepEvent } from './apply';
 import { tempDir } from '../testing/temp';
 
 // chmod() passes straight through, except where a test refuses it for one path, as the
@@ -75,6 +77,8 @@ const NOT_PRIVATE = (home: string, owner: number) => ({
   message: `cannot make ${join(home, 'appdata')} private (EPERM): it belongs to uid ${String(owner)}, not to the user Mediaplane runs as (uid ${String(owner + 1)})`,
   hint: 'give appdata/ itself, not what is in it, to the user Mediaplane runs as (MEDIAPLANE_UID in its container), then run apply again',
 });
+
+const RUNBOOK = runbookUrl('wiring-failed');
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -1077,7 +1081,11 @@ describe('apply: the wiring', () => {
     const sonarr = await fakeSonarr();
     const docker = fakeDocker(home, { addresses: sonarr.addresses });
     const wired = { catalog: WIRED_CATALOG, wiring: sonarr.seams };
-    const first = await apply(options(home, docker, wired));
+    // Each step's start goes in among Docker's calls, so each call shows its step.
+    const onStep = (event: StepEvent) => {
+      if (event.phase === 'start') docker.calls.push(`step ${event.step}`);
+    };
+    const first = await apply(options(home, docker, { ...wired, onStep }));
     expect(first.outcome).toBe('success');
     expect(first.plan.wiring).toEqual([
       { resource: 'sonarr.login', action: 'after-start' },
@@ -1095,12 +1103,19 @@ describe('apply: the wiring', () => {
     expect(
       first.actions.find((a) => a.step === 'wire' && a.resource === undefined)?.detail,
     ).toBe('sonarr.login created');
-    const leave = docker.calls.indexOf('leave-wiring');
-    expect(leave).toBeGreaterThan(-1);
-    expect(leave).toBeLessThan(docker.calls.indexOf('up'));
-    expect(docker.calls.lastIndexOf('join-wiring')).toBeGreaterThan(
-      docker.calls.indexOf('up'),
-    );
+    const during = (step: string, next: string) =>
+      docker.calls.slice(
+        docker.calls.indexOf(`step ${step}`) + 1,
+        docker.calls.indexOf(`step ${next}`),
+      );
+    // The start step steps off before up; the wire step itself joins again, before it
+    // looks for the apps (verify's plan joins too, but later).
+    expect(during('start', 'wire')).toEqual(['leave-wiring', 'up']);
+    expect(during('wire', 'verify').slice(0, 3)).toEqual([
+      'join-wiring',
+      'containers',
+      'wiring-addresses fake-sonarr',
+    ]);
     expect(sonarr.state.user).toBe('admin');
     expect(Object.keys(await readResources(home))).toEqual(['sonarr.login']);
     const [record] = (await listRecords(home)).records;
@@ -1209,7 +1224,103 @@ describe("apply: a resources.json it can't read", () => {
       'resources.invalid',
       'apply.wire-failed',
     ]);
+    expect(result.diagnostics[1]?.hint).toBe(
+      `state/resources.json was left as it is; fix it or move it aside as the error above says, then run apply again. See ${RUNBOOK}`,
+    );
     expect(await readFile(path, 'utf8')).toBe(UNREADABLE);
     expect(sonarr.app.requests).toEqual([]);
+  });
+});
+
+describe('apply: what a failed wiring says to do', () => {
+  /** apply with a fake Sonarr, and the step's own diagnostic. */
+  async function stepFailure(
+    step: 'start' | 'wire',
+    runtime: (docker: Runtime) => Runtime = (docker) => docker,
+    catalog: Catalog = WIRED_CATALOG,
+    extra: Parameters<typeof fakeDocker>[1] = {},
+  ) {
+    const home = await makeHome();
+    const sonarr = await fakeSonarr();
+    const docker = fakeDocker(home, { addresses: sonarr.addresses, ...extra });
+    const result = await apply(
+      options(home, runtime(docker), { catalog, wiring: sonarr.seams }),
+    );
+    expect(result.outcome).toBe('failed');
+    return {
+      result,
+      docker,
+      sonarr,
+      own: result.diagnostics.find((d) => d.code === `apply.${step}-failed`),
+    };
+  }
+
+  it('says to look for the network, when there is none after the start', async () => {
+    const { own, sonarr } = await stepFailure('wire', undefined, WIRED_CATALOG, {
+      join: 'no-network',
+    });
+    expect(own).toMatchObject({
+      message: 'the stack has no wiring network, though apply has just started it',
+      hint: `run "docker network ls" and look for mediaplane_wiring (<project>_wiring under another project name); a compose.override.yaml that sets the apps' networks can drop it. Then run apply again. See ${RUNBOOK}`,
+    });
+    expect(sonarr.app.requests).toEqual([]);
+  });
+
+  it("says nothing was changed in the apps, when Mediaplane can't reach them", async () => {
+    const { result, own } = await stepFailure('wire', undefined, WIRED_CATALOG, {
+      join: () => {
+        throw new WiringRefused('refusing to join fake_wiring: it is not internal');
+      },
+    });
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      'wire.network',
+      'apply.wire-failed',
+    ]);
+    expect(own?.hint).toBe(
+      `the error above says why Mediaplane couldn't reach the apps; nothing was changed in them. Fix it, then run apply again. See ${RUNBOOK}`,
+    );
+  });
+
+  it("gives the step's own hint for what isn't the app's, after each resource's", async () => {
+    const broken: Catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr'
+        ? {
+            ...def,
+            integration: {
+              after: [],
+              resources: [
+                { ...FAKE_LOGIN, create: () => Promise.reject(new Error('a fake bug')) },
+              ],
+            },
+          }
+        : def,
+    );
+    const { result, own } = await stepFailure('wire', undefined, broken);
+    expect(own).toMatchObject({
+      message: 'a fake bug',
+      hint: `fix what the error says, then run apply again; see ${RUNBOOK}`,
+    });
+    expect(
+      result.actions.slice(-3).map((a) => [a.step, a.resource ?? '', a.result]),
+    ).toEqual([
+      ['wire', 'sonarr.login', 'failed'],
+      ['wire', '', 'failed'],
+      ['verify', '', 'skipped'],
+    ]);
+  });
+
+  it("says why it couldn't step off the network, and starts nothing", async () => {
+    const { own, docker } = await stepFailure('start', (inner) => ({
+      ...inner,
+      leaveWiring: () =>
+        Promise.reject(
+          new RuntimeError('could not leave the wiring network fake_wiring: fake'),
+        ),
+    }));
+    expect(own).toMatchObject({
+      message: 'could not leave the wiring network fake_wiring: fake',
+      hint: `Mediaplane steps off the stack's wiring network before Compose starts the apps, and couldn't, so nothing was started; fix what the error says, then run apply again. See ${RUNBOOK}`,
+    });
+    expect(docker.calls).not.toContain('up');
   });
 });

@@ -1,4 +1,4 @@
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -21,6 +21,8 @@ import { wire, WiringFailed, type WireOptions } from './wire';
 import type { WiringSeams } from './wiring';
 
 const KEY = '0'.repeat(32);
+const RUNBOOK =
+  'https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md';
 const PASSWORD = 'fake-admin-password';
 const AT = new Date('2026-10-10T12:00:00.000Z');
 
@@ -126,6 +128,9 @@ describe('wire', () => {
     const failure = await run.catch((cause: unknown) => cause);
     expect(failure).toBeInstanceOf(WiringFailed);
     expect((failure as WiringFailed).message).toBe('the wiring failed for sonarr.login');
+    expect((failure as WiringFailed).hint).toBe(
+      `the apps' own messages are above; fix what they say, then run apply again. See ${RUNBOOK}`,
+    );
     expect((failure as WiringFailed).diagnostics).toEqual([
       expect.objectContaining({
         severity: 'error',
@@ -170,7 +175,11 @@ describe('wire', () => {
     );
     const sonarr = await fakeSonarr({ key: KEY });
     const { run, actions } = await wireWith(sonarr, { stack: stackOf(wired) });
-    await expect(run).rejects.toBeInstanceOf(WiringFailed);
+    const failure = await run.catch((thrown: unknown) => thrown);
+    // What failed, and apart from it, what was skipped for it.
+    expect((failure as WiringFailed).message).toBe(
+      'the wiring failed for sonarr.first; skipped sonarr.second, which needs what failed',
+    );
     expect(
       actions.map((a) => `${a.resource ?? ''} ${a.result} ${a.detail ?? ''}`),
     ).toEqual([
@@ -180,12 +189,61 @@ describe('wire', () => {
     ]);
   });
 
-  it('says so when there is no wiring network after the start', async () => {
+  it('skips what needs a resource that was skipped, and says which', async () => {
+    const failing: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'first',
+      observe: (api) => api.get('/api/v3/missing', z.unknown()).then(() => undefined),
+    };
+    const needs = (name: string, requires: string[]): ResourceSpec => ({
+      ...FAKE_LOGIN,
+      name,
+      requires,
+    });
+    const wired = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr'
+        ? {
+            ...def,
+            integration: {
+              after: [],
+              resources: [
+                failing,
+                needs('second', ['sonarr.first']),
+                needs('third', ['sonarr.second']),
+              ],
+            },
+          }
+        : def,
+    );
     const sonarr = await fakeSonarr({ key: KEY });
-    const { run } = await wireWith(sonarr, { join: 'no-network' });
-    await expect(run).rejects.toThrow(
+    const { run, actions } = await wireWith(sonarr, { stack: stackOf(wired) });
+    const failure = await run.catch((thrown: unknown) => thrown);
+    expect((failure as WiringFailed).message).toBe(
+      'the wiring failed for sonarr.first; skipped sonarr.second, sonarr.third, which need what failed',
+    );
+    expect(
+      actions.map((a) => `${a.resource ?? ''} ${a.result} ${a.detail ?? ''}`),
+    ).toEqual([
+      'sonarr.first failed ',
+      'sonarr.second skipped sonarr.first failed',
+      'sonarr.third skipped sonarr.second was skipped',
+    ]);
+  });
+
+  it('says so when there is no wiring network after the start, and asks no app', async () => {
+    const sonarr = await fakeSonarr({ key: KEY });
+    const { run, actions } = await wireWith(sonarr, { join: 'no-network' });
+    const failure = await run.catch((thrown: unknown) => thrown);
+    expect(failure).toBeInstanceOf(WiringFailed);
+    expect((failure as WiringFailed).message).toBe(
       'the stack has no wiring network, though apply has just started it',
     );
+    expect((failure as WiringFailed).hint).toBe(
+      `run "docker network ls" and look for mediaplane_wiring (<project>_wiring under another project name); a compose.override.yaml that sets the apps' networks can drop it. Then run apply again. See ${RUNBOOK}`,
+    );
+    expect((failure as WiringFailed).diagnostics).toEqual([]);
+    expect(actions).toEqual([]);
+    expect(sonarr.app.requests).toEqual([]);
   });
 
   it.each([
@@ -209,6 +267,9 @@ describe('wire', () => {
     expect(failure).toBeInstanceOf(WiringFailed);
     expect((failure as WiringFailed).message).toBe(
       'Mediaplane could not reach the apps, so nothing was wired',
+    );
+    expect((failure as WiringFailed).hint).toBe(
+      `the error above says why Mediaplane couldn't reach the apps; nothing was changed in them. Fix it, then run apply again. See ${RUNBOOK}`,
     );
     expect((failure as WiringFailed).diagnostics).toEqual([
       expect.objectContaining({ code, message: cause.message }),
@@ -264,6 +325,9 @@ describe('wire', () => {
     expect((failure as WiringFailed).message).toBe(
       'state/resources.json could not be read, so nothing was wired',
     );
+    expect((failure as WiringFailed).hint).toBe(
+      `state/resources.json was left as it is; fix it or move it aside as the error above says, then run apply again. See ${RUNBOOK}`,
+    );
     expect((failure as WiringFailed).diagnostics).toEqual([
       expect.objectContaining({
         code: 'resources.invalid',
@@ -276,40 +340,133 @@ describe('wire', () => {
     expect(sonarr.app.requests).toEqual([]);
   });
 
-  it("never keeps a managed field that is one of the stack's secrets", async () => {
-    // The user name "admin" is also a value of .env.
-    const sonarr = await fakeSonarr({ key: KEY });
-    const { run, home, actions } = await wireWith(sonarr, {
-      values: { MP_FAKE_TOKEN: 'admin' },
-    });
-    const failure = await run.catch((thrown: unknown) => thrown);
-    expect((failure as WiringFailed).diagnostics).toEqual([
-      expect.objectContaining({ code: 'wire.secret-field' }),
-    ]);
-    expect(actions).toEqual([
-      {
-        step: 'wire',
-        resource: 'sonarr.login',
-        result: 'failed',
-        error:
-          "sonarr.login.user is the same as one of the stack's secrets, so Mediaplane won't keep it in state/resources.json; give it another value",
-      },
-    ]);
-    // Nothing was changed in the app that resources.json couldn't record.
-    expect(sonarr.app.requests.some((r) => r.method === 'PUT')).toBe(false);
-    await expect(stat(join(home, RESOURCES_PATH))).rejects.toThrow();
-  });
+  it.each([
+    ['is', 'admin'],
+    ['holds', 'dmi'],
+  ])(
+    "never keeps a managed field that %s one of the stack's secrets, and sends nothing for it",
+    async (_how, secret) => {
+      // The user name "admin" is, or holds, a value of .env.
+      const sonarr = await fakeSonarr({ key: KEY });
+      const { run, home, actions } = await wireWith(sonarr, {
+        values: { MP_FAKE_TOKEN: secret },
+      });
+      const failure = await run.catch((thrown: unknown) => thrown);
+      expect((failure as WiringFailed).diagnostics).toEqual([
+        expect.objectContaining({ code: 'wire.secret-field' }),
+      ]);
+      expect(actions).toEqual([
+        {
+          step: 'wire',
+          resource: 'sonarr.login',
+          result: 'failed',
+          error:
+            "sonarr.login.user holds one of the stack's secrets, so Mediaplane won't keep it in state/resources.json; give it another value",
+        },
+      ]);
+      // Only the app's own check: the resource was neither looked at nor changed.
+      expect(sonarr.app.requests.map((r) => r.path)).toEqual([
+        '/ping',
+        '/api/v3/system/status',
+      ]);
+      await expect(stat(join(home, RESOURCES_PATH))).rejects.toThrow();
+    },
+  );
 
-  it("throws what isn't the app's failure as it is", async () => {
-    const bug = new Error('a bug in a resource');
-    const broken: ResourceSpec = { ...FAKE_LOGIN, create: () => Promise.reject(bug) };
+  it('keeps only the managed fields in resources.json', async () => {
+    // desired() gives a field the spec doesn't manage: it goes to the app, but isn't kept.
+    const extra: ResourceSpec = {
+      ...FAKE_LOGIN,
+      desired: (ctx) => {
+        const desired = FAKE_LOGIN.desired(ctx);
+        return desired && { ...desired, fields: { ...desired.fields, theme: 'dark' } };
+      },
+    };
     const wired = WIRED_CATALOG.map((def) =>
       def.id === 'sonarr'
-        ? { ...def, integration: { after: [], resources: [broken] } }
+        ? { ...def, integration: { after: [], resources: [extra] } }
         : def,
     );
     const sonarr = await fakeSonarr({ key: KEY });
-    const { run } = await wireWith(sonarr, { stack: stackOf(wired) });
-    await expect(run).rejects.toBe(bug);
+    const { run, home } = await wireWith(sonarr, { stack: stackOf(wired) });
+    expect(await run).toEqual(['sonarr.login created']);
+    expect((await readResources(home))['sonarr.login']?.fields).toEqual({
+      user: 'admin',
+    });
+  });
+
+  /**
+   * Sonarr with three resources: one the app refuses, one it takes, and a third that is
+   * always made anew, with `create`.
+   */
+  function threeResources(create: ResourceSpec['create']) {
+    const refused: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'first',
+      observe: (api) => api.get('/api/v3/missing', z.unknown()).then(() => undefined),
+    };
+    const resources: ResourceSpec[] = [
+      refused,
+      { ...FAKE_LOGIN, name: 'second' },
+      { ...FAKE_LOGIN, name: 'third', observe: () => Promise.resolve(undefined), create },
+    ];
+    return stackOf(
+      WIRED_CATALOG.map((def) =>
+        def.id === 'sonarr' ? { ...def, integration: { after: [], resources } } : def,
+      ),
+    );
+  }
+
+  it("fails the resource an error that isn't the app's hit, and keeps what failed before", async () => {
+    const bug = new Error(`a bug in a resource, near ${PASSWORD}`);
+    const sonarr = await fakeSonarr({ key: KEY });
+    const { run, home, actions } = await wireWith(sonarr, {
+      stack: threeResources(() => Promise.reject(bug)),
+    });
+    const failure = await run.catch((thrown: unknown) => thrown);
+    expect(failure).toBeInstanceOf(WiringFailed);
+    expect((failure as WiringFailed).cause).toBe(bug);
+    expect((failure as WiringFailed).message).toBe('a bug in a resource, near ***');
+    // The step's own hint, for what Mediaplane can't explain.
+    expect((failure as WiringFailed).hint).toBeUndefined();
+    // The refused one's diagnostic is still there.
+    expect((failure as WiringFailed).diagnostics.map((d) => d.code)).toEqual([
+      'wire.rejected',
+    ]);
+    expect(actions.map((a) => `${a.resource ?? ''} ${a.result}`)).toEqual([
+      'sonarr.first failed',
+      'sonarr.second done',
+      'sonarr.third failed',
+    ]);
+    expect(actions[2]?.error).toBe('a bug in a resource, near ***');
+    // Written straight after it was made, before the third failed.
+    expect(Object.keys(await readResources(home))).toEqual(['sonarr.second']);
+  });
+
+  it("fails the resource whose record can't be written, and keeps what failed before", async () => {
+    const home = await tempDir('mediaplane-wire-');
+    const path = join(home, RESOURCES_PATH);
+    const sonarr = await fakeSonarr({ key: KEY });
+    const { run, actions } = await wireWith(sonarr, {
+      home,
+      // Once the second is recorded, a folder takes the file's place: the third's write
+      // fails, as a full disk or a folder this user can't write would make it.
+      stack: threeResources(async (api, desired) => {
+        await rm(path);
+        await mkdir(join(path, 'in-the-way'), { recursive: true });
+        return FAKE_LOGIN.create(api, desired);
+      }),
+    });
+    const failure = await run.catch((thrown: unknown) => thrown);
+    expect((failure as WiringFailed).message).toBe(`cannot write ${path} (EISDIR)`);
+    expect((failure as WiringFailed).diagnostics.map((d) => d.code)).toEqual([
+      'wire.rejected',
+    ]);
+    expect(actions.map((a) => `${a.resource ?? ''} ${a.result}`)).toEqual([
+      'sonarr.first failed',
+      'sonarr.second done',
+      'sonarr.third failed',
+    ]);
+    expect(actions[2]?.error).toBe(`cannot write ${path} (EISDIR)`);
   });
 });

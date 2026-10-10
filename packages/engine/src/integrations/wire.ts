@@ -1,12 +1,14 @@
 import { error, type Diagnostic } from '../diagnostics';
 import { AppApiError, APP_DEADLINE_MS } from '../http/client';
 import type { ActionResult } from '../history/records';
+import { PROJECT_NAME, WIRING_NETWORK } from '../render/compose';
 import type { ResolvedStack } from '../resolver/resolve';
 import { RuntimeError, type Runtime } from '../runtime/types';
 import { adminLogin } from '../secrets/admin';
 import type { SecretStore } from '../secrets/store';
+import { redact } from '../util/redact';
 import { readResources, writeResources, type KnownResources } from './resources';
-import type { DesiredResource, WiringContext } from './types';
+import type { DesiredResource, Fields, ResourceSpec, WiringContext } from './types';
 import {
   checkApp,
   examine,
@@ -41,14 +43,23 @@ export interface WireOptions {
 /** What one wired resource came to, for the step's own detail. */
 const DONE = { create: 'created', update: 'updated', adopt: 'adopted' } as const;
 
+/** What a failed wire step says to do, by what failed. */
+const HINTS = {
+  resources: `the apps' own messages are above; fix what they say, then run apply again. See ${WIRING_RUNBOOK}`,
+  reach: `the error above says why Mediaplane couldn't reach the apps; nothing was changed in them. Fix it, then run apply again. See ${WIRING_RUNBOOK}`,
+  file: `state/resources.json was left as it is; fix it or move it aside as the error above says, then run apply again. See ${WIRING_RUNBOOK}`,
+  noNetwork: `run "docker network ls" and look for ${PROJECT_NAME}_${WIRING_NETWORK} (<project>_${WIRING_NETWORK} under another project name); a compose.override.yaml that sets the apps' networks can drop it. Then run apply again. See ${WIRING_RUNBOOK}`,
+} as const;
+
 /**
  * Apply's wire step (spec §5 step 10): for each app with an API, in order, wait until it
  * is ready and check its key, then make each of its resources what the stack wants, and
  * record it in state/resources.json at once. It reads that file again first, under
  * apply's lock, and never writes over one it can't read. A resource that fails doesn't
- * stop the others; one that `requires` it is skipped (spec §5.1). Each result goes to
- * `record`. Returns what it changed, as "<resource> <what>"; throws WiringFailed when
- * anything failed.
+ * stop the others; one that `requires` it is skipped (spec §5.1). An error that isn't an
+ * app's fails the resource it hit, and stops the step. Each result goes to `record`.
+ * Returns what it changed, as "<resource> <what>"; throws WiringFailed when anything
+ * failed.
  */
 export async function wire(options: WireOptions): Promise<string[]> {
   const { stack, runtime } = options;
@@ -61,6 +72,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
     throw new WiringFailed(
       'state/resources.json could not be read, so nothing was wired',
       [resourcesInvalid(cause)],
+      { hint: HINTS.file },
     );
   }
   const admin = await adminLogin(stack.config, options.home, options.store, options.env);
@@ -68,8 +80,10 @@ export async function wire(options: WireOptions): Promise<string[]> {
   let reached: Map<string, ReachedApp>;
   try {
     if ((await runtime.joinWiring()) === 'no-network') {
-      throw new Error(
+      throw new WiringFailed(
         'the stack has no wiring network, though apply has just started it',
+        [],
+        { hint: HINTS.noNetwork },
       );
     }
     reached = await reachApps(order, {
@@ -83,17 +97,30 @@ export async function wire(options: WireOptions): Promise<string[]> {
   } catch (cause) {
     // A join Mediaplane refuses, or Docker failing, says what to do as plan says it.
     if (!(cause instanceof RuntimeError)) throw cause;
-    throw new WiringFailed('Mediaplane could not reach the apps, so nothing was wired', [
-      joinFailure(cause, options.env),
-    ]);
+    throw new WiringFailed(
+      'Mediaplane could not reach the apps, so nothing was wired',
+      [joinFailure(cause, options.env)],
+      { hint: HINTS.reach },
+    );
   }
   const diagnostics: Diagnostic[] = [];
-  const failed = new Set<string>();
+  const failed: string[] = [];
+  const skipped: string[] = [];
   const done: string[] = [];
   const fail = (resource: string, message: string, code: string) => {
-    failed.add(resource);
+    failed.push(resource);
     diagnostics.push(error(code, message, { hint: `see ${WIRING_RUNBOOK}` }));
     options.record({ step: 'wire', resource, result: 'failed', error: message });
+  };
+  // An error that isn't the app's, such as a resources.json that can't be written, or a
+  // bug: what it hit fails, and the step stops with it, keeping what failed before.
+  const stop = (resources: readonly string[], cause: unknown): WiringFailed => {
+    const said = cause instanceof Error ? cause.message : String(cause);
+    const message = redact(said, Object.fromEntries(secrets.map((s, i) => [i, s])));
+    for (const resource of resources) {
+      options.record({ step: 'wire', resource, result: 'failed', error: message });
+    }
+    return new WiringFailed(message, diagnostics, { cause });
   };
   for (const app of order) {
     const ctx: WiringContext = { stack, app, admin };
@@ -107,38 +134,42 @@ export async function wire(options: WireOptions): Promise<string[]> {
     try {
       await checkApp(client);
     } catch (cause) {
-      if (!(cause instanceof AppApiError)) throw cause;
+      if (!(cause instanceof AppApiError)) throw stop(targets, cause);
       for (const target of targets) fail(target, cause.message, `wire.${cause.kind}`);
       continue;
     }
     for (const spec of wantedResources(ctx)) {
       const address = resourceAddress(app, spec);
-      const blocker = (spec.requires ?? []).find((needed) => failed.has(needed));
+      const blocker = (spec.requires ?? []).find(
+        (needed) => failed.includes(needed) || skipped.includes(needed),
+      );
       if (blocker !== undefined) {
-        failed.add(address);
+        skipped.push(address);
         options.record({
           step: 'wire',
           resource: address,
           result: 'skipped',
-          detail: `${blocker} failed`,
+          detail: `${blocker} ${failed.includes(blocker) ? 'failed' : 'was skipped'}`,
         });
+        continue;
+      }
+      // Wanted, and desired() is pure: only a guard.
+      const desired = spec.desired(ctx);
+      if (desired === undefined) continue;
+      // Before anything is sent: resources.json keeps the managed fields, and holds no
+      // secret, so a field that holds one leaves the resource as it is.
+      const secretField = fieldHoldingSecret(spec, desired, secrets);
+      if (secretField !== undefined) {
+        fail(
+          address,
+          `${address}.${secretField} holds one of the stack's secrets, so Mediaplane won't keep it in state/resources.json; give it another value`,
+          'wire.secret-field',
+        );
         continue;
       }
       try {
         const result = await examine(spec, client.api, ctx, known[address]);
-        // Wanted, and desired() is pure: only a guard.
         if (result === undefined) continue;
-        // resources.json holds no secret: a managed field that is one is never kept, so
-        // the resource is left as it is.
-        const secretField = secretFieldOf(result.desired, secrets);
-        if (secretField !== undefined) {
-          fail(
-            address,
-            `${address}.${secretField} is the same as one of the stack's secrets, so Mediaplane won't keep it in state/resources.json; give it another value`,
-            'wire.secret-field',
-          );
-          continue;
-        }
         if (result.action === 'unchanged') {
           options.record({
             step: 'wire',
@@ -158,7 +189,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
         known[address] = {
           id,
           name: result.desired.name,
-          fields: { ...result.desired.fields },
+          fields: managedFields(spec, result.desired),
           secrets: [...spec.secrets],
           appliedAt: options.now().toISOString(),
         };
@@ -170,35 +201,68 @@ export async function wire(options: WireOptions): Promise<string[]> {
         done.push(`${address} ${what}`);
         options.record({ step: 'wire', resource: address, result: 'done', detail: what });
       } catch (cause) {
-        if (!(cause instanceof AppApiError)) throw cause;
+        if (!(cause instanceof AppApiError)) throw stop([address], cause);
         fail(address, cause.message, `wire.${cause.kind}`);
       }
     }
   }
-  if (failed.size > 0) {
-    const names = [...failed].join(', ');
-    throw new WiringFailed(`the wiring failed for ${names}`, diagnostics);
+  if (failed.length > 0) {
+    throw new WiringFailed(failureMessage(failed, skipped), diagnostics, {
+      hint: HINTS.resources,
+    });
   }
   return done;
 }
 
-/** The first managed field whose value is one of `secrets`, by name. */
-function secretFieldOf(
+/** "the wiring failed for a; skipped b, which needs what failed". */
+function failureMessage(failed: readonly string[], skipped: readonly string[]): string {
+  const because =
+    skipped.length === 0
+      ? ''
+      : `; skipped ${skipped.join(', ')}, which ${skipped.length === 1 ? 'needs' : 'need'} what failed`;
+  return `the wiring failed for ${failed.join(', ')}${because}`;
+}
+
+/** The first of the managed fields whose value holds one of `secrets`, by name. */
+function fieldHoldingSecret(
+  spec: ResourceSpec,
   desired: DesiredResource,
   secrets: readonly string[],
 ): string | undefined {
-  return Object.keys(desired.fields).find((field) =>
-    secrets.includes(String(desired.fields[field])),
+  return spec.fields.find((field) => {
+    const value = desired.fields[field];
+    return (
+      value !== undefined && secrets.some((secret) => String(value).includes(secret))
+    );
+  });
+}
+
+/** The managed fields only: what resources.json keeps. */
+function managedFields(spec: ResourceSpec, desired: DesiredResource): Fields {
+  return Object.fromEntries(
+    spec.fields.flatMap((field) => {
+      const value = desired.fields[field];
+      return value === undefined ? [] : [[field, value]];
+    }),
   );
 }
 
-/** Some of the wiring failed: each failure's diagnostic, from the app's own message. */
+/**
+ * Some of the wiring failed: each failure's diagnostic, from the app's own message, and
+ * what to do when the wire step's own hint doesn't fit.
+ */
 export class WiringFailed extends Error {
   override readonly name = 'WiringFailed';
   readonly diagnostics: Diagnostic[];
+  readonly hint: string | undefined;
 
-  constructor(message: string, diagnostics: Diagnostic[]) {
-    super(message);
-    this.diagnostics = diagnostics;
+  constructor(
+    message: string,
+    diagnostics: readonly Diagnostic[],
+    options: { hint?: string; cause?: unknown } = {},
+  ) {
+    super(message, 'cause' in options ? { cause: options.cause } : undefined);
+    this.diagnostics = [...diagnostics];
+    this.hint = options.hint;
   }
 }

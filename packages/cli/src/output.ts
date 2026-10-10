@@ -153,7 +153,10 @@ const SLOW_STEPS: Partial<Record<ApplyStep, string>> = {
   wire: 'Wiring the apps…',
 };
 
-/** Progress lines while apply runs. A failure's message comes once, at the end. */
+/**
+ * Progress lines while apply runs. A failed step's message comes once, at the end, with
+ * what to do; a resource's (the wire step's) shows on its own line, as it comes.
+ */
 export function printStep(event: StepEvent, io: Io): void {
   if (event.phase === 'start') {
     const note = SLOW_STEPS[event.step];
@@ -161,12 +164,16 @@ export function printStep(event: StepEvent, io: Io): void {
     return;
   }
   const { action } = event;
-  io.stdout(`  ${action.result.padEnd(7)} ${describeAction(action)}\n`);
+  const shown = action.resource !== undefined;
+  io.stdout(`  ${action.result.padEnd(7)} ${describeAction(action, shown)}\n`);
 }
 
-/** "wiring sonarr.admin: created", or "files: wrote generated/.env". */
-function describeAction(action: ActionResult): string {
-  const said = action.detail ?? action.error;
+/**
+ * "wiring sonarr.admin: created", or "files: wrote generated/.env"; with `withError`, a
+ * failure's message where there is no detail.
+ */
+function describeAction(action: ActionResult, withError = true): string {
+  const said = action.detail ?? (withError ? action.error : undefined);
   const what =
     action.resource === undefined
       ? STEP_LABELS[action.step]
@@ -175,20 +182,32 @@ function describeAction(action: ActionResult): string {
 }
 
 /**
- * The actions to count in a summary: every step's, except a wire step whose resources
- * were counted one by one, which would count each failure twice.
+ * The actions to count in a summary: every step's, except the wire step's own result
+ * once its resources were counted one by one, which would count each failure twice. A
+ * wire step that failed where none of its resources did still counts.
  */
 function tallied(actions: readonly ActionResult[]): ActionResult[] {
-  const byResource = actions.some((a) => a.resource !== undefined);
+  const resources = actions.filter((a) => a.step === 'wire' && a.resource !== undefined);
+  const resourceFailed = resources.some((a) => a.result === 'failed');
   return actions.filter(
-    (a) => !(byResource && a.step === 'wire' && a.resource === undefined),
+    (a) =>
+      a.step !== 'wire' ||
+      a.resource !== undefined ||
+      resources.length === 0 ||
+      (a.result === 'failed' && !resourceFailed),
   );
 }
 
-/** A step that ran and changed the stack: verify only checks, and NONE_NEEDED did nothing. */
+/**
+ * An action that changed the stack: verify only checks, NONE_NEEDED did nothing, and an
+ * `unchanged` resource was left as it was.
+ */
 function changedSomething(action: ActionResult): boolean {
   return (
-    action.result === 'done' && action.step !== 'verify' && action.detail !== NONE_NEEDED
+    action.result === 'done' &&
+    action.step !== 'verify' &&
+    action.detail !== NONE_NEEDED &&
+    action.detail !== 'unchanged'
   );
 }
 

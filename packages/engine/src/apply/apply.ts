@@ -17,7 +17,12 @@ import { renderEnvFile } from '../render/env';
 import { runbookUrl } from '../runbooks';
 import { prestartFilesFor } from '../render/prestart';
 import { composeToYaml } from '../render/yaml';
-import type { CommandResult, ContainerState, Runtime } from '../runtime/types';
+import {
+  RuntimeError,
+  type CommandResult,
+  type ContainerState,
+  type Runtime,
+} from '../runtime/types';
 import { withGeneratedSecrets, type RandomBytes } from '../secrets/generate';
 import { writeSecretStore } from '../secrets/store';
 import { secretValues } from '../secrets/values';
@@ -76,7 +81,7 @@ const STEP_HINTS: Record<ApplyStep, string> = {
   pull: 'check the network connection and that the image registries are reachable, then run apply again',
   ownership: "the error comes from the app's own image; run apply again to retry",
   start: `run "mediaplane status" to see each app, fix the cause, then run apply again; see ${runbookUrl('app-wont-start')}`,
-  wire: `the apps' own messages are above; fix what they say, then run apply again. See ${runbookUrl('wiring-failed')}`,
+  wire: `fix what the error says, then run apply again; see ${runbookUrl('wiring-failed')}`,
   verify: 'run "mediaplane plan" to see what is still different',
 };
 
@@ -174,7 +179,12 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
   await steps.run('start', async () => {
     // Compose can't recreate the wiring network while another project's container is on
     // it, so Mediaplane steps off before up, and back on in the wire step (ADR 0011).
-    await runtime.leaveWiring();
+    try {
+      await runtime.leaveWiring();
+    } catch (cause) {
+      if (!(cause instanceof RuntimeError)) throw cause;
+      throw new LeaveFailed(cause.message, { cause });
+    }
     const result = await runtime.up(options.waitSeconds ?? DEFAULT_WAIT_SECONDS, values);
     if (!result.ok) throw new Error(await startFailure(runtime, result.error));
     return 'every app is running and healthy';
@@ -283,8 +293,7 @@ class Steps {
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       // An error that knows its own cause says what to do better than the step's hint.
-      const hint =
-        cause instanceof AppdataNotPrivateError ? cause.hint : STEP_HINTS[step];
+      const hint = ownHint(cause) ?? STEP_HINTS[step];
       this.diagnostics.push(error(`apply.${step}-failed`, message, { hint }));
       this.#finish({ step, result: 'failed', error: message });
     }
@@ -299,6 +308,20 @@ class Steps {
     this.actions.push(action);
     this.#onStep?.({ step: action.step, phase: 'end', action });
   }
+}
+
+/** Mediaplane couldn't step off the wiring network before up, so nothing was started. */
+class LeaveFailed extends Error {
+  override readonly name = 'LeaveFailed';
+  readonly hint = `Mediaplane steps off the stack's wiring network before Compose starts the apps, and couldn't, so nothing was started; fix what the error says, then run apply again. See ${runbookUrl('wiring-failed')}`;
+}
+
+/** What an error that knows its own cause says to do, if it does. */
+function ownHint(cause: unknown): string | undefined {
+  if (cause instanceof AppdataNotPrivateError || cause instanceof LeaveFailed) {
+    return cause.hint;
+  }
+  return cause instanceof WiringFailed ? cause.hint : undefined;
 }
 
 /** Services that are not running, or whose health check hasn't passed. */
