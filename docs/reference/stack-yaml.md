@@ -37,7 +37,7 @@ Each field shows its type, then `required` or its default, if it has one.
 - `vpn` (object): The VPN that qBittorrent's traffic goes through, by way of Gluetun. Needed while apps.qbittorrent.vpn is true.
 - `vpn.provider` (string; required): The VPN provider, by its Gluetun name, such as mullvad.
 - `vpn.private_key` (secret reference; required): Your WireGuard private key, as a secret reference.
-- `vpn.addresses` (string): The WireGuard address, for providers that need one, such as Mullvad. Other Gluetun settings go in apps.gluetun.env.
+- `vpn.addresses` (string): The WireGuard address, for providers that need one, such as Mullvad: the Address line of your provider's WireGuard file, such as 10.64.0.2/32. Several go comma-separated, without spaces. Other Gluetun settings go in apps.gluetun.env.
 - `apps` (object; default `{}`): The apps to run, by id. Listing an app runs it, unless it sets enabled: false. The media server that media_server names runs without being listed, and no other media server can be enabled. Apps also bring along the apps they need, such as Gluetun for qBittorrent.
 - `overrides` (map of name → string, number or boolean; default `{}`): Keep mine values, by \<app>.\<resource>.\<field>. Not used yet: drift detection arrives in Slice 4.
 - `managed_by` (`mediaplane` or `external`; default `mediaplane`): external: Mediaplane never writes this file, for when automation such as Ansible owns it. Today only init writes it, and init never overwrites. Matters from Slice 4.

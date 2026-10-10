@@ -171,12 +171,12 @@ async function gatherAnswers(
       return '--vpn-addresses needs --vpn-provider';
     }
     if (vpnProvider !== undefined && vpnAddresses === undefined) {
-      const answer = (
-        await ask(
-          "Your provider's WireGuard address, if its config file has one, e.g. 10.64.0.2/32 (empty to skip): ",
-        )
-      ).trim();
-      vpnAddresses = answer === '' ? undefined : answer;
+      vpnAddresses = await askUntil<string | undefined>(
+        ask,
+        io,
+        "Your provider's WireGuard address, if its config file has one, e.g. 10.64.0.2/32 (empty to skip): ",
+        (answer) => (answer === '' ? { value: undefined } : addressesCheck(answer)),
+      );
     }
     bind ??= await askUntil(
       ask,
@@ -285,6 +285,9 @@ function readFlags(
     ...(options.data === undefined ? {} : { dataPath: options.data }),
     ...(options.adminUser === undefined ? {} : { adminUser: options.adminUser }),
     ...(options.lanSubnet === undefined ? {} : { lanSubnet: options.lanSubnet }),
+    ...(options.vpnAddresses === undefined
+      ? {}
+      : { vpnProvider: ANY_PROVIDER, vpnAddresses: options.vpnAddresses }),
   });
   if (diagnostic !== undefined) return diagnostic.message;
   // With the bind known, so is whether the subnet fits this host. When a terminal asks for
@@ -341,6 +344,14 @@ const BASELINE: StarterAnswers = {
 function schemaDiagnostic(change: Partial<StarterAnswers>): Diagnostic | undefined {
   const parsed = parseConfig(starterStack({ ...BASELINE, ...change }));
   return parsed.ok ? undefined : parsed.diagnostics[0];
+}
+
+/** A provider for checking a WireGuard address: the starter writes it only in a vpn: block. */
+const ANY_PROVIDER = 'custom';
+
+/** The schema's verdict on a typed WireGuard address. */
+function addressesCheck(answer: string): Check<string> {
+  return schemaCheck({ vpnProvider: ANY_PROVIDER, vpnAddresses: answer }, answer);
 }
 
 /** The schema's verdict on one typed answer, as a sentence about that answer. */

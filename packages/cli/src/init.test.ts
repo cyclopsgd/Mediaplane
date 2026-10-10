@@ -246,6 +246,27 @@ describe('mediaplane init', () => {
     );
   });
 
+  it('asks again for a WireGuard address the schema rejects', async () => {
+    const home = await newHome();
+    const term = capture([
+      'jellyfin',
+      '/srv/data',
+      'mullvad',
+      '10.64.0.2',
+      '10.64.0.2/32,fd00::2/128',
+      'localhost',
+      'admin',
+      'y',
+    ]);
+    expect(await run(['init', '--home', home], term.io, deps())).toBe(0);
+    expect(term.stderr()).toBe(
+      'That must be one or more addresses with their prefix length, separated by commas without spaces, such as 10.64.0.2/32 or 10.64.0.2/32,fd00::2/128.\n',
+    );
+    expect((await stackIn(home)).vpn).toMatchObject({
+      addresses: '10.64.0.2/32,fd00::2/128',
+    });
+  });
+
   it('lets you type the LAN subnet when the one it sees is not it', async () => {
     const home = await newHome();
     const term = capture(['jellyfin', '/srv/data', '', 'lan', 'n', '192.168.0.0/16']);
@@ -565,6 +586,10 @@ describe('mediaplane init', () => {
       'network.bind is "lan", but none of this host\'s private addresses (192.168.1.10) is inside 10.10.0.0/16; give --lan-subnet a subnet this host is on, or use --bind localhost',
     ],
     [['--vpn-addresses', '10.64.0.2/32'], '--vpn-addresses needs --vpn-provider'],
+    [
+      ['--vpn-provider', 'mullvad', '--vpn-addresses', '10.64.0.2'],
+      'vpn.addresses: must be one or more addresses with their prefix length',
+    ],
   ];
 
   it.each(REFUSALS)('refuses %j, and writes nothing', async (extra, message) => {

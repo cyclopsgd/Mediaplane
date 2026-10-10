@@ -214,9 +214,8 @@
           "description": "Your WireGuard private key, as a secret reference."
         },
         "addresses": {
-          "description": "The WireGuard address, for providers that need one, such as Mullvad. Other Gluetun settings go in apps.gluetun.env.",
-          "type": "string",
-          "minLength": 1
+          "description": "The WireGuard address, for providers that need one, such as Mullvad: the Address line of your provider's WireGuard file, such as 10.64.0.2/32. Several go comma-separated, without spaces. Other Gluetun settings go in apps.gluetun.env.",
+          "type": "string"
         }
       },
       "required": ["provider", "private_key"],

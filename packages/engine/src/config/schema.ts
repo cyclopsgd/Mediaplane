@@ -1,3 +1,4 @@
+import { isIPv6 } from 'node:net';
 import { z } from 'zod';
 import { isPrivateSubnet } from '../host/facts';
 import { compare } from '../util/sort';
@@ -13,6 +14,29 @@ const ADMIN_USERNAME = /^[A-Za-z0-9._-]{3,32}$/;
 
 function isIpv4Cidr(value: string): boolean {
   return IPV4_CIDR.test(value);
+}
+
+/**
+ * An IPv6 address with a prefix length of 0 to 128, such as fd00::1/128. Node takes a
+ * zone (fe80::1%eth0) as part of an address; Gluetun doesn't, so neither does this.
+ */
+function isIpv6Cidr(value: string): boolean {
+  const slash = value.lastIndexOf('/');
+  const prefix = value.slice(slash + 1);
+  return (
+    slash > 0 &&
+    !value.includes('%') &&
+    /^(?:\d|[1-9]\d|1[01]\d|12[0-8])$/.test(prefix) &&
+    isIPv6(value.slice(0, slash))
+  );
+}
+
+/**
+ * Gluetun's WIREGUARD_ADDRESSES: one or more IPv4 or IPv6 addresses with their prefix
+ * length, separated by commas without spaces, as a provider's config file gives them.
+ */
+export function isWireguardAddresses(value: string): boolean {
+  return value.split(',').every((part) => isIpv4Cidr(part) || isIpv6Cidr(part));
 }
 /** `<app>.<resource>` or `<app>.<resource>.<field>`; field names are camelCase. */
 const OVERRIDE_KEY = /^[a-z0-9-]+(?:\.[A-Za-z0-9_]+){1,2}$/;
@@ -223,10 +247,13 @@ const stackShape = {
       ),
       addresses: z
         .string()
-        .min(1)
+        .refine(
+          isWireguardAddresses,
+          'must be one or more addresses with their prefix length, separated by commas without spaces, such as 10.64.0.2/32 or 10.64.0.2/32,fd00::2/128',
+        )
         .optional()
         .describe(
-          'The WireGuard address, for providers that need one, such as Mullvad. Other Gluetun settings go in apps.gluetun.env.',
+          "The WireGuard address, for providers that need one, such as Mullvad: the Address line of your provider's WireGuard file, such as 10.64.0.2/32. Several go comma-separated, without spaces. Other Gluetun settings go in apps.gluetun.env.",
         ),
     })
     .optional()

@@ -299,6 +299,33 @@ describe('parseConfig', () => {
     ).toHaveLength(1);
   });
 
+  it('takes vpn.addresses as comma-separated IPv4 or IPv6 addresses with a prefix', () => {
+    const vpn = (addresses: string) =>
+      `${MINIMAL}vpn:\n  provider: mullvad\n  private_key: { file: secrets/wg.key }\n  addresses: "${addresses}"\n`;
+    for (const good of ['10.64.0.2/32', 'fd00::2/128', '10.64.0.2/32,fd00::2/128']) {
+      expect(parseConfig(vpn(good)).ok, good).toBe(true);
+    }
+    for (const bad of [
+      '',
+      '10.64.0.2',
+      '10.64.0.256/32',
+      '10.64.0.2/33',
+      'fd00::2/129',
+      '10.64.0.2/32, fd00::2/128',
+      '10.64.0.2/32,',
+      'fe80::1%eth0/64',
+      'mullvad',
+    ]) {
+      const diagnostics = diagnosticsOf(vpn(bad));
+      expect(diagnostics, bad).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        code: 'config.invalid',
+        path: 'vpn.addresses',
+      });
+      expect(diagnostics[0]?.message).toContain('separated by commas without spaces');
+    }
+  });
+
   it('rejects data paths containing ":"', () => {
     const [diagnostic] = diagnosticsOf(MINIMAL.replace('/srv/data', '/srv/data:/x'));
     expect(diagnostic).toMatchObject({ code: 'config.invalid', path: 'paths.data' });
