@@ -78,7 +78,11 @@ export interface AppApiOptions {
   port: number;
   endpoint: Endpoint;
   key?: { scheme: 'x-api-key' | 'bearer'; value: string };
-  /** Every secret value an answer could hold, replaced with *** in every message. */
+  /**
+   * Every secret value an answer could hold, replaced with *** in every message, in the
+   * forms an app may echo it in (as it is, JSON-escaped, percent-encoded, form-encoded,
+   * HTML-escaped). The client adds the key it sends and the password it signs in with.
+   */
   secrets: readonly string[];
   timeoutMs?: number;
   maxBytes?: number;
@@ -117,6 +121,8 @@ interface Call {
   body?: { type: string; text: string };
   /** Without the API key. */
   anonymous?: boolean;
+  /** Secrets this call sends, which the options don't list: a sign-in's password. */
+  secrets?: readonly string[];
 }
 
 interface Answer {
@@ -140,6 +146,12 @@ const NOT_SENT = new Set([
 const CUT_OFF = new Set(['ECONNRESET', 'EPIPE', 'ECONNABORTED']);
 
 /**
+ * The least an attempt may take near the deadline, in ms: a request needs a moment to
+ * connect, and an app that answers in that moment shouldn't be missed by a hair.
+ */
+const MIN_ATTEMPT_MS = 250;
+
+/**
  * A client for one app's API. It goes straight to the container, through an agent of its
  * own: Node's global agent can send requests through a proxy from the environment
  * (NODE_USE_ENV_PROXY), which would hand the proxy the API key. It sends
@@ -157,16 +169,26 @@ export function createAppApi(options: AppApiOptions): AppApi {
         new Promise((done) => {
           setTimeout(done, ms);
         })),
-    now: options.retry?.now ?? Date.now,
+    // A clock that only moves forward: a change of the system's time can't cut a wait short.
+    now: options.retry?.now ?? (() => performance.now()),
     random: options.retry?.random ?? Math.random,
   };
   const agent = new Agent({ keepAlive: false });
   const host = `${options.service}:${String(options.port)}`;
   const where = `http://${host} (${options.endpoint.host})`;
-  const clean = (text: string) => redact(text, toValues(options.secrets));
+  // What the client sends is redacted whether or not the caller listed it.
+  const sent = options.key === undefined ? [] : [options.key.value];
+  const cleanAlways = redactor([...options.secrets, ...sent]);
 
-  /** One attempt. Any status is an answer; a failed connection throws. */
-  function attempt(call: Call): Promise<Answer> {
+  /** Redacts `call`'s messages: the options' secrets, and the ones this call sends. */
+  function cleanFor(call: Call): (text: string) => string {
+    return call.secrets === undefined
+      ? cleanAlways
+      : redactor([...options.secrets, ...sent, ...call.secrets]);
+  }
+
+  /** One attempt, of at most `limitMs`. Any status is an answer; a failed connection throws. */
+  function attempt(call: Call, limitMs: number): Promise<Answer> {
     return new Promise<Answer>((resolve, reject) => {
       const headers: Record<string, string> = {
         Host: host,
@@ -184,48 +206,60 @@ export function createAppApi(options: AppApiOptions): AppApi {
         headers['Content-Type'] = call.body.type;
         headers['Content-Length'] = String(Buffer.byteLength(call.body.text));
       }
-      const req = request(
-        {
-          agent,
-          host: options.endpoint.host,
-          port: options.endpoint.port,
-          method: call.method,
-          path: call.path,
-          headers,
-          signal: AbortSignal.timeout(timeoutMs),
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          let size = 0;
-          res.on('data', (chunk: Buffer) => {
-            size += chunk.length;
-            if (size > maxBytes) {
-              res.destroy();
-              reject(
-                failure(call, `answered more than ${sizeOf(maxBytes)}`, {
-                  kind: 'protocol',
-                }),
-              );
-              return;
-            }
-            chunks.push(chunk);
-          });
-          res.on('end', () => {
-            resolve({
-              status: res.statusCode ?? 0,
-              location: res.headers.location,
-              body: Buffer.concat(chunks).toString('utf8'),
+      try {
+        const req = request(
+          {
+            agent,
+            host: options.endpoint.host,
+            port: options.endpoint.port,
+            method: call.method,
+            path: call.path,
+            headers,
+            signal: AbortSignal.timeout(limitMs),
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            let size = 0;
+            res.on('data', (chunk: Buffer) => {
+              size += chunk.length;
+              if (size > maxBytes) {
+                res.destroy();
+                reject(
+                  failure(call, `answered more than ${sizeOf(maxBytes)}`, {
+                    kind: 'protocol',
+                  }),
+                );
+                return;
+              }
+              chunks.push(chunk);
             });
-          });
-          res.on('error', (cause) => {
-            reject(connectionFailure(call, cause));
-          });
-        },
-      );
-      req.on('error', (cause) => {
-        reject(connectionFailure(call, cause));
-      });
-      req.end(call.body?.text);
+            res.on('end', () => {
+              resolve({
+                status: res.statusCode ?? 0,
+                location: res.headers.location,
+                body: Buffer.concat(chunks).toString('utf8'),
+              });
+            });
+            res.on('error', (cause) => {
+              reject(connectionFailure(call, cause, limitMs));
+            });
+          },
+        );
+        req.on('error', (cause) => {
+          reject(connectionFailure(call, cause, limitMs));
+        });
+        req.end(call.body?.text);
+      } catch (cause) {
+        // Node refuses to build the request: a header value with a newline in it, a path
+        // with a space. Its message could quote the value; the code says enough.
+        reject(
+          failure(
+            call,
+            `could not make the request (${codeOf(cause) ?? 'no reason given'})`,
+            { kind: 'protocol' },
+          ),
+        );
+      }
     });
   }
 
@@ -237,19 +271,25 @@ export function createAppApi(options: AppApiOptions): AppApi {
   ): AppApiError {
     const path = call.path.split('?')[0] ?? call.path;
     return new AppApiError(
-      clean(`${options.name} at ${where} ${what} (${call.method} ${path})`),
+      cleanFor(call)(`${options.name} at ${where} ${what} (${call.method} ${path})`),
       details,
     );
   }
 
-  function connectionFailure(call: Call, cause: unknown): AppApiError {
+  function connectionFailure(call: Call, cause: unknown, limitMs: number): AppApiError {
     if (cause instanceof Error && cause.name === 'AbortError') {
-      return failure(call, `did not answer within ${String(timeoutMs / 1000)} s`, {
+      return failure(call, `did not answer within ${seconds(limitMs)} s`, {
         kind: 'timeout',
         transient: true,
       });
     }
     const code = codeOf(cause) ?? '';
+    // Node's parser refused what the app sent (HPE_INVALID_CONSTANT…): not HTTP.
+    if (code.startsWith('HPE_')) {
+      return failure(call, `answered something that is not valid HTTP (${code})`, {
+        kind: 'protocol',
+      });
+    }
     if (NOT_SENT.has(code)) {
       return failure(call, `could not be reached (${code})`, {
         kind: 'unreachable',
@@ -267,6 +307,7 @@ export function createAppApi(options: AppApiOptions): AppApi {
   /** What a non-2xx answer means. */
   function statusFailure(call: Call, answer: Answer): AppApiError {
     const { status } = answer;
+    const clean = cleanFor(call);
     const said = appMessage(answer.body, clean);
     const message = said === undefined ? '' : `: ${clean(said)}`;
     if (status === 401 || status === 403) {
@@ -310,9 +351,15 @@ export function createAppApi(options: AppApiOptions): AppApi {
   ): Promise<Answer> {
     const start = retry.now();
     for (let tries = 0; ; tries++) {
+      // An attempt may take as long as one request may, but no longer than the time left
+      // before the deadline: an app that hangs costs a caller its deadline, not a
+      // deadline and a timeout.
+      const left = retry.deadlineMs - (retry.now() - start);
+      // A whole number of ms: the clock's are fractions, and a timer takes none.
+      const limitMs = Math.ceil(Math.min(timeoutMs, Math.max(MIN_ATTEMPT_MS, left)));
       let error: AppApiError;
       try {
-        const answer = await attempt(call);
+        const answer = await attempt(call, limitMs);
         if (ok(answer)) return answer;
         error = statusFailure(call, answer);
       } catch (cause) {
@@ -392,6 +439,8 @@ export function createAppApi(options: AppApiOptions): AppApi {
         method: 'POST',
         path,
         anonymous: true,
+        // The field named `password` is a secret of this call, listed or not.
+        secrets: fields.password === undefined ? [] : [fields.password],
         body: {
           type: 'application/x-www-form-urlencoded',
           text: new URLSearchParams(fields).toString(),
@@ -399,7 +448,11 @@ export function createAppApi(options: AppApiOptions): AppApi {
       };
       // A redirect is the answer: where it leads says whether the login worked.
       const answer = await send(call, true, (a) => a.status >= 200 && a.status < 400);
-      return { status: answer.status, location: answer.location };
+      return {
+        status: answer.status,
+        location:
+          answer.location === undefined ? undefined : cleanFor(call)(answer.location),
+      };
     },
     async ready(path) {
       // A starting app answers 503, or nothing: both are tried again until the deadline.
@@ -416,6 +469,47 @@ function toValues(secrets: readonly string[]): Record<string, string> {
   return Object.fromEntries(secrets.map((value, index) => [String(index), value]));
 }
 
+/**
+ * The ways an app may write `secret` into an answer: as it is; JSON-escaped (inside a
+ * quoted string, or a message that quotes JSON); percent-encoded (a URL, a Location);
+ * form-encoded (a sign-in form echoed back; a space is a +); and HTML-escaped (an error
+ * page), where apps differ in how they write a quote (`&quot;`, `&#34;`, or as it is) and
+ * an apostrophe (`&#39;`, `&#x27;`, or as it is).
+ */
+function formsOf(secret: string): string[] {
+  const html = (quote: string, apostrophe: string) =>
+    secret
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', quote)
+      .replaceAll("'", apostrophe);
+  return [
+    secret,
+    JSON.stringify(secret).slice(1, -1),
+    encodeURIComponent(secret),
+    new URLSearchParams({ v: secret }).toString().slice(2),
+    ...['&quot;', '&#34;', '"'].flatMap((quote) =>
+      ['&#39;', '&#x27;', "'"].map((apostrophe) => html(quote, apostrophe)),
+    ),
+  ];
+}
+
+/**
+ * Replaces every secret, in each of its forms, with ***. The forms are deduplicated, and
+ * `redact` replaces the longest first, so a form that holds another is replaced whole.
+ */
+function redactor(secrets: readonly string[]): (text: string) => string {
+  const forms = [...new Set(secrets.filter((s) => s !== '').flatMap(formsOf))];
+  const values = toValues(forms);
+  return (text) => redact(text, values);
+}
+
+/** Milliseconds as seconds, to the hundredth: 50 is 0.05, 30000 is 30. */
+function seconds(ms: number): string {
+  return String(Math.round(ms / 10) / 100);
+}
+
 /** A size limit, in the largest unit it is a whole number of: MiB, KiB, or bytes. */
 function sizeOf(bytes: number): string {
   if (bytes % (1024 * 1024) === 0) return `${String(bytes / 1024 / 1024)} MiB`;
@@ -430,37 +524,57 @@ const MESSAGE_LIMIT = 200;
  * What an app said about a refused request, from its answer's body: Servarr's validation
  * list (`[{propertyName, errorMessage}]`), ASP.NET's problem details (`{title, errors}`),
  * a `{message}`, or plain text such as qBittorrent's or an HTML error page. Never an
- * `attemptedValue`, which can be the very password that was refused. `clean` takes the
- * secrets out before anything else changes the text, and again after the HTML is taken
- * out and the whitespace collapsed (which can put one together), and always before the
- * cut: a secret that the whitespace collapse changed, or the cut split, would no longer
- * be found whole. Callers redact the whole message once more.
+ * `attemptedValue`, which can be the very password that was refused.
+ *
+ * The order is what keeps a secret out. JSON is parsed from the body as it came, since
+ * redacting it first can break it (a password ending in a backslash, found at the end of
+ * `fake-pw\"`); only text is redacted before it is read. Then `clean` takes the secrets
+ * out of the message once it is read (a JSON escape such as \" appears only once parsed),
+ * the control characters become spaces, the whitespace collapses, `clean` runs again
+ * (taking the HTML out and collapsing can put a secret together), and only then is the
+ * message cut, which would split a secret still in it. Callers redact the whole message
+ * once more.
  */
 export function appMessage(
   body: string,
-  clean: (text: string) => string = (text) => text,
+  clean: (text: string) => string,
 ): string | undefined {
-  const raw = clean(body);
-  let message: string | undefined;
-  try {
-    const said = jsonMessage(JSON.parse(raw) as unknown);
-    // A secret written with JSON escapes, such as \" or \u0020, appears only once parsed.
-    message = said === undefined ? undefined : clean(said);
-  } catch {
-    // Taking the tags out and collapsing the whitespace can put a secret together that
-    // the raw text didn't hold: redact again before the cut can split it.
-    message = clean(
-      raw
-        .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
-        .replace(/<[^>]*>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim(),
-    );
-  }
-  if (message === undefined || message === '') return undefined;
+  const json = parseJson(body);
+  const said =
+    json === undefined
+      ? clean(body)
+          .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+          .replace(/<[^>]*>/g, ' ')
+      : jsonMessage(json.value);
+  if (said === undefined) return undefined;
+  const message = clean(plain(clean(said)));
+  if (message === '') return undefined;
   return message.length > MESSAGE_LIMIT
     ? `${message.slice(0, MESSAGE_LIMIT - 1)}…`
     : message;
+}
+
+function parseJson(text: string): { value: unknown } | undefined {
+  try {
+    return { value: JSON.parse(text) as unknown };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * One line of plain text: each control character (ESC, a newline, a carriage return…, DEL
+ * and the C1 range) becomes a space, so an app's answer can't move a terminal's cursor or
+ * change its colours, and runs of whitespace collapse.
+ */
+function plain(text: string): string {
+  return Array.from(text, (char) => {
+    const code = char.codePointAt(0) ?? 0;
+    return code < 0x20 || (code >= 0x7f && code <= 0x9f) ? ' ' : char;
+  })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function jsonMessage(data: unknown): string | undefined {
