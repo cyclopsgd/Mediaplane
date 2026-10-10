@@ -5,7 +5,10 @@ import {
   collectHostReport,
   createDockerRuntime,
   credentials,
+  DEFAULT_VPN_CHECK_URL,
   detectHostFacts,
+  fetchEgress,
+  helperEgress,
   helperHostFacts,
   helperProbe,
   hostFactsOrFailure,
@@ -17,6 +20,8 @@ import {
   PROJECT_NAME,
   readRecord,
   status,
+  vpnCheck,
+  type EgressResult,
   type HostFacts,
   type HostProbe,
   type Runtime,
@@ -36,6 +41,7 @@ import {
 } from './output';
 import { PromptCancelled } from './prompt';
 import { VERSION } from './version';
+import { printVpnCheck } from './vpn-check';
 
 export interface Io {
   stdout(text: string): void;
@@ -55,6 +61,8 @@ export interface CliDeps {
   runtime: (home: string, project: string) => Runtime;
   /** What preflight asks about the host, for the Mediaplane home `home`. */
   probe: (runtime: Runtime, home: string) => HostProbe;
+  /** Which address the host comes from, as the IP-echo service at a URL sees it. */
+  egress: (runtime: Runtime) => (url: string) => Promise<EgressResult>;
 }
 
 export const DEFAULT_HOME = '/opt/mediaplane';
@@ -81,6 +89,11 @@ export const EXIT_CODES: Readonly<Record<string, readonly string[]>> = {
     '0: stack.yaml and secrets/ were written',
     '1: an error; an existing stack.yaml is never overwritten',
   ],
+  'vpn-check': [
+    '0: passed: qBittorrent reaches the internet only through the VPN',
+    '1: a leak, or the VPN is down',
+    '1: an error: stack.yaml, Docker unreachable, or the stack not applied yet',
+  ],
 };
 
 /** The environment variables the CLI reads. */
@@ -98,6 +111,10 @@ export const ENVIRONMENT: readonly { name: string; description: string }[] = [
     name: 'MEDIAPLANE_COMPOSE_PROJECT',
     description:
       'For tests and development only: the full name of the Compose project to manage instead of mediaplane. It must be mediaplane-<name>, such as mediaplane-dev.',
+  },
+  {
+    name: 'MEDIAPLANE_VPN_CHECK_URL',
+    description: `The IP-echo service vpn-check asks which address qBittorrent and this host come from: an http or https URL that answers ip=<address>, as Cloudflare's trace does, or only the address. Default ${DEFAULT_VPN_CHECK_URL}. vpn-check --no-egress asks none.`,
   },
   {
     name: 'DOCKER_HOST',
@@ -132,6 +149,7 @@ export function defaultDeps(env: NodeJS.ProcessEnv): CliDeps {
       host: () => Promise.resolve(detectHostFacts()),
       runtime,
       probe: () => nodeProbe,
+      egress: () => (url) => fetchEgress(url),
     };
   }
   // Mediaplane's own user, as the helper must be; never root, even if the container is.
@@ -140,6 +158,7 @@ export function defaultDeps(env: NodeJS.ProcessEnv): CliDeps {
     host: (docker) => helperHostFacts({ runtime: docker, image, user }),
     runtime,
     probe: (docker, home) => helperProbe({ runtime: docker, image, user, home }),
+    egress: (docker) => (url) => helperEgress({ runtime: docker, image, user }, url),
   };
 }
 
@@ -328,6 +347,36 @@ export function createProgram(
         );
       },
     );
+
+  program
+    .command('vpn-check')
+    .description(
+      "Check that qBittorrent reaches the internet only through the VPN, and compare its address with this host's",
+    )
+    .option('--home <dir>', 'Mediaplane home directory', defaultHome)
+    .option(
+      '--no-egress',
+      'check the containers and the tunnel only, asking no IP-echo service for the two addresses',
+    )
+    .option('--json', 'print machine-readable JSON')
+    .addHelpText('after', exitCodesHelp('vpn-check'))
+    .action(async (options: { home: string; egress: boolean; json?: boolean }) => {
+      const home = resolve(options.home);
+      const runtime = deps.runtime(home, project);
+      const url = setting(io.env, 'MEDIAPLANE_VPN_CHECK_URL') ?? DEFAULT_VPN_CHECK_URL;
+      const result = await vpnCheck({
+        home,
+        catalog,
+        // In the image, the host helper: as for plan, one that fails is an error result.
+        host: () => deps.host(runtime),
+        env: io.env,
+        runtime,
+        project,
+        // Commander makes --no-egress `egress: false`, and `true` when it isn't given.
+        ...(options.egress ? { egress: { url, fromHost: deps.egress(runtime) } } : {}),
+      });
+      setExitCode(printVpnCheck(result, { json: options.json === true }, io));
+    });
 
   program
     .command('init')

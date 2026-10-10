@@ -110,6 +110,26 @@ Exit codes:
 - 0: the login was shown
 - 1: an error: no stack.yaml, no password yet, or no such app
 
+## `mediaplane vpn-check`
+
+Check that qBittorrent reaches the internet only through the VPN, and compare its address with this host's.
+
+```text
+mediaplane vpn-check [options]
+```
+
+| Option         | Description                                                                               |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| `--home <dir>` | Mediaplane home directory (default: "/opt/mediaplane")                                    |
+| `--no-egress`  | check the containers and the tunnel only, asking no IP-echo service for the two addresses |
+| `--json`       | print machine-readable JSON                                                               |
+
+Exit codes:
+
+- 0: passed: qBittorrent reaches the internet only through the VPN
+- 1: a leak, or the VPN is down
+- 1: an error: stack.yaml, Docker unreachable, or the stack not applied yet
+
 ## `mediaplane init`
 
 Write a starter stack.yaml and a secrets/ folder (never overwrites).
@@ -143,4 +163,5 @@ Exit codes:
 - `MEDIAPLANE_HOME`: The Mediaplane home when --home is not given. Default /opt/mediaplane.
 - `MEDIAPLANE_IMAGE`: Set by mediaplane.compose.yaml in the Mediaplane container: the image the host helper runs. Leave it unset when running from source.
 - `MEDIAPLANE_COMPOSE_PROJECT`: For tests and development only: the full name of the Compose project to manage instead of mediaplane. It must be mediaplane-\<name>, such as mediaplane-dev.
+- `MEDIAPLANE_VPN_CHECK_URL`: The IP-echo service vpn-check asks which address qBittorrent and this host come from: an http or https URL that answers ip=\<address>, as Cloudflare's trace does, or only the address. Default https://1.1.1.1/cdn-cgi/trace. vpn-check --no-egress asks none.
 - `DOCKER_HOST`: Docker's own setting, passed to every docker command. In the Mediaplane container it points at the socket proxy.
