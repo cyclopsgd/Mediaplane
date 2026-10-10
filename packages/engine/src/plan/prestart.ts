@@ -38,10 +38,10 @@ async function find(path: string): Promise<Found> {
     return { exists: true, text: await readFile(path, 'utf8') };
   } catch (cause) {
     const code = codeOf(cause);
-    // ENOTDIR: a file stands where one of its folders should be, so it can't exist.
-    if (code === 'ENOTDIR') return { exists: false };
-    // ENOENT: absent, unless it is a link to nothing, which exists and which we can't read.
-    if (code === 'ENOENT') {
+    // ENOENT, or ENOTDIR (a file stands where one of its folders should be): absent,
+    // unless a link stands at the path, one that leads to nothing or through a file, which
+    // exists and which we can't read.
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
       return (await linkExists(path))
         ? { exists: true, text: undefined }
         : { exists: false };

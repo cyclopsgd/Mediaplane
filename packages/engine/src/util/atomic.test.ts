@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ensureDir, writeFileAtomic } from './atomic';
+import { ensureDir, writeFileAtomic, writeFileExclusive } from './atomic';
 import { tempDir } from '../testing/temp';
 
 const modeOf = async (path: string) => (await stat(path)).mode & 0o777;
@@ -39,6 +39,32 @@ describe('writeFileAtomic', () => {
       `cannot write ${join(dir, 'compose.yaml')} (EISDIR)`,
     );
     expect(await readdir(dir)).toEqual(['compose.yaml']);
+  });
+});
+
+describe('writeFileExclusive', () => {
+  it('names the file, not its temporary file, when it cannot be created', async () => {
+    const dir = await tempDir('mediaplane-atomic-');
+    await writeFile(join(dir, 'not-a-folder'), '');
+    const path = join(dir, 'not-a-folder', 'app.conf');
+    const failure = await writeFileExclusive(path, 'key=fake\n', 0o600).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) return;
+    expect(failure.message).toBe(`cannot create ${path} (ENOTDIR)`);
+    // The original error is kept for whoever needs it.
+    expect(failure.cause).toBeInstanceOf(Error);
+  });
+
+  it('creates the file, and returns false and changes nothing when it exists', async () => {
+    const dir = await tempDir('mediaplane-atomic-');
+    const path = join(dir, 'app.conf');
+    expect(await writeFileExclusive(path, 'first\n', 0o600)).toBe(true);
+    expect(await writeFileExclusive(path, 'second\n', 0o600)).toBe(false);
+    expect(await readFile(path, 'utf8')).toBe('first\n');
+    expect(await readdir(dir)).toEqual(['app.conf']);
   });
 });
 

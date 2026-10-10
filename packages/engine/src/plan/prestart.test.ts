@@ -86,6 +86,18 @@ describe('planPrestartFiles', () => {
     });
   });
 
+  it('counts a link through a file as a file that exists, as apply does', async () => {
+    const home = await homeWith();
+    await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+    await writeFile(join(home, 'appdata', 'sonarr', 'blocker'), 'a file, not a folder');
+    // Reading it gives ENOTDIR, not ENOENT, but something stands at the path.
+    await symlink('blocker/inside', join(home, FILE.path));
+    expect(await planPrestartFiles(home, [FILE])).toEqual({
+      changes: [{ path: FILE.path, status: 'unchanged', ...AS_PLANNED }],
+      diagnostics: [],
+    });
+  });
+
   it('treats a file under something that is not a folder as absent', async () => {
     const home = await homeWith();
     await writeFile(join(home, 'appdata'), 'not a folder');

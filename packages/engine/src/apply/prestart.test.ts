@@ -14,8 +14,9 @@ import type { PrestartFile } from '../render/prestart';
 import { tempDir } from '../testing/temp';
 import { writePrestartFiles } from './prestart';
 
+/** A file for the app whose folder `path` is in: appdata/<app>/... */
 const file = (path: string, content: string): PrestartFile => ({
-  app: 'qbittorrent',
+  app: path.split('/')[1] ?? 'qbittorrent',
   appName: 'qBittorrent',
   path,
   content,
@@ -174,4 +175,107 @@ describe('writePrestartFiles', () => {
       expect(await readdir(join(folder, 'qBittorrent'))).toEqual(['app.conf']);
     },
   );
+});
+
+describe('writePrestartFiles and links', () => {
+  /** A home with appdata/qbittorrent made, and an empty folder outside it. */
+  async function homeAndOutside(): Promise<{ home: string; outside: string }> {
+    const home = await tempDir('mediaplane-prestart-');
+    await mkdir(join(home, 'appdata', 'qbittorrent'), { recursive: true });
+    return { home, outside: await tempDir('mediaplane-prestart-outside-') };
+  }
+
+  const failureOf = async (action: Promise<unknown>): Promise<string> => {
+    try {
+      await action;
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : String(cause);
+    }
+    return 'it did not fail';
+  };
+
+  it('refuses a folder on its way that links outside the app folder, writing nothing there', async () => {
+    const { home, outside } = await homeAndOutside();
+    await symlink(outside, join(home, 'appdata', 'qbittorrent', 'sub'));
+    for (const path of [
+      'appdata/qbittorrent/sub/f.conf',
+      'appdata/qbittorrent/sub/deep/er/f.conf',
+    ]) {
+      const message = await failureOf(
+        writePrestartFiles(home, [file(path, 'key=fake-secret-content\n')]),
+      );
+      expect(message).toBe(
+        `${path}: a folder on its way leads outside appdata/qbittorrent`,
+      );
+    }
+    // Neither the file nor a folder for it appeared where the link leads.
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  it("refuses a folder that links into another app's folder", async () => {
+    const { home } = await homeAndOutside();
+    await mkdir(join(home, 'appdata', 'sonarr'));
+    await symlink('../sonarr', join(home, 'appdata', 'qbittorrent', 'sub'));
+    await expect(
+      writePrestartFiles(home, [file('appdata/qbittorrent/sub/f.conf', 'key=fake\n')]),
+    ).rejects.toThrow('leads outside appdata/qbittorrent');
+    expect(await readdir(join(home, 'appdata', 'sonarr'))).toEqual([]);
+  });
+
+  it('refuses a folder that is a link to nothing, writing nothing', async () => {
+    const { home, outside } = await homeAndOutside();
+    await symlink(join(outside, 'missing'), join(home, 'appdata', 'qbittorrent', 'sub'));
+    await expect(
+      writePrestartFiles(home, [file('appdata/qbittorrent/sub/f.conf', 'key=fake\n')]),
+    ).rejects.toThrow(
+      'appdata/qbittorrent/sub/f.conf: a folder on its way is a link to nothing',
+    );
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  it('follows a link that stays inside the app folder', async () => {
+    const { home } = await homeAndOutside();
+    const folder = join(home, 'appdata', 'qbittorrent');
+    await mkdir(join(folder, 'real'));
+    await symlink('real', join(folder, 'sub'));
+    const path = 'appdata/qbittorrent/sub/f.conf';
+    expect(await writePrestartFiles(home, [file(path, 'key=fake\n')])).toEqual([path]);
+    expect(await readFile(join(folder, 'real', 'f.conf'), 'utf8')).toBe('key=fake\n');
+  });
+
+  it('writes where appdata, or an app folder, links to another disk', async () => {
+    const home = await tempDir('mediaplane-prestart-');
+    const disk = await tempDir('mediaplane-prestart-disk-');
+    await mkdir(join(disk, 'qbittorrent'));
+    await symlink(disk, join(home, 'appdata'));
+    const first = 'appdata/qbittorrent/qBittorrent/qBittorrent.conf';
+    expect(await writePrestartFiles(home, [file(first, 'key=fake\n')])).toEqual([first]);
+    expect(
+      await readFile(
+        join(disk, 'qbittorrent', 'qBittorrent', 'qBittorrent.conf'),
+        'utf8',
+      ),
+    ).toBe('key=fake\n');
+
+    // Now only the app's own folder links elsewhere, and does not exist yet at the end.
+    const other = await tempDir('mediaplane-prestart-disk-');
+    const home2 = await tempDir('mediaplane-prestart-');
+    await mkdir(join(home2, 'appdata'));
+    await symlink(other, join(home2, 'appdata', 'sonarr'));
+    const second = 'appdata/sonarr/config/app.ini';
+    expect(await writePrestartFiles(home2, [file(second, 'key=fake\n')])).toEqual([
+      second,
+    ]);
+    expect((await stat(join(other, 'config', 'app.ini'))).mode & 0o777).toBe(0o600);
+  });
+
+  it('works when the home itself is reached through a link', async () => {
+    const real = await tempDir('mediaplane-prestart-');
+    const parent = await tempDir('mediaplane-prestart-links-');
+    const home = join(parent, 'home');
+    await symlink(real, home);
+    const path = 'appdata/qbittorrent/app.conf';
+    expect(await writePrestartFiles(home, [file(path, 'key=fake\n')])).toEqual([path]);
+    expect(await readFile(join(real, path), 'utf8')).toBe('key=fake\n');
+  });
 });

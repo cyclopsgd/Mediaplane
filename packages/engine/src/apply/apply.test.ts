@@ -1,4 +1,13 @@
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -702,6 +711,83 @@ describe('apply', () => {
     expect(confirm).not.toHaveBeenCalled();
     await expect(stat(join(home, 'generated'))).rejects.toThrow();
     expect(await readFile(path, 'utf8')).toBe('user=someone\n');
+  });
+
+  it('leaves existing pre-start files as they are when another change runs the files step', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    const path = join(home, 'appdata', 'sonarr', 'config', 'app.ini');
+    expect((await apply(options(home, docker, { catalog: WITH_FILES }))).outcome).toBe(
+      'success',
+    );
+    await writeFile(path, 'key=rewritten-by-the-app\n');
+    const before = await stat(path);
+    // A stale .env is a pending change, so the files step runs again.
+    await writeFile(join(home, ENV_PATH), 'MP_STALE=1\n');
+    const second = await apply(options(home, docker, { catalog: WITH_FILES }));
+    expect(second.outcome).toBe('success');
+    expect(second.actions[1]).toEqual({
+      step: 'files',
+      result: 'done',
+      detail: 'wrote generated/.env',
+    });
+    expect(second.plan.files).toContainEqual(
+      expect.objectContaining({
+        path: 'appdata/sonarr/config/app.ini',
+        status: 'unchanged',
+      }),
+    );
+    const after = await stat(path);
+    expect(await readFile(path, 'utf8')).toBe('key=rewritten-by-the-app\n');
+    // The same file, not a new one: apply never wrote or replaced it.
+    expect([after.ino, after.mtimeMs, after.mode]).toEqual([
+      before.ino,
+      before.mtimeMs,
+      before.mode,
+    ]);
+    expect(await readdir(join(home, 'appdata', 'sonarr', 'config'))).toEqual(['app.ini']);
+  });
+
+  // root can write anywhere, so there is nothing to test when running as root.
+  it.skipIf(process.getuid?.() === 0)(
+    "skips a pre-start file in a folder the app owns and Mediaplane can't write to",
+    async () => {
+      const home = await makeHome();
+      const docker = fakeDocker(home);
+      const folder = join(home, 'appdata', 'sonarr', 'config');
+      expect((await apply(options(home, docker, { catalog: WITH_FILES }))).outcome).toBe(
+        'success',
+      );
+      await chmod(folder, 0o555);
+      try {
+        await writeFile(join(home, ENV_PATH), 'MP_STALE=1\n');
+        const second = await apply(options(home, docker, { catalog: WITH_FILES }));
+        expect(second.outcome).toBe('success');
+        expect(second.actions[1]?.detail).toBe('wrote generated/.env');
+        expect(await readdir(folder)).toEqual(['app.ini']);
+      } finally {
+        // So that the temporary folder can be removed.
+        await chmod(folder, 0o755);
+      }
+    },
+  );
+
+  it('stops at a pre-start file whose folder links outside the app folder, writing nothing there', async () => {
+    const home = await makeHome();
+    const outside = await tempDir('mediaplane-apply-outside-');
+    await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+    await symlink(outside, join(home, 'appdata', 'sonarr', 'config'));
+    const docker = fakeDocker(home);
+    const result = await apply(options(home, docker, { catalog: WITH_FILES }));
+    expect(result.outcome).toBe('failed');
+    expect(result.actions.find((a) => a.step === 'files')).toEqual({
+      step: 'files',
+      result: 'failed',
+      error:
+        'appdata/sonarr/config/app.ini: a folder on its way leads outside appdata/sonarr',
+    });
+    expect(docker.calls).not.toContain('pull');
+    expect(await readdir(outside)).toEqual([]);
   });
 
   it('stops at a pre-start file whose folder is a file, naming the path and not the content', async () => {

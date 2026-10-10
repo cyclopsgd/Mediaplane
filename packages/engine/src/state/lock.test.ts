@@ -184,6 +184,16 @@ describe('acquireLock, when things go wrong', () => {
     expect(await readdir(join(home, 'state'))).toEqual([]);
   });
 
+  it('names the lock file, not its temporary file, when it cannot be written', async () => {
+    const home = await tempDir('mediaplane-lock-');
+    vi.mocked(open).mockRejectedValueOnce(failure('EACCES'));
+    const attempt = acquireLock(home, NOW);
+    await expect(attempt).rejects.toThrow(
+      `cannot create ${join(home, LOCK_PATH)} (EACCES)`,
+    );
+    expect(await readdir(join(home, 'state'))).toEqual([]);
+  });
+
   it('names the lock file for any other failure to create it', async () => {
     const home = await tempDir('mediaplane-lock-');
     vi.mocked(link).mockRejectedValueOnce(failure('EIO'));
