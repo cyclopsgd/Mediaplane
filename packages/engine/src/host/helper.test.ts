@@ -10,7 +10,7 @@ import {
 import type { HelperMount, HelperResult } from '../runtime/types';
 import { fakeProbe, fakeRuntime } from '../testing/fakes';
 import { FIXTURE_HOST } from '../testing/fixtures';
-import { helperHostFacts, helperMountSources, helperProbe, isInside } from './helper';
+import { helperHostFacts, helperMountSources, helperProbe } from './helper';
 import { collectHostReport, HOST_REPORT_SCHEMA, type HostRequest } from './report';
 import { tempDir } from '../testing/temp';
 
@@ -73,18 +73,6 @@ async function homeWithStack(): Promise<string> {
 }
 
 const NOTHING: ProbeRequest = { stat: [], free: [], ports: [], sameAsHost: [] };
-
-describe('isInside', () => {
-  it.each([
-    ['/srv/data', '/srv/data', true],
-    ['/srv/data/media', '/srv/data', true],
-    ['/srv/data/..x', '/srv/data', true],
-    ['/srv/data-2', '/srv/data', false],
-    ['/srv', '/srv/data', false],
-  ])('%s in %s is %s', (path, folder, expected) => {
-    expect(isInside(path, folder)).toBe(expected);
-  });
-});
 
 describe('helperMountSources', () => {
   it('mounts the fewest folders that show every path, and devices through /dev', () => {

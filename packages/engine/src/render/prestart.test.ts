@@ -40,6 +40,15 @@ const WITH_FILES: Catalog = fixtureCatalog.map((app) =>
   app.id === 'sonarr' ? { ...app, configFiles } : app,
 );
 
+/** Sonarr with one pre-start file at `path`, relative to its appdata folder. */
+function filesAt(path: string): Catalog {
+  return fixtureCatalog.map((app) =>
+    app.id === 'sonarr'
+      ? { ...app, configFiles: () => [{ path, content: 'x', seeded: /x/ }] }
+      : app,
+  );
+}
+
 function stackWith(catalog: Catalog): ResolvedStack {
   const result = resolveStack(
     fixtureConfig(STACK),
@@ -70,6 +79,25 @@ describe('renderPrestartFiles', () => {
       [],
     );
   });
+
+  it('normalises a path that stays inside the app folder', () => {
+    const [file] = renderPrestartFiles(
+      stackWith(filesAt('config/../app.ini')),
+      STORE,
+      ADMIN,
+      sevens,
+    );
+    expect(file?.path).toBe('appdata/sonarr/app.ini');
+  });
+
+  it.each(['../escape.txt', 'config/../../escape.txt', '/etc/passwd', '..', '.', ''])(
+    'refuses a file that would land outside the app folder: "%s"',
+    (path) => {
+      expect(() =>
+        renderPrestartFiles(stackWith(filesAt(path)), STORE, ADMIN, sevens),
+      ).toThrow(`sonarr: the pre-start file "${path}" is not inside its appdata folder`);
+    },
+  );
 
   it('refuses to render a file before its key exists', () => {
     expect(() =>

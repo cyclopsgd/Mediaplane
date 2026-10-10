@@ -1,4 +1,4 @@
-import { isAbsolute, relative } from 'node:path';
+import { relative } from 'node:path';
 import { portKey } from '../preflight/checks';
 import { nodeProbe, type HostProbe, type ProbeRequest } from '../preflight/probe';
 import {
@@ -7,6 +7,7 @@ import {
   type HelperResult,
   type Runtime,
 } from '../runtime/types';
+import { isInside } from '../util/path';
 import { compare, unique } from '../util/sort';
 import type { HostFacts } from './facts';
 import { parseHostReport, type HostReport, type HostRequest } from './report';
@@ -20,12 +21,6 @@ export interface HelperOptions {
   image: string;
   /** Who the helper runs as: Mediaplane's own user. */
   user: { uid: number; gid: number };
-}
-
-/** Whether `path` is `folder` or inside it. */
-export function isInside(path: string, folder: string): boolean {
-  const rel = relative(folder, path);
-  return rel === '' || (rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel));
 }
 
 /**

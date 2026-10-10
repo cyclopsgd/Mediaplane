@@ -1,4 +1,4 @@
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { PrestartFile } from '../render/prestart';
@@ -56,6 +56,33 @@ describe('planPrestartFiles', () => {
           hint: 'stop Sonarr, delete appdata/sonarr/config.xml in the Mediaplane home, then run apply again: it writes a new one before Sonarr starts. The settings in that file are lost; Sonarr\'s other data is kept. See "Set up before Slice 3a" in catalog/sonarr/README.md',
         },
       ],
+    });
+  });
+
+  it('matches a global or multiline pattern the same way every time', async () => {
+    const home = await homeWith(
+      '<Config>\n  <ApiKey>rewritten-by-the-app</ApiKey>\n</Config>\n',
+    );
+    const file = { ...FILE, seeded: /<ApiKey>[^<]+<\/ApiKey>/gm };
+    const expected = {
+      changes: [{ path: FILE.path, status: 'unchanged', ...AS_PLANNED }],
+      diagnostics: [],
+    };
+    expect(await planPrestartFiles(home, [file])).toEqual(expected);
+    expect(await planPrestartFiles(home, [file])).toEqual(expected);
+    expect(await planPrestartFiles(home, [file, file])).toEqual({
+      changes: [expected.changes[0], expected.changes[0]],
+      diagnostics: [],
+    });
+  });
+
+  it('counts a symbolic link to nothing as a file that exists, as apply does', async () => {
+    const home = await homeWith();
+    await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+    await symlink('missing-target.xml', join(home, FILE.path));
+    expect(await planPrestartFiles(home, [FILE])).toEqual({
+      changes: [{ path: FILE.path, status: 'unchanged', ...AS_PLANNED }],
+      diagnostics: [],
     });
   });
 

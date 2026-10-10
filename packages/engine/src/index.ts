@@ -1,6 +1,7 @@
 export * from './diagnostics';
 export * from './paths';
 export * from './util/atomic';
+export * from './util/path';
 export * from './state/lock';
 export * from './config/schema';
 export * from './config/json-schema';

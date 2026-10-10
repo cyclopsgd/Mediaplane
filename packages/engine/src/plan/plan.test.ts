@@ -137,6 +137,22 @@ describe('plan', () => {
     });
   });
 
+  it('plans a missing pre-start file in an otherwise current home, as the one change', async () => {
+    const runtime = fakeRuntime({
+      hashes: { ok: true, hashes: HASHES },
+      containers: running(HASHES),
+    });
+    const home = await makeCurrentHome(runtime);
+    const result = await planFor(home, { runtime, catalog: WITH_FILES });
+    expect(result).toMatchObject({ ok: true, changed: true, secrets: { generate: [] } });
+    expect(result.files.map((file) => file.status)).toEqual([
+      'unchanged',
+      'unchanged',
+      'create',
+    ]);
+    expect(result.containers.every((c) => c.action === 'unchanged')).toBe(true);
+  });
+
   it('fails when a pre-start file is from before Mediaplane seeded the app', async () => {
     const home = await makeHome();
     await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });

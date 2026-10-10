@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { error, type Diagnostic } from '../diagnostics';
 import type { PrestartFile } from '../render/prestart';
@@ -7,19 +7,48 @@ import type { FileChange } from './files';
 /** What is at a pre-start file's path: nothing, or a file, with its text when readable. */
 type Found = { exists: false } | { exists: true; text: string | undefined };
 
+function codeOf(cause: unknown): string | undefined {
+  return cause instanceof Error && 'code' in cause ? String(cause.code) : undefined;
+}
+
+function cannotRead(path: string, cause: unknown): Error {
+  const code = codeOf(cause);
+  return new Error(`cannot read ${path}${code === undefined ? '' : ` (${code})`}`, {
+    cause,
+  });
+}
+
+/**
+ * Whether anything stands at `path`, a link included: a link to nothing reads as missing,
+ * but apply never writes over it, so plan must not promise to.
+ */
+async function linkExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (cause) {
+    const code = codeOf(cause);
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    throw cannotRead(path, cause);
+  }
+}
+
 async function find(path: string): Promise<Found> {
   try {
     return { exists: true, text: await readFile(path, 'utf8') };
   } catch (cause) {
-    const code =
-      cause instanceof Error && 'code' in cause ? String(cause.code) : undefined;
+    const code = codeOf(cause);
     // ENOTDIR: a file stands where one of its folders should be, so it can't exist.
-    if (code === 'ENOENT' || code === 'ENOTDIR') return { exists: false };
+    if (code === 'ENOTDIR') return { exists: false };
+    // ENOENT: absent, unless it is a link to nothing, which exists and which we can't read.
+    if (code === 'ENOENT') {
+      return (await linkExists(path))
+        ? { exists: true, text: undefined }
+        : { exists: false };
+    }
     // After its first start the app owns its appdata, and may keep Mediaplane out.
     if (code === 'EACCES' || code === 'EPERM') return { exists: true, text: undefined };
-    throw new Error(`cannot read ${path}${code === undefined ? '' : ` (${code})`}`, {
-      cause,
-    });
+    throw cannotRead(path, cause);
   }
 }
 
@@ -44,8 +73,13 @@ export async function planPrestartFiles(
       sensitive: true,
       prestart: true,
     });
-    // A file Mediaplane can't read counts as seeded: there is no way to tell.
-    if (found.exists && found.text !== undefined && !file.seeded.test(found.text)) {
+    // A file Mediaplane can't read counts as seeded: there is no way to tell. search(), not
+    // test(): a pattern with the g or y flag keeps its place between calls.
+    if (
+      found.exists &&
+      found.text !== undefined &&
+      found.text.search(file.seeded) === -1
+    ) {
       diagnostics.push(notSeeded(file));
     }
   }
