@@ -22,6 +22,14 @@ export default defineApp({
   health: {
     test: ['CMD-SHELL', 'curl -fsS "http://localhost:$${WEBUI_PORT}/" > /dev/null'],
   },
+  // Its key goes as a Bearer token: X-Api-Key and ?apikey= get 403. Behind the VPN it is
+  // reached through Gluetun, on its own port inside Gluetun's network namespace.
+  api: {
+    port: 'web',
+    ready: '/',
+    key: { secret: 'apiKey', scheme: 'bearer' },
+    check: '/api/v2/app/version',
+  },
   options: z.strictObject({
     vpn: z
       .boolean()

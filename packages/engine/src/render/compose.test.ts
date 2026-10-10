@@ -1,17 +1,22 @@
 import { describe, expect, it } from 'vitest';
+import type { Catalog } from '../catalog/types';
 import type { HostFacts } from '../host/facts';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
-import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
+import {
+  FIXTURE_API,
+  FIXTURE_HOST,
+  fixtureCatalog,
+  fixtureConfig,
+} from '../testing/fixtures';
 import { appEnvSecretName, literal, renderCompose, secretEnvName } from './compose';
 import { composeToYaml } from './yaml';
 
-function stackOf(source: string, host: HostFacts = FIXTURE_HOST): ResolvedStack {
-  const result = resolveStack(
-    fixtureConfig(source),
-    fixtureCatalog,
-    host,
-    '/opt/mediaplane',
-  );
+function stackOf(
+  source: string,
+  host: HostFacts = FIXTURE_HOST,
+  catalog: Catalog = fixtureCatalog,
+): ResolvedStack {
+  const result = resolveStack(fixtureConfig(source), catalog, host, '/opt/mediaplane');
   if (result.stack === undefined)
     throw new Error(JSON.stringify(result.diagnostics, null, 2));
   return result.stack;
@@ -204,5 +209,44 @@ describe('secret env references', () => {
     ['my-app', 'openvpn_password', 'MP_MY_APP_ENV_OPENVPN_PASSWORD'],
   ])('%s/%s → %s', (app, name, expected) => {
     expect(appEnvSecretName(app, name)).toBe(expected);
+  });
+});
+
+describe('the wiring network', () => {
+  /** The fixture catalog, with an API for Sonarr and qBittorrent. */
+  const WIRED: Catalog = fixtureCatalog.map((def) =>
+    def.id === 'sonarr' || def.id === 'qbittorrent' ? { ...def, api: FIXTURE_API } : def,
+  );
+
+  it('puts every app with an API on it, beside the default network, and makes it internal', () => {
+    const compose = renderCompose(stackOf(PLEX_NO_VPN_LOCALHOST, FIXTURE_HOST, WIRED));
+    expect(compose.networks).toEqual({ wiring: { internal: true } });
+    expect(compose.services.sonarr?.networks).toEqual(['default', 'wiring']);
+    expect(compose.services.qbittorrent?.networks).toEqual(['default', 'wiring']);
+    expect(compose.services.plex?.networks).toBeUndefined();
+    expect(composeToYaml(compose)).toContain(
+      '    networks:\n      - default\n      - wiring\n',
+    );
+    expect(composeToYaml(compose)).toContain(
+      'networks:\n  wiring:\n    internal: true\n',
+    );
+  });
+
+  it('puts the app that hosts a guest with an API on it: Gluetun, for qBittorrent', () => {
+    const compose = renderCompose(stackOf(JELLYFIN_VPN_LAN, FIXTURE_HOST, WIRED));
+    expect(compose.services.gluetun?.networks).toEqual(['default', 'wiring']);
+    // In Gluetun's network namespace: no networks of its own.
+    expect(compose.services.qbittorrent?.networks).toBeUndefined();
+  });
+
+  it('has no wiring network when no app has an API', () => {
+    const compose = renderCompose(stackOf(JELLYFIN_VPN_LAN));
+    expect(compose.networks).toBeUndefined();
+    expect(Object.values(compose.services).map((s) => s.networks)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
   });
 });

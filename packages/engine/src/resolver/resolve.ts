@@ -35,6 +35,11 @@ export interface ResolvedStack {
   /** Enabled apps, sorted by id. */
   apps: ResolvedApp[];
   bindAddresses: string[];
+  /**
+   * Where a browser reaches the web UIs: bindAddresses, or with bind: all, 127.0.0.1 and
+   * this host's private addresses (`mediaplane credentials` lists these).
+   */
+  webAddresses: string[];
   lanSubnets: string[];
 }
 
@@ -74,6 +79,8 @@ export function resolveStack(
   const publishesOnLan = config.network.bind !== 'localhost';
   // Only LAN clients need trusting, and only while the web UIs are on the LAN.
   const lanClientSubnets = publishesOnLan ? lanSubnets : [];
+  const bind = bindAddresses(config, host);
+  const web = webAddresses(bind.addresses, host);
 
   const { enabled, unparsed } = enableApps(
     requestedApps(config, byId),
@@ -89,6 +96,7 @@ export function resolveStack(
       options,
       lanSubnets,
       publishesOnLan,
+      webAddresses: web,
       lanClientSubnets,
     };
     diagnostics.push(...checkApp(def, settings, context, host));
@@ -112,14 +120,32 @@ export function resolveStack(
     ...checkPortConflicts(apps),
     ...checkNamespacePorts(apps),
   );
-  const bind = bindAddresses(config, host);
   diagnostics.push(...bind.diagnostics);
 
   if (hasErrors(diagnostics)) return { stack: undefined, diagnostics };
   return {
-    stack: { config, home, apps, bindAddresses: bind.addresses, lanSubnets },
+    stack: {
+      config,
+      home,
+      apps,
+      bindAddresses: bind.addresses,
+      webAddresses: web,
+      lanSubnets,
+    },
     diagnostics,
   };
+}
+
+/**
+ * Where a browser reaches the web UIs. bind: all publishes on every interface, so name
+ * this host's own addresses rather than 0.0.0.0.
+ */
+export function webAddresses(
+  bindAddresses: readonly string[],
+  host: HostFacts,
+): string[] {
+  if (!bindAddresses.includes('0.0.0.0')) return [...bindAddresses];
+  return ['127.0.0.1', ...host.privateAddresses.map((a) => a.address).sort(compare)];
 }
 
 function checkListedApps(

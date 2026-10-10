@@ -44,6 +44,18 @@ describe('renderFacts', () => {
     expect(renderFacts(app('qbittorrent'))).not.toContain('$${WEBUI_PORT}');
   });
 
+  it("says how Mediaplane reaches an app's API, or that it calls none", () => {
+    expect(renderFacts(app('sonarr'))).toContain(
+      "- **API:** on its `web` port, which Mediaplane reaches over the stack's wiring network, with `apiKey` in the `X-Api-Key` header\n",
+    );
+    expect(renderFacts(app('qbittorrent'))).toContain(
+      'with `apiKey` as a Bearer token\n',
+    );
+    expect(renderFacts(app('jellyfin'))).toContain(
+      '- **API:** none that Mediaplane calls\n',
+    );
+  });
+
   it('shows what an app turns on with its default settings', () => {
     expect(renderFacts(app('prowlarr'))).toContain('`byparr`');
     expect(renderFacts(app('qbittorrent'))).toContain('`gluetun`');

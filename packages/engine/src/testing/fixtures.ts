@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AppDefinition, Catalog } from '../catalog/types';
+import type { ApiSpec, AppDefinition, Catalog } from '../catalog/types';
 import { parseConfig } from '../config/load';
 import type { StackConfig } from '../config/schema';
 import { error } from '../diagnostics';
@@ -15,6 +15,17 @@ export const FAKE_DIGEST = `sha256:${'0'.repeat(64)}`;
 export const FIXTURE_HOST: HostFacts = {
   arch: 'amd64',
   privateAddresses: [{ address: '192.168.1.10', cidr: '192.168.1.10/24' }],
+};
+
+/**
+ * An API shaped like the real Servarr apps'. No fixture app has one, so plan never calls
+ * an app in the tests that don't ask it to: give it to an app in a catalog of the test's.
+ */
+export const FIXTURE_API: ApiSpec = {
+  port: 'web',
+  ready: '/ping',
+  key: { secret: 'apiKey', scheme: 'x-api-key' },
+  check: '/api/v3/system/status',
 };
 
 export function fixtureApp<Options = Record<string, unknown>>(

@@ -372,6 +372,18 @@ describe('resolveStack: binding', () => {
     }
   });
 
+  it('tells the apps where a browser reaches their web UIs', () => {
+    const webOf = (base: string) => {
+      const result = resolve('  sonarr: {}\n  qbittorrent: {}\n', { base });
+      return [result.stack?.webAddresses, app(result, 'sonarr')?.context.webAddresses];
+    };
+    expect(webOf(BASE)).toEqual([['127.0.0.1'], ['127.0.0.1']]);
+    expect(webOf(lan)).toEqual([['192.168.1.10'], ['192.168.1.10']]);
+    // bind: all publishes on every interface: a browser comes in on one of this host's own.
+    const all = ['127.0.0.1', '192.168.1.10'];
+    expect(webOf(BASE.replace('bind: localhost', 'bind: all'))).toEqual([all, all]);
+  });
+
   it('refuses "lan" on a host with no private address', () => {
     const result = resolve('  qbittorrent: {}\n', {
       base: lan,

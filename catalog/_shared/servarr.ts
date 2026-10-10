@@ -1,4 +1,9 @@
-import type { AppContext, ConfigFile, ConfigFileContext } from '@mediaplane/engine';
+import type {
+  ApiSpec,
+  AppContext,
+  ConfigFile,
+  ConfigFileContext,
+} from '@mediaplane/engine';
 
 /** When Sonarr, Radarr and Prowlarr ask for the login: everywhere, or not locally. */
 function authenticationRequired(ctx: AppContext): string {
@@ -18,7 +23,30 @@ export function servarrEnv(prefix: string, ctx: AppContext): Record<string, stri
   if (!ctx.config.security.login_on_lan && ctx.lanClientSubnets.length > 0) {
     env[`${prefix}__SERVER__TRUSTEDNETWORKS`] = ctx.lanClientSubnets.join(',');
   }
+  // Without a login for local addresses, the app takes only the Host names it is told
+  // of, and refuses to save its settings until it has some: its service name, which the
+  // other apps and Mediaplane use, and the addresses its web UI is published on.
+  // localhost and 127.0.0.1 always pass.
+  if (!ctx.config.security.login_on_lan) {
+    const hosts = [prefix.toLowerCase(), ...ctx.webAddresses];
+    env[`${prefix}__SERVER__ALLOWEDHOSTS`] = hosts
+      .filter((host) => host !== '127.0.0.1')
+      .join(',');
+  }
   return env;
+}
+
+/**
+ * Sonarr's, Radarr's and Prowlarr's API: `/ping` without a key, then everything under
+ * /api/<version> with it, in `X-Api-Key` (never ?apikey=, which ends up in logs).
+ */
+export function servarrApi(version: 'v1' | 'v3'): ApiSpec {
+  return {
+    port: 'web',
+    ready: '/ping',
+    key: { secret: 'apiKey', scheme: 'x-api-key' },
+    check: `/api/${version}/system/status`,
+  };
 }
 
 /**

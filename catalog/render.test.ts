@@ -142,6 +142,47 @@ describe('the real catalog', () => {
     });
   });
 
+  it('names only itself and its web addresses as hosts when login on the LAN is off', () => {
+    // The apps refuse to save their settings without AllowedHosts in this mode.
+    const off = (bind: string) =>
+      SPEC_EXAMPLE.replace(
+        'network: { bind: lan }',
+        `network: { bind: ${bind} }\nsecurity: { login_on_lan: false }`,
+      );
+    expect(render(off('lan')).compose.services.radarr?.environment).toMatchObject({
+      RADARR__SERVER__ALLOWEDHOSTS: 'radarr,192.168.1.10',
+    });
+    // localhost and 127.0.0.1 always pass.
+    expect(render(off('localhost')).compose.services.prowlarr?.environment).toMatchObject(
+      { PROWLARR__SERVER__ALLOWEDHOSTS: 'prowlarr' },
+    );
+    expect(render(SPEC_EXAMPLE).compose.services.sonarr?.environment).not.toHaveProperty(
+      'SONARR__SERVER__ALLOWEDHOSTS',
+    );
+  });
+
+  it('puts the apps Mediaplane calls on the internal wiring network, Gluetun for qBittorrent', () => {
+    const { compose } = render(SPEC_EXAMPLE);
+    expect(compose.networks).toEqual({ wiring: { internal: true } });
+    const wired = Object.entries(compose.services)
+      .filter(([, service]) => service.networks !== undefined)
+      .map(([id, service]) => `${id} ${String(service.networks)}`);
+    expect(wired).toEqual([
+      'gluetun default,wiring',
+      'prowlarr default,wiring',
+      'radarr default,wiring',
+      'sonarr default,wiring',
+    ]);
+    const direct = SPEC_EXAMPLE.replace(
+      '  qbittorrent: {}',
+      '  qbittorrent: { vpn: false }',
+    );
+    expect(render(direct).compose.services.qbittorrent?.networks).toEqual([
+      'default',
+      'wiring',
+    ]);
+  });
+
   it("refuses a qBittorrent port that clashes with Gluetun's control server", () => {
     const source = SPEC_EXAMPLE.replace(
       '  qbittorrent: {}',

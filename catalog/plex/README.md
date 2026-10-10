@@ -15,6 +15,7 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
 - **Runs as:** the stack's `user:`, through `PUID` and `PGID`
 - **Health check:** `curl -fsS http://localhost:32400/identity`, every 30s (timeout 10s, 5 retries, 120s to start)
 - **Secrets:** `token`: yours, from `plex.token` in `stack.yaml`
+- **API:** none that Mediaplane calls
 - **Needs:** nothing
 - **Provides:** `media-server`
 - **Also turns on:** nothing

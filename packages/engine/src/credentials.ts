@@ -15,7 +15,6 @@ import {
   adminPasswordToGenerate,
 } from './secrets/admin';
 import { readSecretStore } from './secrets/store';
-import { compare } from './util/sort';
 
 export interface CredentialsOptions {
   home: string;
@@ -88,7 +87,7 @@ export async function credentials(
     };
   }
   const login = await adminLogin(config, home, store, options.env);
-  const addresses = webAddresses(resolved.stack.bindAddresses, host);
+  const addresses = resolved.stack.webAddresses;
   return {
     ok: true,
     username: login.username,
@@ -103,15 +102,6 @@ export async function credentials(
 
 function describeRef(ref: SecretRef): string {
   return 'file' in ref ? ref.file : `the environment variable ${ref.env}`;
-}
-
-/**
- * Where a browser reaches the web UIs. bind: all publishes on every interface, so name
- * this host's own addresses rather than 0.0.0.0.
- */
-function webAddresses(bindAddresses: readonly string[], host: HostFacts): string[] {
-  if (!bindAddresses.includes('0.0.0.0')) return [...bindAddresses];
-  return ['127.0.0.1', ...host.privateAddresses.map((a) => a.address).sort(compare)];
 }
 
 function appLogin(app: ResolvedApp, addresses: readonly string[]): AppLogin[] {

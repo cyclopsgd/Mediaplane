@@ -19,6 +19,7 @@ export interface ComposeService {
   devices?: string[];
   network_mode?: string;
   depends_on?: Record<string, { condition: 'service_healthy'; restart: boolean }>;
+  networks?: string[];
   environment?: Record<string, string>;
   volumes?: string[];
   ports?: string[];
@@ -29,9 +30,17 @@ export interface ComposeService {
 export interface ComposeFile {
   name: string;
   services: Record<string, ComposeService>;
+  networks?: Record<string, { internal: true }>;
 }
 
 export const PROJECT_NAME = 'mediaplane';
+
+/**
+ * The stack's wiring network (ADR 0011): internal, so it has no route out. Every app
+ * whose API Mediaplane calls joins it, and so does Mediaplane's own container while it
+ * wires them. Compose names it "<project>_wiring".
+ */
+export const WIRING_NETWORK = 'wiring';
 
 /** Name of the .env variable carrying an app's secret, e.g. MP_SONARR_API_KEY. */
 export function secretEnvName(appId: string, secret: string): string {
@@ -60,15 +69,33 @@ export function renderCompose(stack: ResolvedStack): ComposeFile {
     }
     portsByService.set(target, ports);
   }
+  const wired = wiredServices(stack);
   const services: Record<string, ComposeService> = {};
   for (const app of stack.apps) {
     services[app.def.id] = renderService(
       app,
       stack,
       portsByService.get(app.def.id) ?? [],
+      wired.has(app.def.id),
     );
   }
-  return { name: PROJECT_NAME, services };
+  return {
+    name: PROJECT_NAME,
+    services,
+    ...(wired.size === 0 ? {} : { networks: { [WIRING_NETWORK]: { internal: true } } }),
+  };
+}
+
+/**
+ * The services on the wiring network: every app with an API, or for one inside another
+ * app's network namespace, that app (Gluetun, for qBittorrent).
+ */
+export function wiredServices(stack: ResolvedStack): Set<string> {
+  return new Set(
+    stack.apps.flatMap((app) =>
+      app.def.api === undefined ? [] : [app.networkVia ?? app.def.id],
+    ),
+  );
 }
 
 function portMapping(address: string, port: PublishedPort): string {
@@ -80,6 +107,7 @@ function renderService(
   app: ResolvedApp,
   stack: ResolvedStack,
   ports: string[],
+  wired: boolean,
 ): ComposeService {
   const { def, context, networkVia } = app;
   const extras = def.extras?.(context) ?? {};
@@ -101,6 +129,9 @@ function renderService(
             [networkVia]: { condition: 'service_healthy' as const, restart: true },
           },
         }),
+    // Listing a network replaces Compose's default, so the default is listed too: the
+    // app's own traffic, to the internet and to the other apps, stays on it.
+    ...(wired ? { networks: ['default', WIRING_NETWORK] } : {}),
     ...(Object.keys(environment).length === 0 ? {} : { environment }),
     ...(volumes.length === 0 ? {} : { volumes }),
     ...(ports.length === 0 ? {} : { ports }),

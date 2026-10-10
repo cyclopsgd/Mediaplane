@@ -1,5 +1,5 @@
 import { defineApp } from '@mediaplane/engine';
-import { servarrConfigFiles, servarrEnv } from '../_shared/servarr';
+import { servarrApi, servarrConfigFiles, servarrEnv } from '../_shared/servarr';
 
 export default defineApp({
   id: 'radarr',
@@ -22,6 +22,7 @@ export default defineApp({
     { step: 'bootstrap-api', action: 'create-admin' },
   ],
   health: { test: ['CMD', 'curl', '-fsS', 'http://localhost:7878/ping'] },
+  api: servarrApi('v3'),
   env: (ctx) => servarrEnv('RADARR', ctx),
   configFiles: servarrConfigFiles,
   login: { comingIn: 'Slice 3b' },

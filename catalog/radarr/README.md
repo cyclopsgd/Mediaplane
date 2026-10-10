@@ -16,6 +16,7 @@ LinuxServer.io image, unmodified.
 - **Runs as:** the stack's `user:`, through `PUID` and `PGID`
 - **Health check:** `curl -fsS http://localhost:7878/ping`, every 30s (timeout 10s, 5 retries, 60s to start)
 - **Secrets:** `apiKey`: 32 random hex characters, generated once and kept in `state/secrets.json`
+- **API:** on its `web` port, which Mediaplane reaches over the stack's wiring network, with `apiKey` in the `X-Api-Key` header
 - **Needs:** `download-client`
 - **Provides:** `pvr:movies`
 - **Also turns on:** nothing

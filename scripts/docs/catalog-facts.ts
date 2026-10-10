@@ -64,6 +64,14 @@ function health(def: AppDefinition): string {
   return `${code(test)}, every ${interval} (timeout ${timeout}, ${String(retries)} retries, ${start} to start)`;
 }
 
+function api(def: AppDefinition): string {
+  if (def.api === undefined) return 'none that Mediaplane calls';
+  const { port, key } = def.api;
+  const carried =
+    key.scheme === 'bearer' ? 'as a Bearer token' : 'in the `X-Api-Key` header';
+  return `on its ${code(port)} port, which Mediaplane reaches over the stack's wiring network, with ${code(key.secret)} ${carried}`;
+}
+
 function secret(source: SecretSource): string {
   if ('generate' in source) {
     return source.generate === 'hex32'
@@ -100,6 +108,7 @@ export function renderFacts(def: AppDefinition): string {
     ['Runs as', runsAs(def)],
     ['Health check', health(def)],
     ['Secrets', secrets(def)],
+    ['API', api(def)],
     ['Needs', list(def.requires.map((r) => r.capability))],
     ['Provides', list(def.provides)],
     ['Also turns on', turnsOn(def)],

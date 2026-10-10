@@ -57,6 +57,11 @@ export interface AppContext<Options = Record<string, unknown>> {
   /** Whether the web UIs are published on the LAN: network.bind is lan or all. */
   publishesOnLan: boolean;
   /**
+   * Where a browser reaches the web UIs: the bind addresses, or with bind: all, 127.0.0.1
+   * and this host's private addresses.
+   */
+  webAddresses: string[];
+  /**
    * The LAN subnets whose clients may be trusted: lanSubnets while publishesOnLan,
    * otherwise none. Use it, not lanSubnets, to skip a login or open a firewall.
    */
@@ -92,6 +97,22 @@ export interface ConfigFileContext<
   random(size: number): Buffer;
 }
 
+/**
+ * How Mediaplane reaches an app's HTTP API (spec §6.1), over the stack's wiring network.
+ * An app with one joins that network. One that runs in another app's network namespace,
+ * as qBittorrent does behind Gluetun, is reached through that app, which joins for it.
+ */
+export interface ApiSpec {
+  /** The port, by name, that serves it: its container port, after apps.<id>.port. */
+  port: string;
+  /** A path that answers 200 without a key once the app is ready: /ping for the arrs. */
+  ready: string;
+  /** Which of the app's secrets is its API key, and how a request carries it. */
+  key: { secret: string; scheme: 'x-api-key' | 'bearer' };
+  /** A path that answers 200 only with the key: it shows the key still works. */
+  check: string;
+}
+
 export interface ServiceExtras {
   cap_add?: string[];
   devices?: string[];
@@ -117,6 +138,8 @@ export interface AppDefinition<Options = Record<string, unknown>> {
   credentials: CredentialStep[];
   /** 'image' uses the image's own HEALTHCHECK. 'none' has no health check. */
   health: HealthCheck | 'image' | 'none';
+  /** Its HTTP API, when Mediaplane calls it. */
+  api?: ApiSpec;
   /** App-specific settings under apps.<id> in stack.yaml. */
   options?: z.ZodType<Options>;
   /** Apps this one needs, given its options (e.g. qBittorrent with a VPN needs Gluetun). */

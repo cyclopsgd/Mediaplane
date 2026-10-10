@@ -21,6 +21,28 @@ describe('catalog', () => {
     expect(undocumented(stackJsonSchema(catalog) as DescribedSchema)).toEqual([]);
   });
 
+  it('gives an API to the apps Mediaplane wires', () => {
+    expect(catalog.filter((app) => app.api !== undefined).map((app) => app.id)).toEqual([
+      'prowlarr',
+      'qbittorrent',
+      'radarr',
+      'sonarr',
+    ]);
+  });
+
+  describe.each(
+    catalog.flatMap((app) =>
+      app.api === undefined ? [] : [[app.id, app, app.api] as const],
+    ),
+  )("%s's API", (_id, app, api) => {
+    it('is served on a port it declares, with a key it declares', () => {
+      expect(app.ports.map((port) => port.name)).toContain(api.port);
+      expect(Object.keys(app.secrets)).toContain(api.key.secret);
+      expect(api.ready).toMatch(/^\//);
+      expect(api.check).toMatch(/^\/api\//);
+    });
+  });
+
   describe.each(catalog.map((app) => [app.id, app] as const))('%s', (_id, app) => {
     it('is pinned by exact tag and multi-arch digest', () => {
       expect(app.image.tag).not.toBe('latest');
