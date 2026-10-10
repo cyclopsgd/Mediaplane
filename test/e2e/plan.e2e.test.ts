@@ -74,6 +74,14 @@ describe('plan against real Docker', () => {
       'seerr.apiKey',
       'sonarr.apiKey',
     ]);
+    expect(
+      result.files.filter((f) => f.prestart === true).map((f) => [f.path, f.status]),
+    ).toEqual([
+      ['appdata/prowlarr/config.xml', 'create'],
+      ['appdata/qbittorrent/qBittorrent/qBittorrent.conf', 'create'],
+      ['appdata/radarr/config.xml', 'create'],
+      ['appdata/sonarr/config.xml', 'create'],
+    ]);
   });
 
   it("includes the user's compose.override.yaml in the hashes", async () => {

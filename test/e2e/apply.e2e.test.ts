@@ -8,14 +8,35 @@ import {
   detectHostFacts,
   nodeExec,
   nodeProbe,
+  readSecretStore,
   renderEnvFile,
   type ApplyOptions,
+  type ExecResult,
 } from '@mediaplane/engine';
 import { tempDir } from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
-import { BUSYBOX, composeDown, ejectArguments, makeHome } from './helpers';
+import { BUSYBOX, composeDown, ejectArguments, makeHome, REPO } from './helpers';
 
 const PROJECT = `mediaplane-e2e-${process.pid}-apply`;
+
+const MAIN = join(REPO, 'packages', 'cli', 'src', 'main.ts');
+
+/** `mediaplane <args>`, run from source as a user would, for the test's project. */
+function mediaplane(...args: string[]): Promise<ExecResult> {
+  return nodeExec(process.execPath, ['--import', 'tsx', MAIN, ...args], {
+    cwd: REPO,
+    env: { ...process.env, MEDIAPLANE_COMPOSE_PROJECT: PROJECT },
+    timeoutMs: 120_000,
+  });
+}
+
+/** The pre-start files every apply of the video stack plans. */
+const PRESTART = [
+  'appdata/prowlarr/config.xml',
+  'appdata/qbittorrent/qBittorrent/qBittorrent.conf',
+  'appdata/radarr/config.xml',
+  'appdata/sonarr/config.xml',
+];
 
 describe('apply against real Docker', () => {
   it('starts the video stack healthy, then has nothing left to do', async () => {
@@ -48,11 +69,60 @@ describe('apply against real Docker', () => {
       );
       expect((await stat(join(home, 'appdata', 'seerr'))).uid).toBe(1000);
 
+      // Slice 3a: the files Mediaplane wrote before the apps first started.
+      expect(
+        first.plan.files
+          .filter((f) => f.prestart === true)
+          .map((f) => [f.path, f.status]),
+      ).toEqual(PRESTART.map((path) => [path, 'create']));
+      const store = await readSecretStore(home);
+      for (const app of ['prowlarr', 'radarr', 'sonarr']) {
+        const xml = await readFile(join(home, 'appdata', app, 'config.xml'), 'utf8');
+        expect(xml).toContain(
+          `<ApiKey>${store.apps[app]?.apiKey ?? 'none stored'}</ApiKey>`,
+        );
+      }
+
+      // qBittorrent takes the shared login that credentials shows, and its own key.
+      const shown = await mediaplane('credentials', '--home', home, '--json', '--reveal');
+      expect(shown.code, shown.stderr).toBe(0);
+      const login = JSON.parse(shown.stdout) as {
+        username: string;
+        password: string;
+        apps: { app: string; urls: string[]; login: string }[];
+      };
+      expect(login.apps.find((a) => a.app === 'qbittorrent')).toMatchObject({
+        login: 'shared',
+        urls: ['http://127.0.0.1:8080'],
+      });
+      const signIn = await fetch('http://127.0.0.1:8080/api/v2/auth/login', {
+        method: 'POST',
+        body: new URLSearchParams({ username: login.username, password: login.password }),
+      });
+      expect(signIn.status).toBe(204);
+      const version = await fetch('http://127.0.0.1:8080/api/v2/app/version', {
+        headers: { authorization: `Bearer ${store.apps.qbittorrent?.apiKey ?? ''}` },
+      });
+      expect(version.status).toBe(200);
+      const qbittorrent = containers.find((c) => c.service === 'qbittorrent');
+      const log = await nodeExec('docker', ['logs', qbittorrent?.id ?? 'missing'], {
+        cwd: '/',
+      });
+      expect(log.code, log.stderr).toBe(0);
+      expect(log.stdout + log.stderr).not.toMatch(/temporary password/i);
+
       const second = await apply({
         ...options,
         confirm: () => Promise.reject(new Error('nothing should need confirming')),
       });
       expect(second.outcome).toBe('no-changes');
+      // Nothing ran, so nothing was written: the files are the apps' own from now on.
+      expect(second.actions).toEqual([]);
+      expect(
+        second.plan.files
+          .filter((f) => f.prestart === true)
+          .map((f) => [f.path, f.status]),
+      ).toEqual(PRESTART.map((path) => [path, 'unchanged']));
 
       // Ejectable: the command printed in compose.yaml's header recreates nothing. An
       // empty compose.override.yaml makes the command's second -f real, and changes
