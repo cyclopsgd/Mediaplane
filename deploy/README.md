@@ -11,15 +11,18 @@ Mediaplane runs as two containers in their own Compose project, `mediaplane-syst
 The stack Mediaplane deploys is a separate Compose project, `mediaplane`, so `apply` can
 never touch Mediaplane itself.
 
-> Mediaplane is pre-alpha. The apps are not wired together yet (Slices 3 to 7 do that).
-> On a home network, `init` sets their web UIs to be published on your LAN. Until the
+> Mediaplane is pre-alpha. The apps are not wired together yet (Slices 3b to 7 do that).
+> On a home network, `init` suggests publishing their web UIs on your LAN. Until the
 > wiring lands:
 >
 > - Jellyfin's setup wizard and Seerr's setup are open to anyone on your LAN until you
 >   complete them, so complete them first;
-> - Sonarr, Radarr and Prowlarr ask for a login that has no user yet.
+> - Sonarr, Radarr and Prowlarr ask for a login that has no user yet (Slice 3b creates
+>   it).
 >
-> To keep the web UIs on this machine only, see [First run](#first-run).
+> qBittorrent has the shared admin login from its first start: `mediaplane credentials`
+> shows it. To keep the web UIs on this machine only, answer `localhost` when `init`
+> asks (see [First run](#first-run)).
 
 ## What you need
 
@@ -31,8 +34,9 @@ never touch Mediaplane itself.
 - **No SELinux in enforcing mode.** Such hosts aren't supported yet: neither
   Mediaplane's bind mounts nor the apps' carry a `:z` label.
 - **A folder for the Mediaplane home,** on a local filesystem that supports hard links,
-  such as ext4, XFS or Btrfs. Mediaplane creates its lock and `stack.yaml` with a hard
-  link, so FAT, exFAT and some network shares won't work.
+  such as ext4, XFS or Btrfs. Mediaplane creates its lock, `stack.yaml` and the files
+  apps read at their first start with a hard link, so FAT, exFAT and some network shares
+  won't work.
 - **A data folder** for downloads and media.
 
 ## Install
@@ -97,11 +101,17 @@ It adds `-t` only on a terminal, so it works in scripts too.
 ## First run
 
 ```bash
-mediaplane init     # asks a few questions, then writes /opt/mediaplane/stack.yaml
-mediaplane plan     # checks the host and shows what apply would do
-mediaplane apply    # asks before it changes anything; --yes skips the question
+mediaplane init         # asks a few questions, then writes /opt/mediaplane/stack.yaml
+mediaplane plan         # checks the host and shows what apply would do
+mediaplane apply        # asks before it changes anything; --yes skips the question
 mediaplane status
+mediaplane credentials  # the admin login, and where each app is
 ```
+
+`init` checks the flags it can before its first question, and asks again when an answer
+won't do.
+Without a terminal it asks nothing: pass the flags in the
+[CLI reference](../docs/reference/cli.md#mediaplane-init) instead.
 
 - **`init`** writes the user it runs as into `stack.yaml`. Inside the container that is
   `MEDIAPLANE_UID`; run as root (`docker exec -u 0`), it writes 1000 instead. The apps
@@ -109,15 +119,39 @@ mediaplane status
 - **The timezone.** `init` writes the container's `TZ`: the host's zone from
   `deploy/.env`, or `UTC` when that is empty. Pass `--timezone Europe/London`, for
   example, or edit `timezone:` afterwards.
-- **Who can reach the apps.** On a home network, `init` writes `network.bind: lan`, so
-  the web UIs are published on your LAN, and you can open them from your other devices.
-  On a cloud VM it writes `localhost`. To keep the web UIs on this machine only, change
-  `bind: lan` to `bind: localhost` in `stack.yaml` before you run `apply`: `init` has no
-  option for it. Until the wiring lands (Slices 3 to 7):
+- **Who can reach the apps.** `init` asks whether to publish the web UIs on your LAN
+  (`network.bind: lan`), so you can open them from your other devices, or to keep them
+  on this machine (`localhost`, or `--bind localhost`). On a cloud VM it suggests
+  `localhost`.
+  - With `lan`, it offers the LAN subnet it sees, when it sees just one, or asks you to
+    type one: a private range that holds one of this host's addresses. It writes it as
+    `network.lan_subnet` (`--lan-subnet`). Left empty, `plan` detects it each time. On a
+    cloud VM it offers none, and you must type it.
+  - With `lan`, it also asks whether your own network must sign in too
+    (`security.login_on_lan`; `--no-login-on-lan` says no).
+
+  Until the wiring lands (Slices 3b to 7):
   - Jellyfin's setup wizard and Seerr's setup are open to anyone on your LAN until you
     complete them. Complete them right after the first `apply`.
   - Sonarr, Radarr and Prowlarr ask for a login that has no user yet. Their READMEs,
     such as [Sonarr's](../catalog/sonarr/README.md), say how to create one.
+
+- **The admin login.** `init` asks for its user name (`--admin-user`), and whether
+  Mediaplane should generate its password or read yours from a file in the home
+  (`--admin-password-file secrets/admin-password`, at least 12 characters). After
+  `apply`, `mediaplane credentials` shows the login and each app's address. It shows a
+  password of your own only with `--reveal`, and its `--json` output leaves out either
+  unless you add `--reveal`. qBittorrent uses this login today; Sonarr, Radarr and
+  Prowlarr follow in Slice 3b.
+  - qBittorrent gets the login only at its first start, from a file Mediaplane never
+    rewrites. So if you later change `admin.password`, or switch between yours and the
+    generated one, `credentials` shows the new password but qBittorrent keeps the old
+    one. Change it in qBittorrent's web UI too, until Slice 3c does that for you.
+  - Removing your own `admin.password` brings back the password Mediaplane generated
+    before, if it generated one. It keeps it, and never generates another.
+- **The VPN address.** With a VPN provider, `init` asks for your WireGuard address
+  (`--vpn-addresses`, which needs `--vpn-provider`). Providers such as Mullvad need it.
+  It is the `Address` line in the WireGuard file your provider gives you.
 - **File secrets.** A secret written as `{ file: secrets/… }` is read from the home.
   Mediaplane's container sees nothing outside the home, so keep secret files there.
 - **Environment secrets.** A secret written as `{ env: NAME }` must be in the container's
@@ -254,6 +288,22 @@ Each item is a message you may see, then what to do.
 
   Check that the data folder and the home are reachable on the host. A network share
   (NFS or SMB) that has stopped responding is the usual cause.
+
+- `… was not written by Mediaplane, so it lacks the key Mediaplane gave …`
+
+  The app first started before Mediaplane wrote its settings file. Its README, under
+  "Set up before Slice 3a", shows how to replace the file.
+
+- `cannot create …/appdata/… (EACCES)`
+
+  Mediaplane's user can't write in the app's folder, usually because it belongs to the
+  stack's `user:`, so apply can't write the app's settings file there. Its README, under
+  "Set up before Slice 3a", says what to do.
+
+- `the admin password has not been generated yet`
+
+  `mediaplane credentials` needs an `apply` first: apply generates the password before
+  it starts any app.
 
 - `Error response from daemon: Forbidden`
 

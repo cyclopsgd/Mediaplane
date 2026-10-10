@@ -24,15 +24,20 @@ folder, only its own config folder.
 
 ## What Mediaplane does today
 
-- **Its API key.** Generated once, and passed in `PROWLARR__AUTH__APIKEY`. Prowlarr keeps
-  it only in its environment: it is not in `config.xml`.
+- **Its API key.** Generated once, and passed in `PROWLARR__AUTH__APIKEY`.
+- **`config.xml`, before its first start.** Mediaplane writes
+  `appdata/prowlarr/config.xml` with the API key and the login settings below, only if the
+  file doesn't exist. Prowlarr keeps them and adds the rest of its settings, so it keeps
+  its key even if the variable is ever lost. Mediaplane never changes the file after
+  that.
 - **Its login.** `PROWLARR__AUTH__METHOD` is `Forms`. `PROWLARR__AUTH__REQUIRED` is
   `Enabled`, or `DisabledForLocalAddresses` when `security.login_on_lan` is `false`. In
-  that case `PROWLARR__SERVER__TRUSTEDNETWORKS` also lists your LAN subnet, when it is
-  known.
+  that case, while the web UI is published on your LAN (`network.bind` `lan` or `all`),
+  `PROWLARR__SERVER__TRUSTEDNETWORKS` lists your LAN subnet, when Mediaplane knows it.
 - **Byparr.** Listing Prowlarr also turns on Byparr, the Cloudflare challenge solver,
   unless you list FlareSolverr instead or set `byparr: { enabled: false }`.
-- **Its web UI,** published as `network.bind` says.
+- **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its
+  address.
 
 ## What stays yours
 
@@ -41,9 +46,8 @@ to Sonarr and Radarr.
 
 ## Not built yet
 
-- **Slice 3:**
-  - the key written into `config.xml` before first start;
-  - the shared admin login.
+- **Slice 3b:** the shared admin login. Until then, `mediaplane credentials` lists
+  Prowlarr with `its login arrives in Slice 3b`.
 - **Slice 5:**
   - the links to Sonarr and Radarr, with full sync;
   - Byparr registered as Prowlarr's indexer proxy, with the tag `cloudflare`. Tag your
@@ -80,7 +84,7 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 ## Known issues
 
 - **No one can sign in yet.** Mediaplane turns the forms login on, but no user exists
-  until Slice 3 creates the admin login.
+  until Slice 3b creates the shared admin login.
   - With the default `security.login_on_lan: true`, Prowlarr shows a login page that has
     no account to sign in to.
   - With `security.login_on_lan: false`, anyone who reaches Prowlarr from a local address
@@ -89,3 +93,26 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
     and password under Settings, General, Security. Then set `login_on_lan` back to
     `true` and run `apply` again. While `login_on_lan` is `false`, anyone on your network
     gets in, so do this straight away, or keep `network.bind: localhost` while you do.
+    From Slice 3b, `apply` sets the shared admin login instead.
+- **Set up before Slice 3a.** If Prowlarr first started before Mediaplane wrote its
+  `config.xml`, the file has no API key, and `plan` stops with `prowlarr.not-seeded`. To
+  fix it, stop Prowlarr, delete the file, and apply again: Mediaplane writes a new one
+  before Prowlarr starts. You lose the settings kept in that file, such as a URL base you
+  set in Prowlarr. Your indexers stay.
+
+  ```bash
+  docker stop mediaplane-prowlarr-1
+  rm /opt/mediaplane/appdata/prowlarr/config.xml
+  mediaplane apply
+  ```
+
+  Use your own home, and the container name `docker ps` shows. If `rm` is refused, use
+  `sudo rm`. Slice 4 does this for you.
+
+  If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the
+  stack's `user:`, not to the user Mediaplane runs as (`MEDIAPLANE_UID` in its
+  container). Give the folder to Mediaplane's user, with
+  `sudo chown <uid>:<gid> /opt/mediaplane/appdata/prowlarr` and the ids from
+  `deploy/.env`, then apply again. Prowlarr takes the folder back when it starts. Or
+  delete the whole folder to start Prowlarr afresh: it loses its database and settings,
+  your indexers included.

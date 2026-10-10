@@ -1,6 +1,6 @@
 # Threat model
 
-This is the threat model for Mediaplane as built today: M1, up to and including Slice 2c.
+This is the threat model for Mediaplane as built today: M1, up to and including Slice 3a.
 It makes spec §7 concrete. To report a vulnerability, see [SECURITY.md](../../SECURITY.md).
 
 ## The one thing to know
@@ -11,13 +11,14 @@ that power. None of them removes it.
 
 ## What it protects
 
-| Asset                                        | Where                                                | Why it matters                                             |
-| -------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
-| The host                                     | Everything                                           | Docker access is root on the host                          |
-| Generated API keys                           | `state/secrets.json` and `generated/.env`, both 0600 | They open the apps' APIs                                   |
-| Your secrets: VPN key, Plex token, passwords | `secrets/` (0700), or environment variables          | They are your accounts                                     |
-| App data                                     | `appdata/<app>/`                                     | The apps' databases and settings, some holding credentials |
-| Your media                                   | The data folder                                      | Your library                                               |
+| Asset                                        | Where                                                                 | Why it matters                                             |
+| -------------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
+| The host                                     | Everything                                                            | Docker access is root on the host                          |
+| Generated API keys                           | `state/secrets.json`, `generated/.env` (both 0600) and `appdata/`     | They open the apps' APIs                                   |
+| The shared admin password                    | `state/secrets.json` (0600) or `admin.password`; a hash in `appdata/` | It opens qBittorrent today, and more apps from Slice 3b    |
+| Your secrets: VPN key, Plex token, passwords | `secrets/` (0700), or environment variables                           | They are your accounts                                     |
+| App data                                     | `appdata/<app>/`                                                      | The apps' databases and settings, some holding credentials |
+| Your media                                   | The data folder                                                       | Your library                                               |
 
 ## What runs, and who can reach it
 
@@ -77,8 +78,13 @@ host network, read-only mounts
     socket.
   - Only their web UIs are published, bound as `network.bind` says. Everything else stays
     on the stack's own Docker network.
+  - Before an app's first start, Mediaplane writes the files it reads when it starts:
+    Sonarr's, Radarr's and Prowlarr's `config.xml`, qBittorrent's `qBittorrent.conf` and
+    Gluetun's `auth/config.toml`. Each is written 0600, and only if absent.
   - With a VPN, qBittorrent has no network of its own. It uses Gluetun's, so it has no
-    route out when the VPN is down. The automated test for that arrives in Slice 3.
+    route out when the VPN is down. The automated test for that arrives in Slice 3d.
+  - Gluetun's control server (port 8000) is never published. It answers only Mediaplane's
+    key, on two read-only routes (see T11; Slice 3d's end-to-end test checks this).
 
 ## Threats and controls
 
@@ -103,25 +109,39 @@ Controls today:
 
 - Only web UIs are published: on the host's private addresses (`lan`), on localhost, or
   on every interface with a warning (`all`).
+- qBittorrent asks for the shared admin login from its first start. Mediaplane writes
+  the login into `qBittorrent.conf` before qBittorrent runs, so the image never starts
+  with its temporary password. It asks on localhost too.
 - Sonarr, Radarr and Prowlarr ask for a login from the LAN too, by default
   (`security.login_on_lan`).
+- With `login_on_lan: false`, qBittorrent lets only your LAN subnet skip its login, and
+  only while the web UIs are on the LAN. That subnet is `network.lan_subnet`, or else the
+  subnets of the host's private addresses. Sonarr, Radarr and Prowlarr let any local
+  address in (see What remains). `network.lan_subnet` must be private (RFC 1918): a
+  public range, or `0.0.0.0/0`, is refused.
 
 What remains:
 
-- On a home network, `init` writes `bind: lan`, so the web UIs are on your LAN.
-- Until the wiring lands (Slices 3 to 7), Jellyfin's wizard and Seerr's setup are open to
-  whoever reaches them first. Complete them right after the first `apply`, or keep
+- On a home network, `init` suggests `bind: lan`, which puts the web UIs on your LAN.
+- Until the wiring lands (Slices 6 and 7), Jellyfin's wizard and Seerr's setup are open
+  to whoever reaches them first. Complete them right after the first `apply`, or keep
   `bind: localhost` until you have.
-- Sonarr, Radarr and Prowlarr have no user until Slice 3 creates one, or you do. Until
-  then, with `login_on_lan: true` nobody can sign in, and with `false` anyone on a local
-  address gets in without a login.
+- Sonarr, Radarr and Prowlarr have no user until Slice 3b creates the shared admin
+  there, or you do. Until then, with `login_on_lan: true` nobody can sign in, and with
+  `false` anyone on a local address gets in without a login. For them, "local" means
+  any private address, not just your LAN subnet.
 
 ### T3. A cloud VM's private address is reachable from the internet
 
 Controls today:
 
-- On a detected cloud VM, `init` writes `bind: localhost`, and `bind: lan` is refused
-  unless `network.lan_subnet` is set.
+- On a detected cloud VM, `init` suggests `bind: localhost`. With `lan`, it asks you to
+  type the private network to publish on, and never offers one it detected. `plan`
+  refuses `bind: lan` there unless `network.lan_subnet` is set (`network.cloud-lan`).
+- On a cloud VM, Mediaplane trusts no LAN subnet unless `network.lan_subnet` names one:
+  no login bypass, and no way in through Gluetun's firewall. When that keeps your LAN
+  out of qBittorrent's web UI, or makes qBittorrent ask your LAN for a login, `plan`
+  warns (`network.no-lan-subnet`).
 - `bind: all` warns on every plan.
 
 What remains:
@@ -135,11 +155,17 @@ Controls today:
 
 - It has no Docker access, and no other app's appdata.
 - With a VPN, qBittorrent sits in Gluetun's network namespace.
+- Mediaplane writes an app's pre-start files only inside its `appdata/<app>` folder. It
+  refuses a path that leaves the folder, and a link on the way that leads outside it.
 
 What remains:
 
 - The apps that handle media share the data folder, which hardlinks need, so a
   compromised one can change your media.
+- A running app could swap one of its folders for a link between Mediaplane's check and
+  the write, because Node can't refuse links at each step of a path. The write never
+  replaces a file, and the catalog fixes the file's name. A full fix would write from
+  inside the app's own container.
 
 ### T5. Secrets leak
 
@@ -151,11 +177,16 @@ Controls today:
 - Replaced with `***` in errors. Change records hold names, never values.
 - Given to Compose in its environment or in the 0600 `generated/.env`, never on its
   command line.
+- The files apps read at their first start are written 0600, never half-written, and
+  never over an existing file. `plan` lists them without their content, and change
+  records hold only their paths.
 
 What remains:
 
 - Not encrypted at rest, so use full-disk encryption.
-- `appdata/` holds credentials too: treat it as sensitive.
+- `appdata/` holds credentials too: the apps' keys, and qBittorrent's password hash.
+  qBittorrent rewrites its file readable by every user on the host (0644). Treat
+  `appdata/` as sensitive, and keep other users out of the home.
 
 ### T6. Another user on the host uses Mediaplane's Docker access
 
@@ -217,6 +248,47 @@ Controls today:
 What remains:
 
 - Without it, a bug reaches the whole Docker API.
+
+### T10. One password opens every app
+
+Controls today:
+
+- The shared admin password is generated with `crypto.randomBytes`: 24 letters and
+  digits, about 143 bits. It is kept in `state/secrets.json` (0600).
+- A password of your own (`admin.password`) must be at least 12 characters.
+- `mediaplane credentials` shows a generated password. It shows your own only with
+  `--reveal`, and its `--json` output leaves either out unless you add `--reveal`.
+  `plan`, `apply`, errors and change records never show it.
+- qBittorrent keeps only a hash of it: PBKDF2-HMAC-SHA512, 100 000 rounds, with a
+  random salt.
+
+What remains:
+
+- One password opens every app that uses it: qBittorrent today, Sonarr, Radarr and
+  Prowlarr from Slice 3b, and Jellyfin from Slice 6. A leak from one is a leak for all.
+- From Slice 3b, Sonarr, Radarr and Prowlarr give their password hash to anyone who
+  holds their API key. Prowlarr holds Sonarr's and Radarr's keys from Slice 5.
+- Changing `admin.username`, `admin.password`, `login_on_lan`, `network.bind` or
+  `network.lan_subnet` after qBittorrent's first start doesn't reach qBittorrent, whose
+  file is written only once. `mediaplane credentials` shows the new login all the same. Change it in
+  qBittorrent's web UI too, until Slice 3c manages those settings through its API.
+- There is no way yet to rotate the generated password (Slice 4).
+
+### T11. Something on the stack's network uses Gluetun's control server
+
+Controls today:
+
+- Its port, 8000, is never published.
+- Before Gluetun's first start, Mediaplane writes `appdata/gluetun/auth/config.toml`. It
+  gives a generated key two read-only routes, `GET /v1/vpn/status` and
+  `GET /v1/publicip/ip`, and nothing else. Requests without the key are refused
+  (Slice 3d's end-to-end test checks this). Without that file, Gluetun v3.41 answers
+  anyone on the stack's network.
+
+What remains:
+
+- A Gluetun that started before Slice 3a reads the file only when it next starts.
+- The key is kept in `state/secrets.json` and in Gluetun's appdata, both 0600.
 
 ## What the proxy does not stop
 

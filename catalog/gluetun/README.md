@@ -28,17 +28,29 @@ upstream image, unmodified. It is turned on whenever qBittorrent runs behind the
   - `VPN_SERVICE_PROVIDER` is `vpn.provider`, and `VPN_TYPE` is `wireguard`;
   - `WIREGUARD_PRIVATE_KEY` comes from `vpn.private_key`, through `generated/.env`, so it
     never appears in `compose.yaml`;
-  - `WIREGUARD_ADDRESSES` is `vpn.addresses`, when you set it.
-- **Your LAN.** `FIREWALL_OUTBOUND_SUBNETS` lists your LAN subnet, when it is known, so
-  that your own network can reach qBittorrent's web UI. Gluetun accepts a list.
+  - `WIREGUARD_ADDRESSES` is `vpn.addresses`, when you set it. `mediaplane init` asks for
+    it.
+- **Your LAN.** While the web UIs are published on your LAN (`network.bind` `lan` or
+  `all`), `FIREWALL_OUTBOUND_SUBNETS` lists your LAN subnet, so that your own network can
+  reach qBittorrent's web UI. With `bind: localhost` it is left out: Docker on this
+  machine reaches the web UI from the stack's own network, which Gluetun already lets
+  through (Slice 3d's end-to-end test checks this). If the web UIs are on your LAN but
+  Mediaplane knows no LAN subnet, such as on a cloud VM without `network.lan_subnet`,
+  `plan` warns (`network.no-lan-subnet`).
 - **What it needs from the host.** It gets `NET_ADMIN` and `/dev/net/tun`, and `plan`
   reports an error when `/dev/net/tun` is missing.
 - **Its control server** (port 8000) is never published. Apps in its network must not
   use port 8000.
+- **A key for the control server, before its first start.** Mediaplane writes
+  `appdata/gluetun/auth/config.toml`, only if it doesn't exist. It lets a generated key
+  (`controlApiKey`, kept in `state/secrets.json`) read `GET /v1/vpn/status` and
+  `GET /v1/publicip/ip`, and nothing else. Requests without the key are refused
+  (Slice 3d's end-to-end test checks this). Without the file, Gluetun answers anyone on
+  the stack's network. Slice 3d's `mediaplane vpn-check` uses the key.
 
 ## Not built yet
 
-- **Slice 3:** the automated kill-switch test, against a local WireGuard server, and
+- **Slice 3d:** the automated kill-switch test, against a local WireGuard server, and
   `mediaplane vpn-check`, which compares qBittorrent's public address with the host's.
 
 See the [roadmap](../../docs/plans/m1-roadmap.md).
@@ -66,5 +78,21 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   wrong or fake key, Gluetun never becomes healthy and keeps retrying. `apply` then fails
   within about half a minute, naming `gluetun` as unhealthy, and qBittorrent does not
   start.
-- **The LAN subnet is set even with `bind: localhost`.** Slice 3 is meant to limit it to
-  stacks that publish on the LAN.
+- **Set up before Slice 3a.** A Gluetun that was already running reads its key file only
+  when it next starts. Restart it once, then qBittorrent, which loses its network when
+  Gluetun restarts. Use the container names `docker ps` shows:
+
+  ```bash
+  docker restart mediaplane-gluetun-1
+  docker restart mediaplane-qbittorrent-1
+  ```
+
+  - If `appdata/gluetun/auth/config.toml` was there already, without an `apikey` line,
+    `plan` stops with `gluetun.not-seeded`. Keep a copy of your own roles, delete the
+    file and apply again. Then add your roles below Mediaplane's, and restart both as
+    above.
+  - If `apply` then fails with `cannot create … (EACCES)`, the `auth` folder doesn't
+    belong to the user Mediaplane runs as (`MEDIAPLANE_UID` in its container). Give it to
+    that user, with `sudo chown <uid>:<gid> /opt/mediaplane/appdata/gluetun/auth` and the
+    ids from `deploy/.env`, then apply again. Gluetun runs as root, so it still reads the
+    file.

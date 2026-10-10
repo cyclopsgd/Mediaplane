@@ -378,9 +378,16 @@ export default defineApp({
   secrets: { apiKey: { generate: 'hex32' } },  // where each secret comes from
   credentials: [                // ordered seeding steps (see table below)
     { step: 'env', var: 'SONARR__AUTH__APIKEY', secret: 'apiKey' },
-    { step: 'config-file', path: 'config.xml' },
     { step: 'bootstrap-api', action: 'create-admin' },
   ],
+  configFiles: (ctx) => [       // pre-start files (see below)
+    {
+      path: 'config.xml',       // inside appdata/sonarr
+      content: `<Config><ApiKey>${ctx.secret('apiKey')}</ApiKey>…</Config>`,
+      seeded: /<ApiKey>[^<]+<\/ApiKey>/,
+    },
+  ],
+  login: { comingIn: 'Slice 3b' },  // 'shared' once the shared admin works there
   health: { http: '/ping' },
   experimental: false,
 });
@@ -392,13 +399,23 @@ fixed uid, such as Seerr (uid 1000), Mediaplane sets the ownership of that app's
 
 **Credential seeding steps.** Each app declares an ordered list of steps,
 because some apps need more than one. Sonarr, for example, takes its key from an
-env var and `config.xml`, and its admin user from the API.
+env var and from `config.xml` (a pre-start file, below), and its admin user from
+the API.
 
 | Step | Mechanism | Used by (M1) |
 |---|---|---|
 | `env` | An environment variable set from first start | Sonarr, Radarr, Prowlarr, Seerr |
-| `config-file` | A config file written before first start, and only if absent | Sonarr, Radarr, Prowlarr (`config.xml`), qBittorrent (`qBittorrent.conf`) |
 | `bootstrap-api` | First-run setup through the app's API after it starts | Sonarr, Radarr, Prowlarr (admin user), Jellyfin (startup wizard, API key), Seerr (first sign-in). Audiobookshelf in M4 |
+
+**Pre-start files.** Files an app reads when it starts come from its
+`configFiles(ctx)` hook, not from a step. The hook is pure: from the resolved
+stack, the shared admin login and the app's secrets, it returns each file's path
+inside the app's appdata folder, its content, and a `seeded` pattern. Apply
+writes each file before the app's first start, and only if it is absent (§6.4).
+An existing file that doesn't match `seeded` is from an install made before
+Mediaplane seeded the app, and `plan` reports it (§11, Slice 3a). In M1 these
+are Sonarr's, Radarr's and Prowlarr's `config.xml`, qBittorrent's
+`qBittorrent.conf` and Gluetun's `auth/config.toml`.
 
 Secrets are declared separately from the steps that use them. A secret is
 either generated (`hex32`, `qbt`), created by the app itself (Jellyfin's API
@@ -518,7 +535,7 @@ in `compose.override.yaml` is therefore wired automatically.
 
 | Command | Purpose |
 |---|---|
-| `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider, login on the LAN); otherwise it takes flags. It never overwrites an existing file |
+| `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks the flags before the first prompt, and asks again after a bad answer. It never overwrites an existing file |
 | `plan` | Show what `apply` would change, including drift. Makes no changes |
 | `apply` | Converge on `stack.yaml` (§5) |
 | `status [app]` | Container health, VPN state, and the last apply's outcome |
@@ -555,7 +572,7 @@ against current upstream source and docs.
 | Plex | User-provided token from **`mediaplane plex-login`**, which runs the plex.tv PIN flow (prints a link, then polls until the user has signed in). Uses the long-lived legacy token, not the 7-day JWT | A claim token is fetched from plex.tv at apply time using the user's token, then passed as `PLEX_CLAIM` on first start, so the 4-minute claim expiry is never a problem | The one unavoidable interactive step. The M2 wizard reuses the same flow |
 | Seerr (≥ 3.5) | Generated, set through `API_KEY` | The key does nothing until a first user exists. Mediaplane signs in with `POST /api/v1/auth/jellyfin` as the Jellyfin admin it created, or with `POST /api/v1/auth/plex` and the user's token. It then configures Seerr through `/api/v1/settings/*` and finishes with `POST /api/v1/settings/initialize` | One media-server type per instance. `hostname` is never re-sent once the media server is configured, because doing so returns 500 |
 | Byparr / FlareSolverr | None | None | Internal only; never published |
-| Gluetun | User-provided VPN key (a secret file) | None | `FIREWALL_OUTBOUND_SUBNETS` is set to `network.lan_subnet`, so the LAN can reach qBittorrent's UI |
+| Gluetun | User-provided VPN key (a secret file). A generated `controlApiKey` for its control server, written to `auth/config.toml` before first start (§11, Slice 3a) | None | `FIREWALL_OUTBOUND_SUBNETS` is set to the LAN subnet while the web UIs are published on the LAN, so the LAN can reach qBittorrent's UI |
 
 **Login on the LAN.** `security.login_on_lan` defaults to `true`, and the M2
 wizard asks the user to choose.
@@ -563,7 +580,12 @@ wizard asks the user to choose.
 | Setting | Sonarr / Radarr / Prowlarr | qBittorrent |
 |---|---|---|
 | `true` | `AUTH__REQUIRED=Enabled` | Subnet whitelist disabled |
-| `false` | `AUTH__REQUIRED=DisabledForLocalAddresses`, with `SERVER__TRUSTEDNETWORKS` set to the LAN subnet plus Mediaplane's Docker network. Without that, the local bypass misbehaves behind proxies | `AuthSubnetWhitelist` set to the LAN subnet |
+| `false` | `AUTH__REQUIRED=DisabledForLocalAddresses`, with `SERVER__TRUSTEDNETWORKS` set to the LAN subnet, plus Mediaplane's Docker network from M2 (§11, Slice 3a). Without that, the local bypass misbehaves behind proxies | `AuthSubnetWhitelist` set to the LAN subnet |
+
+The LAN is trusted only while the web UIs are published on it (`network.bind`
+`lan` or `all`). Only then are Servarr's `SERVER__TRUSTEDNETWORKS`,
+qBittorrent's `AuthSubnetWhitelist` and Gluetun's `FIREWALL_OUTBOUND_SUBNETS`
+set. With `localhost`, they are left out (§11, Slice 3a).
 
 Jellyfin, Plex and Seerr always require login, because they have real user
 accounts.
@@ -931,3 +953,78 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   `docs/reference/stack.schema.json` (§4.2, §9) and the CLI reference are generated
   from code, and CI fails when they are stale. They move here from S8, by the owner's
   decision. The `--json` shapes stay in S8.
+
+### Slice 3a: shared admin and pre-start files (2026-10-10)
+
+- **S3 ships in four parts:** S3a (the shared admin and pre-start files), S3d (the
+  VPN's kill-switch test and `vpn-check`), S3b (the wiring framework) and S3c (the
+  download path), in that order. The roadmap gives each part's scope.
+- **Pre-start files come from each app's `configFiles(ctx)`** (§4.3, §6.4), a pure
+  renderer that replaces the `config-file` seeding step. Apply writes them in its files
+  step, before any pull or start, only when they are absent: mode 0600, never
+  half-written, with their folders created, and never through a link that leads out of
+  the app's appdata folder. `plan` lists them as created "before first start", and
+  never shows their content. It renders them from the secrets apply would generate, in
+  memory only, to learn their paths.
+- **Installs from before Slice 3a are reported, never overwritten.** A `config.xml`
+  without `ApiKey`, a `qBittorrent.conf` without `WebUI\APIKey`, or Gluetun's
+  `auth/config.toml` without an `apikey` line fails `plan` with `<app>.not-seeded`, and
+  its hint gives the steps. A file Mediaplane can't read counts as seeded, because
+  there is no way to tell. Slice 4 automates the fix, with the rest of "restore the key
+  at the source" (§6.3).
+- **The shared admin (§6.1).** `admin.username` is 3 to 32 letters, digits, `.`, `_`
+  or `-`. A password of your own must be at least 12 characters
+  (`admin.password-too-short`). Otherwise Mediaplane generates 24 base62 characters,
+  keeps them in `state/secrets.json` as `shared.adminPassword`, and `plan` lists
+  `admin.password` among the secrets to generate. It is generated for every stack that
+  doesn't set `admin.password`, even before an app uses it. In Slice 3a only
+  qBittorrent gets the login, through its pre-start file. Sonarr, Radarr and Prowlarr
+  get it through their API in Slice 3b, though their `config.xml` already sets
+  `AuthenticationMethod` and `AuthenticationRequired`.
+- **`credentials` (§5.2)** prints the login, and the web address of each app that has a
+  login. Its human output shows a generated password, as §6.1 says. `--json`
+  (`mediaplane.credentials/v1`) leaves the password `null` unless `--reveal` is given.
+  A password of your own is shown only with `--reveal`. Apps whose login is still to
+  come say which slice brings it, from the catalog's `login`.
+  - The addresses come from each app's port named `web`, on the stack's bind
+    addresses. With `bind: all`, they are `127.0.0.1` and the host's private
+    addresses.
+  - It writes nothing, and needs no running container: only the host's facts, and a
+    password that apply has generated.
+- **`init` asks five more questions (§5.2),** each with a flag: the admin user name,
+  whether to generate the password or read it from a file, `lan` or `localhost`
+  (`localhost` on a cloud VM), the LAN subnet with `lan`, and the WireGuard address
+  with a VPN provider.
+  - It checks every flag it can before the first question, and on a terminal it asks
+    again after a bad answer.
+  - The LAN subnet must hold one of the host's private addresses. On a cloud VM, it is
+    never offered, and `--bind lan` without `--lan-subnet` is refused.
+  - "Ask for a login from your own network too?" is asked only with `lan`.
+  - `--admin-password-file` must name a file inside the home, and
+    `--vpn-addresses` needs `--vpn-provider`.
+- **qBittorrent's Automatic Torrent Management is on**
+  (`Session\DisableAutoTMMByDefault=false`), so a torrent follows its category's save
+  path (§6.2). It applies to torrents you add by hand too.
+- **Gluetun's control server needs a key (§6.1).** Its pre-start `auth/config.toml`
+  gives a generated `controlApiKey` the routes `GET /v1/vpn/status` and
+  `GET /v1/publicip/ip`, and no other (Slice 3d's end-to-end test checks this).
+  Without it, Gluetun v3.41 answers anyone on the stack's network.
+- **The LAN is trusted only while the web UIs are on it (§6.1).**
+  `FIREWALL_OUTBOUND_SUBNETS`, Servarr's `SERVER__TRUSTEDNETWORKS` and qBittorrent's
+  `AuthSubnetWhitelist` are set only for `network.bind: lan` or `all`.
+  `network.lan_subnet` must lie inside an RFC 1918 range. On a cloud VM without it,
+  Mediaplane trusts no subnet. `plan` warns (`network.no-lan-subnet`) when that keeps
+  the LAN out of qBittorrent's web UI behind Gluetun, or, without the VPN, makes
+  qBittorrent ask the LAN for a login although `login_on_lan` is `false`.
+- **Mediaplane's own network joins `TRUSTEDNETWORKS` in M2, not M1** (§6.1). That
+  setting names the proxies whose `X-Forwarded-For` header Sonarr believes.
+  Mediaplane's own calls use API keys and send no such header, so the setting waits for
+  the M2 panel, which proxies requests.
+- **Apply retries a pull** (§5 step 7, §5.1) after a temporary registry error: a TLS
+  handshake, I/O or client timeout, a reset connection, an unexpected EOF, an HTTP
+  500, 502, 503 or 504, or a rate limit. It tries three more times, after 5, 15 and 45
+  seconds. A missing image, a refused login or a name that doesn't resolve fails at
+  once.
+- **Change records grow by additive, optional fields within `mediaplane.change/v1`**
+  (§5 step 12). Older records still parse. A field that changes meaning needs a v2.
+  Slice 3a adds none; S3b's wiring actions will.

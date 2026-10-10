@@ -34,17 +34,32 @@ unmodified, and by default puts it behind Gluetun's VPN.
 - **One port, inside and out.** qBittorrent checks the `Host` header, so the published
   port and its own port must match. `apps.qbittorrent.port` changes both, through
   `WEBUI_PORT`, and `apps.qbittorrent.env` refuses `WEBUI_PORT`.
-- **Its API key.** It is generated once and kept in `state/secrets.json`. It is not
-  applied yet (see below).
+- **`qBittorrent.conf`, before its first start.** Mediaplane writes
+  `appdata/qbittorrent/qBittorrent/qBittorrent.conf`, only if it doesn't exist, with:
+  - **the shared admin login:** the user name, and a PBKDF2 hash of the password, never
+    the password itself. `mediaplane credentials` shows the login;
+  - **its API key** (`WebUI\APIKey`), generated once and kept in `state/secrets.json`.
+    Sonarr and Radarr use it from Slice 3c;
+  - **the save path** `/data/torrents/`;
+  - **Automatic Torrent Management on,** so a torrent follows its category's save path.
+    That includes torrents you add by hand;
+  - **UPnP off,** so nothing opens a port on your router;
+  - **a login on localhost too** (`WebUI\LocalHostAuth`);
+  - **your LAN without a login** (`WebUI\AuthSubnetWhitelist`), only with
+    `security.login_on_lan: false` and the web UI published on your LAN. It lists your LAN
+    subnets, separated by commas. If Mediaplane knows no LAN subnet, `plan` warns
+    (`network.no-lan-subnet`).
+
+  qBittorrent keeps these and adds its own settings, and starts with no temporary
+  password. Mediaplane never changes the file after that: from then on, change settings
+  in qBittorrent's web UI.
 
 ## Not built yet
 
-- **Slice 3:**
-  - `qBittorrent.conf` written before first start, with the API key and the shared admin
-    login;
-  - the `tv` and `movies` categories, and save paths under `/data/torrents/`;
-  - the automated kill-switch test, which checks that qBittorrent has no network when
-    the VPN is down, and `mediaplane vpn-check`.
+- **Slice 3c:** the `tv` and `movies` categories, with save paths under
+  `/data/torrents/`, and the settings above managed through qBittorrent's API.
+- **Slice 3d:** the automated kill-switch test, which checks that qBittorrent has no
+  network when the VPN is down, and `mediaplane vpn-check`.
 
 See the [roadmap](../../docs/plans/m1-roadmap.md).
 
@@ -60,7 +75,38 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Known issues
 
-- **The first sign-in.** Until Slice 3 writes the shared admin login, the image prints a
-  temporary password for the `admin` user in qBittorrent's log when it starts. It is a new
-  one every time the container starts, until you set your own password in qBittorrent's
-  settings. Read it with `docker compose -p mediaplane logs qbittorrent`.
+- **`stack.yaml` reaches qBittorrent only at its first start.** Mediaplane never
+  rewrites `qBittorrent.conf`, so changing any of these afterwards doesn't change
+  qBittorrent: `admin.username`, `admin.password`, `security.login_on_lan`,
+  `network.bind` or `network.lan_subnet`.
+  - `mediaplane credentials` shows the new login all the same, so it and qBittorrent's
+    differ. Change the login in qBittorrent's web UI too, under Tools, Options, Web UI.
+  - Switching between a password of your own and the generated one is such a change too.
+    Removing `admin.password` brings back the password Mediaplane generated before, if
+    it generated one: it keeps it, and never generates another.
+  - From Slice 3c, `apply` manages these settings through qBittorrent's API, so a change
+    reaches it.
+- **Set up before Slice 3a.** If qBittorrent first started before Mediaplane wrote its
+  `qBittorrent.conf`, it runs with the image's own file. That file has no API key, and
+  until you set a password, qBittorrent makes a new temporary one at every start. `plan`
+  stops with `qbittorrent.not-seeded`. To fix it, stop qBittorrent, delete the file, and
+  apply again: Mediaplane writes a new one before qBittorrent starts. You lose the
+  settings kept in that file, such as speed limits. Your torrents stay.
+
+  ```bash
+  docker stop mediaplane-qbittorrent-1
+  rm /opt/mediaplane/appdata/qbittorrent/qBittorrent/qBittorrent.conf
+  mediaplane apply
+  ```
+
+  Stop it first: qBittorrent writes the file again when it stops. Use your own home, and
+  the container name `docker ps` shows. If `rm` is refused, use `sudo rm`. Slice 4 does
+  this for you.
+
+  If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the
+  stack's `user:`, not to the user Mediaplane runs as (`MEDIAPLANE_UID` in its
+  container). Give the folder to Mediaplane's user, with
+  `sudo chown <uid>:<gid> /opt/mediaplane/appdata/qbittorrent/qBittorrent` and the ids
+  from `deploy/.env`, then apply again. qBittorrent takes the folder back when it
+  starts. Or delete `appdata/qbittorrent` to start qBittorrent afresh: it loses its
+  settings and its list of torrents, but not the files it downloaded.

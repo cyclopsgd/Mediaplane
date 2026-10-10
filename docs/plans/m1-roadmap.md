@@ -14,7 +14,8 @@ Detailed plans so far:
 - Slice 1: [`m1-s1-pure-core.md`](m1-s1-pure-core.md) (done).
 - Slice 2a: [`m1-s2a-plan-against-docker.md`](m1-s2a-plan-against-docker.md) (done).
 - Slice 2b: [`m1-s2b-apply.md`](m1-s2b-apply.md) (done).
-- Slice 2c: [`m1-s2c-packaging.md`](m1-s2c-packaging.md).
+- Slice 2c: [`m1-s2c-packaging.md`](m1-s2c-packaging.md) (done).
+- Slice 3a: [`m1-s3a-admin-and-seed-files.md`](m1-s3a-admin-and-seed-files.md).
 
 ## Slices
 
@@ -40,6 +41,39 @@ just like a full slice.
 | S2b | **Apply.** Key generation and persistence, `.env` rendering, atomic writes and the lock, the appdata ownership helper (Seerr runs as uid 1000), the apply stages (write, pull, `up --wait`, verify, record), change history, the `apply`, `status`, `history` and `init` commands, verified health checks, and ADR 0004 | Containers come up healthy on amd64 and arm64. A second apply reports no changes |
 | S2c | **Packaging.** The Mediaplane image, `deploy/mediaplane.compose.yaml` with the socket proxy (`mediaplane-system`), host detection from inside the container (the host helper), the threat model and ADR 0008. Also, by the owner's decisions of 2026-10-09: Trivy for the Mediaplane image (moved here from S8); native arm64 CI (moved here from S8); and the docs so far, which are the generated `stack.yaml`, JSON Schema and CLI references with a CI freshness check (moved here from S8), `docs/architecture.md`, a README per app, the "app won't start" runbook and ADR 0006. And `pnpm audit` of the CLI's production dependencies in CI, which the image scan can't see because they are bundled (spec §7.2(7)) | Success criterion 6 |
 
+### S3 is delivered in four parts (decided 2026-10-09)
+
+S3 is too large for one plan, so it ships as four sub-slices, in the order below. Each
+one ends green, just like a full slice.
+
+- **S3a: shared admin and pre-start files.**
+  - Delivers: the shared admin login, with a generated password, and
+    `mediaplane credentials`; `init`'s questions for the admin, the LAN and the
+    WireGuard address; files written before an app's first start, only if absent
+    (`config.xml` for Sonarr, Radarr and Prowlarr, `qBittorrent.conf` with the shared
+    login and its key, and Gluetun's control-server key); the S3 network inputs below;
+    pull retries, and tests that clean up after themselves.
+  - Proves: `config.xml` holds the generated key; qBittorrent takes the shared password
+    from `credentials`, and its key; it prints no temporary password; a second apply
+    changes nothing.
+- **S3d: VPN.**
+  - Delivers: the kill-switch test against a local WireGuard server, `vpn-check`, the
+    CI `modprobe wireguard` step, and the "VPN down" runbook.
+  - Proves: success criterion 5.
+- **S3b: the wiring framework.**
+  - Delivers: how the Mediaplane container reaches the apps (an owner's decision, then
+    ADR 0011), the typed HTTP client, the integration contract, `resources.json`, the
+    wiring steps, and the Servarr admin login as its first resource.
+  - Proves: the shared login works in Sonarr, Radarr and Prowlarr, from source and from
+    the image.
+- **S3c: the download path.**
+  - Delivers: qBittorrent's categories and settings through its API, and Sonarr's and
+    Radarr's download clients and root folders, on the VPN topology.
+  - Proves: part of success criterion 1.
+
+S3d comes second because it is small, it settles early whether GitHub's runners can
+load WireGuard, and it gives S3c a real Gluetun to wire through.
+
 Every slice writes its own docs as it goes:
 
 - **ADRs**, when a slice implements the decision:
@@ -50,7 +84,7 @@ Every slice writes its own docs as it goes:
 - **Each app's `catalog/<app>/README.md`**, written in S2c, and updated when that
   app's integration lands.
 - **Runbooks**, written with the feature they cover:
-  - "VPN down" and "wiring failed" in S3;
+  - "VPN down" in S3d, and "wiring failed" in S3b;
   - "drift reported" in S4;
   - "app won't start" in S2c.
 - **A docs task in every slice plan,** from S2c on (owner, 2026-10-09). It covers the
@@ -83,10 +117,10 @@ each one, or corrects it in the catalog:
 | Value | Verified in |
 |---|---|
 | Health-check commands for each image (`curl` in linuxserver images, `wget` in Seerr). The tools were confirmed present in every pinned image on 2026-10-09. **Verified on arm64 and amd64 on 2026-10-09** by S2b's end-to-end test, which applies the video stack and sees every app healthy: on the arm64 dev box, and on amd64 in CI at `ebd18fe` | S2b (done) |
-| Gluetun's built-in health check with `depends_on: service_healthy`. It needs a working tunnel, so it is verified with S3's local WireGuard server | S3 |
-| `FIREWALL_OUTBOUND_SUBNETS` accepting a comma-separated list | S3 |
-| qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace | S3 |
-| The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs) | S3 |
+| Gluetun's built-in health check with `depends_on: service_healthy`. It needs a working tunnel, so it is verified with S3d's local WireGuard server | S3d |
+| `FIREWALL_OUTBOUND_SUBNETS` accepting a comma-separated list | S3d |
+| qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace | S3d |
+| The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs) | S3d |
 | Seerr running as uid 1000 with `init: true`. **Verified on 2026-10-09** by `test/e2e/apply.e2e.test.ts` and `test/e2e/deploy.e2e.test.ts`: Seerr, rendered with `init: true`, runs healthy after apply's ownership step gives its appdata to uid 1000 | S2b (done) |
 
 ## Inputs for later slices from the reviews
@@ -96,7 +130,9 @@ design gaps below, which only matter once Mediaplane writes files or deploys.
 The Slice 2a final review (2026-10-09) added the S2b list and two S3 items.
 The Slice 2b final review (2026-10-09) added the S2c list, two S4 items and an
 M2 item. Slice 2c (2026-10-09) added the last S3 item, the S6 list and the last
-four S8 items. Each slice plan must address the items for that slice.
+four S8 items. Slice 3a (2026-10-10) added the last two S3 items, the S3d list, three
+S4 items, two S6 items and an M2 item. Each slice plan must address the items for that
+slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -176,7 +212,8 @@ four S8 items. Each slice plan must address the items for that slice.
   `com.docker.compose.project.working_dir` from a different home, which means
   another home already manages a project with this name.
 
-**S3:**
+**S3:** S3a handles the first five, except Mediaplane's network in TRUSTEDNETWORKS,
+which moved to M2. The rest are for S3b and S3c.
 
 - Gluetun's `FIREWALL_OUTBOUND_SUBNETS` and Servarr's `TRUSTEDNETWORKS` should
   only be filled when ports are actually published on the LAN. Today they are
@@ -192,6 +229,27 @@ four S8 items. Each slice plan must address the items for that slice.
 - **The Mediaplane container can reach only the socket proxy.** Its network is
   internal (S2c). Wiring needs the apps' APIs, so attach the container to the
   stack's network, or find another route. Then update ADR 0008 and the threat model.
+- **qBittorrent's settings after its first start.** `admin.username`,
+  `admin.password`, `login_on_lan` and the LAN subnet reach qBittorrent only through
+  its pre-start file (S3a). S3c manages them through its API.
+- **The shared admin password, through each app's API.** Apply it through every app's
+  API, qBittorrent included, so that a change to `admin.password` reaches every app
+  (S3b for Sonarr, Radarr and Prowlarr, S3c for qBittorrent). Today `credentials` shows
+  the new password while qBittorrent keeps the one from its first start.
+
+**S3d:**
+
+- **Gluetun's control server refuses requests without the key.** S3a writes
+  `auth/config.toml`, and this was checked only by hand on the pinned image. Check
+  in the end-to-end test that `GET /v1/vpn/status` answers 401 without `X-API-Key`,
+  and 200 with it.
+- **qBittorrent's web UI on localhost, behind Gluetun.** Since S3a,
+  `FIREWALL_OUTBOUND_SUBNETS` is set only while the web UIs are on the LAN. Check in
+  the end-to-end test that with `bind: localhost` the web UI still answers on
+  `127.0.0.1`, as a hand check found in S3a. If it doesn't, the cloud-VM default has
+  regressed.
+- **Validate `vpn.addresses`.** The schema takes any non-empty string today. Check it
+  as comma-separated IPv4 or IPv6 CIDRs.
 
 **S4:**
 
@@ -201,7 +259,20 @@ four S8 items. Each slice plan must address the items for that slice.
   something else changes, and never re-checks it for apps that are running.
 - **An override can move an appdata mount.** When `compose.override.yaml`
   remaps an app's appdata mount, the ownership helper's chown runs on the
-  override's host path, not on `appdata/<app>`.
+  override's host path, not on `appdata/<app>`. Pre-start files (S3a) are still
+  written to `appdata/<app>`, so the app starts without them, and nothing reports
+  it.
+- **Installs from before Slice 3a.** `plan` reports a `config.xml` without `ApiKey`,
+  a `qBittorrent.conf` without `WebUI\APIKey`, or Gluetun's `auth/config.toml` without
+  an `apikey` line, as `<app>.not-seeded`, and the app READMEs give the manual fix.
+  Automate it: stop the app, add the stored key to its file, and start it ("restore
+  the key at the source", spec §6.3).
+- **FlareSolverr's anonymous volume.** Its image declares `VOLUME /config`, and the
+  catalog mounts nothing there, so every container it creates leaves an anonymous
+  volume behind. Mount a folder there, or document it. (The end-to-end helpers
+  remove them with `down -v` since S3a.)
+- **Rotating the admin password.** There is no way to replace the generated password
+  yet. Add one, which reaches every app through its API.
 
 **S6:**
 
@@ -210,6 +281,14 @@ four S8 items. Each slice plan must address the items for that slice.
 - **Jellyfin's health check can pass early.** In its first seconds, Jellyfin's
   `/health` answers 200 with `Degraded` while the server still answers 503 to
   everything else (S2c). Look at a check that waits for the server itself.
+- **A login of your own for Plex, and for Seerr on Plex.** Plex's login is always
+  your plex.tv account, never the shared admin (spec §6.1). With Plex, Seerr's
+  first sign-in uses that account too. The catalog's `login` (S3a) is `'shared'`
+  or the slice that brings it, so `credentials` says their login arrives in
+  Slice 6 (Plex) or Slice 7 (Seerr). Give `login` a value for your own account,
+  and use it for both.
+- **Plex's web UI is at `/web`.** `credentials` prints `http://<address>:<port>`
+  for every app, so give the catalog a per-app web path.
 
 **S8 (before going public):**
 
@@ -239,9 +318,14 @@ four S8 items. Each slice plan must address the items for that slice.
   `deploy/mediaplane.compose.yaml` a pinned default. Then the install guide can pull
   instead of build.
 
-**M2 (the panel):** `trigger: 'cli'` is a literal in `mediaplane.change/v1`.
-Decide an additive rule, or a v2 of the schema, before the panel writes change
-records.
+**M2 (the panel):**
+
+- `trigger: 'cli'` is a literal in `mediaplane.change/v1`. Fields may be added
+  within v1 when they are optional (spec §11, Slice 3a); decide whether a new
+  trigger is one, or needs a v2, before the panel writes change records.
+- **Servarr `TRUSTEDNETWORKS` and Mediaplane's network (ruling R12).** Once the panel
+  proxies requests to the apps, add its network, so Sonarr believes the
+  `X-Forwarded-For` header it sends (spec §11, Slice 3a).
 
 ## Spec refinements made while planning (2026-10-08)
 

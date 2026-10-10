@@ -1,7 +1,7 @@
 # Architecture
 
 This page is a condensed version of the [M1 design](design/m1-engine-cli.md), §3 to §6,
-covering what is built so far (Slices 1 to 2c). The design describes the whole of M1;
+covering what is built so far (Slices 1 to 3a). The design describes the whole of M1;
 this page describes what exists.
 
 ## The idea
@@ -81,8 +81,11 @@ Each part, and where its code is:
   out ports and bind addresses.
 - **renderer** (`packages/engine/src/render`): renders `compose.yaml` and `.env`, the
   same bytes for the same input.
-- **secrets** (`packages/engine/src/secrets`): generates each key once, and keeps it in
-  `state/secrets.json`.
+- **secrets** (`packages/engine/src/secrets`): generates each key once, and the shared
+  admin password, and keeps them in `state/secrets.json`.
+- **pre-start files** (`render/prestart.ts`, `plan/prestart.ts` and
+  `apply/prestart.ts` in `packages/engine/src`): the files some apps read when they
+  start, from each app's `configFiles` in the catalog.
 - **runtime** (`packages/engine/src/runtime`): the only code that runs `docker`.
 - **host and preflight** (`packages/engine/src/host`, `packages/engine/src/preflight`):
   read the host's facts, and check the host before anything changes. In the container,
@@ -96,12 +99,14 @@ Each part, and where its code is:
   that runs its steps, failed ones included.
 - **status** (`packages/engine/src/status.ts`): each app's container state and health,
   and the last apply.
+- **credentials** (`packages/engine/src/credentials.ts`): the shared admin login, and
+  where each app's web UI is.
 - **CLI** (`packages/cli`): the commands, human and `--json` output, and exit codes
   ([reference](reference/cli.md)).
 
 Not built yet:
 
-- the integrations, which wire the apps together through their APIs (Slices 3 to 7);
+- the integrations, which wire the apps together through their APIs (Slices 3b to 7);
 - drift detection, with Keep mine (Slice 4).
 
 ## `plan`
@@ -122,7 +127,8 @@ preflight
   │ devices, ports, home
   ▼
 render
-  │ compose.yaml, .env
+  │ compose.yaml, .env,
+  │ pre-start files
   ▼
 diff
   files, containers,
@@ -151,7 +157,9 @@ update to Mediaplane's image brings a new one.
 lock
  → plan, then ask
  → generate keys
- → write files
+ → write files, and
+   pre-start files
+   if absent
  → pull images
  → set appdata owners
  → up --wait
@@ -166,6 +174,17 @@ lock
 - **Images are pulled before any container changes.** Nothing is stopped before the
   pull, so a network failure leaves the running stack alone.
 - **Keys are saved before any container starts.**
+- **Pre-start files are written once, before the first start.** Some apps read a file
+  when they start: Sonarr's, Radarr's and Prowlarr's `config.xml`, qBittorrent's
+  `qBittorrent.conf` and Gluetun's `auth/config.toml`. Apply writes each one only when
+  it is absent, in the files step, 0600, and never changes it after that, because the
+  apps rewrite them. `plan` lists them as `before first start`, without their content.
+  A file that is there but lacks Mediaplane's key is from an install made before
+  Slice 3a: `plan` stops with `<app>.not-seeded`.
+- **Pulls are retried.** When a registry times out, drops the connection, answers with
+  a 500, 502, 503 or 504 error, or rate-limits, apply pulls again, up to three times,
+  after 5, 15 and 45 seconds. Other errors, such as a missing image or a refused login,
+  fail at once.
 - **`up --wait`** waits until every app is healthy. It fails as soon as an app is marked
   unhealthy, and gives up after 10 minutes.
 - **The lock** records the process and the host name. That is why the Mediaplane
@@ -203,8 +222,12 @@ lock
 - **`generated/`** is Mediaplane's: apply rewrites it, so never edit it. The header of
   `compose.yaml` gives the exact `docker compose` command that runs the stack without
   Mediaplane.
-- **The home's filesystem must support hard links,** because the lock and `init`'s
-  `stack.yaml` are created with one.
+- **`appdata/<app>/`** is each app's. Mediaplane creates the folder, gives it to the
+  app's user where the app needs that (Seerr), and writes its pre-start files once. The
+  rest is the app's. It holds keys and qBittorrent's password hash, so treat it as
+  sensitive.
+- **The home's filesystem must support hard links,** because the lock, `init`'s
+  `stack.yaml` and the pre-start files are created with one.
 
 The data folder (`paths.data`) is yours. The apps that handle media files (Sonarr,
 Radarr, qBittorrent, and Jellyfin or Plex) mount it as `/data`. Keep downloads and media
@@ -221,7 +244,8 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
-- the wiring, app by app (Slices 3 to 7);
+- the VPN's kill-switch test and `vpn-check` (Slice 3d), then the wiring, app by app
+  (Slices 3b to 7);
 - drift detection (Slice 4);
 - releases (Slice 8);
 - the web panel (M2).

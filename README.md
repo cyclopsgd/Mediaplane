@@ -14,12 +14,12 @@ Compose and wires the apps together for you.**
 >   proxy.
 > - **Next:** wiring the apps together. Until that lands, each app still needs
 >   setting up by hand. Jellyfin's wizard and Seerr's setup are open to anyone who
->   can reach them until you complete them, so complete them first. By default,
+>   can reach them until you complete them, so complete them first. qBittorrent has
+>   the shared admin login from its first start (`mediaplane credentials` shows it).
 >   Sonarr, Radarr and Prowlarr ask for a login that doesn't exist yet; their READMEs
 >   say how to set one.
-> - **Who can reach them:** on a home network, `mediaplane init` sets the web UIs to be
->   published on your LAN (`network.bind: lan`). To keep them on this machine only, set
->   `network.bind: localhost` in `stack.yaml`.
+> - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
+>   your LAN (`network.bind: lan`) or keep them on this machine (`localhost`).
 >
 > Watch the repo to follow along.
 
@@ -43,21 +43,22 @@ Mediaplane does that part for you:
 
 ## What works so far
 
-| Capability                                                                        | Status       |
-| --------------------------------------------------------------------------------- | ------------ |
-| Validate `stack.yaml`, with errors that say what to change                        | Done         |
-| Render a readable Compose project with images pinned by tag and digest            | Done         |
-| Check the host first: Docker versions, disk, data folder, ports, the VPN device   | Done         |
-| Refuse to publish web UIs on a cloud VM's private address by mistake              | Done         |
-| Predict exactly which containers will change, using Compose's own config hashes   | Done         |
-| Generate keys and start the stack (`mediaplane apply`)                            | Done         |
-| See each app's health and every past apply (`status`, `history`)                  | Done         |
-| Write a starter `stack.yaml` (`init`)                                             | Done         |
-| Run in a hardened container, behind a Docker socket proxy                         | Done         |
-| Documentation generated from code: the `stack.yaml` and CLI references, app facts | Done         |
-| Wire the apps together (download clients, indexers, root folders, media server)   | Planned      |
-| Detect manual changes and offer Re-apply or "Keep mine"                           | Planned      |
-| Web panel with a setup wizard                                                     | Planned (M2) |
+| Capability                                                                            | Status       |
+| ------------------------------------------------------------------------------------- | ------------ |
+| Validate `stack.yaml`, with errors that say what to change                            | Done         |
+| Render a readable Compose project with images pinned by tag and digest                | Done         |
+| Check the host first: Docker versions, disk, data folder, ports, the VPN device       | Done         |
+| Refuse to publish web UIs on a cloud VM's private address by mistake                  | Done         |
+| Predict exactly which containers will change, using Compose's own config hashes       | Done         |
+| Generate keys and start the stack (`mediaplane apply`)                                | Done         |
+| See each app's health and every past apply (`status`, `history`)                      | Done         |
+| Write a starter `stack.yaml` (`init`)                                                 | Done         |
+| One admin login, generated, set in qBittorrent before it first starts (`credentials`) | Done         |
+| Run in a hardened container, behind a Docker socket proxy                             | Done         |
+| Documentation generated from code: the `stack.yaml` and CLI references, app facts     | Done         |
+| Wire the apps together (download clients, indexers, root folders, media server)       | Planned      |
+| Detect manual changes and offer Re-apply or "Keep mine"                               | Planned      |
+| Web panel with a setup wizard                                                         | Planned (M2) |
 
 ## The stack
 
@@ -109,8 +110,10 @@ mediaplane plan
   │  changes nothing
   ▼
 mediaplane apply
-  ├─ generates keys (kept for good)
-  ├─ writes compose.yaml and .env
+  ├─ generates keys and the admin
+  │  password (kept for good)
+  ├─ writes compose.yaml, .env, and
+  │  files apps read at first start
   ├─ pulls images, starts the apps
   ├─ waits until every app is healthy
   ├─ plans again: nothing left to do
@@ -140,7 +143,8 @@ A few principles hold throughout:
 ## What it looks like
 
 This is real output from a run on an arm64 VM, trimmed where marked. The stack is the
-example above without the VPN, which is why `plan` warns about qBittorrent.
+example above without the VPN, which is why `plan` warns about qBittorrent, and with
+`network.bind: localhost`.
 
 ```console
 $ mediaplane plan
@@ -148,7 +152,16 @@ warning: qBittorrent is running without a VPN (apps.qbittorrent.vpn: false)
   hint: peers will see your real IP address; add a vpn: block and remove vpn: false
 + generated/compose.yaml
   … the whole Compose file, as a diff …
+
 + generated/.env (secret values, not shown)
+
++ appdata/prowlarr/config.xml (before first start; secret values, not shown)
+
++ appdata/qbittorrent/qBittorrent/qBittorrent.conf (before first start; secret values, not shown)
+
++ appdata/radarr/config.xml (before first start; secret values, not shown)
+
++ appdata/sonarr/config.xml (before first start; secret values, not shown)
 
 Containers:
   + create    byparr
@@ -158,13 +171,13 @@ Containers:
   + create    radarr
   + create    seerr
   + create    sonarr
-Secrets to generate: prowlarr.apiKey, qbittorrent.apiKey, radarr.apiKey, seerr.apiKey, sonarr.apiKey
-Plan: 2 files to write, 7 containers to change, 5 secrets to generate.
+Secrets to generate: admin.password, prowlarr.apiKey, qbittorrent.apiKey, radarr.apiKey, seerr.apiKey, sonarr.apiKey
+Plan: 6 files to write, 7 containers to change, 6 secrets to generate.
 
 $ mediaplane apply --yes
   … the same plan …
-  done    secrets: generated prowlarr.apiKey, qbittorrent.apiKey, radarr.apiKey, seerr.apiKey, sonarr.apiKey
-  done    files: wrote generated/compose.yaml and generated/.env
+  done    secrets: generated admin.password, prowlarr.apiKey, qbittorrent.apiKey, radarr.apiKey, seerr.apiKey, sonarr.apiKey
+  done    files: wrote generated/compose.yaml and generated/.env; created appdata/prowlarr/config.xml, appdata/qbittorrent/qBittorrent/qBittorrent.conf, appdata/radarr/config.xml, appdata/sonarr/config.xml
 Pulling images (the first time can take several minutes)…
   done    images: images present
   done    appdata ownership: seerr → 1000:1000
@@ -172,9 +185,11 @@ Starting containers and waiting until every app is healthy…
   done    containers: every app is running and healthy
   done    verify: no changes remain
 
-Apply complete. Change record: 20261009T125331Z-16a818bc
+Apply complete. Change record: 20261010T031836Z-17560c95
 
 $ mediaplane apply --yes
+warning: qBittorrent is running without a VPN (apps.qbittorrent.vpn: false)
+  hint: peers will see your real IP address; add a vpn: block and remove vpn: false
 No changes.
 
 $ mediaplane status
@@ -186,7 +201,19 @@ qbittorrent  running  healthy
 radarr       running  healthy
 seerr        running  healthy
 sonarr       running  healthy
-Last apply: 2026-10-09T12:53:31.563Z, success (20261009T125331Z-16a818bc)
+Last apply: 2026-10-10T03:18:36.677Z, success (20261010T031836Z-17560c95)
+
+$ mediaplane credentials
+Admin login for the apps:
+  user name  admin
+  password   … 24 letters and digits …
+
+Jellyfin     http://127.0.0.1:8096  (its login arrives in Slice 6)
+Prowlarr     http://127.0.0.1:9696  (its login arrives in Slice 3b)
+qBittorrent  http://127.0.0.1:8080
+Radarr       http://127.0.0.1:7878  (its login arrives in Slice 3b)
+Seerr        http://127.0.0.1:5055  (its login arrives in Slice 7)
+Sonarr       http://127.0.0.1:8989  (its login arrives in Slice 3b)
 ```
 
 ## Run it in a container
@@ -248,10 +275,12 @@ connect, so Gluetun would never become healthy. Change the qBittorrent line to
 ```bash
 MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane apply --home .mediaplane-dev --yes
 MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane status --home .mediaplane-dev
+pnpm --silent mediaplane credentials --home .mediaplane-dev
 ```
 
-This starts real containers on this machine, with the web UIs on `localhost`. The first
-`apply` downloads several GB of images, so it can take a while. To remove the
+This starts real containers on this machine, with the web UIs on `localhost`. The last
+command shows the admin login, which qBittorrent already uses, and each app's address.
+The first `apply` downloads several GB of images, so it can take a while. To remove the
 containers, run `docker compose -p mediaplane-dev down`, then
 `sudo rm -rf .mediaplane-dev`. Seerr's folder belongs to uid 1000, which is why `sudo`
 is needed.
@@ -314,8 +343,11 @@ It is pre-alpha, so treat it as something to try rather than to rely on.
 Mediaplane controls Docker, and that is root-equivalent on the host. It keeps its
 secrets private:
 
-- they live in `state/secrets.json` and `generated/.env`, both mode 0600;
-- they never appear in `stack.yaml`, in `compose.yaml` or in any output.
+- they live in `state/secrets.json` and `generated/.env`, both mode 0600, and in the
+  apps' own settings files;
+- they never appear in `stack.yaml` or in `compose.yaml`;
+- the only output that shows one is `mediaplane credentials`, which shows the admin
+  login.
 
 On a cloud VM it refuses to publish the web UIs on the private address unless you say
 so. In its container, Mediaplane never touches the Docker socket. It goes through a

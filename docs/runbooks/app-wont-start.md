@@ -60,7 +60,11 @@
   fails. `apply` never waits more than 10 minutes in all. Wait until `mediaplane status`
   shows the app healthy, then run `apply` again.
 - **The image could not be pulled** (`apply.pull-failed`). Nothing was stopped, so the
-  old stack still runs. Check the network and the registry, then run `apply` again.
+  old stack still runs. After a temporary registry error (a timeout, a dropped
+  connection, a 500, 502, 503 or 504 answer, or a rate limit), apply has already retried
+  three times, after 5, 15 and 45 seconds. So the error is likely to last: a wrong image
+  name or tag, a refused login, a name that doesn't resolve, or a long outage. Check the
+  network and the registry, then run `apply` again.
 - **`compose.override.yaml` broke it.** `plan` reports `compose.invalid` when Compose
   rejects the file. Otherwise, take the change out and run `apply` again.
 - **A `version:` you chose.** It is an untested combination, and `plan` warns about it.
