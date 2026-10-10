@@ -5,8 +5,10 @@ import type { SecretRef } from './config/schema';
 import { checkSecretRefs } from './config/secrets';
 import { error, type Diagnostic } from './diagnostics';
 import type { HostFacts } from './host/facts';
+import { hostFactsOrFailure } from './host/failure';
 import { STACK_PATH } from './paths';
 import { resolveStack, type ResolvedApp } from './resolver/resolve';
+import type { Runtime } from './runtime/types';
 import {
   ADMIN_PASSWORD_PATH,
   adminLogin,
@@ -18,10 +20,18 @@ import { compare } from './util/sort';
 export interface CredentialsOptions {
   home: string;
   catalog: Catalog;
-  /** Facts about the host, or how to get them once they are needed. */
+  /**
+   * Facts about the host, or how to get them once they are needed. In its image,
+   * Mediaplane asks the host helper (helperHostFacts), whose failure is an error result.
+   */
   host: HostFacts | (() => Promise<HostFacts>);
   env: NodeJS.ProcessEnv;
+  /** Only asked to explain a host helper that failed (is Docker reachable at all?). */
+  runtime: Runtime;
 }
+
+/** The name of the catalog port that serves an app's web UI. */
+const WEB_PORT = 'web';
 
 /** One app's web UI, and how you sign in to it. */
 export type AppLogin = {
@@ -67,7 +77,9 @@ export async function credentials(
       ],
     };
   }
-  const host = typeof options.host === 'function' ? await options.host() : options.host;
+  const hostFacts = await hostFactsOrFailure(options.host, options);
+  if (!hostFacts.ok) return { ok: false, diagnostics: [hostFacts.diagnostic] };
+  const host = hostFacts.host;
   const resolved = resolveStack(config, options.catalog, host, home);
   if (resolved.stack === undefined) {
     return {
@@ -105,8 +117,9 @@ function webAddresses(bindAddresses: readonly string[], host: HostFacts): string
 function appLogin(app: ResolvedApp, addresses: readonly string[]): AppLogin[] {
   const { login, id, name } = app.def;
   if (login === undefined) return [];
+  // The web UI only: an app may publish other ports, such as a peer or an API port.
   const urls = app.ports
-    .filter((port) => port.protocol === 'tcp')
+    .filter((port) => port.name === WEB_PORT)
     .flatMap((port) => addresses.map((address) => `http://${address}:${port.host}`));
   return [
     login === 'shared'

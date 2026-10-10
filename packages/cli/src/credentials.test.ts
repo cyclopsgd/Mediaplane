@@ -50,7 +50,7 @@ async function ownHome(password = OWN): Promise<string> {
   return home;
 }
 
-function capture() {
+function capture(env: NodeJS.ProcessEnv = {}) {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -60,7 +60,7 @@ function capture() {
     stderr: (text) => {
       err.push(text);
     },
-    env: {},
+    env,
   };
   return { io, stdout: () => out.join(''), stderr: () => err.join('') };
 }
@@ -210,6 +210,30 @@ describe('mediaplane credentials', () => {
       expect(await run(argv, term.io, deps)).toBe(1);
       expect(term.stdout() + term.stderr()).not.toContain(PASSWORD);
     }
+  });
+
+  it('explains host facts the host helper could not give, with its hint, as plan does', async () => {
+    const env = { MEDIAPLANE_IMAGE: 'mediaplane:test' };
+    // This fake Docker has no host helper, so every run of it fails.
+    const overrides = { runtime: () => fakeRuntime() };
+    const home = await makeHome();
+    const term = capture(env);
+    expect(await run(['credentials', '--home', home], term.io, overrides)).toBe(1);
+    expect(term.stdout()).toBe('');
+    expect(term.stderr()).toContain(
+      'error: the host helper failed: this fake Docker has no host helper\n  hint: the host helper runs the image named by MEDIAPLANE_IMAGE',
+    );
+    expect(term.stderr()).not.toContain(PASSWORD);
+    const json = capture(env);
+    expect(await run(['credentials', '--home', home, '--json'], json.io, overrides)).toBe(
+      1,
+    );
+    expect(JSON.parse(json.stdout())).toMatchObject({
+      schema: 'mediaplane.error/v1',
+      ok: false,
+      error: { message: 'the host helper failed: this fake Docker has no host helper' },
+    });
+    expect(json.stdout()).not.toContain(PASSWORD);
   });
 
   it('says to run apply first, as an error, before the password exists', async () => {

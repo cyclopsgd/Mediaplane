@@ -54,6 +54,13 @@ describe('catalog', () => {
       expect(app.login !== undefined).toBe(published);
     });
 
+    it('names its web UI port "web", which `mediaplane credentials` lists', () => {
+      if (app.login === undefined) return;
+      expect(
+        app.ports.filter((port) => port.name === 'web' && port.publish !== false),
+      ).toHaveLength(1);
+    });
+
     it('only injects secrets it declares', () => {
       for (const step of app.credentials) {
         if (step.step === 'env') expect(Object.keys(app.secrets)).toContain(step.secret);

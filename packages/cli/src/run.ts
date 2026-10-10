@@ -300,9 +300,11 @@ export function createProgram(
         const result = await credentials({
           home,
           catalog,
-          // In the image, the host helper: needed for the LAN addresses.
+          // In the image, the host helper: needed for the LAN addresses. A helper that
+          // fails is an error result, as for plan, not a crash.
           host: () => deps.host(runtime),
           env: io.env,
+          runtime,
         });
         setExitCode(
           printCredentials(
