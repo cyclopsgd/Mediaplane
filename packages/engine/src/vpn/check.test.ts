@@ -250,60 +250,85 @@ describe('vpnCheck', () => {
     expect(asked).toEqual([]);
   });
 
-  it('finds no answer when curl could not reach a server, or got no byte back', async () => {
+  it('finds no answer when curl could not reach a server, or timed out before it connected', async () => {
     for (const output of [
       'curl: (7) Failed to connect to 1.1.1.1 port 443 after 3 ms: Could not connect to server',
       'curl: (6) Could not resolve host: echo.example',
-      'curl: (28) Operation timed out after 10001 milliseconds with 0 bytes received',
-      'curl: (28) Operation timed out after 10001 milliseconds with 0 out of 900 bytes received',
+      'curl: (28) Connection timed out after 10001 milliseconds',
+      'curl: (28) Resolving timed out after 10001 milliseconds',
     ]) {
       const exit = Number(/\((\d+)\)/.exec(output)?.[1]);
       const answers: Answers = { ...HEALTHY, egress: [exit, output] };
       const { result } = await checkWith(await homeWith(), { answers });
       expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: true });
-      expect(statuses(result).at(-1)).toBe('egress down');
+      expect(result.ok && result.checks.at(-1)).toMatchObject({
+        id: 'egress',
+        status: 'down',
+        message: `qBittorrent's traffic got no answer from ${TRACE}: ${output}`,
+      });
     }
   });
 
-  it("counts an answer curl couldn't finish as an answer: something got out", async () => {
-    // curl exits 63 for a body over --max-filesize, 52 for an empty reply, 28 for a
-    // timeout: each after a server answered, so the tunnel's way out isn't shut.
-    for (const output of [
-      'curl: (63) Maximum file size exceeded',
-      'curl: (52) Empty reply from server',
-      'ip=203.0.113.7\ncurl: (28) Operation timed out after 10001 milliseconds with 15 bytes received',
-      'curl: (28) Operation timed out after 10001 milliseconds with 15 out of 900 bytes received',
-    ]) {
-      const exit = Number(/\((\d+)\)/.exec(output)?.[1]);
-      const answers: Answers = { ...HEALTHY, egress: [exit, output] };
-      const { result, asked } = await checkWith(await homeWith(), { answers });
-      expect(result).toMatchObject({
-        ok: true,
-        verdict: 'pass',
-        egress: { url: TRACE, vpn: null, host: null },
-        failClosed: false,
-      });
-      expect(result.ok && result.checks.at(-1)).toMatchObject({
-        id: 'egress',
-        status: 'warning',
-        message: `${TRACE} answered qBittorrent, but its answer could not be read (curl exited ${String(exit)}), so the addresses were not compared`,
-      });
-      expect(asked).toEqual([]);
+  /**
+   * An answer curl couldn't finish, with the egress check's `exit` and `output`: through the
+   * tunnel, a pass that warns and is never closed; with the route out of the tunnel, a leak.
+   */
+  async function expectUnreadAnswer(exit: number, output: string): Promise<void> {
+    const answers: Answers = { ...HEALTHY, egress: [exit, output] };
+    const { result, asked } = await checkWith(await homeWith(), { answers });
+    expect(result).toMatchObject({
+      ok: true,
+      verdict: 'pass',
+      egress: { url: TRACE, vpn: null, host: null },
+      failClosed: false,
+    });
+    expect(result.ok && result.checks.at(-1)).toMatchObject({
+      id: 'egress',
+      status: 'warning',
+      message: `${TRACE} answered qBittorrent, but its answer could not be read (curl exited ${String(exit)}), so the addresses were not compared`,
+    });
+    expect(asked).toEqual([]);
 
-      // The same answer, with the route out of the tunnel, left outside the VPN.
-      const leaked = await checkWith(await homeWith(), {
-        answers: {
-          ...answers,
-          route: [0, '1.1.1.1 via 172.20.0.1 dev eth0  src 172.20.0.2'],
-        },
-      });
-      expect(leaked.result).toMatchObject({
-        ok: true,
-        verdict: 'leak',
-        failClosed: false,
-      });
-      expect(statuses(leaked.result)).toContain('route leak');
-    }
+    // The same answer, with the route out of the tunnel, left outside the VPN.
+    const leaked = await checkWith(await homeWith(), {
+      answers: {
+        ...answers,
+        route: [0, '1.1.1.1 via 172.20.0.1 dev eth0  src 172.20.0.2'],
+      },
+    });
+    expect(leaked.result).toMatchObject({ ok: true, verdict: 'leak', failClosed: false });
+    expect(statuses(leaked.result)).toContain('route leak');
+  }
+
+  it("counts an answer curl couldn't finish as an answer: something got out", async () => {
+    // curl exits 63 for a body over --max-filesize and 52 for an empty reply: each after a
+    // server answered, so the tunnel's way out isn't shut.
+    await expectUnreadAnswer(63, 'curl: (63) Maximum file size exceeded');
+    await expectUnreadAnswer(52, 'curl: (52) Empty reply from server');
+  });
+
+  it('counts a timeout once curl was connected as an answer, wherever its error line falls', async () => {
+    // The probe merges curl's stderr into its stdout, and curl prints its error line
+    // before it flushes the body it buffered (curl 8.5.0, a 20-byte body):
+    await expectUnreadAnswer(
+      28,
+      'curl: (28) Operation timed out after 2002 milliseconds with 20 out of 100 bytes received\nfl=1\nip=203.0.113.7\n',
+    );
+    // A body larger than stdout's 4096-byte buffer is flushed in part first, so the error
+    // line starts in the middle of a line (curl 8.5.0, a 6000-byte body):
+    await expectUnreadAnswer(
+      28,
+      `${'x'.repeat(4096)}curl: (28) Operation timed out after 2002 milliseconds with 6000 bytes received\n${'x'.repeat(1903)}\n`,
+    );
+    // "Operation timed out" comes only after the connection was up, even with no byte back.
+    await expectUnreadAnswer(
+      28,
+      'curl: (28) Operation timed out after 10001 milliseconds with 0 bytes received',
+    );
+    await expectUnreadAnswer(
+      28,
+      'curl: (28) Operation timed out after 10001 milliseconds with 0 out of 900 bytes received',
+    );
   });
 
   it('passes on the structure, with a warning, when the host gets no answer', async () => {
@@ -491,25 +516,56 @@ describe('vpnCheck', () => {
     }
   });
 
-  it('finds the VPN down, closed and without probing, when Gluetun is not running', async () => {
-    const containers = [
-      container('gluetun', GLUETUN_ID, { state: 'exited', health: '' }),
-      container('qbittorrent', QBITTORRENT_ID),
-    ];
-    const { result, calls } = await checkWith(await homeWith(), {
-      runtime: { containers },
-    });
-    expect(result).toMatchObject({
-      ok: true,
-      verdict: 'down',
-      egress: { url: TRACE, vpn: null, host: null },
-      failClosed: true,
-    });
-    expect(statuses(result)).toEqual(['network ok', 'gluetun down']);
-    expect(result.ok && result.checks[1]?.message).toBe(
-      'Gluetun is exited, so qBittorrent has no network: nothing gets out',
-    );
-    expect(calls).not.toContain('run qbittorrent sh as 65534:65534');
+  it('finds the VPN down, closed and without probing, when Gluetun has stopped', async () => {
+    for (const state of ['exited', 'dead', 'created']) {
+      const containers = [
+        container('gluetun', GLUETUN_ID, { state, health: '' }),
+        container('qbittorrent', QBITTORRENT_ID),
+      ];
+      const { result, calls } = await checkWith(await homeWith(), {
+        runtime: { containers },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        verdict: 'down',
+        egress: { url: TRACE, vpn: null, host: null },
+        failClosed: true,
+      });
+      expect(statuses(result)).toEqual(['network ok', 'gluetun down']);
+      expect(result.ok && result.checks[1]?.message).toBe(
+        `Gluetun is ${state}, so qBittorrent has no network: nothing gets out`,
+      );
+      expect(calls).not.toContain('run qbittorrent sh as 65534:65534');
+    }
+  });
+
+  it('finds the VPN down, but never closed, when Gluetun is paused or restarting', async () => {
+    // A paused Gluetun's tunnel and firewall are the kernel's, and keep working: whether
+    // anything gets out isn't shown.
+    for (const state of ['paused', 'restarting']) {
+      const containers = [
+        container('gluetun', GLUETUN_ID, { state }),
+        container('qbittorrent', QBITTORRENT_ID),
+      ];
+      const { result, calls } = await checkWith(await homeWith(), {
+        runtime: { containers },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        verdict: 'down',
+        egress: { url: TRACE, vpn: null, host: null },
+        failClosed: false,
+      });
+      expect(statuses(result)).toEqual(['network ok', 'gluetun down']);
+      expect(result.ok && result.checks[1]).toEqual({
+        id: 'gluetun',
+        status: 'down',
+        message: `Gluetun is ${state}`,
+        hint: 'see docs/runbooks/vpn-down.md',
+      });
+      expect(JSON.stringify(result)).not.toContain('nothing gets out');
+      expect(calls).not.toContain('run qbittorrent sh as 65534:65534');
+    }
   });
 
   it('finds the VPN down when Gluetun has no container, or one that has gone', async () => {

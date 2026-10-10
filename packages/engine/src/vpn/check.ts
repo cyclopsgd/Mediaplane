@@ -83,8 +83,10 @@ export type VpnCheckResult =
       /** The address Gluetun reports for itself, when its public-IP lookup is on. */
       gluetunPublicIp: string | null;
       /**
-       * Whether nothing can get out at all: Gluetun isn't running, or nothing answered
-       * through the tunnel. Only then may a `down` verdict say that nothing leaks.
+       * True only when qBittorrent was shown to be in Gluetun's network, and Gluetun isn't
+       * running (it is exited, dead or created; not paused or restarting) or nothing
+       * answered through the tunnel. Only then may a `down` verdict say that nothing gets
+       * out.
        */
       failClosed: boolean;
     }
@@ -181,11 +183,12 @@ async function check(options: VpnCheckOptions): Promise<VpnCheckResult> {
   // is: one in any other network may still get out (the "fail-closed" claim).
   const behindGluetun = network.status === 'ok' || network.status === 'warning';
   const checks: VpnCheckItem[] = [network, gluetunCheck(gluetun, behindGluetun)];
-  // A stopped Gluetun leaves qBittorrent with loopback only, and nothing to probe.
+  // A Gluetun that isn't running is not probed: a stopped one leaves qBittorrent with
+  // loopback only, and a paused one's control server can't answer.
   if (gluetun === undefined || gluetun.state !== 'running') {
     const unmeasured =
       egress === undefined ? null : { url: egress.url, vpn: null, host: null };
-    return verdictOf(checks, unmeasured, null, behindGluetun);
+    return verdictOf(checks, unmeasured, null, behindGluetun && gluetunStopped(gluetun));
   }
 
   // compose run loads generated/.env, so every secret in it is replaced in the output.
@@ -311,6 +314,18 @@ async function networkCheck(
 }
 
 /**
+ * The states of a Gluetun with no process, and so no network to share. A paused Gluetun's
+ * tunnel and firewall are the kernel's, and keep working; a restarting one, or a state
+ * Mediaplane doesn't know, isn't shown to have shut anything either.
+ */
+const STOPPED: ReadonlySet<string> = new Set(['exited', 'dead', 'created']);
+
+/** Whether Gluetun has no container, or one with no process (STOPPED). */
+function gluetunStopped(gluetun: ContainerState | undefined): boolean {
+  return gluetun === undefined || STOPPED.has(gluetun.state);
+}
+
+/**
  * Whether Gluetun runs, healthy. `behindGluetun`: qBittorrent was shown to be in Gluetun's
  * network, so a stopped Gluetun shuts it in. Only then does it say that nothing gets out.
  */
@@ -323,9 +338,11 @@ function gluetunCheck(
     return {
       id: 'gluetun',
       status: 'down',
-      message: behindGluetun
-        ? `Gluetun ${state}, so qBittorrent has no network: nothing gets out`
-        : `Gluetun ${state}, so the VPN is down`,
+      message: gluetunStopped(gluetun)
+        ? behindGluetun
+          ? `Gluetun ${state}, so qBittorrent has no network: nothing gets out`
+          : `Gluetun ${state}, so the VPN is down`
+        : `Gluetun ${state}`,
       hint: `see ${VPN_RUNBOOK}`,
     };
   }
@@ -447,19 +464,24 @@ function routeCheck(probe: ProbeOutput, tunnel: string): VpnCheckItem {
 const AFTER_AN_ANSWER: ReadonlySet<number> = new Set([18, 35, 52, 56, 60, 63]);
 
 /**
+ * curl's message for a timeout once it was connected, whatever it received ("Operation
+ * timed out after 2002 milliseconds with 0 bytes received"). One while it resolved or
+ * connected says "Resolving timed out" or "Connection timed out".
+ */
+const TIMED_OUT_CONNECTED = /Operation timed out after \d+ milliseconds with /;
+
+/**
  * Whether the egress check got an answer from a server, even one curl couldn't finish.
  * This is inferred from curl's exit code: 0, one of AFTER_AN_ANSWER, or a timeout (28)
- * whose message says that some bytes came back. Anything else (6, 7, a timeout while
- * connecting…) is no answer.
+ * once curl was connected. Anything else (6, 7, a timeout while resolving or
+ * connecting…) is no answer. curl's error line is looked for anywhere in the output: the
+ * probe merges it into the body, which curl flushes after it, or around it for a body over
+ * stdout's buffer.
  */
 function answered(line: ProbeLine | undefined): boolean {
   if (line === undefined) return false;
   if (line.exit === 0 || AFTER_AN_ANSWER.has(line.exit)) return true;
-  if (line.exit !== 28) return false;
-  const received = /with (\d+) (?:out of \d+ )?bytes received/.exec(
-    lastLine(line.output),
-  );
-  return Number(received?.[1] ?? 0) > 0;
+  return line.exit === 28 && TIMED_OUT_CONNECTED.test(line.output);
 }
 
 /**
@@ -556,7 +578,7 @@ async function egressCheck(
 
 /**
  * A leak beats down, and down beats a pass. `closed` says whether the VPN's way out is shut
- * (Gluetun stopped, or no answer through the tunnel); with a leak elsewhere, such as a
+ * (Gluetun STOPPED, or no answer through the tunnel); with a leak elsewhere, such as a
  * network of qBittorrent's own, something still gets out, so it is never fail-closed.
  */
 function verdictOf(
