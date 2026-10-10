@@ -3,7 +3,8 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Prove success criterion 5 ("the VPN fails closed") with an automated test against
-a real WireGuard server, on amd64 and arm64, and give users `mediaplane vpn-check`, which
+a real WireGuard server, which CI runs on amd64 and arm64, and give users
+`mediaplane vpn-check`, which
 checks the same on their own host: qBittorrent has no network but Gluetun's, the VPN is
 up, and qBittorrent's traffic leaves from another address than the host's. A "VPN down"
 runbook says what to do when it fails.
@@ -23,9 +24,10 @@ runbook says what to do when it fails.
   comes in on stdin), looks up the route out, and asks the IP-echo service which address
   it comes from (`vpn/probe.ts`). The host's own address comes from the CLI's own `fetch`
   when run from source, and from the host helper (`--network host`) in the image
-  (`vpn/egress.ts`, `host/report.ts`). Docker is asked for each container's network mode
-  and start time (`runtime.inspect`). `vpnCheck()` (`vpn/check.ts`) turns it all into
-  checks and a verdict: `pass`, `down` or `leak`.
+  (`vpn/egress.ts`, `host/report.ts`). Docker is asked for each container's network mode,
+  start time and Compose project (`runtime.inspect`, which refuses any other project).
+  `vpnCheck()` (`vpn/check.ts`) turns it all into checks and a verdict: `pass`, `down` or
+  `leak`, and a summary that never claims more than the checks found.
 - **No new socket-proxy permission.** The probe uses the same Docker API calls as the
   appdata ownership helper (`compose run`), `inspect` is `GET containers/{id}/json`, and
   the host side is the host helper. Task 8's end-to-end test runs `vpn-check` from the
@@ -63,6 +65,8 @@ can still reverse the ones marked "logged"):
   and `ubuntu-24.04-arm`). The first CI run proves R1 (that the hosted runners can load
   it); the fallback is a userspace WireGuard server (Task 2, "If CI can't load the
   module").
+- **The preflight rulings (B1, B2, M1 to M13)** are applied in the tasks that own the code
+  they change, each marked with its ruling, such as "(preflight M3)".
 - **D1 is the owner's, and unresolved:** how the Mediaplane container reaches the apps'
   APIs. S3d must not depend on it.
 - **D14 (S3a):** Gluetun's pre-start `auth/config.toml` gives `controlApiKey` the routes
@@ -101,8 +105,10 @@ These are added or restated for this slice:
 - **Secrets never appear** in diagnostics, errors, change records, logs, or human or JSON
   output. Gluetun's control key reaches the probe only on its standard input: never on a
   command line (every user on the host can list the processes of every container), in a
-  container's environment, or in `docker inspect`. The runtime replaces it with `***` in
-  what the probe prints. End-to-end assertions that see the key, or a WireGuard key, say
+  container's environment, or in `docker inspect`. What the probe prints has the key, and
+  every other secret of the stack, replaced with `***` (preflight M7). The probe's curl
+  reads no config file and no proxy setting (`-q`, `--noproxy '*'`: preflight M2).
+  End-to-end assertions that see the key, or a WireGuard key, say
   only whether they passed, so a failure prints none of them into the public CI log.
 - **No new socket-proxy permission.** `deploy/mediaplane.compose.yaml` and its allow-list
   test stay as they are. Anything that would need a new Docker API call is a
@@ -119,8 +125,11 @@ These are added or restated for this slice:
   the pinned images cached for the end-to-end tests.
 - **Names in end-to-end tests** start with `mediaplane-e2e-`: the project
   `mediaplane-e2e-<pid>-vpn`, with `-wan`, `-wgserver`, `-echo`, `-system` and
-  `-mediaplane` after it for what the test adds, the image `mediaplane-e2e:<pid>-vpn`, and
-  temporary folders `mediaplane-e2e-…`.
+  `-mediaplane` after it for what the test adds, the images `mediaplane-e2e:<pid>-vpn`
+  (and, only if Task 2's contingency is needed, `mediaplane-e2e:<pid>-wg`), and temporary
+  folders `mediaplane-e2e-…`.
+- **Teardown never stops at the first failure.** Every end-to-end removal (the stack, the
+  WireGuard server, the deployment) runs even when one before it throws (preflight B1).
 - **The WireGuard module.** The kill-switch test needs the host's `wireguard` kernel
   module: `sudo modprobe wireguard` once after each boot. It fails, and never skips,
   without it.
@@ -166,35 +175,57 @@ The ones the controller should look at first are marked **(check)**.
    input and hands it to curl as a header file on stdin (`-H @-`). A command-line
    argument would show in `ps` to every user on the host; `compose run -e` would put it in
    the container's settings and `docker inspect`. Checked: `compose run -T` passes stdin
-   on Compose 5.5.1 and 2.38.2, and through the socket proxy (Task 8) (Tasks 3, 5).
+   on Compose 5.5.1 and 2.38.2, and through the socket proxy (Task 8). Every curl in the
+   probe starts with `-q` and `--noproxy '*'`: qBittorrent's appdata is its `HOME`, so a
+   `.curlrc` there, or a proxy variable in its environment, could otherwise see the key or
+   fake the egress answer (preflight M2). What the probe prints has every secret of the
+   stack replaced, not just the key, because `compose run` loads `generated/.env`, as
+   apply's helpers do (preflight M7) (Tasks 3, 5, 6).
 3. **(check) The host's own address, in the image, comes from the host helper.** Its
    request gets an optional `egress` URL, and the helper, already on the host network,
    fetches it and reports the address. Same container, same proxy calls; the helper now
    makes one outbound HTTPS request per `vpn-check` (threat model T13). From source, the
-   CLI fetches it itself (Task 4).
+   CLI fetches it itself. Both sides read at most 16 KiB of the answer: a capped read on
+   the host, `--max-filesize 16384` in the tunnel (preflight M6) (Tasks 4, 5).
 4. **The runtime gains `run()` and `inspect()`.** `chown` becomes a `run` (its arguments
    don't change), which is the generalisation the research's D13 planned for S3c.
-   `inspect(ids)` reads each container's network mode and start time with
-   `docker container inspect --format` (`GET containers/{id}/json`) (Task 3).
+   `inspect(ids)` reads each container's network mode, start time and Compose project
+   with `docker container inspect --format` (`GET containers/{id}/json`), and refuses a
+   container of any other project, so spec §7.2(2) is enforced in the runtime, not left to
+   the caller. Callers match its answers by ID, never by position (preflight M5)
+   (Tasks 3, 6).
 5. **(check) A qBittorrent stranded by a Gluetun started again on its own is "down".**
    The probe joins Gluetun's *current* namespace, so it would pass while qBittorrent still
    holds the old, empty one. Verified on the dev box: Compose restarts qBittorrent when it
    recreates Gluetun, but not when `up` starts a stopped Gluetun, nor after
    `docker restart`. So `vpn-check` compares the two start times (qBittorrent must have
    started after Gluetun's current run) and says to restart qBittorrent. `apply` doesn't
-   fix it; that is recorded as a Slice 3b input (Tasks 6, 9).
+   fix it; that is recorded as a Slice 3b input. A qBittorrent that isn't running is a
+   `warning` ("qBittorrent is exited…"), and gets no start-time comparison, so a
+   `created` one is never "started before Gluetun" (preflight M4) (Tasks 6, 9).
 6. **The probe's output** is one line per check: its name, its exit status, and its
    output in base64, so a multi-line body or a curl error can't break the parse, and
    Compose's own progress lines are ignored (Task 5).
 7. **Verdict rules.** Each check is `ok`, `warning`, `down` or `leak`; a leak beats down,
-   and down beats a pass. Down: Gluetun not running or not healthy, its control server
-   saying the VPN is not `running`, the route not going into the tunnel, no answer
-   through the tunnel, or qBittorrent stranded. Leak: qBittorrent with a network of its
-   own, `apps.qbittorrent.vpn: false`, or the same address on both sides. Warnings only:
-   a control server that refuses the key or doesn't answer (the route and the egress are
-   the evidence), one that answers without the key (Gluetun not restarted since S3a), an
-   answer without an address, and a host that can't ask the service (D9: "passes on
-   structure") (Task 6).
+   and down beats a pass.
+   - **Down:** Gluetun not running or not healthy, its control server saying the VPN is
+     not `running`, the route not going into the tunnel while nothing answered through
+     it, no answer through the tunnel, or qBittorrent stranded.
+   - **Leak:** qBittorrent with a network of its own, or in the network of another
+     running container of the stack (`container:<id>` that isn't Gluetun's: preflight
+     B2), `apps.qbittorrent.vpn: false`, the same address on both sides, or a route that
+     doesn't go into the tunnel while an answer still came back through it (preflight
+     M3).
+   - **Warnings only:** a control server that refuses the key or doesn't answer (the
+     route and the egress are the evidence), one that answers without the key (Gluetun
+     not restarted since S3a), an answer without an address, a host that can't ask the
+     service (D9: "passes on structure"), an IPv4 and an IPv6 address, which can't be
+     compared (preflight M6), and a qBittorrent that isn't running (preflight M4).
+   - **The summary claims no more than that** (preflight M3). "Nothing leaks
+     (fail-closed)" only when Gluetun isn't running or nothing answered through the
+     tunnel (`failClosed` in the result). "Reaches the internet only through the VPN"
+     only when the addresses were compared; any other pass says the address was not
+     compared (Tasks 6, 7).
 8. **`vpn: false` is a `leak` verdict, not an error:** qBittorrent's traffic leaves from
    the host's address by configuration. A stack with no qBittorrent is an error
    (`vpn-check.no-qbittorrent`) (Task 6).
@@ -206,11 +237,14 @@ The ones the controller should look at first are marked **(check)**.
 11. **The tunnel interface** is `tun0`, unless `apps.gluetun.env` sets `VPN_INTERFACE`
     (Task 6).
 12. **`--json`'s `ok`** says the check ran, as in `mediaplane.plan/v1`, where `ok: true`
-    can still exit 2; `verdict` says what it found, and the exit code is 1 for `leak` and
-    `down`. Errors use the existing `mediaplane.error/v1` envelope (Task 7).
+    can still exit 2; `verdict` says what it found, `failClosed` whether a `down` may say
+    that nothing leaks, and the exit code is 1 for `leak` and `down`. Errors use the
+    existing `mediaplane.error/v1` envelope (Task 7).
 13. **`vpn.addresses`** is one or more IPv4 or IPv6 CIDRs, comma-separated without spaces,
-    as Gluetun's `WIREGUARD_ADDRESSES` takes them. `init` checks `--vpn-addresses` before
-    its first question and asks again after a bad answer (Task 1).
+    as Gluetun's `WIREGUARD_ADDRESSES` takes them, and never an IPv6 zone such as
+    `fe80::1%eth0/64`, which Node takes but Gluetun doesn't (preflight M8). `init` checks
+    `--vpn-addresses` before its first question and asks again after a bad answer
+    (Task 1).
 14. **(check) The test topology** differs from the research's (D10), which used two extra
     networks. One test network ("wan") holds the WireGuard server and the echo; both
     publish on its gateway, a host address, at ports Docker picks (no fixed port can
@@ -226,13 +260,15 @@ The ones the controller should look at first are marked **(check)**.
 16. **(check) The WireGuard module on CI:** a step
     `sudo modprobe wireguard && test -d /sys/module/wireguard` before `pnpm test:e2e` on
     both runners, and the fixture fails, never skips, without `/sys/module/wireguard`.
-    The kill-switch test comes second (Task 2), before any `vpn-check` code, so the
-    controller can push the branch early and learn R1 from CI before the rest is built.
-    If CI can't load the module, Task 2's contingency swaps the server for a userspace
-    one (`wireguard-go`) without touching the test.
+    There is no early push: CI runs only on pull requests and on `main`, so R1 is learned
+    from the slice PR's first CI run (preflight M1). If CI can't load the module there,
+    Task 2's contingency becomes a fix task on that PR: it swaps the server for a
+    userspace one (`wireguard-go`) without touching the test.
 17. **`vpn-check` from the image is tested behind the real proxy** by a new
-    `deployMediaplane()` e2e helper. `deploy.e2e.test.ts` keeps its own setup; moving it
-    onto the helper is an S8 tidy-up (Task 8).
+    `deployMediaplane()` e2e helper. `deploy.e2e.test.ts` keeps its own setup, and the S8
+    roadmap item to move it onto the helper stays (preflight M9). The helper stats the
+    Docker socket before it makes anything, and a deployment that fails to start reports
+    that error first, after tearing down (preflight M10) (Task 8).
 18. **The roadmap's last S3d input is covered by the e2e:** Gluetun started without its
     key file answers without the key, and `vpn-check` warns (Task 8).
 
@@ -247,7 +283,8 @@ packages/engine/src/
 ├── runtime/docker.ts (+test)      (changed) run, inspect,
 │                                            parseDetails; chown on run
 ├── testing/fakes.ts               (changed) run, inspect, details,
-│                                            probeOutput
+│                                            probeOutput,
+│                                            fakeProbeRuntime
 ├── vpn/egress.ts (+test)          (new) DEFAULT_VPN_CHECK_URL,
 │                                        egressAddress, fetchEgress
 ├── vpn/probe.ts (+test)           (new) PROBE_SCRIPT, probeCommand,
@@ -306,7 +343,8 @@ kill-switch test (Task 2) is the first to apply one for real.
 Decision: one or more IPv4 or IPv6 addresses with a prefix length, separated by commas
 **without spaces**, as a provider's WireGuard file and Gluetun's `WIREGUARD_ADDRESSES`
 take them. IPv4 reuses the existing `IPV4_CIDR` check (no leading zeros); IPv6 uses
-`node:net`'s `isIPv6` and a prefix of 0 to 128. `init` checks `--vpn-addresses` before
+`node:net`'s `isIPv6` and a prefix of 0 to 128, and refuses a zone such as
+`fe80::1%eth0/64`, which `isIPv6` takes but Gluetun doesn't (preflight M8). `init` checks `--vpn-addresses` before
 its first question (inside a `vpn:` block, which is the only place the starter writes
 it), and on a terminal asks again after a bad answer, like its other questions.
 
@@ -343,6 +381,7 @@ Add to `describe('parseConfig', …)` in `packages/engine/src/config/load.test.t
       'fd00::2/129',
       '10.64.0.2/32, fd00::2/128',
       '10.64.0.2/32,',
+      'fe80::1%eth0/64',
       'mullvad',
     ]) {
       const diagnostics = diagnosticsOf(vpn(bad));
@@ -413,12 +452,16 @@ In `packages/engine/src/config/schema.ts`:
 
   ```ts
 
-  /** An IPv6 address with a prefix length of 0 to 128, such as fd00::1/128. */
+  /**
+   * An IPv6 address with a prefix length of 0 to 128, such as fd00::1/128. Node takes a
+   * zone (fe80::1%eth0) as part of an address; Gluetun doesn't, so neither does this.
+   */
   function isIpv6Cidr(value: string): boolean {
     const slash = value.lastIndexOf('/');
     const prefix = value.slice(slash + 1);
     return (
       slash > 0 &&
+      !value.includes('%') &&
       /^(?:\d|[1-9]\d|1[01]\d|12[0-8])$/.test(prefix) &&
       isIPv6(value.slice(0, slash))
     );
@@ -1067,14 +1110,15 @@ git commit -m "test(e2e): prove the VPN kill switch against a local WireGuard se
   -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Decision: the controller may push the branch now, for a first CI run that settles R1 on
-both runners while Tasks 3 to 9 are built (decision 16). Implementers never push.
+Decision: there is no early push (preflight M1). CI runs only on pull requests and on
+`main`, so the slice PR's first CI run is what settles R1 on both runners (decision 16).
+Implementers never push.
 
 #### If CI can't load the module (the R1 contingency)
 
-Only if the first CI run fails at "Load the WireGuard kernel module" (`modprobe: FATAL:
-Module wireguard not found`) on either runner. Not needed on the dev box, which has the
-module, and not replayed.
+A fix task on the slice PR, only if its first CI run fails at "Load the WireGuard kernel
+module" (`modprobe: FATAL: Module wireguard not found`) on either runner. Not needed on
+the dev box, which has the module, and not replayed.
 
 - **Swap the server for a userspace one.** Add `test/e2e/wireguard/Dockerfile`: a pinned
   Alpine base (`alpine:<tag>@sha256:<digest>`) with `apk add --no-cache wireguard-tools
@@ -1083,7 +1127,7 @@ module, and not replayed.
   kernel first and falls back to `wireguard-go` when `ip link add … type wireguard`
   fails, which is exactly a runner without the module. Check the package names and
   versions against the Alpine release you pin.
-- **In `test/e2e/wireguard.ts`:** build that image as `mediaplane-e2e-wg:<pid>` in
+- **In `test/e2e/wireguard.ts`:** build that image as `mediaplane-e2e:<pid>-wg` in
   `startWireGuard()` (and remove it in `remove()`), run it instead of `WIREGUARD` with
   `--device /dev/net/tun` added, and drop `requireWireGuardModule()`. The ready check
   (`wg show wg0`) and everything the test sees stay the same, so
@@ -1105,9 +1149,11 @@ Decision: `run(service, command)` is the `compose run --rm --no-deps -T` the own
 helper already makes, generalised; `chown` becomes a call to it, with the same arguments
 as before (decision 4). Its output comes back with `command.values` replaced by `***`.
 Decision: `inspect(ids)` runs `docker container inspect --format '{{.Id}}
-{{.HostConfig.NetworkMode}} {{.State.StartedAt}}' <ids…>` (`GET containers/{id}/json`,
-already on the proxy's allow-list), and refuses anything that is not a container ID, so
-no name or option can reach the command line.
+{{.HostConfig.NetworkMode}} {{.State.StartedAt}} {{index .Config.Labels
+"com.docker.compose.project"}}' <ids…>` (`GET containers/{id}/json`, already on the
+proxy's allow-list). It refuses anything that is not a container ID, so no name or option
+can reach the command line, and a container of any other Compose project, or of none, so
+spec §7.2(2) holds in the runtime itself (preflight M5).
 
 **Files:**
 - Modify: `packages/engine/src/runtime/types.ts`, `packages/engine/src/runtime/docker.ts`,
@@ -1123,8 +1169,10 @@ no name or option can reach the command line.
   - `interface ContainerDetails { id: string; networkMode: string; startedAt: string }`;
   - `Runtime.run(service: string, command: OneOffCommand): Promise<ExecResult>`;
   - `Runtime.inspect(ids: readonly string[]): Promise<ContainerDetails[]>` (throws
-    `RuntimeError`);
-  - `parseDetails(stdout: string): ContainerDetails[]` in `runtime/docker.ts`;
+    `RuntimeError`, also for a container outside the managed project); callers match the
+    answers by `id`;
+  - `parseDetails(stdout: string, project: string): ContainerDetails[]` in
+    `runtime/docker.ts`, which throws `RuntimeError` for another project's container;
   - in the fakes: `FakeRuntimeOptions.run?: (service, command) => ExecResult | Promise<ExecResult>`
     (default: exit 0, no output), recorded as
     `run <service> <entrypoint> as <uid>:<gid>`;
@@ -1186,7 +1234,7 @@ Add to `describe('createDockerRuntime', …)` in
     const other = 'e'.repeat(64);
     const { exec, calls } = recorder(() =>
       ok(
-        `${SONARR_ID} container:${other} 2026-10-10T10:00:01.5Z\n${other} mediaplane_default 2026-10-10T10:00:00Z\n`,
+        `${SONARR_ID} container:${other} 2026-10-10T10:00:01.5Z mediaplane\n${other} mediaplane_default 2026-10-10T10:00:00Z mediaplane\n`,
       ),
     );
     const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
@@ -1202,10 +1250,22 @@ Add to `describe('createDockerRuntime', …)` in
       'container',
       'inspect',
       '--format',
-      '{{.Id}} {{.HostConfig.NetworkMode}} {{.State.StartedAt}}',
+      '{{.Id}} {{.HostConfig.NetworkMode}} {{.State.StartedAt}} {{index .Config.Labels "com.docker.compose.project"}}',
       SONARR_ID,
       other,
     ]);
+  });
+
+  it('refuses a container of another Compose project, or of none', async () => {
+    for (const owner of ['mediaplane-system', '']) {
+      const { exec } = recorder(() =>
+        ok(`${SONARR_ID} bridge 2026-10-10T10:00:00Z ${owner}\n`),
+      );
+      const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+      await expect(runtime.inspect([SONARR_ID])).rejects.toThrow(
+        'container d5a2f5c9b82d is not in the Compose project "mediaplane"',
+      );
+    }
   });
 
   it('inspects container IDs only, and asks nothing for none', async () => {
@@ -1342,7 +1402,7 @@ In `packages/engine/src/runtime/docker.ts`:
           'container',
           'inspect',
           '--format',
-          '{{.Id}} {{.HostConfig.NetworkMode}} {{.State.StartedAt}}',
+          '{{.Id}} {{.HostConfig.NetworkMode}} {{.State.StartedAt}} {{index .Config.Labels "com.docker.compose.project"}}',
           ...ids,
         ]);
         if (result.code !== 0) {
@@ -1350,7 +1410,7 @@ In `packages/engine/src/runtime/docker.ts`:
             `docker container inspect failed: ${firstLine(result.stderr)}`,
           );
         }
-        return parseDetails(result.stdout);
+        return parseDetails(result.stdout, options.project);
       },
 
       async chown(service, path, owner, values) {
@@ -1369,16 +1429,26 @@ In `packages/engine/src/runtime/docker.ts`:
 - add before `/** \`docker compose config --hash\` output: … */`:
 
   ```ts
-  /** `docker container inspect` lines of "<id> <network mode> <started at>". */
-  export function parseDetails(stdout: string): ContainerDetails[] {
+  /**
+   * `docker container inspect` lines of "<id> <network mode> <started at> <project>". A
+   * container of any other Compose project is refused: Mediaplane acts on its own project
+   * only (spec §7.2(2)).
+   */
+  export function parseDetails(stdout: string, project: string): ContainerDetails[] {
     return stdout
       .split('\n')
       .map((line) => line.trim().split(/\s+/))
-      .flatMap(([id, networkMode, startedAt]) =>
-        id === undefined || networkMode === undefined || startedAt === undefined
-          ? []
-          : [{ id, networkMode, startedAt }],
-      );
+      .flatMap(([id, networkMode, startedAt, owner]) => {
+        if (id === undefined || networkMode === undefined || startedAt === undefined) {
+          return [];
+        }
+        if (owner !== project) {
+          throw new RuntimeError(
+            `container ${id.slice(0, 12)} is not in the Compose project "${project}"`,
+          );
+        }
+        return [{ id, networkMode, startedAt }];
+      });
   }
 
   ```
@@ -1482,8 +1552,9 @@ it: its request gets an optional `egress` URL, and its report an `egress` answer
 exception: `vpn-check` only warns when the host can't ask (D9).
 Decision: the answer is read from an `ip=` line, as Cloudflare's trace gives it, or from
 an answer that is only an address, as plain-text services give it; `node:net`'s `isIP`
-decides what is an address. Only the first 16 KiB of the answer is parsed, and the fetch
-never follows a redirect and gives up after 10 seconds.
+decides what is an address. The fetch reads at most 16 KiB of the answer and cancels the
+rest, never follows a redirect, and gives up after 10 seconds; the probe's curl gets the
+same cap (Task 5), so both sides are read alike (preflight M6).
 
 **Files:**
 - Create: `packages/engine/src/vpn/egress.ts`, `packages/engine/src/vpn/egress.test.ts`
@@ -1495,7 +1566,8 @@ never follows a redirect and gives up after 10 seconds.
 - **Consumes:** `runHelper`, `parseHostReport` and `HelperOptions` in `host/helper.ts`;
   `collectHostReport` in `host/report.ts`.
 - **Produces:**
-  - `DEFAULT_VPN_CHECK_URL = 'https://1.1.1.1/cdn-cgi/trace'`, `EGRESS_TIMEOUT_MS = 10_000`;
+  - `DEFAULT_VPN_CHECK_URL = 'https://1.1.1.1/cdn-cgi/trace'`, `EGRESS_TIMEOUT_MS = 10_000`,
+    `EGRESS_MAX_BYTES = 16_384`;
   - `type EgressResult = { ok: true; address: string } | { ok: false; error: string }`;
   - `egressAddress(answer: string): string | undefined`;
   - `isEgressUrl(url: string): boolean` (http and https only);
@@ -1509,26 +1581,34 @@ never follows a redirect and gives up after 10 seconds.
 Create `packages/engine/src/vpn/egress.test.ts`:
 
 ```ts
-import { createServer, type Server } from 'node:http';
+import { createServer, type RequestListener, type Server } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { egressAddress, fetchEgress, isEgressUrl } from './egress';
 
-/** A local web server answering every request with `status` and `body`. */
-async function answering(
-  status: number,
-  body: string,
+/** A local web server whose every request `handler` answers. */
+async function serving(
+  handler: RequestListener,
 ): Promise<{ url: string; server: Server }> {
-  const server = createServer((_request, response) => {
-    response.writeHead(status, { 'content-type': 'text/plain' });
-    response.end(body);
-  });
+  const server = createServer(handler);
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
   const address = server.address();
   const port = typeof address === 'object' && address !== null ? address.port : 0;
   return { url: `http://127.0.0.1:${String(port)}/cdn-cgi/trace`, server };
 }
 
+/** A local web server answering every request with `status` and `body`. */
+function answering(
+  status: number,
+  body: string,
+): Promise<{ url: string; server: Server }> {
+  return serving((_request, response) => {
+    response.writeHead(status, { 'content-type': 'text/plain' });
+    response.end(body);
+  });
+}
+
 function close(server: Server): Promise<void> {
+  server.closeAllConnections();
   return new Promise((done) => {
     server.close(() => {
       done();
@@ -1575,6 +1655,21 @@ describe('fetchEgress', () => {
     }
   });
 
+  it('stops reading after 16 KiB, so an answer that never ends still gets an answer', async () => {
+    const { url, server } = await serving((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.write('x'.repeat(20_000));
+    });
+    try {
+      expect(await fetchEgress(url, fetch, 5_000)).toEqual({
+        ok: false,
+        error: `${url} answered without an address`,
+      });
+    } finally {
+      await close(server);
+    }
+  });
+
   it('reports an HTTP error, or an answer without an address', async () => {
     const refused = await answering(503, 'ip=127.0.0.1\n');
     const empty = await answering(200, 'nothing here\n');
@@ -1616,7 +1711,9 @@ describe('fetchEgress', () => {
 });
 ```
 
-The local server listens on `127.0.0.1:0`: no network beyond this machine, and no Docker.
+The local servers listen on `127.0.0.1:0`: no network beyond this machine, and no Docker.
+The one that never ends its answer shows the cap: without it, `fetchEgress` would wait
+for the end and time out.
 
 In `packages/engine/src/host/report.test.ts`:
 
@@ -1777,8 +1874,8 @@ export const DEFAULT_VPN_CHECK_URL = 'https://1.1.1.1/cdn-cgi/trace';
 /** How long each side of the egress check waits for an answer, in ms. */
 export const EGRESS_TIMEOUT_MS = 10_000;
 
-/** The most of an answer Mediaplane reads: a trace is a few hundred bytes. */
-const MAX_ANSWER = 16_384;
+/** The most of an answer either side reads, in bytes: a trace is a few hundred. */
+export const EGRESS_MAX_BYTES = 16_384;
 
 /** The address an IP-echo service saw, or why there is none. */
 export type EgressResult = { ok: true; address: string } | { ok: false; error: string };
@@ -1789,7 +1886,7 @@ export type EgressResult = { ok: true; address: string } | { ok: false; error: s
  * give it. Undefined when there is no valid IPv4 or IPv6 address.
  */
 export function egressAddress(answer: string): string | undefined {
-  const text = answer.slice(0, MAX_ANSWER);
+  const text = answer.slice(0, EGRESS_MAX_BYTES);
   const candidate = (/^ip=(.*)$/m.exec(text)?.[1] ?? text).trim();
   return isIP(candidate) === 0 ? undefined : candidate;
 }
@@ -1819,7 +1916,7 @@ export async function fetchEgress(
     if (!response.ok) {
       return { ok: false, error: `${url} answered HTTP ${String(response.status)}` };
     }
-    answer = await response.text();
+    answer = await readCapped(response, EGRESS_MAX_BYTES);
   } catch (cause) {
     return { ok: false, error: `no answer from ${url}: ${reason(cause, timeoutMs)}` };
   }
@@ -1827,6 +1924,23 @@ export async function fetchEgress(
   return address === undefined
     ? { ok: false, error: `${url} answered without an address` }
     : { ok: true, address };
+}
+
+/** The first `max` bytes of a response's body, as text; the rest is never read. */
+async function readCapped(response: Response, max: number): Promise<string> {
+  const reader: ReadableStreamDefaultReader<Uint8Array> | undefined =
+    response.body?.getReader();
+  if (reader === undefined) return '';
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (size < max) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    size += value.byteLength;
+  }
+  await reader.cancel();
+  return Buffer.concat(chunks).subarray(0, max).toString('utf8');
 }
 
 /** Why a fetch failed, in words: undici keeps the network error in `cause`. */
@@ -1942,7 +2056,16 @@ What runs on the VPN's side (decision 1): a POSIX shell script for `sh -c`, run 
 - with a URL, asks the IP-echo service which address it comes from.
 
 Decision: the key comes in on stdin, and goes to curl as a header file on stdin
-(`printf … | curl -H @-`), so it is never an argument (decision 2). `printf` is a
+(`printf … | curl -H @-`), so it is never an argument (decision 2). Every curl starts
+with `-q` (which must be its first option) and `--noproxy '*'`: the one-off has
+qBittorrent's environment and mounts, so a `.curlrc` in its appdata or a proxy variable
+could otherwise capture the key or fake the egress answer (preflight M2). The egress
+curl also gets `--max-filesize 16384`, as the host side reads at most 16 KiB (preflight
+M6). It gets no `-f`: an answer with any HTTP status still proves the path, and a body
+without `ip=` already gives the "answer without an address" warning.
+Decision: `probeCommand` takes the stack's secret values too, and the runtime replaces
+them all, with the key, in what the probe prints: `compose run` loads `generated/.env`,
+as apply's helpers do (preflight M7). `printf` is a
 builtin of the image's busybox `sh` (checked): no process ever carries the key in its
 arguments. The URL and the port are
 positional arguments (`"$1"`, `"$2"`), never pasted into the script, so a URL can't
@@ -1957,16 +2080,17 @@ body or a curl error can't break the parse, and Compose's progress lines are ign
 - Modify: `packages/engine/src/testing/fakes.ts`, `packages/engine/src/index.ts`
 
 **Interfaces:**
-- **Consumes:** `OneOffCommand` (Task 3), `EGRESS_TIMEOUT_MS` (Task 4), `nodeExec`.
+- **Consumes:** `OneOffCommand` (Task 3), `EGRESS_TIMEOUT_MS` and `EGRESS_MAX_BYTES`
+  (Task 4), `nodeExec`.
 - **Produces:**
   - `ROUTE_TARGET = '1.1.1.1'`, `PROBE_USER = { uid: 65534, gid: 65534 }`,
     `PROBE_SCRIPT: string`;
   - `type ProbeCheck = 'route' | 'anonymous' | 'status' | 'publicip' | 'egress'`,
     `interface ProbeLine { exit: number; output: string }`,
     `type ProbeOutput = Partial<Record<ProbeCheck, ProbeLine>>`;
-  - `probeCommand(key: string, controlPort: number, url: string | undefined): OneOffCommand`
+  - `probeCommand(key: string, controlPort: number, url: string | undefined, values?: Record<string, string>): OneOffCommand`
     (args `['-c', PROBE_SCRIPT, 'vpn-check', <port>, <url or "">]`, input `<key>\n`,
-    values `{ controlApiKey: key }`);
+    values `{ ...values, controlApiKey: key }`);
   - `parseProbe(stdout: string): ProbeOutput`;
   - `routeDevice(line: ProbeLine | undefined): string | undefined`;
   - `httpAnswer(line: ProbeLine | undefined): { status: number; body: string }`;
@@ -2044,8 +2168,15 @@ describe('PROBE_SCRIPT', () => {
     const calls = await readFile(log, 'utf8');
     expect(calls).toContain('http://127.0.0.1:8000/v1/vpn/status');
     expect(calls).toContain('http://127.0.0.1:8000/v1/publicip/ip');
-    expect(calls).toContain('--max-time 10 http://192.0.2.10/cgi-bin/ip');
+    expect(calls).toContain(
+      '--max-time 10 --max-filesize 16384 http://192.0.2.10/cgi-bin/ip',
+    );
     expect(calls).not.toContain(KEY);
+    // No .curlrc and no proxy: -q must come first.
+    for (const call of calls.trim().split('\n')) {
+      expect(call.startsWith('-q '), call).toBe(true);
+      expect(call, call).toContain(' --noproxy * ');
+    }
   });
 
   it('asks no egress question without a URL', async () => {
@@ -2066,13 +2197,18 @@ describe('PROBE_SCRIPT', () => {
 });
 
 describe('probeCommand', () => {
-  it('runs the script as nobody, with the key on stdin and hidden in what it prints', () => {
+  it('runs the script as nobody, with the key on stdin, and hides every secret it prints', () => {
     expect(probeCommand(KEY, 8000, undefined)).toEqual({
       user: PROBE_USER,
       entrypoint: 'sh',
       args: ['-c', PROBE_SCRIPT, 'vpn-check', '8000', ''],
       input: `${KEY}\n`,
       values: { controlApiKey: KEY },
+    });
+    const values = { MP_GLUETUN_WIREGUARD_KEY: 'fake-wireguard-key' };
+    expect(probeCommand(KEY, 8000, undefined, values).values).toEqual({
+      MP_GLUETUN_WIREGUARD_KEY: 'fake-wireguard-key',
+      controlApiKey: KEY,
     });
     expect(PROBE_USER).toEqual({ uid: 65534, gid: 65534 });
   });
@@ -2134,7 +2270,7 @@ Create `packages/engine/src/vpn/probe.ts`:
 
 ```ts
 import type { OneOffCommand } from '../runtime/types';
-import { EGRESS_TIMEOUT_MS } from './egress';
+import { EGRESS_MAX_BYTES, EGRESS_TIMEOUT_MS } from './egress';
 
 /** A public address to ask the namespace's route to. Only the route is read: no traffic. */
 export const ROUTE_TARGET = '1.1.1.1';
@@ -2147,6 +2283,8 @@ export const PROBE_USER = { uid: 65534, gid: 65534 } as const;
  * own image (busybox `ip` and `base64`, and curl). Its arguments are Gluetun's control
  * port and the egress URL ("" for none); Mediaplane's key to the control server comes on
  * stdin and goes to curl as a header file on stdin, so it is never on a command line.
+ * Every curl starts with -q and --noproxy '*': it reads no .curlrc (qBittorrent's
+ * appdata is its HOME) and no proxy setting, so neither can see the key or fake an answer.
  * Each check prints one line: its name, its exit status, and its output in base64.
  */
 export const PROBE_SCRIPT = [
@@ -2154,11 +2292,11 @@ export const PROBE_SCRIPT = [
   'base="http://127.0.0.1:$1"',
   'url=$2',
   'anonymous() {',
-  `  curl -s -o /dev/null --max-time 5 -w '%{http_code}' "$base/v1/vpn/status"`,
+  `  curl -q -s --noproxy '*' -o /dev/null --max-time 5 -w '%{http_code}' "$base/v1/vpn/status"`,
   '}',
   'withkey() {',
   `  printf 'X-API-Key: %s\\n' "$key" |`,
-  `    curl -s --max-time 5 -H @- -w '\\n%{http_code}' "$base$1"`,
+  `    curl -q -s --noproxy '*' --max-time 5 -H @- -w '\\n%{http_code}' "$base$1"`,
   '}',
   'report() {',
   '  name=$1',
@@ -2171,7 +2309,7 @@ export const PROBE_SCRIPT = [
   'report anonymous anonymous',
   'report status withkey /v1/vpn/status',
   'report publicip withkey /v1/publicip/ip',
-  `[ -z "$url" ] || report egress curl -sS --max-time ${String(EGRESS_TIMEOUT_MS / 1000)} "$url"`,
+  `[ -z "$url" ] || report egress curl -q -sS --noproxy '*' --max-time ${String(EGRESS_TIMEOUT_MS / 1000)} --max-filesize ${String(EGRESS_MAX_BYTES)} "$url"`,
   '',
 ].join('\n');
 
@@ -2186,18 +2324,23 @@ export interface ProbeLine {
 
 export type ProbeOutput = Partial<Record<ProbeCheck, ProbeLine>>;
 
-/** The one-off command for `runtime.run`: the probe, given the key and what to ask. */
+/**
+ * The one-off command for `runtime.run`: the probe, given the key and what to ask.
+ * `values` are the stack's secret values, which `compose run` loads from .env as apply's
+ * helpers do: they are replaced with `***` in what it prints, and so is the key.
+ */
 export function probeCommand(
   key: string,
   controlPort: number,
   url: string | undefined,
+  values: Record<string, string> = {},
 ): OneOffCommand {
   return {
     user: PROBE_USER,
     entrypoint: 'sh',
     args: ['-c', PROBE_SCRIPT, 'vpn-check', String(controlPort), url ?? ''],
     input: `${key}\n`,
-    values: { controlApiKey: key },
+    values: { ...values, controlApiKey: key },
   };
 }
 
@@ -2286,9 +2429,15 @@ writes nothing, and never prints the key.
 The checks, in order, each `ok`, `warning`, `down` or `leak` (decision 7):
 
 - `network`: qBittorrent's network mode is `container:<the running Gluetun's id>`, and
-  qBittorrent started after Gluetun's current run. Decision: a qBittorrent that started
-  first holds the network an earlier Gluetun had, which is gone, so it is `down`
-  (decision 5). A network of its own is a `leak`; a Gluetun that has gone is `down`.
+  qBittorrent started after Gluetun's current run. Docker's answers are matched by
+  container ID (preflight M5).
+  - Decision: a qBittorrent that started first holds the network an earlier Gluetun had,
+    which is gone, so it is `down` (decision 5).
+  - A qBittorrent that isn't running is a `warning` ("qBittorrent is exited…"), with no
+    start-time comparison (preflight M4).
+  - A network of its own is a `leak`, and so is `container:<id>` naming another running
+    container of the stack ("qBittorrent uses sonarr's network…", preflight B2). Any
+    other `container:<id>` is a Gluetun that has gone: `down`.
 - `gluetun`: running and healthy. Not running is `down`, and nothing is probed:
   qBittorrent has only loopback. Running but not healthy is `down`, and the probe still
   runs.
@@ -2299,11 +2448,19 @@ The checks, in order, each `ok`, `warning`, `down` or `leak` (decision 7):
   Mediaplane wrote it (the roadmap's last S3d input), with the fix: restart Gluetun,
   then qBittorrent. No answer at all leaves this check out (`control` already warns).
 - `route`: the route out goes into the tunnel (`tun0`, or `VPN_INTERFACE` from
-  `apps.gluetun.env`: decision 11). Anything else is `down`.
+  `apps.gluetun.env`: decision 11). Anything else is `down`, unless an answer still came
+  back through the probe: then it left outside the tunnel, a `leak` (preflight M3).
 - `egress` (unless `--no-egress`): no answer through the tunnel is `down`, and the host
   isn't asked (decision 9); an answer without an address is a `warning`; a host that
-  can't ask is a `warning` (D9: "passes on structure"); the same address on both sides
-  is a `leak`; different addresses are `ok`.
+  can't ask is a `warning` (D9: "passes on structure"); an IPv4 and an IPv6 address are a
+  `warning`, never compared (preflight M6); the same address on both sides is a `leak`;
+  different addresses are `ok`.
+
+Decision: the result's `failClosed` is true only when Gluetun isn't running or nothing
+answered through the tunnel, the two cases where nothing can get out; Task 7's summary
+says "nothing leaks" only then (preflight M3).
+Decision: the probe gets the stack's secret values (`secretValues`, as apply uses them)
+for redaction, with the key (preflight M7).
 
 Decision: `apps.qbittorrent.vpn: false` is a `leak` verdict, found without asking Docker,
 and a stack with no qBittorrent is an error (decision 8). The other errors (`ok: false`,
@@ -2317,24 +2474,84 @@ Decision: Gluetun's own public address is reported as `gluetunPublicIp`, never c
 
 **Files:**
 - Create: `packages/engine/src/vpn/check.ts`, `packages/engine/src/vpn/check.test.ts`
-- Modify: `packages/engine/src/index.ts`
+- Modify: `packages/engine/src/index.ts`, `packages/engine/src/testing/fakes.ts`
 
 **Interfaces:**
 - **Consumes:** `loadConfigFile`, `hostFactsOrFailure`, `dockerUnavailable`,
-  `resolveStack`, `readSecretStore`; `Runtime.containers`, `inspect` and `run` (Task 3);
-  `egressAddress`, `isEgressUrl` and `EgressResult` (Task 4); `probeCommand`,
-  `parseProbe`, `routeDevice` and `httpAnswer` (Task 5). In the tests, `fakeRuntime`'s
-  `run` and `details` (Task 3), and `probeOutput` and `ProbeAnswers` (Task 5).
+  `resolveStack`, `readSecretStore`, `secretValues`; `Runtime.containers`, `inspect` and
+  `run` (Task 3); `egressAddress`, `isEgressUrl` and `EgressResult` (Task 4);
+  `probeCommand`, `parseProbe`, `routeDevice` and `httpAnswer` (Task 5). In the tests,
+  `fakeRuntime`'s `run` and `details` (Task 3), and `probeOutput` and `ProbeAnswers`
+  (Task 5).
 - **Produces:**
   - `VPN_RUNBOOK = 'docs/runbooks/vpn-down.md'`;
   - `interface VpnCheckOptions { home: string; catalog: Catalog; host: HostFacts | (() => Promise<HostFacts>); env: NodeJS.ProcessEnv; runtime: Runtime; egress?: { url: string; fromHost: (url: string) => Promise<EgressResult> } }`;
   - `type VpnVerdict = 'pass' | 'leak' | 'down'`;
   - `interface VpnCheckItem { id: 'network' | 'gluetun' | 'control' | 'control-key' | 'route' | 'egress'; status: 'ok' | 'warning' | 'down' | 'leak'; message: string; hint?: string }`;
   - `interface VpnEgress { url: string; vpn: string | null; host: string | null }`;
-  - `type VpnCheckResult = { ok: true; verdict: VpnVerdict; checks: VpnCheckItem[]; egress: VpnEgress | null; gluetunPublicIp: string | null } | { ok: false; diagnostics: Diagnostic[] }`;
-  - `vpnCheck(options: VpnCheckOptions): Promise<VpnCheckResult>`.
+  - `type VpnCheckResult = { ok: true; verdict: VpnVerdict; checks: VpnCheckItem[]; egress: VpnEgress | null; gluetunPublicIp: string | null; failClosed: boolean } | { ok: false; diagnostics: Diagnostic[] }`;
+  - `vpnCheck(options: VpnCheckOptions): Promise<VpnCheckResult>`;
+  - in the fakes (Task 7 uses them too): `FAKE_GLUETUN_ID`, `FAKE_QBITTORRENT_ID`,
+    `fakeContainer(service: string, id: string, extra?: Partial<ContainerState>): ContainerState`,
+    and `fakeProbeRuntime(answers: ProbeAnswers, sent?: OneOffCommand[], options?: FakeRuntimeOptions): Runtime`,
+    a Docker running qBittorrent in a healthy Gluetun's network whose probe prints
+    `answers` (preflight M9).
 
 - [ ] **Step 1: Write the failing tests**
+
+Add to the end of `packages/engine/src/testing/fakes.ts`, the one fake Docker both this
+task's and Task 7's tests use:
+
+```ts
+
+/** The container IDs fakeProbeRuntime gives Gluetun and qBittorrent. */
+export const FAKE_GLUETUN_ID = 'a'.repeat(64);
+export const FAKE_QBITTORRENT_ID = 'b'.repeat(64);
+
+/** A running, healthy container of the stack, unless `extra` says otherwise. */
+export function fakeContainer(
+  service: string,
+  id: string,
+  extra: Partial<ContainerState> = {},
+): ContainerState {
+  return {
+    service,
+    id,
+    state: 'running',
+    health: 'healthy',
+    configHash: undefined,
+    published: [],
+    ...extra,
+  };
+}
+
+/**
+ * A Docker running qBittorrent in a healthy Gluetun's network, whose vpn-check probe
+ * prints `answers`, as the script would: no egress line when it is asked no URL. Each
+ * probe's command is pushed to `sent`. `options` replace these defaults, and anything
+ * else a fakeRuntime takes.
+ */
+export function fakeProbeRuntime(
+  answers: ProbeAnswers,
+  sent: OneOffCommand[] = [],
+  options: FakeRuntimeOptions = {},
+): Runtime {
+  return fakeRuntime({
+    containers: [
+      fakeContainer('gluetun', FAKE_GLUETUN_ID),
+      fakeContainer('qbittorrent', FAKE_QBITTORRENT_ID),
+    ],
+    details: { [FAKE_QBITTORRENT_ID]: { networkMode: `container:${FAKE_GLUETUN_ID}` } },
+    run: (_service, command) => {
+      sent.push(command);
+      const shown: ProbeAnswers = { ...answers };
+      if (command.args.at(-1) === '') delete shown.egress;
+      return { code: 0, stdout: probeOutput(shown), stderr: '' };
+    },
+    ...options,
+  });
+}
+```
 
 Create `packages/engine/src/vpn/check.test.ts`:
 
@@ -2343,7 +2560,6 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SECRETS_PATH } from '../paths';
-import type { ExecResult } from '../runtime/exec';
 import {
   RuntimeError,
   type ContainerState,
@@ -2351,8 +2567,10 @@ import {
   type Runtime,
 } from '../runtime/types';
 import {
-  fakeRuntime,
-  probeOutput,
+  FAKE_GLUETUN_ID as GLUETUN_ID,
+  FAKE_QBITTORRENT_ID as QBITTORRENT_ID,
+  fakeContainer as container,
+  fakeProbeRuntime,
   type FakeRuntimeOptions,
   type ProbeAnswers as Answers,
 } from '../testing/fakes';
@@ -2363,8 +2581,7 @@ import type { EgressResult } from './egress';
 
 const KEY = '0'.repeat(32);
 const TRACE = 'https://1.1.1.1/cdn-cgi/trace';
-const GLUETUN_ID = 'a'.repeat(64);
-const QBITTORRENT_ID = 'b'.repeat(64);
+const SONARR_ID = 'c'.repeat(64);
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -2384,24 +2601,6 @@ async function homeWith({ stack = STACK, key = true } = {}): Promise<string> {
   return home;
 }
 
-function container(service: string, id: string, extra: Partial<ContainerState> = {}) {
-  return {
-    service,
-    id,
-    state: 'running',
-    health: 'healthy',
-    configHash: undefined,
-    published: [],
-    ...extra,
-  };
-}
-
-const UP: ContainerState[] = [
-  container('gluetun', GLUETUN_ID),
-  container('jellyfin', 'c'.repeat(64)),
-  container('qbittorrent', QBITTORRENT_ID),
-];
-
 const HEALTHY: Answers = {
   route: [0, '1.1.1.1 dev tun0  src 10.66.0.2 '],
   anonymous: [0, '401'],
@@ -2412,12 +2611,11 @@ const HEALTHY: Answers = {
 
 interface Setup {
   answers?: Answers;
-  containers?: ContainerState[];
-  details?: FakeRuntimeOptions['details'];
   host?: EgressResult;
   egress?: boolean;
   url?: string;
-  runtime?: Partial<FakeRuntimeOptions>;
+  /** For the fake Docker: containers, details, a run of its own… */
+  runtime?: FakeRuntimeOptions;
   /** Methods that replace the fake's own. */
   replace?: Partial<Runtime>;
 }
@@ -2427,21 +2625,8 @@ async function checkWith(home: string, setup: Setup = {}) {
   const calls: string[] = [];
   const sent: OneOffCommand[] = [];
   const asked: string[] = [];
-  const egressAsked = setup.egress ?? true;
-  const answers = setup.answers ?? HEALTHY;
-  const fake = fakeRuntime({
+  const fake = fakeProbeRuntime(setup.answers ?? HEALTHY, sent, {
     calls,
-    containers: setup.containers ?? UP,
-    details: setup.details ?? {
-      [QBITTORRENT_ID]: { networkMode: `container:${GLUETUN_ID}` },
-    },
-    run: (_service, command): ExecResult => {
-      sent.push(command);
-      // Like the script, the probe asks no egress question without a URL.
-      const shown: Answers = { ...answers };
-      if (command.args.at(-1) === '') delete shown.egress;
-      return { code: 0, stdout: probeOutput(shown), stderr: '' };
-    },
     ...setup.runtime,
   });
   const runtime: Runtime = { ...fake, ...setup.replace };
@@ -2451,7 +2636,7 @@ async function checkWith(home: string, setup: Setup = {}) {
     host: FIXTURE_HOST,
     env: {},
     runtime,
-    ...(egressAsked
+    ...((setup.egress ?? true)
       ? {
           egress: {
             url: setup.url ?? TRACE,
@@ -2469,6 +2654,12 @@ async function checkWith(home: string, setup: Setup = {}) {
 const statuses = (result: Awaited<ReturnType<typeof vpnCheck>>) =>
   result.ok ? result.checks.map((c) => `${c.id} ${c.status}`) : [];
 
+/** Gluetun and qBittorrent, as `fakeProbeRuntime` has them, changed by `qbittorrent`. */
+const withQbittorrent = (qbittorrent: Partial<ContainerState>): ContainerState[] => [
+  container('gluetun', GLUETUN_ID),
+  container('qbittorrent', QBITTORRENT_ID, qbittorrent),
+];
+
 describe('vpnCheck', () => {
   it('passes when qBittorrent gets out only through the tunnel, from another address', async () => {
     const { result, calls, sent, asked } = await checkWith(await homeWith());
@@ -2477,6 +2668,7 @@ describe('vpnCheck', () => {
       verdict: 'pass',
       egress: { url: TRACE, vpn: '203.0.113.7', host: '198.51.100.2' },
       gluetunPublicIp: null,
+      failClosed: false,
     });
     expect(statuses(result)).toEqual([
       'network ok',
@@ -2498,6 +2690,17 @@ describe('vpnCheck', () => {
     expect(asked).toEqual([TRACE]);
   });
 
+  it('hides every secret of the stack in what the probe prints, not just the key', async () => {
+    const home = await homeWith();
+    await mkdir(join(home, 'secrets'));
+    await writeFile(join(home, 'secrets', 'wg.key'), 'fake-wireguard-key\n');
+    const { sent } = await checkWith(home);
+    expect(sent[0]?.values).toEqual({
+      MP_GLUETUN_WIREGUARD_KEY: 'fake-wireguard-key',
+      controlApiKey: KEY,
+    });
+  });
+
   it('checks the structure only with --no-egress, and asks no one for an address', async () => {
     const answers: Answers = {
       ...HEALTHY,
@@ -2513,7 +2716,13 @@ describe('vpnCheck', () => {
       egress: null,
       gluetunPublicIp: '203.0.113.7',
     });
-    expect(statuses(result)).not.toContain('egress ok');
+    expect(statuses(result)).toEqual([
+      'network ok',
+      'gluetun ok',
+      'control ok',
+      'control-key ok',
+      'route ok',
+    ]);
     expect(sent[0]?.args.at(-1)).toBe('');
     expect(asked).toEqual([]);
   });
@@ -2532,7 +2741,7 @@ describe('vpnCheck', () => {
     });
   });
 
-  it('finds the VPN down when nothing answers through the tunnel, and asks the host nothing', async () => {
+  it('finds the VPN down, and closed, when nothing answers through the tunnel; the host is not asked', async () => {
     const answers: Answers = {
       ...HEALTHY,
       egress: [28, 'curl: (28) Connection timed out after 10002 milliseconds'],
@@ -2542,6 +2751,7 @@ describe('vpnCheck', () => {
       ok: true,
       verdict: 'down',
       egress: { url: TRACE, vpn: null, host: null },
+      failClosed: true,
     });
     expect(result.ok && result.checks.at(-1)).toMatchObject({
       id: 'egress',
@@ -2571,40 +2781,114 @@ describe('vpnCheck', () => {
     expect(asked).toEqual([]);
   });
 
+  it('warns, without comparing, when one side answered over IPv4 and the other over IPv6', async () => {
+    const { result } = await checkWith(await homeWith(), {
+      host: { ok: true, address: '2001:db8::2' },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      verdict: 'pass',
+      egress: { url: TRACE, vpn: '203.0.113.7', host: '2001:db8::2' },
+    });
+    expect(result.ok && result.checks.at(-1)).toMatchObject({
+      id: 'egress',
+      status: 'warning',
+      message:
+        "qBittorrent's traffic leaves from 203.0.113.7, and this host's from 2001:db8::2: one IPv4 and one IPv6 address, so the two were not compared",
+    });
+  });
+
   it('finds a leak when qBittorrent has a network of its own', async () => {
     const { result } = await checkWith(await homeWith(), {
-      details: { [QBITTORRENT_ID]: { networkMode: 'mediaplane_default' } },
+      runtime: { details: { [QBITTORRENT_ID]: { networkMode: 'mediaplane_default' } } },
     });
     expect(result).toMatchObject({ ok: true, verdict: 'leak' });
     expect(statuses(result)[0]).toBe('network leak');
+  });
+
+  it("finds a leak when qBittorrent uses another app's network, even with --no-egress", async () => {
+    const { result } = await checkWith(await homeWith(), {
+      egress: false,
+      runtime: {
+        containers: [...withQbittorrent({}), container('sonarr', SONARR_ID)],
+        details: { [QBITTORRENT_ID]: { networkMode: `container:${SONARR_ID}` } },
+      },
+    });
+    expect(result).toMatchObject({ ok: true, verdict: 'leak', failClosed: false });
+    expect(result.ok && result.checks[0]).toMatchObject({
+      status: 'leak',
+      message:
+        "qBittorrent uses sonarr's network, not Gluetun's: its traffic does not go through the VPN",
+    });
   });
 
   it('finds the VPN down when qBittorrent holds the network of an earlier Gluetun', async () => {
     // Gluetun restarted on its own, after qBittorrent: the probe would join Gluetun's new
     // network and pass, while qBittorrent itself has none.
     const { result } = await checkWith(await homeWith(), {
-      details: {
-        [QBITTORRENT_ID]: { networkMode: `container:${GLUETUN_ID}` },
-        [GLUETUN_ID]: { startedAt: '2026-10-10T10:05:00Z' },
+      runtime: {
+        details: {
+          [QBITTORRENT_ID]: { networkMode: `container:${GLUETUN_ID}` },
+          [GLUETUN_ID]: { startedAt: '2026-10-10T10:05:00Z' },
+        },
       },
     });
-    expect(result).toMatchObject({ ok: true, verdict: 'down' });
+    expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
     expect(result.ok && result.checks[0]).toMatchObject({
       status: 'down',
       hint: 'restart qBittorrent: "docker restart mediaplane-qbittorrent-1"',
     });
   });
 
-  it('finds the VPN down, without probing, when Gluetun is not running', async () => {
+  it('matches what Docker says to each container by its ID, not by its place', async () => {
+    const reversed: Runtime['inspect'] = (ids) =>
+      Promise.resolve(
+        [...ids].reverse().map((id) => ({
+          id,
+          networkMode: id === QBITTORRENT_ID ? `container:${GLUETUN_ID}` : 'bridge',
+          startedAt: '2026-10-10T10:00:00Z',
+        })),
+      );
+    const { result } = await checkWith(await homeWith(), {
+      replace: { inspect: reversed },
+    });
+    expect(result).toMatchObject({ ok: true, verdict: 'pass' });
+  });
+
+  it('warns, and passes, when qBittorrent is not running: it sends nothing', async () => {
+    for (const state of ['exited', 'created']) {
+      const { result } = await checkWith(await homeWith(), {
+        runtime: {
+          containers: withQbittorrent({ state, health: '' }),
+          details: {
+            [QBITTORRENT_ID]: {
+              networkMode: `container:${GLUETUN_ID}`,
+              startedAt: '0001-01-01T00:00:00Z',
+            },
+          },
+        },
+      });
+      expect(result).toMatchObject({ ok: true, verdict: 'pass' });
+      expect(result.ok && result.checks[0]).toMatchObject({
+        status: 'warning',
+        message: `qBittorrent is ${state}: it uses Gluetun's network, but sends nothing until it runs`,
+      });
+    }
+  });
+
+  it('finds the VPN down, closed and without probing, when Gluetun is not running', async () => {
     const containers = [
       container('gluetun', GLUETUN_ID, { state: 'exited', health: '' }),
       container('qbittorrent', QBITTORRENT_ID),
     ];
-    const { result, calls } = await checkWith(await homeWith(), { containers });
+    const { result, calls } = await checkWith(await homeWith(), {
+      runtime: { containers },
+    });
     expect(result).toMatchObject({
       ok: true,
       verdict: 'down',
       egress: { url: TRACE, vpn: null, host: null },
+      failClosed: true,
     });
     expect(statuses(result)).toEqual(['network ok', 'gluetun down']);
     expect(result.ok && result.checks[1]?.message).toBe(
@@ -2615,18 +2899,20 @@ describe('vpnCheck', () => {
 
   it('finds the VPN down when Gluetun has no container, or one that has gone', async () => {
     const containers = [container('qbittorrent', QBITTORRENT_ID)];
-    const { result } = await checkWith(await homeWith(), { containers });
+    const { result } = await checkWith(await homeWith(), { runtime: { containers } });
     expect(statuses(result)).toEqual(['network down', 'gluetun down']);
     expect(result).toMatchObject({ ok: true, verdict: 'down' });
   });
 
-  it('finds the VPN down when Gluetun is unhealthy, and still probes', async () => {
+  it('finds the VPN down, but not closed, when Gluetun is unhealthy; it still probes', async () => {
     const containers = [
       container('gluetun', GLUETUN_ID, { health: 'unhealthy' }),
       container('qbittorrent', QBITTORRENT_ID),
     ];
-    const { result, calls } = await checkWith(await homeWith(), { containers });
-    expect(result).toMatchObject({ ok: true, verdict: 'down' });
+    const { result, calls } = await checkWith(await homeWith(), {
+      runtime: { containers },
+    });
+    expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
     expect(statuses(result)[1]).toBe('gluetun down');
     expect(calls).toContain('run qbittorrent sh as 65534:65534');
   });
@@ -2664,17 +2950,32 @@ describe('vpnCheck', () => {
     expect(statuses(result)).toContain('control down');
   });
 
-  it('finds the VPN down when the route does not go into the tunnel', async () => {
+  it('finds the VPN down when the route does not go into the tunnel and nothing answers', async () => {
     for (const route of [
       [0, '1.1.1.1 via 172.20.0.1 dev eth0  src 172.20.0.2'],
       [2, 'RTNETLINK answers: Network is unreachable'],
     ] as [number, string][]) {
       const { result } = await checkWith(await homeWith(), {
+        egress: false,
         answers: { ...HEALTHY, route },
       });
-      expect(result).toMatchObject({ ok: true, verdict: 'down' });
+      expect(result).toMatchObject({ ok: true, verdict: 'down', failClosed: false });
       expect(statuses(result)).toContain('route down');
     }
+  });
+
+  it('finds a leak when the route does not go into the tunnel, yet an answer came back', async () => {
+    const answers: Answers = {
+      ...HEALTHY,
+      route: [0, '1.1.1.1 via 172.20.0.1 dev eth0  src 172.20.0.2'],
+    };
+    const { result } = await checkWith(await homeWith(), { answers });
+    expect(result).toMatchObject({ ok: true, verdict: 'leak' });
+    expect(result.ok && result.checks.find((c) => c.id === 'route')).toMatchObject({
+      status: 'leak',
+      message:
+        "qBittorrent's traffic is routed to eth0, not into the tunnel (tun0), and it still got an answer from outside: it leaves outside the VPN",
+    });
   });
 
   it("takes Gluetun's tunnel from VPN_INTERFACE when apps.gluetun.env sets it", async () => {
@@ -2700,7 +3001,10 @@ describe('vpnCheck', () => {
       [checkWith(await homeWith({ stack: noQbittorrent })), 'vpn-check.no-qbittorrent'],
       [checkWith(await homeWith(), { url: 'file:///etc/passwd' }), 'vpn-check.bad-url'],
       [checkWith(await homeWith({ key: false })), 'vpn-check.no-key'],
-      [checkWith(await homeWith(), { containers: [] }), 'vpn-check.not-applied'],
+      [
+        checkWith(await homeWith(), { runtime: { containers: [] } }),
+        'vpn-check.not-applied',
+      ],
       [
         checkWith(await homeWith(), {
           runtime: {
@@ -2733,8 +3037,8 @@ describe('vpnCheck', () => {
 ```
 
 The fixture catalog's Gluetun has the control port 8000, which is what the probe is
-asked for. Every `checkWith` runs against a fake Docker; `calls` shows what was asked of
-it, `sent` the probe's command, and `asked` what the host side was asked.
+asked for. Every `checkWith` runs against `fakeProbeRuntime`; `calls` shows what was
+asked of it, `sent` the probe's command, and `asked` what the host side was asked.
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -2747,6 +3051,7 @@ Expected: FAIL: the test can't import `./check`.
 Create `packages/engine/src/vpn/check.ts`:
 
 ```ts
+import { isIP } from 'node:net';
 import { join, resolve } from 'node:path';
 import type { Catalog } from '../catalog/types';
 import { loadConfigFile } from '../config/load';
@@ -2757,6 +3062,7 @@ import { STACK_PATH } from '../paths';
 import { resolveStack, type ResolvedApp } from '../resolver/resolve';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { readSecretStore } from '../secrets/store';
+import { secretValues } from '../secrets/values';
 import { egressAddress, isEgressUrl, type EgressResult } from './egress';
 import {
   httpAnswer,
@@ -2784,7 +3090,7 @@ export interface VpnCheckOptions {
   egress?: { url: string; fromHost: (url: string) => Promise<EgressResult> };
 }
 
-/** pass: qBittorrent gets out only through the tunnel. down: it can't get out at all. */
+/** pass: qBittorrent gets out only through the tunnel. down: the VPN doesn't work. */
 export type VpnVerdict = 'pass' | 'leak' | 'down';
 
 /** What one check found. `down` and `leak` fail the check, and say how. */
@@ -2811,6 +3117,11 @@ export type VpnCheckResult =
       egress: VpnEgress | null;
       /** The address Gluetun reports for itself, when its public-IP lookup is on. */
       gluetunPublicIp: string | null;
+      /**
+       * Whether nothing can get out at all: Gluetun isn't running, or nothing answered
+       * through the tunnel. Only then may a `down` verdict say that nothing leaks.
+       */
+      failClosed: boolean;
     }
   | { ok: false; diagnostics: Diagnostic[] };
 
@@ -2847,13 +3158,14 @@ async function check(options: VpnCheckOptions): Promise<VpnCheckResult> {
   const facts = await hostFactsOrFailure(options.host, options);
   if (!facts.ok) return { ok: false, diagnostics: [facts.diagnostic] };
   const resolved = resolveStack(loaded.config, options.catalog, facts.host, home);
-  if (resolved.stack === undefined) {
+  const stack = resolved.stack;
+  if (stack === undefined) {
     return {
       ok: false,
       diagnostics: resolved.diagnostics.filter((d) => d.severity === 'error'),
     };
   }
-  const app = (id: string) => resolved.stack?.apps.find((a) => a.def.id === id);
+  const app = (id: string) => stack.apps.find((a) => a.def.id === id);
   const qbittorrentApp = app('qbittorrent');
   const gluetunApp = app('gluetun');
   if (qbittorrentApp === undefined) {
@@ -2875,9 +3187,11 @@ async function check(options: VpnCheckOptions): Promise<VpnCheckResult> {
       ],
       null,
       null,
+      false,
     );
   }
-  const key = (await readSecretStore(home)).apps.gluetun?.controlApiKey;
+  const store = await readSecretStore(home);
+  const key = store.apps.gluetun?.controlApiKey;
   if (key === undefined) {
     return failure(
       'vpn-check.no-key',
@@ -2897,20 +3211,23 @@ async function check(options: VpnCheckOptions): Promise<VpnCheckResult> {
     );
   }
   const checks: VpnCheckItem[] = [
-    await networkCheck(runtime, qbittorrent, gluetun),
+    await networkCheck(runtime, containers, qbittorrent, gluetun),
     gluetunCheck(gluetun),
   ];
   // A stopped Gluetun leaves qBittorrent with loopback only, and nothing to probe.
   if (gluetun === undefined || gluetun.state !== 'running') {
     const unmeasured =
       egress === undefined ? null : { url: egress.url, vpn: null, host: null };
-    return verdictOf(checks, unmeasured, null);
+    return verdictOf(checks, unmeasured, null, true);
   }
 
+  // compose run loads generated/.env, so every secret in it is replaced in the output.
+  const values = await secretValues(stack, store, options.env);
   const command = probeCommand(
     key,
     gluetunApp.containerPorts.control ?? 8000,
     egress?.url,
+    values,
   );
   const result = await runtime.run('qbittorrent', command);
   const probe = parseProbe(result.stdout);
@@ -2923,27 +3240,35 @@ async function check(options: VpnCheckOptions): Promise<VpnCheckResult> {
   }
   checks.push(...controlChecks(probe), routeCheck(probe, tunnelInterface(gluetunApp)));
   const publicIp = gluetunPublicIp(probe);
-  if (egress === undefined) return verdictOf(checks, null, publicIp);
+  if (egress === undefined) return verdictOf(checks, null, publicIp, false);
   const compared = await egressCheck(probe, egress);
   checks.push(compared.item);
-  return verdictOf(checks, compared.egress, publicIp);
+  return verdictOf(checks, compared.egress, publicIp, compared.item.status === 'down');
 }
 
 async function networkCheck(
   runtime: Runtime,
+  containers: readonly ContainerState[],
   qbittorrent: ContainerState,
   gluetun: ContainerState | undefined,
 ): Promise<VpnCheckItem> {
   const ids = gluetun === undefined ? [qbittorrent.id] : [qbittorrent.id, gluetun.id];
-  const [itself, joined] = await runtime.inspect(ids);
-  const mode = itself?.networkMode ?? '';
+  const details = await runtime.inspect(ids);
+  const of = (id: string) => details.find((d) => d.id === id);
+  const mode = of(qbittorrent.id)?.networkMode ?? '';
   if (gluetun !== undefined && mode === `container:${gluetun.id}`) {
+    if (qbittorrent.state !== 'running') {
+      return {
+        id: 'network',
+        status: 'warning',
+        message: `qBittorrent is ${qbittorrent.state}: it uses Gluetun's network, but sends nothing until it runs`,
+        hint: 'run "mediaplane apply" to start it, then run vpn-check again',
+      };
+    }
     // A container joins another's namespace when it starts. Gluetun started again on its
     // own, after qBittorrent, has a new one; qBittorrent keeps the old, which is gone.
-    if (
-      gluetun.state === 'running' &&
-      Date.parse(itself?.startedAt ?? '') < Date.parse(joined?.startedAt ?? '')
-    ) {
+    const started = (id: string) => Date.parse(of(id)?.startedAt ?? '');
+    if (gluetun.state === 'running' && started(qbittorrent.id) < started(gluetun.id)) {
       return {
         id: 'network',
         status: 'down',
@@ -2958,8 +3283,19 @@ async function networkCheck(
       message: "qBittorrent uses Gluetun's network, and has none of its own",
     };
   }
-  // A container: mode that names no running Gluetun: the one it joined has gone.
-  if (mode.startsWith('container:')) {
+  const joined = /^container:(.+)$/.exec(mode)?.[1];
+  if (joined !== undefined) {
+    // Another running app of the stack has a way out of its own.
+    const other = containers.find((c) => c.id === joined && c.state === 'running');
+    if (other !== undefined) {
+      return {
+        id: 'network',
+        status: 'leak',
+        message: `qBittorrent uses ${other.service}'s network, not Gluetun's: its traffic does not go through the VPN`,
+        hint: 'look for a network_mode under qbittorrent in compose.override.yaml, take it out, and run "mediaplane apply"',
+      };
+    }
+    // Anything else is a Gluetun that has gone.
     return {
       id: 'network',
       status: 'down',
@@ -3059,13 +3395,26 @@ function routeCheck(probe: ProbeOutput, tunnel: string): VpnCheckItem {
       message: `qBittorrent's traffic is routed into the tunnel (${tunnel})`,
     };
   }
+  const where =
+    device === undefined
+      ? `not routed into the tunnel (${tunnel})`
+      : `routed to ${device}, not into the tunnel (${tunnel})`;
+  // An answer from outside, with no route into the tunnel, came the other way.
+  if (probe.egress?.exit === 0) {
+    return {
+      id: 'route',
+      status: 'leak',
+      message: `qBittorrent's traffic is ${where}, and it still got an answer from outside: it leaves outside the VPN`,
+      hint: `stop qBittorrent, then see ${VPN_RUNBOOK}`,
+    };
+  }
   return {
     id: 'route',
     status: 'down',
     message:
       device === undefined
         ? "qBittorrent's network has no route out"
-        : `qBittorrent's traffic is routed to ${device}, not into the tunnel (${tunnel})`,
+        : `qBittorrent's traffic is ${where}`,
     hint: `see ${VPN_RUNBOOK}`,
   };
 }
@@ -3110,6 +3459,18 @@ async function egressCheck(
       egress: { url, vpn, host: null },
     };
   }
+  // An IPv4 and an IPv6 address always differ, and prove nothing.
+  if (isIP(host.address) !== isIP(vpn)) {
+    return {
+      item: {
+        id: 'egress',
+        status: 'warning',
+        message: `qBittorrent's traffic leaves from ${vpn}, and this host's from ${host.address}: one IPv4 and one IPv6 address, so the two were not compared`,
+        hint: 'set MEDIAPLANE_VPN_CHECK_URL to a service named by its IP address, such as https://1.1.1.1/cdn-cgi/trace, or unset it',
+      },
+      egress: { url, vpn, host: host.address },
+    };
+  }
   if (host.address === vpn) {
     return {
       item: {
@@ -3135,13 +3496,14 @@ function verdictOf(
   checks: VpnCheckItem[],
   egress: VpnEgress | null,
   gluetunPublicIp: string | null,
+  failClosed: boolean,
 ): VpnCheckResult {
   const verdict: VpnVerdict = checks.some((c) => c.status === 'leak')
     ? 'leak'
     : checks.some((c) => c.status === 'down')
       ? 'down'
       : 'pass';
-  return { ok: true, verdict, checks, egress, gluetunPublicIp };
+  return { ok: true, verdict, checks, egress, gluetunPublicIp, failClosed };
 }
 
 /** Gluetun's tunnel interface: tun0, unless apps.gluetun.env sets VPN_INTERFACE. */
@@ -3202,7 +3564,7 @@ is the host helper failing, which `hostFactsOrFailure`'s own tests cover.
 
 ```bash
 pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check
-git add packages/engine/src/vpn packages/engine/src/index.ts
+git add packages/engine/src/vpn packages/engine/src/index.ts packages/engine/src/testing/fakes.ts
 git commit -m "feat(engine): vpnCheck, the kill switch's structure and its egress" \
   -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -3228,9 +3590,18 @@ Passed: qBittorrent reaches the internet only through the VPN.
 ```
 
 Decision: `--json` prints `{ schema: 'mediaplane.vpn-check/v1', ok: true, verdict, checks,
-egress, gluetunPublicIp }`: `ok` says the check ran, as in `mediaplane.plan/v1`, and the
-exit code says whether it passed (decision 12). Errors print the existing
-`mediaplane.error/v1` envelope.
+egress, gluetunPublicIp, failClosed }`: `ok` says the check ran, as in
+`mediaplane.plan/v1`, and the exit code says whether it passed (decision 12). Errors
+print the existing `mediaplane.error/v1` envelope.
+Decision: the summary claims no more than the checks found (preflight M3).
+- A pass whose addresses were compared: "Passed: qBittorrent reaches the internet only
+  through the VPN."
+- Any other pass, `--no-egress` or an `egress` warning: "Passed: qBittorrent has no way
+  out but the tunnel; its address was not compared with this host's."
+- A `down` with `failClosed`: "VPN down: qBittorrent can't reach the internet, and
+  nothing leaks (fail-closed). See docs/runbooks/vpn-down.md."
+- Any other `down`: "VPN down: the checks marked DOWN say what failed. See
+  docs/runbooks/vpn-down.md."
 Decision: `CliDeps` gains `egress`, the host's side: `fetchEgress` from source,
 `helperEgress` in the image, chosen by `MEDIAPLANE_IMAGE` like `host` and `probe`
 (decision 3).
@@ -3243,7 +3614,8 @@ Decision: `CliDeps` gains `egress`, the host's side: `fetchEgress` from source,
 **Interfaces:**
 - **Consumes:** `vpnCheck`, `VpnCheckResult`, `VpnCheckItem`, `VPN_RUNBOOK` (Task 6);
   `DEFAULT_VPN_CHECK_URL`, `fetchEgress`, `EgressResult` and `helperEgress` (Task 4);
-  `printDiagnostics` from `./output`.
+  `printDiagnostics` from `./output`. In the tests, `fakeProbeRuntime`, `fakeContainer`
+  and the fake IDs (Task 6), and `ProbeAnswers` (Task 5).
 - **Produces:**
   - `VPN_CHECK_JSON_SCHEMA = 'mediaplane.vpn-check/v1'`;
   - `printVpnCheck(result: VpnCheckResult, options: { json: boolean }, io: Io): number`,
@@ -3260,15 +3632,17 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   collectHostReport,
-  type ContainerState,
   type HostRequest,
   type OneOffCommand,
 } from '@mediaplane/engine';
 import {
+  FAKE_GLUETUN_ID,
+  FAKE_QBITTORRENT_ID,
   FIXTURE_HOST,
+  fakeContainer,
   fakeProbe,
+  fakeProbeRuntime,
   fakeRuntime,
-  probeOutput,
   tempDir,
   type ProbeAnswers,
 } from '@mediaplane/engine/testing';
@@ -3284,8 +3658,6 @@ apps:
   qbittorrent: {}
 `;
 const KEY = '0'.repeat(32);
-const GLUETUN_ID = 'a'.repeat(64);
-const QBITTORRENT_ID = 'b'.repeat(64);
 const TRACE = 'https://1.1.1.1/cdn-cgi/trace';
 
 async function makeHome(): Promise<string> {
@@ -3299,15 +3671,6 @@ async function makeHome(): Promise<string> {
   return home;
 }
 
-const running = (service: string, id: string): ContainerState => ({
-  service,
-  id,
-  state: 'running',
-  health: 'healthy',
-  configHash: undefined,
-  published: [],
-});
-
 const HEALTHY: ProbeAnswers = {
   route: [0, '1.1.1.1 dev tun0  src 10.66.0.2'],
   anonymous: [0, '401'],
@@ -3315,20 +3678,6 @@ const HEALTHY: ProbeAnswers = {
   publicip: [0, '{"public_ip":""}\n200'],
   egress: [0, 'ip=203.0.113.7\n'],
 };
-
-/** A Docker running qBittorrent behind Gluetun, whose probe answers `answers`. */
-function vpnDocker(answers: ProbeAnswers = HEALTHY, sent: OneOffCommand[] = []) {
-  return fakeRuntime({
-    containers: [running('gluetun', GLUETUN_ID), running('qbittorrent', QBITTORRENT_ID)],
-    details: { [QBITTORRENT_ID]: { networkMode: `container:${GLUETUN_ID}` } },
-    run: (_service, command) => {
-      sent.push(command);
-      const shown: ProbeAnswers = { ...answers };
-      if (command.args.at(-1) === '') delete shown.egress;
-      return { code: 0, stdout: probeOutput(shown), stderr: '' };
-    },
-  });
-}
 
 function capture(env: NodeJS.ProcessEnv = {}) {
   const out: string[] = [];
@@ -3346,7 +3695,7 @@ function capture(env: NodeJS.ProcessEnv = {}) {
 }
 
 function deps(
-  runtime = vpnDocker(),
+  runtime = fakeProbeRuntime(HEALTHY),
   hostAddress = '198.51.100.2',
   asked: string[] = [],
 ): Partial<CliDeps> {
@@ -3370,7 +3719,7 @@ describe('mediaplane vpn-check', () => {
       await run(
         ['vpn-check', '--home', home],
         term.io,
-        deps(vpnDocker(), undefined, asked),
+        deps(fakeProbeRuntime(HEALTHY), undefined, asked),
       ),
     ).toBe(0);
     expect(term.stdout()).toBe(
@@ -3397,7 +3746,7 @@ describe('mediaplane vpn-check', () => {
       await run(
         ['vpn-check', '--home', home, '--json'],
         term.io,
-        deps(vpnDocker(), '203.0.113.7'),
+        deps(fakeProbeRuntime(HEALTHY), '203.0.113.7'),
       ),
     ).toBe(1);
     const shown = JSON.parse(term.stdout()) as Record<string, unknown>;
@@ -3421,7 +3770,7 @@ describe('mediaplane vpn-check', () => {
       await run(
         ['vpn-check', '--home', home],
         term.io,
-        deps(vpnDocker(HEALTHY, sent), undefined, asked),
+        deps(fakeProbeRuntime(HEALTHY, sent), undefined, asked),
       ),
     ).toBe(0);
     expect(sent[0]?.args.at(-1)).toBe(echo);
@@ -3432,13 +3781,13 @@ describe('mediaplane vpn-check', () => {
       await run(
         ['vpn-check', '--home', home, '--no-egress'],
         structure.io,
-        deps(vpnDocker(HEALTHY, sent), undefined, asked),
+        deps(fakeProbeRuntime(HEALTHY, sent), undefined, asked),
       ),
     ).toBe(0);
     expect(sent[1]?.args.at(-1)).toBe('');
     expect(asked).toEqual([echo]);
     expect(structure.stdout()).toContain(
-      "Passed: qBittorrent has no way out but the tunnel. Run without --no-egress to compare its address with this host's.",
+      "Passed: qBittorrent has no way out but the tunnel; its address was not compared with this host's.",
     );
   });
 
@@ -3450,7 +3799,7 @@ describe('mediaplane vpn-check', () => {
     };
     const home = await makeHome();
     expect(
-      await run(['vpn-check', '--home', home], term.io, deps(vpnDocker(answers))),
+      await run(['vpn-check', '--home', home], term.io, deps(fakeProbeRuntime(answers))),
     ).toBe(1);
     expect(term.stdout()).toContain(
       `  DOWN  qBittorrent's traffic got no answer from ${TRACE}: curl: (28) Connection timed out after 10001 milliseconds\n        hint: the VPN is down, and nothing gets out (fail-closed); see docs/runbooks/vpn-down.md\n`,
@@ -3458,6 +3807,33 @@ describe('mediaplane vpn-check', () => {
     expect(term.stdout()).toContain(
       "VPN down: qBittorrent can't reach the internet, and nothing leaks (fail-closed). See docs/runbooks/vpn-down.md.",
     );
+  });
+
+  it('claims no more than the checks found', async () => {
+    const home = await makeHome();
+    // The host could not ask: the addresses were never compared.
+    const uncompared = capture();
+    const noHost: Partial<CliDeps> = {
+      ...deps(),
+      egress: () => () => Promise.resolve({ ok: false, error: 'fake: no answer' }),
+    };
+    expect(await run(['vpn-check', '--home', home], uncompared.io, noHost)).toBe(0);
+    expect(uncompared.stdout()).toContain(
+      "Passed: qBittorrent has no way out but the tunnel; its address was not compared with this host's.",
+    );
+    // Gluetun unhealthy while traffic still got through: down, but not "nothing leaks".
+    const unhealthy = fakeProbeRuntime(HEALTHY, [], {
+      containers: [
+        fakeContainer('gluetun', FAKE_GLUETUN_ID, { health: 'unhealthy' }),
+        fakeContainer('qbittorrent', FAKE_QBITTORRENT_ID),
+      ],
+    });
+    const down = capture();
+    expect(await run(['vpn-check', '--home', home], down.io, deps(unhealthy))).toBe(1);
+    expect(down.stdout()).toContain(
+      'VPN down: the checks marked DOWN say what failed. See docs/runbooks/vpn-down.md.',
+    );
+    expect(down.stdout()).not.toContain('nothing leaks');
   });
 
   it('explains what it cannot check, as an error', async () => {
@@ -3479,13 +3855,7 @@ describe('mediaplane vpn-check', () => {
 
   it('asks for the host address through the host helper when it runs from its image', async () => {
     const seen: HostRequest[] = [];
-    const runtime = fakeRuntime({
-      containers: [
-        running('gluetun', GLUETUN_ID),
-        running('qbittorrent', QBITTORRENT_ID),
-      ],
-      details: { [QBITTORRENT_ID]: { networkMode: `container:${GLUETUN_ID}` } },
-      run: () => ({ code: 0, stdout: probeOutput(HEALTHY), stderr: '' }),
+    const runtime = fakeProbeRuntime(HEALTHY, [], {
       hostHelper: async (request) => {
         seen.push(request);
         const report = await collectHostReport(
@@ -3512,7 +3882,8 @@ describe('mediaplane vpn-check', () => {
 ```
 
 The last test leaves `egress` and `host` to `defaultDeps`, with `MEDIAPLANE_IMAGE` set,
-so the host's facts and its address both come from the (fake) host helper.
+so the host's facts and its address both come from the (fake) host helper. Every test
+uses Task 6's `fakeProbeRuntime`, so the fake probe exists once (preflight M9).
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -3572,14 +3943,18 @@ export function printVpnCheck(
   return code;
 }
 
+/** The summary: never more than the checks found. */
 function verdict(result: Extract<VpnCheckResult, { ok: true }>): string {
   switch (result.verdict) {
     case 'pass':
-      return result.egress === null
-        ? "Passed: qBittorrent has no way out but the tunnel. Run without --no-egress to compare its address with this host's."
-        : 'Passed: qBittorrent reaches the internet only through the VPN.';
+      // Only addresses that were compared show that the traffic leaves through the VPN.
+      return result.checks.some((c) => c.id === 'egress' && c.status === 'ok')
+        ? 'Passed: qBittorrent reaches the internet only through the VPN.'
+        : "Passed: qBittorrent has no way out but the tunnel; its address was not compared with this host's.";
     case 'down':
-      return `VPN down: qBittorrent can't reach the internet, and nothing leaks (fail-closed). See ${VPN_RUNBOOK}.`;
+      return result.failClosed
+        ? `VPN down: qBittorrent can't reach the internet, and nothing leaks (fail-closed). See ${VPN_RUNBOOK}.`
+        : `VPN down: the checks marked DOWN say what failed. See ${VPN_RUNBOOK}.`;
     case 'leak':
       return `LEAK: qBittorrent's traffic does not go through the VPN. See ${VPN_RUNBOOK}.`;
   }
@@ -3691,7 +4066,16 @@ Decision: the kill-switch test's stack gets `vpn-check` at each stage, with
 Decision: a new `deployMediaplane()` helper deploys `deploy/mediaplane.compose.yaml` for
 the test, as `<project>-system`, with an override naming its container and project, like
 `deploy.e2e.test.ts` does; that test keeps its own setup (decision 17). The image builds
-from this checkout; in CI the earlier end-to-end files have warmed Docker's build cache.
+from this checkout, which can take minutes when Docker's build cache is cold, so the
+test's timeout goes from 600 to 1 200 seconds, as the deploy test's `beforeAll` has
+(preflight M10).
+Decision: teardown never stops at the first failure (preflight B1). The `finally` block
+nests: the deployment's removal, then, whatever it did, the stack's and the WireGuard
+server's. The in-test removal clears `deployed` before it runs, so a failed removal isn't
+tried twice. `deployMediaplane` stats the Docker socket before it makes anything, and a
+deployment that doesn't start tears down first and then throws its startup error, with a
+failed teardown only added to it; `remove()` collects what failed and asserts once, at
+the end (preflight M10).
 Decision: two more states, at the end, where they disturb nothing: Gluetun stopped, and
 Gluetun started again on its own without its key file. The second checks the roadmap's
 last S3d input (a control server that answers without the key) and decision 5 (a
@@ -3704,7 +4088,8 @@ qBittorrent stranded in the old network) on real Docker.
 - **Consumes:** the `vpn-check` command (Task 7); `startWireGuard` and the test from
   Task 2; `buildImage`, `REPO` and `nodeExec`.
 - **Produces:**
-  - `interface DeployedMediaplane { mediaplane(args: readonly string[], env?: Record<string, string>): Promise<ExecResult>; remove(): Promise<void> }`;
+  - `interface DeployedMediaplane { mediaplane(args: readonly string[], env?: Record<string, string>): Promise<ExecResult>; remove(): Promise<void> }`,
+    whose `remove()` runs every removal and then fails if any did;
   - `deployMediaplane(options: { home: string; stack: string }): Promise<DeployedMediaplane>`,
     which tags the image `mediaplane-e2e:<stack without "mediaplane-e2e-">`.
 
@@ -3720,7 +4105,7 @@ the end:
 export interface DeployedMediaplane {
   /** `mediaplane <args>` in its container, with `env` added to the command's. */
   mediaplane(args: readonly string[], env?: Record<string, string>): Promise<ExecResult>;
-  /** Bring the deployment down, and remove its image. */
+  /** Bring the deployment down, and remove its image; fails if either fails. */
   remove(): Promise<void>;
 }
 
@@ -3737,6 +4122,8 @@ export async function deployMediaplane(options: {
   // mediaplane-e2e-<pid>-vpn is tagged mediaplane-e2e:<pid>-vpn.
   const tag = `mediaplane-e2e:${stack.replace(/^mediaplane-e2e-/, '')}`;
   const container = `${stack}-mediaplane`;
+  // Before anything is made, so a failure here leaves nothing behind.
+  const dockerGid = String((await stat('/var/run/docker.sock')).gid);
   await buildImage(tag);
   const dir = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-system-'));
   const override = join(dir, 'override.yaml');
@@ -3757,7 +4144,7 @@ export async function deployMediaplane(options: {
     MEDIAPLANE_HOME: home,
     MEDIAPLANE_UID: String(process.getuid?.() ?? 1000),
     MEDIAPLANE_GID: String(process.getgid?.() ?? 1000),
-    DOCKER_GID: String((await stat('/var/run/docker.sock')).gid),
+    DOCKER_GID: dockerGid,
   };
   const deploy = join(REPO, 'deploy', 'mediaplane.compose.yaml');
   const system = (...args: string[]) =>
@@ -3777,17 +4164,23 @@ export async function deployMediaplane(options: {
       ],
       { env, cwd: '/', timeoutMs: 300_000 },
     );
-  const remove = async () => {
+  /** Every removal, each whether or not the one before it worked; what failed. */
+  const teardown = async (): Promise<string[]> => {
     const down = await system('down', '--remove-orphans');
     await rm(dir, { recursive: true, force: true });
     const image = await nodeExec('docker', ['image', 'rm', tag], { cwd: '/' });
-    expect(down.code, down.stderr).toBe(0);
-    expect(image.code, image.stderr).toBe(0);
+    return [
+      ...(down.code === 0 ? [] : [`compose down failed: ${down.stderr}`]),
+      ...(image.code === 0 ? [] : [`docker image rm failed: ${image.stderr}`]),
+    ];
   };
   const up = await system('up', '-d', '--wait');
   if (up.code !== 0) {
-    await remove();
-    throw new Error(`mediaplane-system did not start:\n${up.stderr}`);
+    // The startup error first; a failed teardown is only added to it.
+    const failed = await teardown();
+    const also =
+      failed.length === 0 ? '' : `\nIts removal failed too:\n${failed.join('\n')}`;
+    throw new Error(`mediaplane-system did not start:\n${up.stderr}${also}`);
   }
   return {
     mediaplane: (args, extra = {}) =>
@@ -3802,7 +4195,9 @@ export async function deployMediaplane(options: {
         ],
         { cwd: '/', timeoutMs: 300_000 },
       ),
-    remove,
+    remove: async () => {
+      expect(await teardown()).toEqual([]);
+    },
   };
 }
 ```
@@ -3889,8 +4284,10 @@ In `test/e2e/vpn.e2e.test.ts`:
           verdict: 'pass',
           egress: addresses,
         });
-        await deployed.remove();
+        // Cleared first, so the finally block doesn't try a failed removal again.
+        const done = deployed;
         deployed = undefined;
+        await done.remove();
   ```
 
 - add after the `/ dev tun0 /` route check that follows `await wg.stop();`:
@@ -3931,7 +4328,21 @@ In `test/e2e/vpn.e2e.test.ts`:
         expect(checksOf(open)).toContain('control-key warning');
   ```
 
-- in the `finally` block, add `await deployed?.remove();` as its first line.
+- replace the `finally` block, and the timeout after the test, with:
+
+  ```ts
+      } finally {
+        // Each removal runs even if the one before it throws.
+        try {
+          await deployed?.remove();
+        } finally {
+          const down = await composeDown(PROJECT);
+          await wg.remove();
+          expect(down.code, down.stderr).toBe(0);
+        }
+      }
+    }, 1_200_000);
+  ```
 
 `vpn-check`'s output never holds a key, so the failure messages may print it.
 
@@ -4019,9 +4430,13 @@ why, and gets it back. A leak is a different failure, and worse: see [A leak](#a
   VPN down: qBittorrent can't reach the internet, and nothing leaks (fail-closed). See docs/runbooks/vpn-down.md.
   ```
 
+  The last line says that nothing leaks only when the checks show it: Gluetun isn't
+  running, or nothing answered through the tunnel. Otherwise it says
+  `VPN down: the checks marked DOWN say what failed.`
+
 - **`mediaplane status`** shows `gluetun` as `unhealthy` or `starting`, or not running.
-  Gluetun's own health check notices a dead tunnel within a few minutes, and restarts the
-  VPN.
+  Gluetun's own health check usually notices a dead tunnel within a few minutes, and
+  restarts the VPN.
 - **qBittorrent** finds no peers, and its downloads stall. Its web UI still answers.
 - **`mediaplane apply`** fails at the containers step, naming `gluetun` as unhealthy, and
   qBittorrent doesn't start. See [an app won't start](app-wont-start.md).
@@ -4070,11 +4485,15 @@ Go by the first line marked `DOWN`.
 
 - **`control`: Gluetun says the VPN is `stopped` or `crashed`.** Gluetun gave up on the
   tunnel. Its log says why. Fix the cause as above, then `mediaplane apply`.
-- **`route`: traffic is not routed into the tunnel.** Gluetun is between two attempts,
-  with no tunnel. Wait a minute, and run `mediaplane vpn-check` again. If it stays, read
-  Gluetun's log.
+- **`route`: traffic is not routed into the tunnel.** Gluetun is usually between two
+  attempts, with no tunnel. Wait a minute, and run `mediaplane vpn-check` again. If it
+  stays, read Gluetun's log.
 
 Warnings don't fail the check, but say something is off:
+
+- **`network`: qBittorrent is not running.** It sends nothing while it is stopped, so
+  there is nothing to check on its side. `mediaplane apply` starts it; then run
+  `mediaplane vpn-check` again.
 
 - **`control-key`: the control server answers without a key.** Gluetun started before
   Mediaplane wrote its key file, and reads the file only when it starts. Restart Gluetun,
@@ -4085,6 +4504,9 @@ Warnings don't fail the check, but say something is off:
   rest. The host can't reach `https://1.1.1.1/cdn-cgi/trace`: set
   `MEDIAPLANE_VPN_CHECK_URL` to another service that answers with your address, or use
   `--no-egress`.
+- **`egress`: one IPv4 and one IPv6 address.** The service answered the two sides over
+  different protocols, so the addresses prove nothing. Name the service by its IP
+  address in `MEDIAPLANE_VPN_CHECK_URL`, as the default does, or unset it.
 
 Then run `mediaplane vpn-check` again. It ends with `Passed` when qBittorrent reaches
 the internet only through the VPN.
@@ -4103,9 +4525,14 @@ Then go by the line marked `LEAK`:
 - **`network`: qBittorrent runs without the VPN.** `stack.yaml` says
   `apps.qbittorrent.vpn: false`. Add a `vpn:` block, remove that line, and run
   `mediaplane apply`.
-- **`network`: qBittorrent has a network of its own.** Something gave it one: look for
-  `network_mode` or `networks` under `qbittorrent` in `compose.override.yaml`, and take
-  them out. Then `mediaplane apply`, which recreates it behind Gluetun.
+- **`network`: qBittorrent has a network of its own, or uses another app's.** Something
+  gave it one: look for `network_mode` or `networks` under `qbittorrent` in
+  `compose.override.yaml`, and take them out. Then `mediaplane apply`, which recreates it
+  behind Gluetun.
+- **`route`: traffic is routed outside the tunnel, and still got an answer.** Gluetun's
+  routing no longer sends qBittorrent's traffic into the tunnel. Restart Gluetun, then
+  qBittorrent (`docker restart mediaplane-gluetun-1`, then
+  `docker restart mediaplane-qbittorrent-1`), and read Gluetun's log.
 - **`egress`: qBittorrent leaves from this host's own address.** Check that the
   IP-echo service is on the internet, not on your network: `MEDIAPLANE_VPN_CHECK_URL`
   must name one that both sides reach over the internet. If it is, treat it as a leak:
@@ -4134,15 +4561,17 @@ In `docs/security/threat-model.md`:
    and Slice 3d.
    ```
 
-2. In "What runs, and who can reach it", in the host helper's bullet, change
-   ``During `init`, `plan` and `apply`, Mediaplane starts a container`` to
+2. In "What runs, and who can reach it", replace the host helper's first three lines
+   (from `- **The host helper.** During` to `container cannot:`) with
 
    ```markdown
    - **The host helper.** During `init`, `plan`, `apply` and `vpn-check`, Mediaplane
-     starts a container of its own image on the host network, for a second or two.
+     starts a container of its own image on the host network, for a few seconds. It sees
+     what the Mediaplane container cannot:
    ```
 
-   (rewrapping the bullet's first two lines), and replace its sub-bullet
+   ("a few seconds": it may now wait up to 10 for an HTTPS answer; preflight M11), and
+   replace its sub-bullet
    `- through the host network: the host's addresses and free ports;` with:
 
    ```markdown
@@ -4161,8 +4590,8 @@ In `docs/security/threat-model.md`:
      the VPN's state, looks up the route out, and, unless `--no-egress` is given, asks an
      IP-echo service which address it comes from. It writes nothing, and is removed when it
      exits. Gluetun's key reaches it on its standard input, never on a command line or in
-     its environment. It uses the same Docker API calls as the ownership helper, so the
-     proxy allows nothing new for it.
+     its environment. Its curl reads no config file and no proxy setting. It uses the same
+     Docker API calls as the ownership helper, so the proxy allows nothing new for it.
    ```
 
 4. In the apps' bullet, replace the two sub-bullets that end
@@ -4188,8 +4617,10 @@ In `docs/security/threat-model.md`:
 
    ```markdown
    - vpn-check measures qBittorrent's side with qBittorrent's own image, so a compromised
-     image could make the check pass.
+     image, or files it writes in its own appdata, could make the check pass.
    ```
+
+   (preflight M2: the probe's curl already ignores a `.curlrc` there.)
 
 6. In T5, add to "Controls today", after the bullet that ends `never on its command
    line.`:
@@ -4222,10 +4653,10 @@ In `docs/security/threat-model.md`:
      own, so when the tunnel is down it has no way out (fail-closed). Gluetun's firewall
      lets traffic out only through the tunnel, to the stack's own network, and to the LAN
      subnets in `FIREWALL_OUTBOUND_SUBNETS` while the web UIs are on the LAN.
-   - An end-to-end test proves it against a WireGuard server of its own, on amd64 and arm64:
-     traffic leaves through the tunnel; with the server stopped, nothing gets out of
-     qBittorrent's network while an ordinary container on the stack's network still does;
-     with Gluetun stopped, qBittorrent has nothing but loopback.
+   - An end-to-end test, which CI runs on amd64 and arm64, checks it against a WireGuard
+     server of its own: traffic leaves through the tunnel; with the server stopped,
+     nothing gets out of qBittorrent's network while an ordinary container on the stack's
+     network still does; with Gluetun stopped, qBittorrent has nothing but loopback.
    - `mediaplane vpn-check` checks the same on your host: qBittorrent's network mode, that
      it joined the Gluetun now running, Gluetun's health and its own report, the route into
      the tunnel, and where qBittorrent's traffic leaves from, compared with the host's. It
@@ -4272,8 +4703,8 @@ In `catalog/gluetun/README.md`:
      are other routes with it (the kill-switch test checks both). Without the file, Gluetun
      answers anyone on the stack's network.
    - **The kill switch, tested.** qBittorrent has no network but Gluetun's. An end-to-end
-     test runs Gluetun against a WireGuard server of its own, through Gluetun's `custom`
-     provider, on amd64 and arm64, and checks that:
+     test, which CI runs on amd64 and arm64, runs Gluetun against a WireGuard server of its
+     own, through Gluetun's `custom` provider, and checks that:
      - qBittorrent's traffic leaves through the tunnel, from the server's address;
      - with the server stopped, nothing gets out of qBittorrent's network, while an
        ordinary container on the stack's network still reaches the same target;
@@ -4400,7 +4831,14 @@ In `deploy/README.md`:
      reads them there. That container:
    ```
 
-   and add after the "Mediaplane's network" bullet:
+   in the same bullet, change `- never pulls an image, and is removed when it exits, a
+   second or two later.` to
+
+   ```markdown
+     - never pulls an image, and is removed when it exits, a few seconds later.
+   ```
+
+   (preflight M11), and add after the "Mediaplane's network" bullet:
 
    ```markdown
    - **vpn-check's probe** is a throwaway container of qBittorrent's image, in Gluetun's
@@ -4495,6 +4933,9 @@ In `docs/architecture.md`:
      answer through the tunnel means the VPN is down. `--no-egress` skips it.
    - **The verdict:** a leak beats down, and down beats a pass. Warnings, such as a control
      server that answers without a key, don't change it. The exit code is 0 only for a pass.
+     The last line never claims more than the checks found: "nothing leaks" only when
+     Gluetun isn't running or nothing answered through the tunnel, and "only through the
+     VPN" only when the two addresses were compared.
 
    ````
 
@@ -4521,7 +4962,15 @@ In `README.md`:
    | A VPN kill switch, tested against a real WireGuard server, and `vpn-check` | Done |
    ```
 
-3. In "Why not just write the Compose file myself?", replace
+3. In "## Documentation", add after the "Runbook: an app won't start" item (preflight
+   M12):
+
+   ```markdown
+   - **[Runbook: the VPN is down](docs/runbooks/vpn-down.md):** what `vpn-check` found, and
+     what to do about a VPN that is down or a leak.
+   ```
+
+4. In "Why not just write the Compose file myself?", replace
    `- qBittorrent routed through the VPN, so it has no network when the VPN is down;` with:
 
    ```markdown
@@ -4576,7 +5025,9 @@ In `docs/design/m1-engine-cli.md`:
      `MEDIAPLANE_VPN_CHECK_URL` names another service, and `--no-egress` skips it. It exits
      0 on a pass, and 1 on a leak or a VPN that is down. Its `--json` is
      `mediaplane.vpn-check/v1`, where `ok` says the check ran and `verdict` what it found.
-     The default of asking Cloudflare is the controller's ruling, logged for the owner.
+     Its last line claims no more than the checks found: it says nothing leaks only when
+     Gluetun isn't running or nothing answered through the tunnel (`failClosed`). The
+     default of asking Cloudflare is the controller's ruling, logged for the owner.
    - **vpn-check needs no route of its own.** Its probe is a `compose run` of the
      `qbittorrent` service, so it starts in Gluetun's network namespace, in qBittorrent's
      own image, as nobody. It reaches Gluetun's control server on `127.0.0.1:8000` there,
@@ -4586,7 +5037,8 @@ In `docs/design/m1-engine-cli.md`:
      the image, the host helper asks for the host's own address.
    - **The runtime runs one-off commands and inspects containers (§3.2).** `run` is the
      `compose run` that the ownership helper's `chown` now uses too. `inspect` reads a
-     container's network mode and start time (`GET containers/{id}/json`).
+     container's network mode, start time and Compose project (`GET containers/{id}/json`),
+     and refuses a container of any other project (§7.2(2)).
    - **Gluetun started again on its own strands qBittorrent.** qBittorrent keeps the network
      namespace Gluetun had when qBittorrent started. Compose restarts qBittorrent when it
      recreates Gluetun (§6.4), but not when it only starts it again (verified with Compose
@@ -4599,7 +5051,8 @@ In `docs/design/m1-engine-cli.md`:
 
 - [ ] **Step 6: The roadmap**
 
-In `docs/plans/m1-roadmap.md`:
+In `docs/plans/m1-roadmap.md` (preflight M13: `apply`, not `plan`, restarts a stranded
+qBittorrent; S3d extends two S8 items; the pin paragraph after the S8 list stays):
 
 1. **"Detailed plans so far".** Change the Slice 3a line to end in `(done).`, and add
    after it: `` - Slice 3d: [`m1-s3d-vpn-check.md`](m1-s3d-vpn-check.md). ``
@@ -4616,13 +5069,14 @@ In `docs/plans/m1-roadmap.md`:
 3. **"Inputs for later slices from the reviews".**
    - In the intro paragraph, replace `Slice 3a (2026-10-10) added the last three S3 items,`
      with `Slice 3a (2026-10-10) added three S3 items,`, and add at the end of its
-     second-last sentence: `Slice 3d (2026-10-10) added the last S3 item and the last S8
-     item.` so the paragraph ends:
+     second-last sentence: `Slice 3d (2026-10-10) added the last S3 item and extended two
+     S8 items.` so the paragraph ends:
 
      ```markdown
      four S8 items. Slice 3a (2026-10-10) added three S3 items, the S3d list, three
      S4 items, two S6 items, an S8 item and an M2 item. Slice 3d (2026-10-10) added the last
-     S3 item and the last S8 item. Each slice plan must address the items for that slice.
+     S3 item and extended two S8 items. Each slice plan must address the items for that
+     slice.
      ```
 
    - Add at the end of the S3 list, before `**S3d:**`:
@@ -4634,12 +5088,13 @@ In `docs/plans/m1-roadmap.md`:
        starts a stopped one (Compose 5.5.1), so `apply` leaves it stranded and its health
        check still passes on loopback. `vpn-check` reports it (S3d). Make the verify stage's
        VPN topology check (spec §6.4) catch it too, by reusing `vpnCheck` without the egress
-       check, and have `plan` restart qBittorrent then.
+       check, and have `apply` restart qBittorrent then.
      ```
 
    - Change `**S3d:**` to `**S3d:** all of these are in the S3d plan.`
    - In the S8 list, replace the `**Tests:**` bullet and the "Pins outside the catalog"
-     list with:
+     bullet with its list, up to, not including, the paragraph that starts `Every catalog
+     pin bump must also run`, which stays as it is:
 
      ```markdown
      - **Tests:** tighten the catalog tag test, and add Renovate. Let
@@ -4671,7 +5126,7 @@ for (const f of process.argv.slice(1)) {
     if (indent >= 0 && [...l].length - indent > 40) console.log(`${f}:${i + 1}`);
   });
 }' docs/architecture.md docs/runbooks/vpn-down.md deploy/README.md README.md
-git grep -n -e '```mermaid' -- '*.md' || true
+git grep -n -e '```mermaid' -- '*.md' ':!docs/plans' || true
 git grep -n -E "arrives in Slice 3d|Slice 3d's end-to-end|\*\*Slice 3d:\*\*" \
   -- '*.md' '*.ts' ':!docs/plans/m1-s*' ':!docs/design' || true
 git add README.md CONTRIBUTING.md deploy/README.md catalog docs
@@ -4699,12 +5154,6 @@ this", which is history, and now true.
 - [ ] `deploy/mediaplane.compose.yaml` and the allow-list in `deploy/deploy.test.ts` are
   unchanged: `git diff main -- deploy/mediaplane.compose.yaml` prints nothing, and
   `ENGINE_CALLS` and `OVERRIDE_CALLS` are as they were.
-- [ ] By hand, on a scratch home with a working VPN of your own, from source or through the
-  image as in `deploy/README.md`: `mediaplane vpn-check` passes and shows two different
-  addresses; `--no-egress` passes and asks no one; with the VPN key file emptied and
-  `mediaplane apply` run, `vpn-check` ends with `VPN down`. Then bring the stack down
-  (`down -v`) and remove the scratch home. (Without a VPN account, the end-to-end test's
-  WireGuard server is the stand-in, and this step is the owner's.)
 - [ ] No committed file contains a real path, user name, host name or address from this
   machine: `git grep -n -i -e cyclopsgd -e '/home/' -- ':!docs/plans'` prints nothing
   outside the GitHub URLs.
@@ -4712,8 +5161,9 @@ this", which is history, and now true.
   `Claude-Session` line: `git log --format=%B main.. | grep -c Claude-Session` prints `0`.
 - [ ] Every task is committed, and `git status` is clean.
 - [ ] Nothing has been pushed. Report to the controller:
-  - whether CI loaded the WireGuard module on both runners (R1), and, if not, that the
-    contingency in Task 2 is needed;
+  - that R1 (whether CI loads the WireGuard module on both runners) is to be reported
+    after the slice PR's first CI run, and that Task 2's contingency becomes a fix task
+    on that PR if it can't;
   - the logged rulings for the owner to confirm or reverse: `vpn-check` asks Cloudflare
     by default (`--no-egress` to skip);
   - for the owner's manual-steps list: run `sudo modprobe wireguard` on the dev box after
