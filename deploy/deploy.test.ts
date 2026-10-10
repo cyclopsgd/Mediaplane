@@ -61,7 +61,9 @@ const V = '/v1.51';
  * 5.5.1): plan; apply creating, recreating and removing containers and running the chown
  * helper; a pull; and the host helper, including the SIGTERM that its `docker run` client
  * passes on as a kill when the helper times out. socket-proxy matches the path, not the
- * query.
+ * query. vpn-check (Slice 3d) adds none: its probe is a `compose run` like the chown
+ * helper, its `container inspect` is `GET containers/{id}/json`, and its host side is the
+ * host helper.
  */
 const ENGINE_CALLS: [string, string][] = [
   ['HEAD', '/_ping'],

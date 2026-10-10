@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { COMPOSE_PATH, ENV_PATH } from '../paths';
-import { fakeDocker, fakeHash, fakeRuntime } from './fakes';
+import { FAKE_STARTED_AT, fakeDocker, fakeHash, fakeRuntime } from './fakes';
 import { tempDir } from './temp';
 
 const COMPOSE = `services:
@@ -96,5 +96,63 @@ describe('fakeRuntime().hostHelper', () => {
     await expect(throwing.hostHelper('mediaplane:test', '{}', [], user)).rejects.toThrow(
       'fake callback failure',
     );
+  });
+});
+
+describe('fakeRuntime().run', () => {
+  const command = {
+    user: { uid: 65534, gid: 65534 },
+    entrypoint: 'sh',
+    args: ['-c', 'true'],
+    values: {},
+  };
+
+  it('exits 0 with no output unless the test answers, and records the call', async () => {
+    const calls: string[] = [];
+    const none = fakeRuntime({ calls });
+    expect(await none.run('qbittorrent', command)).toEqual({
+      code: 0,
+      stdout: '',
+      stderr: '',
+    });
+    const answering = fakeRuntime({
+      calls,
+      run: (service) => Promise.resolve({ code: 3, stdout: service, stderr: 'fake' }),
+    });
+    expect(await answering.run('qbittorrent', command)).toEqual({
+      code: 3,
+      stdout: 'qbittorrent',
+      stderr: 'fake',
+    });
+    expect(calls).toEqual([
+      'run qbittorrent sh as 65534:65534',
+      'run qbittorrent sh as 65534:65534',
+    ]);
+  });
+
+  it('rejects, rather than throws, for a callback that throws', async () => {
+    const throwing = fakeRuntime({
+      run: () => {
+        throw new Error('fake callback failure');
+      },
+    });
+    await expect(throwing.run('qbittorrent', command)).rejects.toThrow(
+      'fake callback failure',
+    );
+  });
+});
+
+describe('fakeRuntime().inspect', () => {
+  it('puts a container on bridge, started at FAKE_STARTED_AT, unless the test says', async () => {
+    const calls: string[] = [];
+    const runtime = fakeRuntime({
+      calls,
+      details: { 'fake-a': { networkMode: 'container:fake-b' } },
+    });
+    expect(await runtime.inspect(['fake-a', 'fake-b'])).toEqual([
+      { id: 'fake-a', networkMode: 'container:fake-b', startedAt: FAKE_STARTED_AT },
+      { id: 'fake-b', networkMode: 'bridge', startedAt: FAKE_STARTED_AT },
+    ]);
+    expect(calls).toEqual(['inspect fake-a fake-b']);
   });
 });

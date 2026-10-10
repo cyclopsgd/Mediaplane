@@ -7,10 +7,12 @@ import {
   HelperError,
   RuntimeError,
   type CommandResult,
+  type ContainerDetails,
   type ContainerState,
   type HashesResult,
   type HelperMount,
   type HelperResult,
+  type OneOffCommand,
   type Runtime,
 } from './types';
 
@@ -129,6 +131,32 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
     ];
   }
 
+  async function run(service: string, command: OneOffCommand): Promise<ExecResult> {
+    const result = await docker(
+      'compose run',
+      [
+        ...(await projectArgs()),
+        'run',
+        '--rm',
+        '--no-deps',
+        // -T, not --no-tty: Compose v2 spells the long form --no-TTY, v5 --no-tty.
+        '-T',
+        '--user',
+        `${String(command.user.uid)}:${String(command.user.gid)}`,
+        '--entrypoint',
+        command.entrypoint,
+        service,
+        ...command.args,
+      ],
+      { input: command.input, timeoutMs: DOCKER_TIMEOUTS.run },
+    );
+    return {
+      code: result.code,
+      stdout: redact(result.stdout, command.values),
+      stderr: redact(result.stderr, command.values),
+    };
+  }
+
   return {
     async versions() {
       const engine = await docker('version', [
@@ -225,28 +253,38 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
       return commandResult(result, values);
     },
 
+    run,
+
+    async inspect(ids) {
+      // IDs, never names or options: they come from containers().
+      const bad = ids.find((id) => !/^[0-9a-f]{12,64}$/.test(id));
+      if (bad !== undefined) {
+        throw new RuntimeError(`not a container ID: ${JSON.stringify(bad)}`);
+      }
+      if (ids.length === 0) return [];
+      const result = await docker('container inspect', [
+        'container',
+        'inspect',
+        '--format',
+        '{{.Id}} {{.HostConfig.NetworkMode}} {{.State.StartedAt}} {{index .Config.Labels "com.docker.compose.project"}}',
+        ...ids,
+      ]);
+      if (result.code !== 0) {
+        throw new RuntimeError(
+          `docker container inspect failed: ${firstLine(result.stderr)}`,
+        );
+      }
+      return parseDetails(result.stdout, options.project);
+    },
+
     async chown(service, path, owner, values) {
-      const result = await docker(
-        'compose run',
-        [
-          ...(await projectArgs()),
-          'run',
-          '--rm',
-          '--no-deps',
-          // -T, not --no-tty: Compose v2 spells the long form --no-TTY, v5 --no-tty.
-          '-T',
-          '--user',
-          '0:0',
-          '--entrypoint',
-          'chown',
-          service,
-          '-R',
-          `${String(owner.uid)}:${String(owner.gid)}`,
-          path,
-        ],
-        { timeoutMs: DOCKER_TIMEOUTS.run },
-      );
-      return commandResult(result, values);
+      const result = await run(service, {
+        user: { uid: 0, gid: 0 },
+        entrypoint: 'chown',
+        args: ['-R', `${String(owner.uid)}:${String(owner.gid)}`, path],
+        values,
+      });
+      return commandResult(result, {});
     },
 
     async hostHelper(image, request, mounts, user): Promise<HelperResult> {
@@ -354,6 +392,28 @@ export function bindMount(mount: HelperMount): string {
     );
   }
   return `type=bind,"source=${mount.source.replaceAll('"', '""')}",target=${mount.target},readonly`;
+}
+
+/**
+ * `docker container inspect` lines of "<id> <network mode> <started at> <project>". A
+ * container of any other Compose project is refused: Mediaplane acts on its own project
+ * only (spec §7.2(2)).
+ */
+export function parseDetails(stdout: string, project: string): ContainerDetails[] {
+  return stdout
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/))
+    .flatMap(([id, networkMode, startedAt, owner]) => {
+      if (id === undefined || networkMode === undefined || startedAt === undefined) {
+        return [];
+      }
+      if (owner !== project) {
+        throw new RuntimeError(
+          `container ${id.slice(0, 12)} is not in the Compose project "${project}"`,
+        );
+      }
+      return [{ id, networkMode, startedAt }];
+    });
 }
 
 /** `docker compose config --hash` output: one "service hash" pair per line. */

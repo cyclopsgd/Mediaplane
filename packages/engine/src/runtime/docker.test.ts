@@ -344,6 +344,129 @@ describe('createDockerRuntime', () => {
     ]);
   });
 
+  it("reports a failed chown with Compose's last lines, secrets replaced", async () => {
+    const { exec } = recorder(() => ({
+      code: 1,
+      stdout: '',
+      stderr: 'Container x Creating\nchown: fake-secret-value: Operation not permitted\n',
+    }));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane-test', exec });
+    expect(
+      await runtime.chown(
+        'seerr',
+        '/app/config',
+        { uid: 1000, gid: 1000 },
+        { MP_X: 'fake-secret-value' },
+      ),
+    ).toEqual({
+      ok: false,
+      error: 'Container x Creating\nchown: ***: Operation not permitted',
+    });
+  });
+
+  it('runs a one-off in a throwaway container of the service, with its input on stdin', async () => {
+    const dir = await tempDir('mediaplane-runtime-');
+    const { exec, calls } = recorder(() => ({
+      code: 3,
+      stdout: 'route fake-key-0123 ok\n',
+      stderr: 'Container x Creating\nfake-key-0123 refused\n',
+    }));
+    const runtime = createDockerRuntime({ home: dir, project: 'mediaplane-test', exec });
+    const result = await runtime.run('qbittorrent', {
+      user: { uid: 65534, gid: 65534 },
+      entrypoint: 'sh',
+      args: ['-c', 'read -r key', 'probe', '8000'],
+      input: 'fake-key-0123\n',
+      values: { key: 'fake-key-0123' },
+    });
+    expect(result).toEqual({
+      code: 3,
+      stdout: 'route *** ok\n',
+      stderr: 'Container x Creating\n*** refused\n',
+    });
+    expect(calls[0]?.args).toEqual([
+      ...projectArgs(dir),
+      'run',
+      '--rm',
+      '--no-deps',
+      '-T',
+      '--user',
+      '65534:65534',
+      '--entrypoint',
+      'sh',
+      'qbittorrent',
+      '-c',
+      'read -r key',
+      'probe',
+      '8000',
+    ]);
+    // The secret goes in on stdin: never in the arguments or the environment.
+    expect(calls[0]?.options?.input).toBe('fake-key-0123\n');
+    expect(calls[0]?.args.join(' ')).not.toContain('fake-key-0123');
+    expect(Object.values(calls[0]?.options?.env ?? {})).not.toContain('fake-key-0123');
+    expect(calls[0]?.options?.timeoutMs).toBe(300_000);
+  });
+
+  it("reads containers' network mode and start time", async () => {
+    const other = 'e'.repeat(64);
+    const { exec, calls } = recorder(() =>
+      ok(
+        `${SONARR_ID} container:${other} 2026-10-10T10:00:01.5Z mediaplane\n${other} mediaplane_default 2026-10-10T10:00:00Z mediaplane\n`,
+      ),
+    );
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    expect(await runtime.inspect([SONARR_ID, other])).toEqual([
+      {
+        id: SONARR_ID,
+        networkMode: `container:${other}`,
+        startedAt: '2026-10-10T10:00:01.5Z',
+      },
+      { id: other, networkMode: 'mediaplane_default', startedAt: '2026-10-10T10:00:00Z' },
+    ]);
+    expect(calls[0]?.args).toEqual([
+      'container',
+      'inspect',
+      '--format',
+      '{{.Id}} {{.HostConfig.NetworkMode}} {{.State.StartedAt}} {{index .Config.Labels "com.docker.compose.project"}}',
+      SONARR_ID,
+      other,
+    ]);
+  });
+
+  it('refuses a container of another Compose project, or of none', async () => {
+    for (const owner of ['mediaplane-system', '']) {
+      const { exec } = recorder(() =>
+        ok(`${SONARR_ID} bridge 2026-10-10T10:00:00Z ${owner}\n`),
+      );
+      const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+      await expect(runtime.inspect([SONARR_ID])).rejects.toThrow(
+        'container d5a2f5c9b82d is not in the Compose project "mediaplane"',
+      );
+    }
+  });
+
+  it('inspects container IDs only, and asks nothing for none', async () => {
+    const { exec, calls } = recorder(() => ok(''));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    await expect(runtime.inspect([SONARR_ID, '--help'])).rejects.toThrow(
+      'not a container ID: "--help"',
+    );
+    expect(await runtime.inspect([])).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it('explains an inspect docker could not do', async () => {
+    const { exec } = recorder(() => ({
+      code: 1,
+      stdout: '',
+      stderr: `Error: No such container: ${SONARR_ID}\n`,
+    }));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    await expect(runtime.inspect([SONARR_ID])).rejects.toThrow(
+      `docker container inspect failed: Error: No such container: ${SONARR_ID}`,
+    );
+  });
+
   it("reports a failed command with Compose's last lines, secrets replaced", async () => {
     const { exec } = recorder(() => ({
       code: 1,

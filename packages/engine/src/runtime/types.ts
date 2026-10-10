@@ -1,3 +1,5 @@
+import type { ExecResult } from './exec';
+
 export interface PublishedAddress {
   address: string;
   port: number;
@@ -36,6 +38,30 @@ export interface HelperMount {
   target: string;
 }
 
+/** What `docker container inspect` says about one container. */
+export interface ContainerDetails {
+  id: string;
+  /** `HostConfig.NetworkMode`, such as "container:<id>" for one that shares another's. */
+  networkMode: string;
+  /** `State.StartedAt`: when it last started (RFC 3339). */
+  startedAt: string;
+}
+
+/** A command for a throwaway container of one of the stack's services (`compose run`). */
+export interface OneOffCommand {
+  /** Who it runs as. */
+  user: { uid: number; gid: number };
+  entrypoint: string;
+  args: readonly string[];
+  /**
+   * Written to its standard input, then closed. A secret sent this way stays off every
+   * command line, out of the container's environment, and out of `docker inspect`.
+   */
+  input?: string;
+  /** Secret values, replaced with `***` in what it prints. */
+  values: Record<string, string>;
+}
+
 /** The host helper's output, or why it failed; `missingSource` is a source the host lacks. */
 export type HelperResult =
   { ok: true; stdout: string } | { ok: false; error: string; missingSource?: string };
@@ -59,6 +85,18 @@ export interface Runtime {
   pull(values: Record<string, string>): Promise<CommandResult>;
   /** `up --detach --wait --remove-orphans` on the written project. */
   up(waitSeconds: number, values: Record<string, string>): Promise<CommandResult>;
+  /**
+   * Run `command` in a throwaway container of `service` (`compose run --rm --no-deps -T`),
+   * with the service's own image, mounts and network: for a service with `network_mode:
+   * service:gluetun`, inside Gluetun's network namespace. Its exit code and output, with
+   * `command.values` replaced. Throws a `RuntimeError` when docker can't be started.
+   */
+  run(service: string, command: OneOffCommand): Promise<ExecResult>;
+  /**
+   * Details of the containers `ids`, as `containers()` gives their IDs, in that order.
+   * Throws a `RuntimeError` when docker fails.
+   */
+  inspect(ids: readonly string[]): Promise<ContainerDetails[]>;
   /**
    * `chown -R uid:gid path` as root, in a throwaway container of `service` (`compose
    * run --rm --no-deps`), so the project's own image and mounts are used.

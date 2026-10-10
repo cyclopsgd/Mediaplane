@@ -5,13 +5,16 @@ import { parse, stringify } from 'yaml';
 import { COMPOSE_PATH, ENV_PATH } from '../paths';
 import type { HostRequest } from '../host/report';
 import type { HostProbe, PathStat } from '../preflight/probe';
+import type { ExecResult } from '../runtime/exec';
 import {
   RuntimeError,
   type CommandResult,
+  type ContainerDetails,
   type ContainerState,
   type HashesResult,
   type HelperMount,
   type HelperResult,
+  type OneOffCommand,
   type Runtime,
 } from '../runtime/types';
 
@@ -73,6 +76,9 @@ export function fakeHash(
   );
 }
 
+/** When a fake container started, unless the test says otherwise. */
+export const FAKE_STARTED_AT = '2026-10-10T10:00:00.000000001Z';
+
 export interface FakeRuntimeOptions {
   versions?: { engine: string; compose: string };
   containers?: ContainerState[];
@@ -83,12 +89,22 @@ export interface FakeRuntimeOptions {
   pull?: CommandResult | readonly CommandResult[];
   up?: CommandResult;
   chown?: CommandResult;
+  /** Answers a one-off command; without it, every one-off exits 0 and prints nothing. */
+  run?: (service: string, command: OneOffCommand) => ExecResult | Promise<ExecResult>;
+  /**
+   * `inspect` details by container ID. Any other container is on "bridge" and started at
+   * FAKE_STARTED_AT.
+   */
+  details?: Record<string, Partial<Omit<ContainerDetails, 'id'>>>;
   /** Answers the host helper, given the parsed request; without it, the helper fails. */
   hostHelper?: (
     request: HostRequest,
     mounts: readonly HelperMount[],
   ) => HelperResult | Promise<HelperResult>;
-  /** Each call is appended here, e.g. "pull" or "chown seerr 1000:1000 /app/config". */
+  /**
+   * Each call is appended here, e.g. "pull", "chown seerr 1000:1000 /app/config" or
+   * "run qbittorrent sh as 65534:65534".
+   */
   calls?: string[];
 }
 
@@ -124,6 +140,25 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
     up: () => {
       record('up');
       return Promise.resolve(options.up ?? { ok: true });
+    },
+    // async: a throwing callback rejects like a failed docker call.
+    run: async (service, command) => {
+      const { uid, gid } = command.user;
+      record(`run ${service} ${command.entrypoint} as ${String(uid)}:${String(gid)}`);
+      return (
+        (await options.run?.(service, command)) ?? { code: 0, stdout: '', stderr: '' }
+      );
+    },
+    inspect: (ids) => {
+      record(`inspect ${ids.join(' ')}`);
+      return Promise.resolve(
+        ids.map((id) => ({
+          id,
+          networkMode: 'bridge',
+          startedAt: FAKE_STARTED_AT,
+          ...options.details?.[id],
+        })),
+      );
     },
     chown: (service, path, owner) => {
       record(`chown ${service} ${String(owner.uid)}:${String(owner.gid)} ${path}`);
