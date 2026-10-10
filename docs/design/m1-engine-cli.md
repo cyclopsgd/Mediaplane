@@ -1078,11 +1078,13 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   0 on a pass, and 1 on a leak or a VPN that is down. Its `--json` is
   `mediaplane.vpn-check/v1`, where `ok` says the check ran and `verdict` what it found.
   Its last line claims no more than the checks found: it says nothing leaks only when
-  Gluetun isn't running or nothing answered through the tunnel (`failClosed`). The
-  default of asking Cloudflare is the controller's ruling, logged for the owner.
-  - **The addresses were compared** when the check with the id `egress` has the status
-    `ok`. `egress.vpn` and `egress.host` can hold addresses without it: an IPv4 and an
-    IPv6 address are both known, but prove nothing.
+  Gluetun is stopped or nothing answered through the tunnel (`failClosed`). The default
+  of asking Cloudflare was decided while planning this slice; the owner can still change
+  it.
+  - **The addresses were compared, and differed,** when the check with the id `egress`
+    has the status `ok`. Equal addresses give `leak`. `egress.vpn` and `egress.host` can
+    hold addresses without a comparison: an IPv4 and an IPv6 address are both known, but
+    prove nothing.
   - **`failClosed` is true** only when qBittorrent was shown to be in Gluetun's network,
     and either Gluetun is stopped (exited, dead or created, or without a container) or
     nothing answered through the tunnel. It is an inference, not a measurement: a

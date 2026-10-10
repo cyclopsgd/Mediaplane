@@ -104,9 +104,9 @@ Nothing for Gluetun itself. See the [roadmap](../../docs/plans/m1-roadmap.md).
 - **Restarting Gluetun on its own leaves qBittorrent without a network.** A container
   joins Gluetun's network when it starts. When Gluetun restarts alone, by hand or after a
   crash, it gets a new network, and qBittorrent keeps the old one, which has nothing but
-  loopback. Nothing leaks, but nothing downloads either, and `mediaplane apply` doesn't
-  notice: Compose restarts qBittorrent only when it recreates Gluetun. `mediaplane
-vpn-check` does notice. Restart qBittorrent after Gluetun:
+  loopback. Nothing leaks, but nothing downloads either. `mediaplane apply` doesn't
+  notice, because Compose restarts qBittorrent only when it recreates Gluetun, but
+  `mediaplane vpn-check` does. Restart qBittorrent after Gluetun:
   `docker restart mediaplane-qbittorrent-1`.
 - **A wrong key never connects.** Gluetun's health check needs a working tunnel. With a
   wrong or fake key, Gluetun never becomes healthy and keeps retrying. `apply` then fails

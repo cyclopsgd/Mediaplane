@@ -16,12 +16,11 @@ Detailed plans so far:
 - Slice 2b: [`m1-s2b-apply.md`](m1-s2b-apply.md) (done).
 - Slice 2c: [`m1-s2c-packaging.md`](m1-s2c-packaging.md) (done).
 - Slice 3a: [`m1-s3a-admin-and-seed-files.md`](m1-s3a-admin-and-seed-files.md) (done).
-- Slice 3d: [`m1-s3d-vpn-check.md`](m1-s3d-vpn-check.md).
+- Slice 3d: [`m1-s3d-vpn-check.md`](m1-s3d-vpn-check.md) (done).
 
 Where M1 stands (the README shows the same):
 
-- **Merged:** S1, S2a, S2b, S2c and S3a.
-- **In progress:** S3d.
+- **Merged:** S1, S2a, S2b, S2c, S3a and S3d.
 - **Next:** S3b.
 - **After that:** S3c, then S4 to S8.
 
@@ -125,9 +124,9 @@ each one, or corrects it in the catalog:
 | Value | Verified in |
 |---|---|
 | Health-check commands for each image (`curl` in linuxserver images, `wget` in Seerr). The tools were confirmed present in every pinned image on 2026-10-09. **Verified on arm64 and amd64 on 2026-10-09** by S2b's end-to-end test, which applies the video stack and sees every app healthy: on the arm64 dev box, and on amd64 in CI at `ebd18fe` | S2b (done) |
-| Gluetun's built-in health check with `depends_on: service_healthy`. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`, against a local WireGuard server: `apply` waits for Gluetun to be healthy, then starts qBittorrent, and both end healthy | S3d (done) |
-| `FIREWALL_OUTBOUND_SUBNETS` accepting a comma-separated list. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`: two subnets, given through `apps.gluetun.env`, are both routed in Gluetun's namespace | S3d (done) |
-| qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`: with `apps.qbittorrent.port: 8090` and `bind: localhost`, the web UI answers on `127.0.0.1:8090` | S3d (done) |
+| Gluetun's built-in health check with `depends_on: service_healthy`. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`, against a local WireGuard server: `apply` waits for Gluetun to be healthy, then starts qBittorrent, and both end healthy. It runs in CI from Slice 3d | S3d (done) |
+| `FIREWALL_OUTBOUND_SUBNETS` accepting a comma-separated list. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`: two subnets, given through `apps.gluetun.env`, are both routed in Gluetun's namespace. It runs in CI from Slice 3d | S3d (done) |
+| qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`: with `apps.qbittorrent.port: 8090` and `bind: localhost`, the web UI answers on `127.0.0.1:8090`. It runs in CI from Slice 3d | S3d (done) |
 | The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs) | S3b |
 | Seerr running as uid 1000 with `init: true`. **Verified on 2026-10-09** by `test/e2e/apply.e2e.test.ts` and `test/e2e/deploy.e2e.test.ts`: Seerr, rendered with `init: true`, runs healthy after apply's ownership step gives its appdata to uid 1000 | S2b (done) |
 
@@ -238,9 +237,9 @@ which moved to M2. The rest are for S3b and S3c.
 - **The Mediaplane container can reach only the socket proxy.** Its network is
   internal (S2c). Wiring needs the apps' APIs, so attach the container to the
   stack's network, or find another route. Then update ADR 0008 and the threat model.
-  **Decided by the owner on 2026-10-10 (D1): A2.** A Docker network with
-  `internal: true`, which Mediaplane's container, every wired app and Gluetun (for
-  qBittorrent) join.
+  **Decided by the owner on 2026-10-10, on how Mediaplane reaches the apps (option A2,
+  a private wiring network).** A Docker network with `internal: true`, which
+  Mediaplane's container, every wired app and Gluetun (for qBittorrent) join.
   - Mediaplane's container stays offline: that network has no route out.
   - The apps keep their normal network for their own internet traffic.
   - Gluetun's firewall must accept wiring traffic to qBittorrent's port, and S3b's
@@ -315,8 +314,9 @@ which moved to M2. The rest are for S3b and S3c.
 **S6:**
 
 - **The Plex claim and `plex-login` need plex.tv.** The Mediaplane container has no
-  route out today (S2c), and stays offline under S3b's decision (A2, above). So make
-  the plex.tv calls from a short-lived helper, and record that in the threat model.
+  route out today (S2c), and stays offline under S3b's decision above (a private wiring
+  network). So make the plex.tv calls from a short-lived helper, and record that in the
+  threat model.
 - **Jellyfin's health check can pass early.** In its first seconds, Jellyfin's
   `/health` answers 200 with `Degraded` while the server still answers 503 to
   everything else (S2c). Look at a check that waits for the server itself.

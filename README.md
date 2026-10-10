@@ -375,8 +375,8 @@ runs the stack without Mediaplane.
 M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it stands:
 
 - **Merged:** S1 (the pure core), S2a (`plan` against a real host), S2b (`apply`), S2c
-  (packaging) and S3a (the shared admin and pre-start files).
-- **In progress:** S3d (the VPN's kill-switch test and `vpn-check`).
+  (packaging), S3a (the shared admin and pre-start files) and S3d (the VPN's kill-switch
+  test and `vpn-check`).
 - **Next:** S3b (the wiring framework).
 - **After that:** S3c (the download path), then S4 to S8.
 

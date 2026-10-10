@@ -84,6 +84,10 @@ host network, read-only mounts
   exits. Gluetun's key reaches it on its standard input, never on a command line or in
   its environment. Its curl reads no config file and no proxy setting. It uses the same
   Docker API calls as the ownership helper, so the proxy allows nothing new for it.
+  Like the ownership helper, it gets the app's own settings from `compose.yaml` and
+  `compose.override.yaml`, so it has qBittorrent's mounts (its appdata and the data
+  folder) and environment. Its script writes nothing; see T4 for what a compromised image
+  could do with them.
 - **The apps.**
   - They are unmodified upstream images, pinned by digest, and never get the Docker
     socket.

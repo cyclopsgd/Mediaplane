@@ -7,7 +7,7 @@ why, and gets it back. A leak is a different failure, and worse: see [A leak](#a
 ## Symptoms
 
 - **`mediaplane vpn-check`** ends with `VPN down` and exits 1. Each line says what it
-  checked, and `DOWN` marks what failed:
+  checked. Its mark is `ok`, `warn` for a warning, `DOWN` for what failed, or `LEAK`:
 
   ```console
   $ mediaplane vpn-check
@@ -22,15 +22,26 @@ why, and gets it back. A leak is a different failure, and worse: see [A leak](#a
   VPN down: qBittorrent can't reach the internet, and nothing leaks (fail-closed). See docs/runbooks/vpn-down.md.
   ```
 
-  The last line says that nothing leaks only when the checks show it: Gluetun isn't
-  running, or nothing answered through the tunnel. Otherwise it says
-  `VPN down: the checks marked DOWN say what failed.`
+  The last line says that nothing leaks only when the checks show it: Gluetun is
+  stopped (exited, dead or created, or without a container), or nothing answered through
+  the tunnel. Otherwise it says
+  `VPN down: the checks marked DOWN say what failed. See docs/runbooks/vpn-down.md.`
 
   "Nothing leaks" is an inference, not a measurement. It rests on qBittorrent being shown
   to be in Gluetun's network, and on no answer through the tunnel. A service that accepts
   the connection but stalls the TLS handshake reads as no answer too, so a working
-  tunnel can read as down. A `LEAK` is the result to act on first: it is the only one
-  where traffic gets out.
+  tunnel can read as down.
+
+  A `LEAK` is the result to act on first. But a `down` that doesn't say "nothing leaks"
+  has not been shown to be safe. A leak can read as `down` in three cases:
+  - the service stalls the TLS handshake, while the `route` line shows a way out that is
+    not the tunnel;
+  - the `network` line says qBittorrent uses the network of a container that isn't part of
+    this stack, and that container may have a way out;
+  - you ran `--no-egress`, which asks no one: a route outside the tunnel is then `down`,
+    not `LEAK`.
+
+  If you can't tell, stop qBittorrent, as in [A leak](#a-leak), until `vpn-check` passes.
 
 - **`mediaplane status`** shows `gluetun` as `unhealthy` or `starting`, or not running.
   Gluetun's own health check usually notices a dead tunnel within a few minutes, and
@@ -51,8 +62,9 @@ why, and gets it back. A leak is a different failure, and worse: see [A leak](#a
      a `pass`.
    - `failClosed` is true only when qBittorrent was shown to be in Gluetun's network, and
      Gluetun is stopped or nothing answered through the tunnel.
-   - The two addresses were compared when the check with the id `egress` has the status
-     `ok`. Then `egress.vpn` and `egress.host` hold them.
+   - The two addresses were compared, and differed, when the check with the id `egress`
+     has the status `ok`. Equal addresses give `leak`. `egress.vpn` and `egress.host` hold
+     what each side saw.
    - It measures IPv4 only. The route it asks about is the one to `1.1.1.1`, and the
      default service is reached by an IPv4 address. IPv6 is not checked.
 2. **Gluetun's state:** `mediaplane status gluetun`.
@@ -70,6 +82,9 @@ The hints `vpn-check` prints already name yours.
 
 Go by the first line marked `DOWN`.
 
+Run the `docker` commands below on the host. The socket proxy refuses `restart`, `pause`
+and `unpause` from inside Mediaplane's container.
+
 - **`network`: qBittorrent started before Gluetun last did.** Gluetun was restarted on
   its own, by hand or after a crash, so it has a new network, and qBittorrent kept the
   old one, which has nothing but loopback. `mediaplane apply` doesn't fix this: Compose
@@ -86,11 +101,15 @@ Go by the first line marked `DOWN`.
   `mediaplane apply`.
 - **`network`: Mediaplane can't read the start times.** It can't tell whether qBittorrent
   holds Gluetun's current network. Restart qBittorrent, as above, then run
-  `mediaplane vpn-check` again.
-- **`gluetun`: Gluetun is exited, or has no container.** Run `mediaplane apply`, which
-  starts it. Then restart qBittorrent as above: it kept the network Gluetun had before.
-- **`gluetun`: Gluetun is paused or restarting.** A restart ends by itself: wait a minute,
-  and run `mediaplane vpn-check` again. A pause is a `docker pause` by hand: undo it with
+  `mediaplane vpn-check` again. If it stays, open an issue on the project's GitHub page
+  with the output of `mediaplane vpn-check --json`. That output holds your addresses:
+  take them out first if you'd rather not share them.
+- **`gluetun`: Gluetun is exited, dead or created, or has no container.** Run
+  `mediaplane apply`, which starts it. Then restart qBittorrent as above: it kept the
+  network Gluetun had before.
+- **`gluetun`: Gluetun is paused or restarting.** A restart usually ends by itself: wait
+  a minute, and run `mediaplane vpn-check` again. A restart loop doesn't end: if it stays,
+  read Gluetun's log. A pause is a `docker pause` by hand: undo it with
   `docker unpause mediaplane-gluetun-1`.
 - **`gluetun`: running but unhealthy, or `egress`: no answer through the tunnel.** The
   tunnel doesn't carry traffic. Read Gluetun's log, then check, in this order:
@@ -113,7 +132,7 @@ Go by the first line marked `DOWN`.
   attempts, with no tunnel. Wait a minute, and run `mediaplane vpn-check` again. If it
   stays, read Gluetun's log.
 
-Warnings don't fail the check, but say something is off:
+Warnings (marked `warn`) don't fail the check, but say something is off:
 
 - **`network`: qBittorrent is not running.** It sends nothing while it is stopped, so
   there is nothing to check on its side. `mediaplane apply` starts it; then run
