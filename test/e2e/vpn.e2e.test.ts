@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
@@ -11,7 +11,14 @@ import {
   type ExecResult,
 } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
-import { BUSYBOX, composeDown, makeHome } from './helpers';
+import {
+  BUSYBOX,
+  composeDown,
+  deployMediaplane,
+  makeHome,
+  REPO,
+  type DeployedMediaplane,
+} from './helpers';
 import { startWireGuard, TUNNEL, type WireGuardServer } from './wireguard';
 
 const PROJECT = `mediaplane-e2e-${String(process.pid)}-vpn`;
@@ -110,10 +117,95 @@ function bodyOf(result: ExecResult): string {
   return result.stdout.split('\r\n\r\n').slice(1).join('\r\n\r\n').trim();
 }
 
+const MAIN = join(REPO, 'packages', 'cli', 'src', 'main.ts');
+
+/** `mediaplane vpn-check <args>`, run from source as a user would. */
+function runVpnCheck(
+  home: string,
+  env: Record<string, string>,
+  args: string[],
+): Promise<ExecResult> {
+  return nodeExec(
+    process.execPath,
+    ['--import', 'tsx', MAIN, 'vpn-check', '--home', home, ...args],
+    {
+      cwd: REPO,
+      env: { ...process.env, MEDIAPLANE_COMPOSE_PROJECT: PROJECT, ...env },
+      timeoutMs: 120_000,
+    },
+  );
+}
+
+/** `vpn-check --json <args>`: the checks and the verdict, for the test to read. */
+function vpnCheck(
+  home: string,
+  env: Record<string, string>,
+  ...args: string[]
+): Promise<ExecResult> {
+  return runVpnCheck(home, env, ['--json', ...args]);
+}
+
+/** `vpn-check <args>` as a person reads it: each check, then the summary line. */
+function vpnCheckText(
+  home: string,
+  env: Record<string, string>,
+  ...args: string[]
+): Promise<ExecResult> {
+  return runVpnCheck(home, env, args);
+}
+
+/** One check in `vpn-check --json`'s answer. */
+interface CheckItem {
+  id: string;
+  status: string;
+  message: string;
+  hint?: string;
+}
+
+/** Each check vpn-check made, in the order it made them. */
+function itemsOf(result: ExecResult): CheckItem[] {
+  return (JSON.parse(result.stdout) as { checks: CheckItem[] }).checks;
+}
+
+/** Each check vpn-check made, as "<id> <status>". */
+function checksOf(result: ExecResult): string[] {
+  return itemsOf(result).map((c) => `${c.id} ${c.status}`);
+}
+
+/** The check with `id`, or an object saying there was none, so a test fails readably. */
+function itemOf(result: ExecResult, id: string): CheckItem {
+  return (
+    itemsOf(result).find((c) => c.id === id) ?? {
+      id,
+      status: 'missing',
+      message: `vpn-check made no ${id} check`,
+    }
+  );
+}
+
 describe('the VPN kill switch, against a local WireGuard server', () => {
   it('sends qBittorrent through the tunnel, and lets nothing out once the tunnel or Gluetun is down', async () => {
     const home = await makeHome();
     const wg = await startWireGuard(PROJECT);
+    let deployed: DeployedMediaplane | undefined;
+    /** Every removal, each whether or not the one before it worked; what failed. */
+    const removeAll = async (): Promise<unknown[]> => {
+      const failures: unknown[] = [];
+      const attempt = async (removal: () => Promise<unknown>) => {
+        try {
+          await removal();
+        } catch (failure) {
+          failures.push(failure);
+        }
+      };
+      await attempt(() => deployed?.remove() ?? Promise.resolve());
+      await attempt(async () => {
+        const down = await composeDown(PROJECT);
+        expect(down.code, down.stderr).toBe(0);
+      });
+      await attempt(() => wg.remove());
+      return failures;
+    };
     try {
       await writeFile(join(home, 'stack.yaml'), vpnStack(join(home, 'data'), wg));
       await mkdir(join(home, 'secrets'), { mode: 0o700 });
@@ -152,6 +244,16 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
         { cwd: '/' },
       );
       expect(inspect.stdout.trim()).toBe(inGluetun);
+      // vpn-check's hints name containers as <project>-<service>-1: these are the real names.
+      const names = await nodeExec(
+        'docker',
+        ['container', 'inspect', '--format', '{{.Name}}', gluetun, qbittorrent],
+        { cwd: '/' },
+      );
+      expect(names.stdout.trim().split('\n')).toEqual([
+        `/${PROJECT}-gluetun-1`,
+        `/${PROJECT}-qbittorrent-1`,
+      ]);
 
       // qBittorrent's web UI, on WEBUI_PORT inside Gluetun's namespace, answers on
       // localhost without FIREWALL_OUTBOUND_SUBNETS covering it.
@@ -190,6 +292,45 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       const fromHost = await fetch(echo, { signal: AbortSignal.timeout(10_000) });
       expect((await fromHost.text()).trim()).toBe(`ip=${wg.gateway}`);
 
+      // vpn-check passes, and sees the same two addresses: from source, and from the image
+      // behind the socket proxy, whose own network has no route to the stack (its probe
+      // runs inside qBittorrent's namespace, and the host helper asks for the host's own
+      // address).
+      const toEcho = { MEDIAPLANE_VPN_CHECK_URL: echo };
+      const compared = {
+        verdict: 'pass',
+        failClosed: false,
+        egress: { url: echo, vpn: wg.exit, host: wg.gateway },
+      };
+      const bothAddresses = `qBittorrent's traffic leaves from ${wg.exit}, and this host's from ${wg.gateway}`;
+      const passedJson = await vpnCheck(home, toEcho);
+      expect(passedJson.code, passedJson.stdout + passedJson.stderr).toBe(0);
+      expect(JSON.parse(passedJson.stdout)).toMatchObject(compared);
+      expect(checksOf(passedJson)).toEqual([
+        'network ok',
+        'gluetun ok',
+        'control ok',
+        'control-key ok',
+        'route ok',
+        'egress ok',
+      ]);
+      expect(itemOf(passedJson, 'egress').message).toBe(bothAddresses);
+      const passedText = await vpnCheckText(home, toEcho);
+      expect(passedText.code, passedText.stdout + passedText.stderr).toBe(0);
+      expect(passedText.stdout).toContain(
+        'Passed: qBittorrent reaches the internet only through the VPN.',
+      );
+      deployed = await deployMediaplane({ home, stack: PROJECT });
+      const inImage = await deployed.mediaplane(['vpn-check', '--json'], toEcho);
+      expect(inImage.code, inImage.stdout + inImage.stderr).toBe(0);
+      expect(JSON.parse(inImage.stdout)).toMatchObject(compared);
+      expect(checksOf(inImage)).toEqual(checksOf(passedJson));
+      expect(itemOf(inImage, 'egress').message).toBe(bothAddresses);
+      // Cleared first, so the teardown below doesn't try a failed removal again.
+      const done = deployed;
+      deployed = undefined;
+      await done.remove();
+
       // The tunnel goes down. At once, nothing gets out of Gluetun's namespace, while an
       // ordinary container on the stack's network still reaches the same target.
       await wg.stop();
@@ -219,6 +360,22 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       expect(viaEth0.stdout, viaEth0.stderr).toMatch(/ dev eth0 /);
       expect((await fetchFrom(inGluetun, leak)).code).not.toBe(0);
 
+      // vpn-check finds the VPN down: nothing answers, so no address is known, and it says
+      // that nothing leaks. Only what holds whether Gluetun's own health check has
+      // restarted the tunnel yet is asserted.
+      const tunnelDown = await vpnCheck(home, toEcho);
+      expect(tunnelDown.code, tunnelDown.stdout + tunnelDown.stderr).toBe(1);
+      expect(JSON.parse(tunnelDown.stdout)).toMatchObject({
+        verdict: 'down',
+        failClosed: true,
+        egress: { url: echo, vpn: null, host: null },
+      });
+      expect(checksOf(tunnelDown).at(-1)).toBe('egress down');
+      expect(itemOf(tunnelDown, 'egress').hint).toContain('(fail-closed)');
+      const tunnelDownText = await vpnCheckText(home, toEcho);
+      expect(tunnelDownText.code, tunnelDownText.stdout).toBe(1);
+      expect(tunnelDownText.stdout).toContain('nothing leaks (fail-closed)');
+
       // Gluetun stops: qBittorrent keeps running, with nothing but loopback.
       const stopped = await nodeExec('docker', ['stop', '-t', '5', gluetun], {
         cwd: '/',
@@ -235,10 +392,50 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       const unreachable = await fetchFrom(inQbittorrent, leak);
       expect(unreachable.code).not.toBe(0);
       expect(unreachable.stderr).toContain('Network is unreachable');
-    } finally {
-      const down = await composeDown(PROJECT);
-      await wg.remove();
-      expect(down.code, down.stderr).toBe(0);
+      const gluetunDown = await vpnCheck(home, {}, '--no-egress');
+      expect(gluetunDown.code, gluetunDown.stdout + gluetunDown.stderr).toBe(1);
+      expect(checksOf(gluetunDown)).toEqual(['network ok', 'gluetun down']);
+      expect(JSON.parse(gluetunDown.stdout)).toMatchObject({
+        verdict: 'down',
+        failClosed: true,
+      });
+      expect(itemOf(gluetunDown, 'gluetun').message).toBe(
+        'Gluetun is exited, so qBittorrent has no network: nothing gets out',
+      );
+
+      // Gluetun starts again on its own, without Mediaplane's key file, as one from before
+      // Slice 3a that was never restarted. vpn-check says that its control server answers
+      // without a key, and that qBittorrent, which kept running, still holds the network
+      // the old Gluetun had: it has none.
+      const auth = join(home, 'appdata', 'gluetun', 'auth', 'config.toml');
+      await rename(auth, `${auth}.aside`);
+      const started = await nodeExec('docker', ['start', gluetun], { cwd: '/' });
+      expect(started.code, started.stderr).toBe(0);
+      for (
+        let attempt = 0;
+        statusOf(await control('/v1/vpn/status', false)) !== 200;
+        attempt++
+      ) {
+        expect(attempt, "Gluetun's control server never answered").toBeLessThan(30);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      const open = await vpnCheck(home, {}, '--no-egress');
+      expect(open.code, open.stdout + open.stderr).toBe(1);
+      expect(checksOf(open)).toContain('network down');
+      expect(checksOf(open)).toContain('control-key warning');
+      expect(itemOf(open, 'network').hint).toBe(
+        `restart qBittorrent: "docker restart ${PROJECT}-qbittorrent-1"`,
+      );
+      expect(itemOf(open, 'control-key').hint).toContain(
+        `"docker restart ${PROJECT}-gluetun-1", then "docker restart ${PROJECT}-qbittorrent-1"`,
+      );
+    } catch (failure) {
+      // The body's own failure is the one to show: a removal that fails too is only logged.
+      for (const removal of await removeAll())
+        console.error('teardown failed too:', removal);
+      throw failure;
     }
-  }, 600_000);
+    const failures = await removeAll();
+    if (failures.length > 0) throw new AggregateError(failures, 'teardown failed');
+  }, 1_200_000);
 });

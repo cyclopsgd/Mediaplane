@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -143,4 +143,124 @@ export async function removeAsRoot(dir: string): Promise<void> {
     throw new Error(`could not empty ${dir} as root:\n${result.stderr}`);
   }
   await rm(dir, { recursive: true, force: true });
+}
+
+/** Mediaplane deployed for a test, as `deployMediaplane` started it. */
+export interface DeployedMediaplane {
+  /** `mediaplane <args>` in its container, with `env` added to the command's. */
+  mediaplane(args: readonly string[], env?: Record<string, string>): Promise<ExecResult>;
+  /** Bring the deployment down, and remove its image; fails if either fails. */
+  remove(): Promise<void>;
+}
+
+/** An error's message, or what was thrown, as text. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Mediaplane deployed as a user deploys it (deploy/mediaplane.compose.yaml): its image,
+ * built from this checkout, behind the socket proxy, on a network with no route out,
+ * managing the Compose project `stack` in `home`. Its own project is `<stack>-system`.
+ */
+export async function deployMediaplane(options: {
+  home: string;
+  stack: string;
+}): Promise<DeployedMediaplane> {
+  const { home, stack } = options;
+  // mediaplane-e2e-<pid>-vpn is tagged mediaplane-e2e:<pid>-vpn.
+  const tag = `mediaplane-e2e:${stack.replace(/^mediaplane-e2e-/, '')}`;
+  const container = `${stack}-mediaplane`;
+  // Before anything is made, so a failure here leaves nothing behind.
+  const dockerGid = String((await stat('/var/run/docker.sock')).gid);
+  await buildImage(tag);
+  const dir = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-system-'));
+  const override = join(dir, 'override.yaml');
+  const env = {
+    ...process.env,
+    MEDIAPLANE_IMAGE: tag,
+    MEDIAPLANE_HOME: home,
+    MEDIAPLANE_UID: String(process.getuid?.() ?? 1000),
+    MEDIAPLANE_GID: String(process.getgid?.() ?? 1000),
+    DOCKER_GID: dockerGid,
+  };
+  const deploy = join(REPO, 'deploy', 'mediaplane.compose.yaml');
+  const system = (...args: string[]) =>
+    nodeExec(
+      'docker',
+      [
+        'compose',
+        '-p',
+        `${stack}-system`,
+        '--env-file',
+        '/dev/null',
+        '-f',
+        deploy,
+        '-f',
+        override,
+        ...args,
+      ],
+      { env, cwd: '/', timeoutMs: 300_000 },
+    );
+  /** Every removal, each whether or not the one before it worked; what failed. */
+  const teardown = async (): Promise<string[]> => {
+    const failed: string[] = [];
+    const step = async (what: string, run: () => Promise<ExecResult | undefined>) => {
+      try {
+        const result = await run();
+        if (result !== undefined && result.code !== 0) {
+          failed.push(`${what} failed: ${result.stderr}`);
+        }
+      } catch (error) {
+        failed.push(`${what} failed: ${messageOf(error)}`);
+      }
+    };
+    await step('compose down', () => system('down', '--remove-orphans'));
+    await step('removing the override', async () => {
+      await rm(dir, { recursive: true, force: true });
+      return undefined;
+    });
+    await step('docker image rm', () =>
+      nodeExec('docker', ['image', 'rm', tag], { cwd: '/' }),
+    );
+    return failed;
+  };
+  try {
+    await writeFile(
+      override,
+      [
+        'services:',
+        '  mediaplane:',
+        `    container_name: ${container}`,
+        '    environment:',
+        `      MEDIAPLANE_COMPOSE_PROJECT: ${stack}`,
+        '',
+      ].join('\n'),
+    );
+    const up = await system('up', '-d', '--wait');
+    if (up.code !== 0) throw new Error(`mediaplane-system did not start:\n${up.stderr}`);
+  } catch (error) {
+    // The startup error first; a failed teardown is only added to it.
+    const failed = await teardown();
+    const also =
+      failed.length === 0 ? '' : `\nIts removal failed too:\n${failed.join('\n')}`;
+    throw new Error(`${messageOf(error)}${also}`, { cause: error });
+  }
+  return {
+    mediaplane: (args, extra = {}) =>
+      nodeExec(
+        'docker',
+        [
+          'exec',
+          ...Object.entries(extra).flatMap(([name, value]) => ['-e', `${name}=${value}`]),
+          container,
+          'mediaplane',
+          ...args,
+        ],
+        { cwd: '/', timeoutMs: 300_000 },
+      ),
+    remove: async () => {
+      expect(await teardown()).toEqual([]);
+    },
+  };
 }
