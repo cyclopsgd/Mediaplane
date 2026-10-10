@@ -15,9 +15,15 @@ export const PROBE_USER = { uid: 65534, gid: 65534 } as const;
  * stdin and goes to curl as a header file on stdin, so it is never on a command line.
  * Every curl starts with -q and --noproxy '*': it reads no .curlrc (qBittorrent's
  * appdata is its HOME) and no proxy setting, so neither can see the key or fake an answer.
- * Each check prints one line: its name, its exit status, and its output in base64.
+ * Every answer it reads is capped at EGRESS_MAX_BYTES (curl's --max-filesize), and the
+ * egress URL follows --url, so a value that starts with "-" is never read as an option.
+ * No curl has -f: an answer with any HTTP status still proves the path. The variables it
+ * assigns are unset first, so one the environment exported can't carry the key to a child.
+ * Each check prints one line: its name, its exit status, and its output in base64. The
+ * line ends in a space when a check printed nothing.
  */
 export const PROBE_SCRIPT = [
+  'unset key url base name out code',
   'IFS= read -r key || true',
   'base="http://127.0.0.1:$1"',
   'url=$2',
@@ -26,7 +32,7 @@ export const PROBE_SCRIPT = [
   '}',
   'withkey() {',
   `  printf 'X-API-Key: %s\\n' "$key" |`,
-  `    curl -q -s --noproxy '*' --max-time 5 -H @- -w '\\n%{http_code}' "$base$1"`,
+  `    curl -q -s --noproxy '*' --max-time 5 --max-filesize ${String(EGRESS_MAX_BYTES)} -H @- -w '\\n%{http_code}' "$base$1"`,
   '}',
   'report() {',
   '  name=$1',
@@ -39,7 +45,7 @@ export const PROBE_SCRIPT = [
   'report anonymous anonymous',
   'report status withkey /v1/vpn/status',
   'report publicip withkey /v1/publicip/ip',
-  `[ -z "$url" ] || report egress curl -q -sS --noproxy '*' --max-time ${String(EGRESS_TIMEOUT_MS / 1000)} --max-filesize ${String(EGRESS_MAX_BYTES)} "$url"`,
+  `[ -z "$url" ] || report egress curl -q -sS --noproxy '*' --max-time ${String(EGRESS_TIMEOUT_MS / 1000)} --max-filesize ${String(EGRESS_MAX_BYTES)} --url "$url"`,
   '',
 ].join('\n');
 
@@ -74,7 +80,8 @@ export function probeCommand(
   };
 }
 
-const LINE = /^(route|anonymous|status|publicip|egress) (\d+) ([A-Za-z0-9+/=]*)$/;
+// A check that printed nothing ends in a space, which trim() removes: the output is optional.
+const LINE = /^(route|anonymous|status|publicip|egress) (\d+)(?: ([A-Za-z0-9+/=]*))?$/;
 
 /**
  * The probe's lines, by check. Anything else it printed is ignored. Each output is
