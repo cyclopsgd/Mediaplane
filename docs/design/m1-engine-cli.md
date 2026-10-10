@@ -344,7 +344,9 @@ Rules:
 - **Externally managed mode.** With `managed_by: external`, Mediaplane never
   writes `stack.yaml`. `migrate` and Keep mine print the snippet to add instead.
 - **`vpn.addresses`** is optional and sets the WireGuard address for providers
-  that need one, such as Mullvad. Any other Gluetun setting is passed through
+  that need one, such as Mullvad. It is one or more IPv4 or IPv6 addresses with a
+  prefix length (CIDRs), separated by commas without spaces, and never an IPv6 zone
+  such as `fe80::1%eth0/64`. Any other Gluetun setting is passed through
   `apps.gluetun.env`.
 - **Override keys** follow the form `<app>.<resource>.<field>`. The set of
   overridable fields is declared per integration and documented in each app's
@@ -537,7 +539,7 @@ in `compose.override.yaml` is therefore wired automatically.
 
 | Command | Purpose |
 |---|---|
-| `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt (on a terminal, `--vpn-addresses` and `--lan-subnet` wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file |
+| `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt, including the format of `--vpn-addresses` (on a terminal, only the refusal of `--vpn-addresses` without `--vpn-provider`, and whether `--lan-subnet` fits this host, wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file |
 | `plan` | Show what `apply` would change, including drift. Makes no changes |
 | `apply` | Converge on `stack.yaml` (§5) |
 | `status [app]` | Container health, VPN state, and the last apply's outcome |
@@ -546,7 +548,7 @@ in `compose.override.yaml` is therefore wired automatically.
 | `history [id]` | List change records, or show one in full |
 | `credentials [app]` | Show the shared admin login and per-app URLs (never printed in `--json` unless `--reveal` is given) |
 | `plex-login` | Run the plex.tv PIN flow and save the token to `secrets/plex-token` |
-| `vpn-check` | Compare qBittorrent's egress IP with the host's |
+| `vpn-check` | Check that qBittorrent reaches the internet only through the VPN: its network, Gluetun's state and the route into the tunnel, then its egress IP against the host's (`--no-egress` skips that) |
 | `migrate` | Rewrite `stack.yaml` to the current schema version, preserving comments |
 
 - **`plan`.** Exit 0 means no changes, 2 means changes are pending, 1 means an
@@ -784,7 +786,8 @@ full threat model goes in `docs/security/threat-model.md`.
    - qBittorrent uses `network_mode: service:gluetun`, so it has no network of
      its own and fails closed by construction.
    - Verify asserts this topology and that Gluetun reports connected.
-   - `mediaplane vpn-check` compares qBittorrent's egress IP with the host's.
+   - `mediaplane vpn-check` checks this topology, and compares qBittorrent's egress
+     IP with the host's (§11, Slice 3d).
 7. **Supply chain.**
    - Images are pinned by tag and digest, and Renovate bumps both.
    - CI runs Trivy (failing on critical vulnerabilities that have a fix),
@@ -1028,6 +1031,10 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   - "Ask for a login from your own network too?" is asked only with `lan`.
   - `--admin-password-file` must name a file inside the home, and
     `--vpn-addresses` needs `--vpn-provider`.
+  - `--vpn-addresses` is one or more IPv4 or IPv6 CIDRs, comma-separated without spaces
+    and with no IPv6 zone (Slice 3d, §4.2). `init` checks its format before the first
+    question; on a terminal, only the "needs `--vpn-provider`" refusal waits for the
+    provider answer.
 - **qBittorrent's Automatic Torrent Management is on**
   (`Session\DisableAutoTMMByDefault=false`), so a torrent follows its category's save
   path (§6.2). It applies to torrents you add by hand too.
@@ -1054,3 +1061,57 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 - **Change records grow by additive, optional fields within `mediaplane.change/v1`**
   (§5 step 12). Older records still parse. A field that changes meaning needs a v2.
   Slice 3a adds none; S3b's wiring actions will.
+
+### Slice 3d: the VPN's kill-switch test and vpn-check (2026-10-10)
+
+- **The kill-switch test (§2.3 criterion 5, §8.1(4))** runs Gluetun's `custom` provider
+  against a WireGuard server of its own (`lscr.io/linuxserver/wireguard`, pinned by
+  digest) and an echo server that answers with the caller's address. CI loads the
+  `wireguard` kernel module on both runners first. The test fails, and never skips,
+  without it.
+- **`vpn-check` (§5.2, §7.2(6))** always checks the structure: qBittorrent's network
+  mode, that it joined the Gluetun now running, Gluetun's health, the VPN's status from
+  Gluetun's control server (with `controlApiKey`, header `X-API-Key`), and that the route
+  out goes into the tunnel. By default it also compares where qBittorrent's traffic and
+  the host's leave from, through `https://1.1.1.1/cdn-cgi/trace`;
+  `MEDIAPLANE_VPN_CHECK_URL` names another service, and `--no-egress` skips it. It exits
+  0 on a pass, and 1 on a leak or a VPN that is down. Its `--json` is
+  `mediaplane.vpn-check/v1`, where `ok` says the check ran and `verdict` what it found.
+  Its last line claims no more than the checks found: it says nothing leaks only when
+  Gluetun isn't running or nothing answered through the tunnel (`failClosed`). The
+  default of asking Cloudflare is the controller's ruling, logged for the owner.
+  - **The addresses were compared** when the check with the id `egress` has the status
+    `ok`. `egress.vpn` and `egress.host` can hold addresses without it: an IPv4 and an
+    IPv6 address are both known, but prove nothing.
+  - **`failClosed` is true** only when qBittorrent was shown to be in Gluetun's network,
+    and either Gluetun is stopped (exited, dead or created, or without a container) or
+    nothing answered through the tunnel. It is an inference, not a measurement: a
+    service that stalls the TLS handshake also reads as no answer.
+  - **It measures IPv4 only.** The route target is `1.1.1.1`, and the default URL is
+    reached by an IPv4 address. An IPv6 check waits for Docker's IPv6 to be turned on; the
+    roadmap lists it.
+  - **The egress URL is not a secret.** It is shown in the output and in `egress.url`,
+    and in the image it goes on the host helper's command line. It must carry no token.
+    The host's request refuses a redirect and a URL with a user name or password, and
+    only an address-shaped answer comes back. Run from source behind a Node env proxy
+    (`NODE_USE_ENV_PROXY`, `--use-env-proxy`), the host side can't be measured, so it is
+    a warning (threat model, T13).
+- **vpn-check needs no route of its own.** Its probe is a `compose run` of the
+  `qbittorrent` service, so it starts in Gluetun's network namespace, in qBittorrent's
+  own image, as nobody. It reaches Gluetun's control server on `127.0.0.1:8000` there,
+  and gets the key on its standard input, never on a command line. It uses only Docker
+  API calls that `apply` already makes. So it doesn't depend on how the Mediaplane
+  container will reach the apps (Slice 3b), and the socket proxy allows nothing new. In
+  the image, the host helper asks for the host's own address.
+- **The runtime runs one-off commands and inspects containers (§3.2).** `run` is the
+  `compose run` that the ownership helper's `chown` now uses too. `inspect` reads a
+  container's network mode, start time and Compose project (`GET containers/{id}/json`),
+  and refuses a container of any other project (§7.2(2)).
+- **Gluetun started again on its own strands qBittorrent.** qBittorrent keeps the network
+  namespace Gluetun had when qBittorrent started. Compose restarts qBittorrent when it
+  recreates Gluetun (§6.4), but not when it only starts it again (verified with Compose
+  5.5.1), so `apply` doesn't fix it. `vpn-check` reports it from the two start times, and
+  the "VPN down" runbook gives the fix. Having `apply` restart qBittorrent is a Slice 3b
+  input.
+- **`vpn.addresses` (§4.2)** is one or more IPv4 or IPv6 addresses with a prefix length,
+  separated by commas without spaces, as Gluetun's `WIREGUARD_ADDRESSES` takes them.

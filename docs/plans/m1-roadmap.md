@@ -15,7 +15,15 @@ Detailed plans so far:
 - Slice 2a: [`m1-s2a-plan-against-docker.md`](m1-s2a-plan-against-docker.md) (done).
 - Slice 2b: [`m1-s2b-apply.md`](m1-s2b-apply.md) (done).
 - Slice 2c: [`m1-s2c-packaging.md`](m1-s2c-packaging.md) (done).
-- Slice 3a: [`m1-s3a-admin-and-seed-files.md`](m1-s3a-admin-and-seed-files.md).
+- Slice 3a: [`m1-s3a-admin-and-seed-files.md`](m1-s3a-admin-and-seed-files.md) (done).
+- Slice 3d: [`m1-s3d-vpn-check.md`](m1-s3d-vpn-check.md).
+
+Where M1 stands (the README shows the same):
+
+- **Merged:** S1, S2a, S2b, S2c and S3a.
+- **In progress:** S3d.
+- **Next:** S3b.
+- **After that:** S3c, then S4 to S8.
 
 ## Slices
 
@@ -117,9 +125,9 @@ each one, or corrects it in the catalog:
 | Value | Verified in |
 |---|---|
 | Health-check commands for each image (`curl` in linuxserver images, `wget` in Seerr). The tools were confirmed present in every pinned image on 2026-10-09. **Verified on arm64 and amd64 on 2026-10-09** by S2b's end-to-end test, which applies the video stack and sees every app healthy: on the arm64 dev box, and on amd64 in CI at `ebd18fe` | S2b (done) |
-| Gluetun's built-in health check with `depends_on: service_healthy`. It needs a working tunnel, so it is verified with S3d's local WireGuard server | S3d |
-| `FIREWALL_OUTBOUND_SUBNETS` accepting a comma-separated list | S3d |
-| qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace | S3d |
+| Gluetun's built-in health check with `depends_on: service_healthy`. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`, against a local WireGuard server: `apply` waits for Gluetun to be healthy, then starts qBittorrent, and both end healthy | S3d (done) |
+| `FIREWALL_OUTBOUND_SUBNETS` accepting a comma-separated list. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`: two subnets, given through `apps.gluetun.env`, are both routed in Gluetun's namespace | S3d (done) |
+| qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`: with `apps.qbittorrent.port: 8090` and `bind: localhost`, the web UI answers on `127.0.0.1:8090` | S3d (done) |
 | The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs) | S3b |
 | Seerr running as uid 1000 with `init: true`. **Verified on 2026-10-09** by `test/e2e/apply.e2e.test.ts` and `test/e2e/deploy.e2e.test.ts`: Seerr, rendered with `init: true`, runs healthy after apply's ownership step gives its appdata to uid 1000 | S2b (done) |
 
@@ -130,8 +138,9 @@ design gaps below, which only matter once Mediaplane writes files or deploys.
 The Slice 2a final review (2026-10-09) added the S2b list and two S3 items.
 The Slice 2b final review (2026-10-09) added the S2c list, two S4 items and an
 M2 item. Slice 2c (2026-10-09) added the last S3 item, the S6 list and the last
-four S8 items. Slice 3a (2026-10-10) added the last three S3 items, the S3d list, three
-S4 items, two S6 items, an S8 item and an M2 item. Each slice plan must address the
+four S8 items. Slice 3a (2026-10-10) added three S3 items, the S3d list, three
+S4 items, two S6 items, an S8 item and an M2 item. Slice 3d (2026-10-10) added the last
+S3 item, the unscheduled list and extended two S8 items. Each slice plan must address the
 items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
@@ -229,6 +238,17 @@ which moved to M2. The rest are for S3b and S3c.
 - **The Mediaplane container can reach only the socket proxy.** Its network is
   internal (S2c). Wiring needs the apps' APIs, so attach the container to the
   stack's network, or find another route. Then update ADR 0008 and the threat model.
+  **Decided by the owner on 2026-10-10 (D1): A2.** A Docker network with
+  `internal: true`, which Mediaplane's container, every wired app and Gluetun (for
+  qBittorrent) join.
+  - Mediaplane's container stays offline: that network has no route out.
+  - The apps keep their normal network for their own internet traffic.
+  - Gluetun's firewall must accept wiring traffic to qBittorrent's port, and S3b's
+    end-to-end test proves it.
+  - The plex.tv calls go through a short-lived helper in S6.
+  - This is defence in depth, not a wall, because the proxy still lets Mediaplane
+    create containers.
+  - S3b writes ADR 0011 on it.
 - **qBittorrent's settings after its first start.** `admin.username`,
   `admin.password`, `login_on_lan` and the LAN subnet reach qBittorrent only through
   its pre-start file (S3a). S3c manages them through its API.
@@ -241,8 +261,15 @@ which moved to M2. The rest are for S3b and S3c.
   into the apps' files unescaped. A secret with `createdBy: 'app'` is kept in the same
   store, so its value must fit too, or the check must apply only to the keys Mediaplane
   generates. Otherwise the next `plan` can't read the store.
+- **qBittorrent stranded by a Gluetun started again on its own (S3b).** When Gluetun
+  restarts alone, by hand or after a crash, qBittorrent keeps the old, empty network
+  namespace. Compose restarts qBittorrent only when it recreates Gluetun, not when it
+  starts a stopped one (Compose 5.5.1), so `apply` leaves it stranded and its health
+  check still passes on loopback. `vpn-check` reports it (S3d). Make the verify stage's
+  VPN topology check (spec §6.4) catch it too, by reusing `vpnCheck` without the egress
+  check, and have `apply` restart qBittorrent then.
 
-**S3d:**
+**S3d:** all of these are in the S3d plan.
 
 - **Gluetun's control server refuses requests without the key.** S3a writes
   `auth/config.toml`, and this was checked only by hand on the pinned image. Check
@@ -288,7 +315,8 @@ which moved to M2. The rest are for S3b and S3c.
 **S6:**
 
 - **The Plex claim and `plex-login` need plex.tv.** The Mediaplane container has no
-  route out today (S2c), so give it one, and record that in the threat model.
+  route out today (S2c), and stays offline under S3b's decision (A2, above). So make
+  the plex.tv calls from a short-lived helper, and record that in the threat model.
 - **Jellyfin's health check can pass early.** In its first seconds, Jellyfin's
   `/health` answers 200 with `Degraded` while the server still answers 503 to
   everything else (S2c). Look at a check that waits for the server itself.
@@ -311,12 +339,15 @@ which moved to M2. The rest are for S3b and S3c.
 - **`credentials --json` has no `ok` field.** `init`, `plan`, `apply` and the error
   envelope all carry one, and the success output of `mediaplane.credentials/v1` doesn't.
   Align it in the `--json` pass: adding `ok: true` is additive within v1.
-- **Tests:** tighten the catalog tag test, and add Renovate.
+- **Tests:** tighten the catalog tag test, and add Renovate. Let
+  `test/e2e/deploy.e2e.test.ts` deploy with `deployMediaplane()` from
+  `test/e2e/helpers.ts` (S3d), as the VPN test does.
 - **Pins outside the catalog.** Renovate must also bump the images pinned in:
   - `Dockerfile` (`node`, `docker:*-cli`);
   - `deploy/mediaplane.compose.yaml` (`wollomatic/socket-proxy`);
   - `.github/workflows/ci.yml` (Trivy and gitleaks), `.githooks/pre-commit`
-    (gitleaks) and `test/e2e/helpers.ts` (busybox).
+    (gitleaks), `test/e2e/helpers.ts` (busybox) and `test/e2e/wireguard.ts` (the
+    `lscr.io/linuxserver/wireguard` test server, rebuilt weekly upstream).
 
   Every catalog pin bump must also run `pnpm docs:generate`, because each app
   README's facts block shows the pin.
@@ -340,6 +371,12 @@ which moved to M2. The rest are for S3b and S3c.
 - **Servarr `TRUSTEDNETWORKS` and Mediaplane's network (ruling R12).** Once the panel
   proxies requests to the apps, add its network, so Sonarr believes the
   `X-Forwarded-For` header it sends (spec §11, Slice 3a).
+
+**Not scheduled yet:**
+
+- **An IPv6 egress check.** `vpn-check` measures IPv4 only (S3d): its route target is
+  `1.1.1.1`, and its default URL is reached by an IPv4 address. When Docker's IPv6 is
+  turned on for the stack, add an IPv6 egress check, so a leak over IPv6 shows.
 
 ## Spec refinements made while planning (2026-10-08)
 
