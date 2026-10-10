@@ -38,6 +38,11 @@ The apply end-to-end test pulls the full app stack the first time, about 7 GB, a
 starts it, so allow several minutes. The test files run one at a time because they
 share host ports.
 
+The VPN kill-switch test (`test/e2e/vpn.e2e.test.ts`) runs a WireGuard server in a
+container, which needs the host's `wireguard` kernel module: run
+`sudo modprobe wireguard` once after each boot. CI does this in its end-to-end job. The
+test fails, and never skips, without it.
+
 Before committing, run
 `pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check`.
 

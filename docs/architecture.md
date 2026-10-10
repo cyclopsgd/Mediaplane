@@ -1,8 +1,8 @@
 # Architecture
 
 This page is a condensed version of the [M1 design](design/m1-engine-cli.md), §3 to §6,
-covering what is built so far (Slices 1 to 3a). The design describes the whole of M1;
-this page describes what exists.
+covering what is built so far (Slices 1 to 3a, and 3d). The design describes the whole
+of M1; this page describes what exists.
 
 ## The idea
 
@@ -33,7 +33,7 @@ host (Docker)
 │
 └─ host helper        container
      throwaway, during init,
-     plan and apply
+     plan, apply, vpn-check
 ```
 
 - **`mediaplane-system`** is Mediaplane's own Compose project. Apply never manages it,
@@ -51,9 +51,9 @@ host (Docker)
   ([ADR 0008](adr/0008-docker-socket-proxy-on-by-default.md)). It is defence in depth,
   not a boundary: the [threat model](security/threat-model.md) says what it leaves open.
 - **The host helper.** From inside its container, Mediaplane can't see the host's
-  network, free ports, devices, or folders outside the home. So during `init`, `plan`
-  and `apply`, it runs a throwaway container of its own image on the host network, which
-  reports what it sees as JSON. That container:
+  network, free ports, devices, or folders outside the home. So during `init`, `plan`,
+  `apply` and `vpn-check`, it runs a throwaway container of its own image on the host
+  network, which reports what it sees as JSON. That container:
   - gets read-only mounts of the data folder, the home's `stack.yaml`, and `/dev` when
     the VPN needs `/dev/net/tun`. Read-only has two limits
     ([threat model](security/threat-model.md)):
@@ -101,6 +101,9 @@ Each part, and where its code is:
   and the last apply.
 - **credentials** (`packages/engine/src/credentials.ts`): the shared admin login, and
   where each app's web UI is.
+- **vpn** (`packages/engine/src/vpn`): `vpn-check`. It reads the containers, runs a probe
+  inside qBittorrent's network, and compares where qBittorrent's traffic and the host's
+  leave from (see [`vpn-check`](#vpn-check)).
 - **CLI** (`packages/cli`): the commands, human and `--json` output, and exit codes
   ([reference](reference/cli.md)).
 
@@ -239,6 +242,51 @@ inside it, on one filesystem, so moving a finished download into the library is 
 instant hardlink. `plan` checks that `torrents/`, `usenet/` and `media/`, where they
 exist, are on the same filesystem as the folder itself.
 
+## `vpn-check`
+
+`mediaplane vpn-check` checks that qBittorrent reaches the internet only through the
+VPN. It changes nothing.
+
+```text
+containers, through Docker
+  │ qBittorrent in Gluetun's
+  │ network, joined since
+  │ Gluetun last started;
+  │ Gluetun running, healthy
+  ▼
+probe, inside that network
+  │ compose run of qbittorrent,
+  │ as nobody, key on stdin:
+  │ Gluetun's control server,
+  │ the route into tun0, and
+  │ the IP-echo service
+  ▼
+the host's own address
+  │ the same service, from the
+  │ host (the host helper in
+  │ the image)
+  ▼
+pass, down or leak
+```
+
+- **The probe** is a `compose run` of the `qbittorrent` service, so it starts in
+  Gluetun's network namespace, as qBittorrent does. It reaches Gluetun's control server
+  on `127.0.0.1:8000` there. So `vpn-check` needs no network route from the Mediaplane
+  container, and no Docker API call that `apply` doesn't already make.
+- **The egress check** asks `https://1.1.1.1/cdn-cgi/trace`, or
+  `MEDIAPLANE_VPN_CHECK_URL`, from both sides. A leak is the same address on both. No
+  answer through the tunnel means the VPN is down. `--no-egress` skips it. It measures
+  IPv4 only.
+- **The verdict:** a leak beats down, and down beats a pass. Warnings, such as a control
+  server that answers without a key, don't change it. The exit code is 0 only for a pass.
+  The last line never claims more than the checks found: "nothing leaks" only when
+  Gluetun isn't running or nothing answered through the tunnel, and "only through the
+  VPN" only when the two addresses were compared.
+- **`--json`** is `mediaplane.vpn-check/v1`. Its `ok` says that the check ran, and
+  `verdict` says what it found. `failClosed` is true only when qBittorrent was shown to
+  be in Gluetun's network, and Gluetun is stopped or nothing answered through the tunnel.
+  The addresses were compared when the check with the id `egress` has the status `ok`.
+
 ## Security
 
 Controlling Docker is root on the host, so Mediaplane's security is the host's. The
@@ -248,8 +296,7 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
-- the VPN's kill-switch test and `vpn-check` (Slice 3d), then the wiring, app by app
-  (Slices 3b to 7);
+- the wiring, app by app (Slices 3b to 7);
 - drift detection (Slice 4);
 - releases (Slice 8);
 - the web panel (M2).

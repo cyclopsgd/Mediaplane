@@ -106,6 +106,7 @@ mediaplane plan         # checks the host and shows what apply would do
 mediaplane apply        # asks before it changes anything; --yes skips the question
 mediaplane status
 mediaplane credentials  # the admin login, and where each app is
+mediaplane vpn-check    # with a VPN: qBittorrent gets out only through it
 ```
 
 `init` checks the flags it can before its first question, and asks again when an answer
@@ -151,7 +152,28 @@ Without a terminal it asks nothing: pass the flags in the
     before, if it generated one. It keeps it, and never generates another.
 - **The VPN address.** With a VPN provider, `init` asks for your WireGuard address
   (`--vpn-addresses`, which needs `--vpn-provider`). Providers such as Mullvad need it.
-  It is the `Address` line in the WireGuard file your provider gives you.
+  It is the `Address` line in the WireGuard file your provider gives you, such as
+  `10.64.0.2/32`; several go comma-separated, without spaces.
+- **Checking the VPN.** `mediaplane vpn-check` checks that qBittorrent has no network
+  but Gluetun's, that the VPN is up, and that qBittorrent's traffic leaves from another
+  address than this host's. For that last check it asks Cloudflare
+  (`https://1.1.1.1/cdn-cgi/trace`) twice: once from qBittorrent's network, and once
+  from the host, through the host helper. `--no-egress` asks no one, and
+  `MEDIAPLANE_VPN_CHECK_URL` names another service. It exits 0 on a pass, and 1 on a
+  leak or a VPN that is down: the [VPN down runbook](../docs/runbooks/vpn-down.md) says
+  what to do.
+  - It measures IPv4 only.
+  - The shim doesn't pass environment variables. To name another service, run the
+    command in the container yourself, as for an environment secret below (the address
+    is a made-up example):
+
+    ```bash
+    docker exec -it -e MEDIAPLANE_VPN_CHECK_URL=https://203.0.113.5/ip \
+      mediaplane mediaplane vpn-check
+    ```
+
+    The URL is not a secret: it goes on the host helper's command line, which every user
+    on the host can read, so put no token in it.
 - **File secrets.** A secret written as `{ file: secrets/… }` is read from the home.
   Mediaplane's container sees nothing outside the home, so keep secret files there.
 - **Environment secrets.** A secret written as `{ env: NAME }` must be in the container's
@@ -167,17 +189,18 @@ host
 │  └─ socket-proxy  Docker API, filtered
 ├─ mediaplane       your stack's apps
 └─ host helper      seconds, during
-                    init, plan and apply
+                    init, plan, apply
+                    and vpn-check
 ```
 
 - **The host helper.** From inside its container, Mediaplane can't see the host's
-  network, ports, or folders outside its home. So during `init`, `plan` and `apply` it
-  starts a throwaway container of its own image on the host network, and reads them
-  there. That container:
+  network, ports, or folders outside its home. So during `init`, `plan`, `apply` and
+  `vpn-check` it starts a throwaway container of its own image on the host network, and
+  reads them there. That container:
   - gets read-only mounts of the data folder, `stack.yaml`, and `/dev` when the VPN needs
     `/dev/net/tun`;
   - runs as Mediaplane's user, with no capabilities and a read-only root;
-  - never pulls an image, and is removed when it exits, a second or two later.
+  - never pulls an image, and is removed when it exits, a few seconds later.
 
   Before Docker 25, or on a kernel older than 5.12, read-only mounts are not recursive: a
   mount inside one of those folders, such as `/dev/shm`, stays writable. On any version,
@@ -186,6 +209,9 @@ host
 
 - **Mediaplane's network** is internal: the container reaches the proxy and nothing else.
   Image pulls happen in the Docker daemon, which has the host's network.
+- **vpn-check's probe** is a throwaway container of qBittorrent's image, in Gluetun's
+  network, as qBittorrent is. That is how `vpn-check` reaches Gluetun and the internet
+  from the VPN's side without a route of its own.
 
 ## Updating
 
@@ -319,6 +345,13 @@ Each item is a message you may see, then what to do.
 
   `mediaplane credentials` needs an `apply` first: apply generates the password before
   it starts any app.
+
+- `VPN down: qBittorrent can't reach the internet`, or
+  `LEAK: qBittorrent's traffic does not go through the VPN`
+
+  From `mediaplane vpn-check`. Follow the
+  [VPN down runbook](../docs/runbooks/vpn-down.md), which goes by the line marked `DOWN`
+  or `LEAK`.
 
 - `Error response from daemon: Forbidden`
 

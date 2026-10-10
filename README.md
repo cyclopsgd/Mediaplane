@@ -10,8 +10,9 @@ Compose and wires the apps together for you.**
 >
 > - **Works today:** `mediaplane plan` checks a real host and shows exactly what it
 >   would do. `mediaplane apply` then starts the stack and confirms that every app
->   is healthy. Mediaplane runs in its own hardened container, behind a Docker socket
->   proxy.
+>   is healthy. `mediaplane vpn-check` confirms that qBittorrent reaches the internet
+>   only through the VPN. Mediaplane runs in its own hardened container, behind a
+>   Docker socket proxy.
 > - **Next:** wiring the apps together. Until that lands, each app still needs
 >   setting up by hand. Jellyfin's wizard and Seerr's setup are open to anyone who
 >   can reach them until you complete them, so complete them first. qBittorrent has
@@ -54,6 +55,7 @@ Mediaplane does that part for you:
 | See each app's health and every past apply (`status`, `history`)                      | Done         |
 | Write a starter `stack.yaml` (`init`)                                                 | Done         |
 | One admin login, generated, set in qBittorrent before it first starts (`credentials`) | Done         |
+| A VPN kill switch, tested against a real WireGuard server, and `vpn-check`            | Done         |
 | Run in a hardened container, behind a Docker socket proxy                             | Done         |
 | Documentation generated from code: the `stack.yaml` and CLI references, app facts     | Done         |
 | Wire the apps together (download clients, indexers, root folders, media server)       | Planned      |
@@ -327,7 +329,8 @@ and keep. What it adds is everything around the file:
 - one user and one data folder, so downloads can be hardlinked into the library instead
   of copied;
 - health checks that actually pass;
-- qBittorrent routed through the VPN, so it has no network when the VPN is down;
+- qBittorrent routed through the VPN, so it has no network when the VPN is down, with
+  an automated test of that and `mediaplane vpn-check` to confirm it on your host;
 - keys that are generated once and kept;
 - next, the wiring between the apps.
 
@@ -369,7 +372,13 @@ runs the stack without Mediaplane.
 | **M3: operations**     | Safe updates with rollback, scheduled backups and restore, alerts                              |
 | **M4: more apps**      | SABnzbd, Audiobookshelf, Bazarr, Recyclarr, Portainer, Homepage                                |
 
-M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it stands.
+M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it stands:
+
+- **Merged:** S1 (the pure core), S2a (`plan` against a real host), S2b (`apply`), S2c
+  (packaging) and S3a (the shared admin and pre-start files).
+- **In progress:** S3d (the VPN's kill-switch test and `vpn-check`).
+- **Next:** S3b (the wiring framework).
+- **After that:** S3c (the download path), then S4 to S8.
 
 ## Documentation
 
@@ -388,6 +397,8 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
   [Byparr](catalog/byparr/README.md) and [FlareSolverr](catalog/flaresolverr/README.md).
 - **[Runbook: an app won't start](docs/runbooks/app-wont-start.md):** symptoms, checks,
   fix and prevention.
+- **[Runbook: the VPN is down](docs/runbooks/vpn-down.md):** what `vpn-check` found, and
+  what to do about a VPN that is down or a leak.
 - **[Threat model](docs/security/threat-model.md):** what is protected, how, and what
   isn't.
 - **[Architecture decision records](docs/adr/):** why things are the way they are.
