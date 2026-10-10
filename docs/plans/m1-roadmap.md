@@ -258,8 +258,9 @@ which moved to M2. The rest are for S3b and S3c.
 - **`vpn-check` and a Gluetun that wasn't restarted.** A Gluetun that started before
   Slice 3a, and hasn't been restarted since, has not read the key file Mediaplane
   wrote: it reads the file only when it starts (its README says to restart it once).
-  `vpn-check` can get a 401 from it. Say so in `vpn-check`'s error, with the fix
-  (restart Gluetun, then qBittorrent), or detect it.
+  Until then its control server still answers anyone, without the key, so `vpn-check`
+  works but the server is open. Have `vpn-check` notice that (a request without the
+  key that succeeds) and say so, with the fix: restart Gluetun, then qBittorrent.
 
 **S4:**
 
