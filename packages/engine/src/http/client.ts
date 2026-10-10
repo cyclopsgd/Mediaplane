@@ -400,10 +400,14 @@ export function createAppApi(options: AppApiOptions): AppApi {
     const result = schema.safeParse(data);
     if (result.success) return result.data;
     // The paths only: a value could be a key, a password or its hash. A path can name a
-    // key of the app's answer (a record's), so it is made plain too.
+    // key of the app's answer (a record's), so it is made plain too: redacted first, so
+    // collapsing its whitespace can't hide a secret from the redaction.
+    const clean = cleanFor(call);
     const at = [
       ...new Set(
-        result.error.issues.map((issue) => plain(issue.path.join('.')) || '(the answer)'),
+        result.error.issues.map(
+          (issue) => plain(clean(issue.path.join('.'))) || '(the answer)',
+        ),
       ),
     ];
     throw failure(

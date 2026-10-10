@@ -685,6 +685,19 @@ describe('createAppApi', () => {
     expect(Array.from(error.message).some(control)).toBe(false);
   });
 
+  it('hides a secret that names a path, before its whitespace is collapsed', async () => {
+    // Collapsing first would turn the runs of spaces into one, and the redaction would
+    // then no longer find the secret.
+    const secret = 'fake  spaced   secret';
+    const counts = z.record(z.string(), z.number());
+    const { api } = await sonarr(() => ({ status: 200, body: { [secret]: 'x' } }), {
+      secrets: [KEY, PASSWORD, secret],
+    });
+    const error = await failure(api.get('/x', counts));
+    expect(error.message).toContain("doesn't understand (at ***) (GET /x)");
+    expect(error.message).not.toContain('spaced');
+  });
+
   it('follows no redirect for a call with the key', async () => {
     const { api } = await sonarr(() => ({
       status: 302,
