@@ -40,6 +40,9 @@ opens qBittorrent. Later slices add the links between the apps.
 
 - **`apply` fails at verify** with `changes remain after apply: sonarr.admin (update)`:
   the app took the change, then kept something else.
+- **`apply` stops at the containers step** with `could not leave the wiring network …`:
+  it couldn't take Mediaplane off the wiring network before starting the apps, so it
+  started nothing.
 - **`plan` or `apply` stops** with `wire.network` (Mediaplane won't join the wiring
   network, or can't tell which container it runs in), or with `resources.invalid` (it
   can't read `state/resources.json`). `apply` can also say that the stack has no wiring
@@ -57,6 +60,8 @@ In `--json` output, each `diagnostics` entry has a `code`:
 - `wire.network`: Mediaplane won't join the wiring network.
 - `resources.invalid`: `state/resources.json` can't be read.
 - `apply.wire-failed`: the wiring step itself failed.
+- `apply.start-failed`: the containers step failed. For this runbook, that is a failure
+  to leave the wiring network, or Compose refusing to change it (see Fix).
 
 `plan --json` lists each resource under `wiring`, with its `action`, the `changes` that
 differ, and a `reason` when it is `unknown`.
@@ -83,9 +88,12 @@ differ, and a `reason` when it is `unknown`.
     `docker stop mediaplane-qbittorrent-1`, set `WebUI\APIKey=` in
     `appdata/qbittorrent/qBittorrent/qBittorrent.conf` to `qbittorrent.apiKey` from
     `state/secrets.json`, then `docker start mediaplane-qbittorrent-1`.
-  - **Sonarr, Radarr and Prowlarr** take their key from their environment as well as
-    `config.xml`, so the stored key comes back when the container is created or started
-    again. If `plan` says `<app>.not-seeded`, follow the app's README.
+  - **Sonarr, Radarr and Prowlarr** get the stored key in their environment, and in
+    `config.xml` before their first start. Restarting the container may put the stored
+    key back, if the app prefers its environment, but that depends on the app. What works
+    either way: stop the app, set `<ApiKey>` in `appdata/<app>/config.xml` to
+    `<app>.apiKey` from `state/secrets.json` (use `sudo` if the file isn't yours), and
+    start it. If `plan` says `<app>.not-seeded`, follow the app's README.
   - Slice 4 restores a key at its source for you.
 - **`could not be reached`, `cut the connection` or `did not answer within … s`.** The
   app isn't up, or Mediaplane can't get to it.
@@ -104,16 +112,15 @@ differ, and a `reason` when it is `unknown`.
   Take out the entry, or put the container back on the host:
   `docker network connect mediaplane_wiring mediaplane-<app>-1`, or
   `mediaplane-gluetun-1` for qBittorrent behind the VPN.
-- **`refused the request (HTTP 400): … Invalid Hostname`, or
-  `Allowed Hosts is required`.** With `security.login_on_lan: false`, Sonarr, Radarr and
-  Prowlarr take only the Host names Mediaplane lists in `<APP>__SERVER__ALLOWEDHOSTS`:
-  their own name and the addresses their web UI is published on. If you set that
-  variable yourself, in `apps.<app>.env`, keep the app's name, such as `sonarr`, in it.
-  Separate the names with commas, as Mediaplane does (the apps also take `;`). A browser
+- **`refused the request (HTTP 400): … Invalid Hostname`.** With
+  `security.login_on_lan: false`, Sonarr, Radarr and Prowlarr take only the Host names
+  Mediaplane lists in `<APP>__SERVER__ALLOWEDHOSTS`: their own name and the addresses
+  their web UI is published on. If you set that variable yourself, in `apps.<app>.env`,
+  keep the app's name, such as `sonarr`, in it, with commas between the names. A browser
   that uses another name, such as your host's, needs it listed there too.
 - **A resource the app refused** (`refused the request`, with another HTTP status). The
-  message after the status is the app's own, cut to 200 characters. Servarr's messages
-  start with the name of the setting it didn't take. Fix that value in `stack.yaml`, then
+  message after the status is the app's own, cut to 200 characters. Messages from Sonarr,
+  Radarr and Prowlarr start with the name of the setting they didn't take. Fix that value in `stack.yaml`, then
   run `apply` again.
 - **`failed (HTTP 500)`, or another 5xx.** The app failed. Read its log (check 3).
 - **`answered something Mediaplane doesn't understand`.** The app answered in a shape the
@@ -137,6 +144,14 @@ differ, and a `reason` when it is `unknown`.
   it isn't labelled as this project's `wiring` network (another project made it, or it
   was made by hand). Look for a `networks:` entry in `compose.override.yaml` that changes
   it, and take it out. Then remove the network on the host, as below.
+- **`could not leave the wiring network …`** (under `apply.start-failed`). Before
+  `docker compose up`, `apply` takes Mediaplane's container off the wiring network, so
+  that Compose can change it if it must. When that fails, nothing is started. The
+  message after the colon is Docker's. Then:
+  1. On the host, run `docker network disconnect mediaplane_wiring mediaplane`.
+  2. Run `mediaplane apply` again.
+  3. If the socket proxy refused the call, see the `Forbidden` item in the
+     [deploy guide's troubleshooting](../../deploy/README.md#troubleshooting).
 - **The wiring network must be made anew,** when its settings changed, or when
   Mediaplane refused it (`wire.network`, above). When its settings changed, Compose has
   to delete the network, and through the socket proxy it can't: `apply` then stops at
@@ -154,8 +169,15 @@ differ, and a `reason` when it is `unknown`.
   `docker network ls` still shows it (it was made by hand), check that nothing you need
   is on it with `docker network inspect mediaplane_wiring`, then remove it with
   `docker network rm mediaplane_wiring`. Use the container name of your Mediaplane, as
-  `docker ps` shows it. The first command says it is not connected when Mediaplane
-  isn't on the network, which is fine.
+  `docker ps` shows it. The first command may say Mediaplane is not connected when
+  it isn't on the network, which is fine.
+
+- **`docker compose -p mediaplane down` left the wiring network behind**
+  (`Resource is still in use`). Mediaplane was still on it. Take it off with
+  `docker network disconnect mediaplane_wiring mediaplane`, then run
+  `docker compose -p mediaplane down` again. The
+  [deploy guide](../../deploy/README.md#how-mediaplane-reaches-the-apps) says why, and
+  how to avoid it.
 
 Then run `mediaplane apply`. It plans again and does only what is left
 ([ADR 0004](../adr/0004-converge-forward-apply.md)).

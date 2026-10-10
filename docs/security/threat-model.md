@@ -445,9 +445,10 @@ Controls today:
   end-to-end test checks that it has no default route.
 - The runtime connects only Mediaplane's own container, only to the internal wiring
   network the managed project's Compose made, and never takes it off any other network.
-  It reads the network first, strictly: it must be internal, a bridge, and carry this
-  project's Compose labels for `wiring`. Joining and leaving then act on the ID it read,
-  not on the name.
+  To join, it reads the network first, strictly: it must be internal, a bridge, and
+  carry this project's Compose labels for `wiring`. It then joins by the ID it read. To
+  leave, it reads the network and takes Mediaplane off by that ID; leaving has no
+  refusal of its own.
 - Mediaplane's container has `net.ipv4.ip_forward: 0`, so it cannot pass packets between
   the proxy's network and the wiring network. Without it, a container on the wiring
   network that holds `NET_ADMIN` could route through Mediaplane's to the proxy. Only the
@@ -466,9 +467,9 @@ What remains:
 - Like any Docker network, the wiring network reaches the host at its gateway address,
   where the host's own services listen.
 - "Offline" means no route of its own. Mediaplane holds the apps' keys, and the apps on
-  the wiring network can fetch for it: qBittorrent's add-by-URL, the Servarr apps' test
-  endpoints, and Gluetun's HTTP proxy or Shadowsocks, if `apps.gluetun.env` turns them
-  on (they listen on every Gluetun interface).
+  the wiring network can fetch for it: qBittorrent's add-by-URL, the test
+  endpoints of Sonarr, Radarr and Prowlarr, and Gluetun's HTTP proxy or Shadowsocks, if
+  `apps.gluetun.env` turns them on (they listen on every Gluetun interface).
 - Docker answers a name from every network a container is on. Only your
   `compose.override.yaml` could put a container called `socket-proxy` on the wiring
   network; it would then compete with the proxy for that name.

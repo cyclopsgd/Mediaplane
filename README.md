@@ -53,7 +53,7 @@ Mediaplane does that part for you:
 | Generate keys and start the stack (`mediaplane apply`)                            | Done         |
 | See each app's health and every past apply (`status`, `history`)                  | Done         |
 | Write a starter `stack.yaml` (`init`)                                             | Done         |
-| One admin login, generated, for qBittorrent and the Servarr apps (`credentials`)  | Done         |
+| One admin login for qBittorrent, Sonarr, Radarr and Prowlarr (`credentials`)      | Done         |
 | Reach the apps' APIs over a private network with no route out                     | Done         |
 | A VPN kill switch, tested against a real WireGuard server, and `vpn-check`        | Done         |
 | Run in a hardened container, behind a Docker socket proxy                         | Done         |
@@ -148,8 +148,9 @@ A few principles hold throughout:
 
 ## What it looks like
 
-Most of this is real output from a run on an arm64 VM, trimmed where marked, and the
-wiring lines came with Slice 3b. The stack is the example above without the VPN, which
+Most of this is real output from a run on an arm64 VM, trimmed where marked. The
+wiring lines came with Slice 3b: `plan`'s are from a later `plan` on the same stack, and
+`apply`'s follow the format the CLI's tests check, so they are not a capture. The stack is the example above without the VPN, which
 is why `plan` warns about qBittorrent, and with `network.bind: localhost`.
 
 ```console
@@ -358,9 +359,10 @@ and keep. What it adds is everything around the file:
 
 Those tools configure apps you already run, and they are good at detailed tuning, such
 as quality profiles. Mediaplane deploys the whole stack and makes it safe: generated
-secrets, a socket proxy, a tested VPN kill switch, and a private wiring network. It then
-wires the apps to each other, with `plan` and `apply` and a history of what it did, and
-leaves the rest of each app's settings to you.
+secrets, a socket proxy, a tested VPN kill switch, and a private wiring network. It will
+wire the apps to each other (Slices 3c to 7), with `plan` and `apply` and a history of
+what it did, and leave the rest of each app's settings to you. Today it sets the shared
+login in Sonarr, Radarr and Prowlarr.
 
 They can be used together. Recyclarr is planned for M4.
 

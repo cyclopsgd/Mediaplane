@@ -135,7 +135,8 @@ Verified in S3b (2026-10-10):
 
 - **`SERVER__TRUSTEDNETWORKS`**: `test/e2e/apply.e2e.test.ts` gives two subnets through
   `apps.sonarr.env`, and Sonarr's own settings show them back as the same
-  comma-separated list. It runs in CI from Slice 3b.
+  comma-separated list. That shows Sonarr reads the list as given; the tests don't show
+  it splitting the list to match a client. It runs in CI from Slice 3b.
 
 ## Inputs for later slices from the reviews
 
@@ -411,11 +412,8 @@ password, which are S3c's (and listed again below).
   Mediaplane's container offline, but the proxy still lets it create containers with any
   network, so that is defence in depth, not a wall (ADR 0011).
 
-- **Windows and macOS through Docker Desktop or WSL2** (spec §1.5, later). A trial from
-  source on WSL with Docker Desktop worked end to end, but the port check binds
-  inside WSL's network, so a container already on the Windows side's `localhost:8080`
-  is not seen. Check the published ports through Docker as well, read-only (the port
-  bindings of every container).
+- **Windows and macOS through Docker Desktop or WSL2** (spec §1.5, later): a manual trial
+  (2026-10-10) worked, but the port check can't see Docker Desktop's Windows-side ports.
 
 - **An IPv6 egress check.** `vpn-check` measures IPv4 only (S3d): its route target is
   `1.1.1.1`, and its default URL is reached by an IPv4 address. When Docker's IPv6 is

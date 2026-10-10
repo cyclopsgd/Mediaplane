@@ -69,6 +69,10 @@
   rejects the file. Otherwise, take the change out and run `apply` again.
 - **A `version:` you chose.** It is an untested combination, and `plan` warns about it.
   Remove it to go back to the tested image.
+- **The wiring network's settings changed.** Compose can't delete a network through the
+  socket proxy, so it can't make this one anew, and `apply` fails at the containers step
+  (`apply.start-failed`). The steps by hand are in the
+  [wiring failed runbook](wiring-failed.md).
 
 Then run `mediaplane apply`. It plans again and does only what is left
 ([ADR 0004](../adr/0004-converge-forward-apply.md)).

@@ -45,7 +45,8 @@ network with containers that have one. The owner chose how to reach the apps on
   - The runtime joins only its own project's wiring network. It reads the network first,
     strictly, and joins by the ID it read. It refuses the network unless it is internal,
     a plain bridge, and carries this project's Compose labels for `wiring`.
-  - Leaving works the same way, and takes Mediaplane off that network only.
+  - Leaving reads the network and takes Mediaplane off by that ID. It has no refusal of
+    its own, and takes Mediaplane off that network only.
   - Mediaplane's container sets `net.ipv4.ip_forward: 0`, so it cannot route between the
     proxy's network and the wiring network. Only the IPv4 setting is made: neither network
     has IPv6, and the IPv6 setting stops a container starting on a host without IPv6.
@@ -59,8 +60,8 @@ network with containers that have one. The owner chose how to reach the apps on
   29.8; CI confirms it on Docker 28 (the slice PR's first run).
 - **The apps are reached at their container's address on the wiring network,** found
   with `docker container inspect`, from source and from the image alike. Each request
-  carries `Host: <service>:<port>`, as the other apps' requests do, which Servarr's
-  allowed hosts and qBittorrent's Host check accept.
+  carries `Host: <service>:<port>`, as the other apps' requests do, which the allowed
+  hosts of Sonarr, Radarr and Prowlarr, and qBittorrent's Host check, accept.
 - **The one change Mediaplane makes to `mediaplane-system`** is its own container's
   membership of this network. Spec §7.2(2) is refined to say so.
 
@@ -70,9 +71,11 @@ network with containers that have one. The owner chose how to reach the apps on
   containers, with any network, so a compromised Mediaplane can still reach anything
   the host can ([ADR 0008](0008-docker-socket-proxy-on-by-default.md)). A later
   hardening could restrict what the proxy lets it create.
-- **Mediaplane stays offline.** It needs no internet in M1 except plex.tv, in Slice 6,
-  which a short-lived helper will reach for it. The apps' own internet traffic is
-  unchanged.
+- **Mediaplane stays offline,** which means it has no route of its own. The apps on the
+  wiring network can still fetch for it: see T14 in the
+  [threat model](../security/threat-model.md). It needs no internet in M1 except
+  plex.tv, in Slice 6, which a short-lived helper will reach for it. The apps' own
+  internet traffic is unchanged.
 - **The apps can reach Mediaplane's container on the wiring network.** It listens on
   nothing in M1. The socket proxy is on another network and answers only the address the
   name `mediaplane` has there.

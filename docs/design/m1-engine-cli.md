@@ -540,7 +540,7 @@ in `compose.override.yaml` is therefore wired automatically.
 | Command | Purpose |
 |---|---|
 | `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt, including the format of `--vpn-addresses` (on a terminal, only the refusal of `--vpn-addresses` without `--vpn-provider`, and whether `--lan-subnet` fits this host, wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file. It also checks the home first, creates the data folder, adds a note before each question, and takes the WireGuard key on a hidden prompt (§11, Slice 3b) |
-| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack; in the image it joins the wiring network, its only change to Docker (§11, Slice 3b) |
+| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack; in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
 | `apply` | Converge on `stack.yaml` (§5) |
 | `status [app]` | Container health, VPN state, and the last apply's outcome |
 | `drift` | Report drift only (§6.3) |
@@ -1136,10 +1136,11 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   - Mediaplane's container joins it during `plan` and `apply`, and stays, so it is on two
     internal networks and has no route out. Apply steps off it before `up`, and back on
     in the wire step. The runtime joins only its own container, and only to its
-    project's wiring network. It reads the network first, strictly (it must be internal,
-    a bridge, and carry the project's Compose labels for `wiring`), and joins and leaves
-    by the ID it read. That is the one change Mediaplane makes to `mediaplane-system`
-    (§7.2(2)). The socket proxy allows nothing new.
+    project's wiring network. To join, it reads the network first, strictly (it must be
+    internal, a bridge, and carry the project's Compose labels for `wiring`), and joins
+    by the ID it read. To leave, it reads the network and takes Mediaplane off by that
+    ID, with no refusal of its own. That is the one change Mediaplane makes to
+    `mediaplane-system` (§7.2(2)). The socket proxy allows nothing new.
   - Mediaplane's container sets `net.ipv4.ip_forward: 0`, so it cannot route between the
     proxy's network and the wiring network. Only the IPv4 key is set: the networks have
     no IPv6, and the IPv6 key fails on hosts without IPv6.
@@ -1179,18 +1180,20 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   of any other app is checked `after-start`. One Mediaplane couldn't ask is `unknown`,
   with a warning, and makes the plan changed. `plan` waits up to 15 seconds for an app;
   it changes nothing in the apps. In the image, when an app is running and left as it is,
-  it joins the wiring network to ask it: the one change `plan` makes, to Docker and not
-  to the stack (the §5.2 row).
+  it joins the wiring network to ask it: the one lasting change `plan` makes, to Docker
+  and not to the stack (the §5.2 row). It also runs the short-lived host helper, which
+  leaves nothing behind.
 - **The wire step** (§5 step 10) runs after `start`. It waits up to two minutes for each
   app, checks its key, and makes each resource what the stack wants, in the order of
   `after`. A resource that fails doesn't stop the others; one that requires it is
   skipped, and the step fails (outcome `failed`: `partial` is not used yet).
-- **The typed HTTP client** (§3.2, §5.1) uses Node's `http` with an agent of its own, so a
-  proxy from the environment never sees a key. It tries again a refused connection, a
-  timeout, a cut connection, or a 502, 503 or 504, with exponential backoff and jitter, until the deadline;
-  a POST only when nothing reached the app. A 4xx or a 500 fails at once, with the app's
-  own message: Servarr's validation list, ASP.NET's problem details, or plain text, cut
-  to 200 characters, and never an `attemptedValue`. It reads at most 5 MiB of an answer,
+- **The typed HTTP client** (§3.2, §5.1) uses Node's `http` with an agent of its own, so
+  a proxy from the environment never sees a key. It tries again a refused connection, a
+  timeout, a cut connection, or a 502, 503 or 504, with exponential backoff and jitter,
+  until the deadline; a POST only when nothing reached the app. Any other failing status,
+  a 4xx or a 500 for example, fails at once, with the app's own message: Servarr's
+  validation list, ASP.NET's problem details, or plain text, cut to 200 characters, and
+  never an `attemptedValue`. It reads at most 5 MiB of an answer,
   and checks its shape with Zod, naming only the paths that don't fit. Every message has
   each key and password replaced with `***`, before an answer is collapsed or cut, and
   again after.

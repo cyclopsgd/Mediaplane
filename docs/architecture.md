@@ -75,7 +75,8 @@ host (Docker)
 - **Running from source** (`pnpm mediaplane`, for development), `MEDIAPLANE_IMAGE` is
   unset. There is no container and no host helper: the CLI runs under Node on the host,
   and looks at the host itself. It reaches the apps on the wiring network from the host,
-  which reaches every container on a Docker bridge network.
+  which reaches every container on a Docker bridge network. That is checked on Docker
+  29.8; CI confirms it on Docker 28.
 
 ## The engine
 
@@ -309,10 +310,11 @@ mediaplane (the stack)
   `apply` join Mediaplane's container to it, and it stays; `apply` steps off for `up`,
   so that Compose can make the network anew if it must (only without the proxy, which
   lets no one delete a network: [ADR 0011](adr/0011-a-private-wiring-network.md)).
-- **Joining and leaving** act on the network's ID, after a strict read of it: the
-  network must be internal, a bridge, and carry this project's Compose labels for
-  `wiring`, or the runtime refuses it. They touch Mediaplane's own container and that
-  network, and nothing else.
+- **Joining** reads the network strictly first: it must be internal, a bridge, and carry
+  this project's Compose labels for `wiring`, or the runtime refuses it. It then joins by
+  the ID it read. **Leaving** reads the network and takes Mediaplane off by that ID; it
+  has no refusal of its own. Both touch Mediaplane's own container and that network,
+  and nothing else.
 - **Each app's integration** (`catalog/<app>/integration.ts`) lists the resources
   Mediaplane manages in it, such as `sonarr.admin`. For each, it says how to read it
   from the app, which of its fields are managed, which secrets it holds, and how to
@@ -327,18 +329,18 @@ mediaplane (the stack)
     change its container.
   - `unknown`: Mediaplane couldn't ask the app, and a warning says why.
 - **The wire step** waits until each app is ready (`/ping` for Sonarr, Radarr and
-  Prowlarr), checks that its key still works, then makes each resource what the stack wants, in order: an app comes
-  after the apps its integration names. A resource that fails doesn't stop the others,
-  and one that needs it is skipped. Each result is kept at once in
-  `state/resources.json`: each resource's id, name and managed fields, and the names of
-  its secrets, never their values.
+  Prowlarr), checks that its key still works, then makes each resource what the stack
+  wants, in order: an app comes after the apps its integration names. A resource that
+  fails doesn't stop the others, and one that needs it is skipped. Each result is kept at
+  once in `state/resources.json`: each resource's id, name and managed fields, and the
+  names of its secrets, never their values.
 - **The client** (`http/client.ts`) goes straight to the container, through an HTTP
   agent of its own, never through a proxy from the environment. It sends the app's key in
   a header, never in the URL. It tries a refused or cut connection, a timeout, or a 502,
   503 or 504 again, waiting longer each time, for up to two minutes in `apply` and 15
-  seconds in `plan`; a create only when nothing reached the app. It reads at most 5 MiB of an
-  answer, checks its shape, and shows only the app's own message about a refusal, with
-  every secret replaced.
+  seconds in `plan`; a create only when nothing reached the app. It reads at most 5 MiB
+  of an answer, checks its shape, and shows only the app's own message about a refusal,
+  with every secret replaced.
 
 ## `vpn-check`
 
