@@ -738,6 +738,158 @@ describe('createAppApi', () => {
     expect(answer).toEqual({ status: 302, location: '/login?loginFailed&echo=***' });
   });
 
+  it('takes a status the caller names as the answer to a sign-in', async () => {
+    // qBittorrent answers a wrong password with 401, and a right one with 204.
+    const { api } = await sonarr(() => ({ status: 401, body: 'Unauthorized' }));
+    expect(
+      await api.login(
+        '/api/v2/auth/login',
+        { username: 'admin', password: PASSWORD },
+        { answers: [401] },
+      ),
+    ).toEqual({ status: 401, location: undefined });
+    expect(
+      await failure(api.login('/api/v2/auth/login', { password: PASSWORD })),
+    ).toMatchObject({ kind: 'auth', status: 401 });
+  });
+
+  it('says a request without the key was refused, not the key', async () => {
+    const { api } = await sonarr(() => ({
+      status: 403,
+      body: 'Your IP address has been banned after too many failed authentication attempts.',
+    }));
+    const error = await failure(
+      api.login('/api/v2/auth/login', { username: 'admin', password: PASSWORD }),
+    );
+    expect(error).toMatchObject({ kind: 'auth', status: 403 });
+    expect(error.message).toBe(
+      'Sonarr at http://sonarr:8989 (127.0.0.1) refused the request (HTTP 403): Your IP address has been banned after too many failed authentication attempts. (POST /api/v2/auth/login)',
+    );
+  });
+
+  it('POSTs a form with the key, and takes any 2xx as done', async () => {
+    const { api, app } = await sonarr(() => ({ status: 200 }), {
+      key: { scheme: 'bearer', value: KEY },
+    });
+    await api.form('/api/v2/torrents/createCategory', {
+      category: 'tv',
+      savePath: '/data/torrents/tv',
+    });
+    expect(app.requests[0]).toMatchObject({
+      method: 'POST',
+      path: '/api/v2/torrents/createCategory',
+      body: 'category=tv&savePath=%2Fdata%2Ftorrents%2Ftv',
+      headers: {
+        authorization: `Bearer ${KEY}`,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+    });
+    const refused = await sonarr(() => ({
+      status: 409,
+      body: 'Unable to create category',
+    }));
+    expect(
+      (await failure(refused.api.form('/api/v2/torrents/createCategory', {}))).message,
+    ).toContain(
+      'refused the request (HTTP 409): Unable to create category (POST /api/v2/torrents/createCategory)',
+    );
+  });
+
+  it('keeps a secret that a form sends out of what the app says, listed or not', async () => {
+    const { api } = await sonarr(
+      (request) => ({ status: 400, body: `Bad: ${decodeURIComponent(request.body)}` }),
+      { secrets: [] },
+    );
+    const error = await failure(
+      api.form(
+        '/api/v2/app/setPreferences',
+        { json: JSON.stringify({ web_ui_password: PASSWORD }) },
+        { secrets: [PASSWORD] },
+      ),
+    );
+    expect(error.message).toContain('Bad: json={"web_ui_password":"***"}');
+    expect(error.message).not.toContain(PASSWORD);
+  });
+
+  it("runs an app's own test: a 2xx passes, and a 400 says what failed, never a warning or a value", async () => {
+    const passing = await sonarr(() => ({ status: 200, body: {} }));
+    expect(
+      await passing.api.test('/api/v3/downloadclient/test', { name: 'qBittorrent' }),
+    ).toEqual({ passed: true, failures: [] });
+    expect(passing.app.requests[0]).toMatchObject({
+      method: 'POST',
+      body: '{"name":"qBittorrent"}',
+      headers: { 'x-api-key': KEY, 'content-type': 'application/json' },
+    });
+    const failing = await sonarr(() => ({
+      status: 400,
+      body: [
+        {
+          propertyName: 'ApiKey',
+          errorMessage: 'Authentication Failure',
+          detailedDescription: 'Please verify your credentials.',
+          attemptedValue: `qbt_${'x'.repeat(28)}`,
+          isWarning: false,
+        },
+        {
+          propertyName: 'Host',
+          errorMessage: 'Unable to connect to qBittorrent',
+          detailedDescription: `Connection refused (gluetun:8080) ${KEY}`,
+        },
+        { propertyName: 'Category', errorMessage: 'Only a warning', isWarning: true },
+      ],
+    }));
+    const result = await failing.api.test('/api/v3/downloadclient/test', {});
+    expect(result).toEqual({
+      passed: false,
+      failures: [
+        {
+          property: 'ApiKey',
+          message: 'Authentication Failure (Please verify your credentials.)',
+        },
+        {
+          property: 'Host',
+          message:
+            'Unable to connect to qBittorrent (Connection refused (gluetun:8080) ***)',
+        },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain('qbt_');
+    // Warnings alone pass, as the app's own UI says.
+    const warned = await sonarr(() => ({
+      status: 400,
+      body: [{ propertyName: '', errorMessage: 'Only a warning', isWarning: true }],
+    }));
+    expect(await warned.api.test('/api/v3/downloadclient/test', {})).toEqual({
+      passed: true,
+      failures: [],
+    });
+  });
+
+  it('refuses a test answer it cannot read as a verdict', async () => {
+    const { api } = await sonarr(() => ({
+      status: 400,
+      body: { title: 'One or more errors.', errors: { id: ['Bad id'] } },
+    }));
+    const error = await failure(api.test('/api/v3/downloadclient/test', {}));
+    expect(error).toMatchObject({ kind: 'rejected', status: 400 });
+    expect(error.message).toContain(
+      'refused the request (HTTP 400): One or more errors.; id: Bad id (POST /api/v3/downloadclient/test)',
+    );
+    // A list that says nothing is no verdict either, never a pass.
+    for (const body of [[], ['bad'], [{ propertyName: 'Host' }]]) {
+      const unreadable = await sonarr(() => ({ status: 400, body }));
+      expect(
+        await failure(unreadable.api.test('/api/v3/downloadclient/test', {})),
+        JSON.stringify(body),
+      ).toMatchObject({ kind: 'rejected', status: 400 });
+    }
+    const broken = await sonarr(() => ({ status: 500, body: 'Oops' }));
+    expect(
+      await failure(broken.api.test('/api/v3/downloadclient/test', {})),
+    ).toMatchObject({ kind: 'server', status: 500 });
+  });
+
   it('waits for the app to be ready, without the key', async () => {
     const answers = [503, 503, 200];
     const { api, app } = await sonarr(() => ({ status: answers.shift() ?? 200 }));

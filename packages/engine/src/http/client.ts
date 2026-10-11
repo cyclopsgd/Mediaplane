@@ -54,6 +54,14 @@ export class AppApiError extends Error {
   }
 }
 
+/** One thing an app's own test of a setting found wrong (Servarr's validation list). */
+export interface TestFailure {
+  /** The setting it is about, as the app names it ("ApiKey", "Host"), or "". */
+  property: string;
+  /** What the app said, and its details: redacted, on one line, at most 200 characters. */
+  message: string;
+}
+
 /** Where to connect: the container's address, and its port. */
 export interface Endpoint {
   host: string;
@@ -104,12 +112,34 @@ export interface AppApi {
   /** POST a JSON body with the key, and the JSON answer, checked with `schema`. */
   post<T>(path: string, body: unknown, schema: z.ZodType<T>): Promise<T>;
   /**
+   * POST a form with the key, as qBittorrent's API takes one; any 2xx answer is success.
+   * `secrets` are values the form sends, kept out of every message, listed or not.
+   */
+  form(
+    path: string,
+    fields: Readonly<Record<string, string>>,
+    options?: { secrets?: readonly string[] },
+  ): Promise<void>;
+  /**
+   * POST a JSON body with the key to an app's own test of a setting (Servarr's
+   * `…/test`). A 2xx answer passes; a 400 is the app's verdict: the errors of its
+   * validation list, never a warning, nor the value it was given; warnings alone pass.
+   * Any other answer, or a 400 that isn't such a list (an empty one, or one with an item
+   * without a message), throws as `post` would.
+   */
+  test(
+    path: string,
+    body: unknown,
+  ): Promise<{ passed: boolean; failures: TestFailure[] }>;
+  /**
    * POST a form, without the key and never following a redirect: an app's own sign-in
-   * page. Its status and Location; its cookies are dropped.
+   * page. Its status and Location; its cookies are dropped. A 2xx or 3xx answer is the
+   * answer, and so is any status in `answers` (qBittorrent's 401 for a wrong password).
    */
   login(
     path: string,
     fields: Readonly<Record<string, string>>,
+    options?: { answers?: readonly number[] },
   ): Promise<{ status: number; location: string | undefined }>;
   /** Wait, until the deadline, for `path` to answer 200 without the key. */
   ready(path: string): Promise<void>;
@@ -311,14 +341,12 @@ export function createAppApi(options: AppApiOptions): AppApi {
     const said = appMessage(answer.body, clean);
     const message = said === undefined ? '' : `: ${clean(said)}`;
     if (status === 401 || status === 403) {
-      return failure(
-        call,
-        `refused Mediaplane's API key (HTTP ${String(status)})${message}`,
-        {
-          kind: 'auth',
-          status,
-        },
-      );
+      // Without the key, the key isn't what was refused: a sign-in, say.
+      const refused = call.anonymous ? 'the request' : "Mediaplane's API key";
+      return failure(call, `refused ${refused} (HTTP ${String(status)})${message}`, {
+        kind: 'auth',
+        status,
+      });
     }
     if (status >= 500) {
       return failure(call, `failed (HTTP ${String(status)})${message}`, {
@@ -439,7 +467,34 @@ export function createAppApi(options: AppApiOptions): AppApi {
       const call: Call = { method: 'POST', path, body: json(body) };
       return parsed(call, await send(call, false), schema);
     },
-    async login(path, fields) {
+    async form(path, fields, extra = {}) {
+      await send(
+        {
+          method: 'POST',
+          path,
+          ...(extra.secrets === undefined ? {} : { secrets: extra.secrets }),
+          body: {
+            type: 'application/x-www-form-urlencoded',
+            text: new URLSearchParams(fields).toString(),
+          },
+        },
+        false,
+      );
+    },
+    async test(path, body) {
+      const call: Call = { method: 'POST', path, body: json(body) };
+      const answer = await send(
+        call,
+        false,
+        (a) => (a.status >= 200 && a.status < 300) || a.status === 400,
+      );
+      if (answer.status !== 400) return { passed: true, failures: [] };
+      const failures = testFailures(answer.body, cleanFor(call));
+      if (failures === undefined) throw statusFailure(call, answer);
+      return { passed: failures.length === 0, failures };
+    },
+    async login(path, fields, extra = {}) {
+      const answers = extra.answers ?? [];
       const call: Call = {
         method: 'POST',
         path,
@@ -452,7 +507,11 @@ export function createAppApi(options: AppApiOptions): AppApi {
         },
       };
       // A redirect is the answer: where it leads says whether the login worked.
-      const answer = await send(call, true, (a) => a.status >= 200 && a.status < 400);
+      const answer = await send(
+        call,
+        true,
+        (a) => (a.status >= 200 && a.status < 400) || answers.includes(a.status),
+      );
       return {
         status: answer.status,
         location:
@@ -559,11 +618,55 @@ export function appMessage(
           .replace(/<[^>]*>/g, ' ')
       : jsonMessage(json.value);
   if (said === undefined) return undefined;
+  const message = oneLine(said, clean);
+  return message === '' ? undefined : message;
+}
+
+/**
+ * What an app said, safe to show: redacted, on one plain line (redacted again, since
+ * collapsing it can put a secret together), and only then cut to MESSAGE_LIMIT.
+ */
+function oneLine(said: string, clean: (text: string) => string): string {
   const message = clean(plain(clean(said)));
-  if (message === '') return undefined;
   return message.length > MESSAGE_LIMIT
     ? `${message.slice(0, MESSAGE_LIMIT - 1)}…`
     : message;
+}
+
+/**
+ * The errors of Servarr's validation list, from a test's answer: each one's property, and
+ * its message with its details, made safe as appMessage makes a message. A warning is
+ * not an error, and an `attemptedValue` is never read. Undefined for an answer that
+ * isn't such a list: an empty one, or one with anything but items with a message, which
+ * would otherwise read as a pass.
+ */
+function testFailures(
+  body: string,
+  clean: (text: string) => string,
+): TestFailure[] | undefined {
+  const json = parseJson(body);
+  if (json === undefined || !Array.isArray(json.value) || json.value.length === 0) {
+    return undefined;
+  }
+  const failures: TestFailure[] = [];
+  for (const item of json.value as unknown[]) {
+    if (typeof item !== 'object' || item === null) return undefined;
+    const { propertyName, errorMessage, detailedDescription, isWarning } = item as Record<
+      string,
+      unknown
+    >;
+    if (typeof errorMessage !== 'string') return undefined;
+    if (isWarning === true) continue;
+    const details =
+      typeof detailedDescription === 'string' && detailedDescription !== ''
+        ? ` (${detailedDescription})`
+        : '';
+    failures.push({
+      property: typeof propertyName === 'string' ? oneLine(propertyName, clean) : '',
+      message: oneLine(`${errorMessage}${details}`, clean),
+    });
+  }
+  return failures;
 }
 
 function parseJson(text: string): { value: unknown } | undefined {
