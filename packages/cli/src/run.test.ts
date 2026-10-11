@@ -95,6 +95,20 @@ const WIRED: KnownResources = {
     secrets: ['password'],
     appliedAt: AT,
   },
+  'sonarr.download_client': {
+    id: 1,
+    name: 'qBittorrent (Mediaplane)',
+    fields: { host: 'gluetun', port: 8080, useSsl: false, category: 'tv', enable: true },
+    secrets: ['apiKey'],
+    appliedAt: AT,
+  },
+  'sonarr.root_folder': {
+    id: 1,
+    name: '/data/media/tv',
+    fields: { path: '/data/media/tv' },
+    secrets: [],
+    appliedAt: AT,
+  },
 };
 
 /** All zeros: the keys currentHome stores are never printed, so their value is moot. */
@@ -133,7 +147,28 @@ async function currentHome(
   // qBittorrent takes only the stack's key, and gives it back among its preferences.
   const key = store.apps.qbittorrent?.apiKey;
   if (key === undefined) throw new Error('the test stack must store a qBittorrent key');
-  apis.apps.set('sonarr', { ...freshAppState(), user: 'admin', password });
+  apis.apps.set('sonarr', {
+    ...freshAppState(),
+    user: 'admin',
+    password,
+    downloadClients: [
+      {
+        id: 1,
+        name: 'qBittorrent (Mediaplane)',
+        enable: true,
+        implementation: 'QBittorrent',
+        priority: 1,
+        fields: [
+          { name: 'host', value: 'gluetun' },
+          { name: 'port', value: 8080 },
+          { name: 'useSsl', value: false },
+          { name: 'apiKey', value: key },
+          { name: 'tvCategory', value: 'tv' },
+        ],
+      },
+    ],
+    rootFolders: [{ id: 1, path: '/data/media/tv' }],
+  });
   apis.apps.set('qbittorrent', {
     ...freshAppState(),
     user: 'admin',
@@ -261,7 +296,7 @@ describe('mediaplane plan', () => {
       'Secrets to generate: admin.password, gluetun.controlApiKey, qbittorrent.apiKey, sonarr.apiKey\n',
     );
     expect(term.stdout()).toContain(
-      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 4 wiring checks after the start.',
+      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 6 wiring checks after the start.',
     );
     expect(term.stdout()).toContain('+ generated/.env (secret values, not shown)\n');
   });
@@ -311,6 +346,51 @@ describe('mediaplane plan', () => {
     expect(term.stdout()).toBe('No changes.\n');
   });
 
+  it("asks no arr to test its download client while qBittorrent's category is to be made", async () => {
+    // Sonarr's own test would make the missing category, with no save path, and plan
+    // changes nothing: the client's key is checked once the category is there.
+    const runtime = fakeRuntime({
+      hashes: { ok: true, hashes: HASHES },
+      containers: running(HASHES),
+    });
+    const home = await currentHome(runtime);
+    const qbittorrent = apis.apps.get('qbittorrent');
+    if (qbittorrent === undefined) throw new Error('no qBittorrent faked');
+    const tested = () =>
+      apis.app.requests.filter((r) => r.path === '/api/v3/downloadclient/test').length;
+    qbittorrent.categories = {};
+    const missing = capture();
+    expect(await run(['plan', '--home', home], missing.io, deps(runtime))).toBe(2);
+    expect(missing.stdout()).toMatch(/\+ create +qbittorrent\.category_tv\n/);
+    expect(tested()).toBe(0);
+    // With the category in place, the test runs.
+    qbittorrent.categories = { tv: '/data/torrents/tv' };
+    expect(await run(['plan', '--home', home], capture().io, deps(runtime))).toBe(0);
+    expect(tested()).toBe(1);
+  });
+
+  it("keeps qBittorrent's key out of what an arr's own test of its download client says", async () => {
+    // An app may repeat in its answer what it was sent: the plan's client, like the wire
+    // step's, redacts every key the stack stores, not only the app's own.
+    const runtime = fakeRuntime({
+      hashes: { ok: true, hashes: HASHES },
+      containers: running(HASHES),
+    });
+    const home = await currentHome(runtime);
+    const sonarr = apis.apps.get('sonarr');
+    if (sonarr === undefined) throw new Error('no Sonarr faked');
+    const key = (await readSecretStore(home)).apps.qbittorrent?.apiKey ?? '';
+    expect(key).not.toBe('');
+    sonarr.testFailure = `Unable to connect to qBittorrent with ${key}`;
+    const term = capture();
+    expect(await run(['plan', '--home', home], term.io, deps(runtime))).toBe(2);
+    expect(term.stdout()).toContain('  ? unknown     sonarr.download_client\n');
+    expect(term.stderr()).toContain(
+      'tested qBittorrent (Mediaplane), and it failed: Host: Unable to connect to qBittorrent with *** (POST /api/v3/downloadclient/test)',
+    );
+    expectNoSecrets(term.stdout() + term.stderr(), await secretsIn(home));
+  });
+
   it('exits 2 and names the apps it would wait for when only their health is left', async () => {
     const runtime = fakeRuntime({
       hashes: { ok: true, hashes: HASHES },
@@ -322,7 +402,7 @@ describe('mediaplane plan', () => {
     const term = capture();
     expect(await run(['plan', '--home', home], term.io, deps(runtime))).toBe(2);
     expect(term.stdout()).toBe(
-      'Not healthy yet: sonarr (unhealthy)\nWiring:\n  > after start sonarr.admin\nPlan: 1 app to wait for, 1 wiring check after the start.\n',
+      'Not healthy yet: sonarr (unhealthy)\nWiring:\n  > after start sonarr.admin\n  > after start sonarr.download_client\n  > after start sonarr.root_folder\nPlan: 1 app to wait for, 3 wiring checks after the start.\n',
     );
     const json = capture();
     expect(await run(['plan', '--home', home, '--json'], json.io, deps(runtime))).toBe(2);
@@ -519,7 +599,7 @@ describe('mediaplane apply', () => {
     const first = capture();
     expect(await run(['apply', '--home', home, '--yes'], first.io, deps(docker))).toBe(0);
     expect(first.stdout()).toContain(
-      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 4 wiring checks after the start.',
+      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 6 wiring checks after the start.',
     );
     expect(first.stdout()).toContain('  done    images: images present\n');
     expect(first.stdout()).toMatch(
@@ -531,6 +611,73 @@ describe('mediaplane apply', () => {
       0,
     );
     expect(second.stdout()).toBe('No changes.\n');
+  });
+
+  it('gives Sonarr the qBittorrent key the stack stores, and sets it again when Sonarr holds another', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(0);
+    const store = await readSecretStore(home);
+    const stored = store.apps.qbittorrent?.apiKey ?? '';
+    expect(stored).not.toBe('');
+    expect(stored).not.toBe(store.apps.sonarr?.apiKey);
+    const sonarr = apis.apps.get('sonarr');
+    const qbittorrent = apis.apps.get('qbittorrent');
+    if (sonarr === undefined || qbittorrent === undefined)
+      throw new Error('no app faked');
+    const held = () =>
+      sonarr.downloadClients[0]?.fields.find((f) => f.name === 'apiKey')?.value;
+    // The wire step made the client, from the store's keys.
+    expect(held()).toBe(stored);
+    // qBittorrent now takes only that key, and the client holds another.
+    qbittorrent.key = stored;
+    const [client] = sonarr.downloadClients;
+    if (client === undefined) throw new Error('no download client made');
+    client.fields = client.fields.map((f) =>
+      f.name === 'apiKey' ? { ...f, value: `qbt_${'9'.repeat(28)}` } : f,
+    );
+    const again = capture();
+    expect(await run(['apply', '--home', home, '--yes'], again.io, deps(docker))).toBe(0);
+    expect(again.stdout()).toContain(
+      '  done    wiring sonarr.download_client: updated apiKey\n',
+    );
+    expect(held()).toBe(stored);
+    expectNoSecrets(again.stdout() + again.stderr(), await secretsIn(home));
+  });
+
+  it("keeps qBittorrent's key out of the failure of an arr's own test, in apply and in its record", async () => {
+    const runtime = fakeRuntime({
+      hashes: { ok: true, hashes: HASHES },
+      containers: running(HASHES),
+    });
+    const home = await currentHome(runtime);
+    const sonarr = apis.apps.get('sonarr');
+    if (sonarr === undefined) throw new Error('no Sonarr faked');
+    const key = (await readSecretStore(home)).apps.qbittorrent?.apiKey ?? '';
+    expect(key).not.toBe('');
+    sonarr.testFailure = `Unable to connect to qBittorrent with ${key}`;
+    const applied = capture();
+    expect(await run(['apply', '--home', home, '--yes'], applied.io, deps(runtime))).toBe(
+      1,
+    );
+    // Failed in the wire step, which says what the app said, the key redacted.
+    expect(applied.stdout()).toContain(
+      '  failed  wiring sonarr.download_client: Sonarr at http://sonarr:8989 (127.0.0.1) tested qBittorrent (Mediaplane), and it failed: Host: Unable to connect to qBittorrent with *** (POST /api/v3/downloadclient/test)\n',
+    );
+    // The plan it began with said it too, as a warning (apply prints the same message once).
+    const said =
+      'Sonarr at http://sonarr:8989 (127.0.0.1) tested qBittorrent (Mediaplane), and it failed: Host: Unable to connect to qBittorrent with *** (POST /api/v3/downloadclient/test)\n';
+    expect(applied.stderr()).toContain(`warning: ${said}`);
+    const id = /Change record: (\S+)/.exec(applied.stderr())?.[1] ?? '';
+    expect(id).toMatch(/^\d{8}T\d{6}Z-[0-9a-f]{8}$/);
+    const record = capture();
+    expect(await run(['history', id, '--home', home], record.io, deps(runtime))).toBe(0);
+    expect(record.stdout()).toContain('Unable to connect to qBittorrent with ***');
+    const secrets = await secretsIn(home);
+    expectNoSecrets(applied.stdout() + applied.stderr(), secrets);
+    expectNoSecrets(record.stdout() + record.stderr(), secrets);
   });
 
   it("is banned from qBittorrent's sign-in by four plans of a changed password, not three", async () => {
@@ -667,6 +814,8 @@ describe('mediaplane apply', () => {
       ['wire', 'qbittorrent.preferences', 'done'],
       ['wire', 'qbittorrent.category_tv', 'done'],
       ['wire', 'sonarr.admin', 'done'],
+      ['wire', 'sonarr.download_client', 'done'],
+      ['wire', 'sonarr.root_folder', 'done'],
       ['wire', '', 'done'],
       ['verify', '', 'done'],
     ]);
@@ -929,7 +1078,7 @@ describe('mediaplane history', () => {
     const list = capture();
     expect(await run(['history', '--home', home], list.io, deps(docker))).toBe(0);
     expect(list.stdout()).toBe(
-      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 4 resources wired\n`,
+      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 6 resources wired\n`,
     );
     const one = capture();
     expect(await run(['history', id, '--home', home], one.io, deps(docker))).toBe(0);
@@ -939,6 +1088,7 @@ describe('mediaplane history', () => {
     );
     expect(one.stdout()).toContain('  done    wiring sonarr.admin: created\n');
     expect(one.stdout()).toContain('  done    wiring qbittorrent.category_tv: created\n');
+    expect(one.stdout()).toContain('  done    wiring sonarr.download_client: created\n');
   });
 
   it('prints versioned JSON', async () => {

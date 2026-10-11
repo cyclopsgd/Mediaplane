@@ -105,6 +105,26 @@ export interface FakeAppState {
    * a ban), until a test sets it back to 0, as a restart would; a success resets it.
    */
   signInFailures: number;
+  /** Sonarr's or Radarr's download clients, their keys in clear. */
+  downloadClients: FakeDownloadClient[];
+  /** Sonarr's or Radarr's root folders. */
+  rootFolders: { id: number; path: string }[];
+  /**
+   * Sonarr's or Radarr's own test of a download client fails with this reason (`Host:
+   * <reason>`), whatever the client holds; a test may make it repeat a key, as an app
+   * may. Empty: it tests the client.
+   */
+  testFailure: string;
+}
+
+/** A download client, as Sonarr and Radarr keep one. */
+export interface FakeDownloadClient {
+  id: number;
+  name: string;
+  enable: boolean;
+  implementation: string;
+  priority: number;
+  fields: { name: string; value?: unknown }[];
 }
 
 /** A fake app as it first starts: qBittorrent's settings as its pre-start file sets them. */
@@ -122,17 +142,171 @@ export function freshAppState(): FakeAppState {
     categories: {},
     key: '',
     signInFailures: 0,
+    downloadClients: [],
+    rootFolders: [],
+    testFailure: '',
   };
+}
+
+/** Sonarr's or Radarr's template for a qBittorrent client, as `…/schema` gives it. */
+function qbittorrentTemplate(service: string): Omit<FakeDownloadClient, 'id'> & {
+  presets: unknown[];
+} {
+  const category = service === 'radarr' ? 'movieCategory' : 'tvCategory';
+  return {
+    name: '',
+    enable: false,
+    implementation: 'QBittorrent',
+    priority: 1,
+    presets: [],
+    fields: [
+      { name: 'host', value: 'localhost' },
+      { name: 'port', value: 8080 },
+      { name: 'useSsl', value: false },
+      { name: 'urlBase' },
+      { name: 'apiKey' },
+      { name: 'username' },
+      { name: 'password' },
+      { name: category, value: service === 'radarr' ? 'radarr' : 'tv-sonarr' },
+    ],
+  };
+}
+
+/** A download client as the app shows it: its key masked. */
+function masked(held: FakeDownloadClient): FakeDownloadClient {
+  return {
+    ...held,
+    fields: held.fields.map((f) =>
+      f.name === 'apiKey' && f.value !== undefined ? { ...f, value: '********' } : f,
+    ),
+  };
+}
+
+/**
+ * Sonarr's and Radarr's download clients and root folders, as fakeStackApis answers them.
+ * A client's test passes when it names qBittorrent's service (gluetun or qbittorrent)
+ * and holds qBittorrent's key; otherwise it fails as Sonarr's does.
+ */
+function fakeServarrDownloads(
+  request: FakeRequest,
+  service: string,
+  state: FakeAppState,
+  qbittorrent: FakeAppState,
+): FakeReply | undefined {
+  const { method, path } = request;
+  const clients = '/api/v3/downloadclient';
+  if (path === `${clients}/schema`)
+    return { status: 200, body: [qbittorrentTemplate(service)] };
+  if (path === clients && method === 'GET') {
+    return { status: 200, body: state.downloadClients.map(masked) };
+  }
+  const one = new RegExp(`^${clients}/(\\d+)(\\?forceSave=true)?$`).exec(path);
+  const held = state.downloadClients.find((c) => c.id === Number(one?.[1]));
+  if (one !== null && method === 'GET') {
+    return held === undefined ? { status: 404 } : { status: 200, body: masked(held) };
+  }
+  if (path === `${clients}?forceSave=true` && method === 'POST') {
+    const sent = JSON.parse(request.body) as Omit<FakeDownloadClient, 'id'>;
+    if (state.downloadClients.some((c) => c.name === sent.name)) {
+      return {
+        status: 400,
+        body: [{ propertyName: 'Name', errorMessage: 'Should be unique' }],
+      };
+    }
+    const made = { ...sent, id: state.downloadClients.length + 1 };
+    state.downloadClients.push(made);
+    return { status: 201, body: masked(made) };
+  }
+  if (one?.[2] !== undefined && method === 'PUT' && held !== undefined) {
+    const sent = JSON.parse(request.body) as FakeDownloadClient;
+    // "********" keeps the key it holds.
+    const key = held.fields.find((f) => f.name === 'apiKey')?.value;
+    Object.assign(held, {
+      ...sent,
+      fields: sent.fields.map((f) =>
+        f.name === 'apiKey' && f.value === '********' ? { ...f, value: key } : f,
+      ),
+    });
+    return { status: 202, body: masked(held) };
+  }
+  if (path === `${clients}/test` && method === 'POST') {
+    const sent = JSON.parse(request.body) as FakeDownloadClient;
+    const value = (name: string) => sent.fields.find((f) => f.name === name)?.value;
+    const stored = state.downloadClients
+      .find((c) => c.id === sent.id)
+      ?.fields.find((f) => f.name === 'apiKey')?.value;
+    const key = value('apiKey') === '********' ? stored : value('apiKey');
+    const host = value('host');
+    if (state.testFailure !== '') {
+      return {
+        status: 400,
+        body: [
+          { propertyName: 'Host', errorMessage: state.testFailure, isWarning: false },
+        ],
+      };
+    }
+    if (host !== 'gluetun' && host !== 'qbittorrent') {
+      return {
+        status: 400,
+        body: [
+          {
+            propertyName: 'Host',
+            errorMessage: 'Unable to connect to qBittorrent',
+            detailedDescription: `Name does not resolve (${String(host)}:${String(value('port'))})`,
+            isWarning: false,
+          },
+        ],
+      };
+    }
+    const right =
+      typeof key === 'string' &&
+      key !== '' &&
+      (qbittorrent.key === '' || key === qbittorrent.key);
+    return right
+      ? { status: 200, body: {} }
+      : {
+          status: 400,
+          body: [
+            {
+              propertyName: 'ApiKey',
+              errorMessage: 'Authentication Failure',
+              detailedDescription: 'Please verify your credentials.',
+              isWarning: false,
+            },
+          ],
+        };
+  }
+  const folders = '/api/v3/rootfolder';
+  if (path === folders && method === 'GET') {
+    return {
+      status: 200,
+      body: state.rootFolders.map((f) => ({ ...f, accessible: true, freeSpace: 1 })),
+    };
+  }
+  if (path === folders && method === 'POST') {
+    const { path: wanted } = JSON.parse(request.body) as { path: string };
+    if (state.rootFolders.some((f) => f.path === wanted)) {
+      return {
+        status: 400,
+        body: [{ propertyName: 'Path', errorMessage: 'already configured' }],
+      };
+    }
+    const made = { id: state.rootFolders.length + 1, path: wanted };
+    state.rootFolders.push(made);
+    return { status: 201, body: { ...made, accessible: true } };
+  }
+  return undefined;
 }
 
 /**
  * The APIs of the real catalog's apps, as far as Mediaplane uses them, all on one port
  * of 127.0.0.1: told apart by their Host header ("sonarr:8989", "gluetun:8080"). Sonarr,
- * Radarr and Prowlarr have /ping, system/status, config/host and /login; qBittorrent has
- * /, app/version, its sign-in (with its ban), preferences and categories, answered as
- * qBittorrent 5.2 answers them, and is `apps`' "qbittorrent" also when reached through
- * Gluetun. Any key is taken, but qBittorrent takes only a Bearer token (X-Api-Key gets a
- * 403): its `key` when that is set. `seams` send every app's calls there.
+ * Radarr and Prowlarr have /ping, system/status, config/host and /login, and the arrs
+ * their download clients and root folders; qBittorrent has /, app/version, its sign-in
+ * (with its ban), preferences and categories, answered as qBittorrent 5.2 answers them,
+ * and is `apps`' "qbittorrent" also when reached through Gluetun. Any key is taken, but
+ * qBittorrent takes only a Bearer token (X-Api-Key gets a 403): its `key` when that is
+ * set. `seams` send every app's calls there.
  */
 export async function fakeStackApis(): Promise<{
   app: FakeApp;
@@ -181,7 +355,11 @@ export async function fakeStackApis(): Promise<{
       state.password = sent.password;
       return { status: 202, body: {} };
     }
-    return { status: 404 };
+    return (
+      fakeServarrDownloads(request, service, state, stateOf('qbittorrent')) ?? {
+        status: 404,
+      }
+    );
   });
   return {
     app,

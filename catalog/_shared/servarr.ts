@@ -118,12 +118,16 @@ export function servarrAdmin(version: 'v1' | 'v3'): ResourceSpec {
   };
 }
 
-/** How Mediaplane wires Sonarr, Radarr or Prowlarr, after the apps `after`. */
+/**
+ * How Mediaplane wires Sonarr, Radarr or Prowlarr, after the apps `after`: the shared
+ * admin, then `more`.
+ */
 export function servarrIntegration(
   version: 'v1' | 'v3',
   after: readonly string[] = [],
+  more: readonly ResourceSpec[] = [],
 ): Integration {
-  return defineIntegration({ after, resources: [servarrAdmin(version)] });
+  return defineIntegration({ after, resources: [servarrAdmin(version), ...more] });
 }
 
 /**
