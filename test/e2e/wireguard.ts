@@ -41,6 +41,31 @@ export interface WireGuardServer {
   remove(): Promise<void>;
 }
 
+/**
+ * Gluetun's settings for `wg`, as `apps.gluetun.env` takes them: the `custom` provider on
+ * the test's server, with Gluetun's health checks aimed at the echo server, and its own
+ * DNS, public-IP and version lookups off, so it needs no internet.
+ */
+export function gluetunEnv(wg: WireGuardServer): Record<string, string> {
+  return {
+    WIREGUARD_ENDPOINT_IP: wg.gateway,
+    WIREGUARD_ENDPOINT_PORT: String(wg.endpointPort),
+    WIREGUARD_PUBLIC_KEY: wg.serverPublicKey,
+    HEALTH_TARGET_ADDRESSES: `${wg.echo}:80`,
+    HEALTH_ICMP_TARGET_IPS: wg.echo,
+    DNS_SERVER: 'off',
+    PUBLICIP_ENABLED: 'off',
+    VERSION_INFORMATION: 'off',
+  };
+}
+
+/** `env` as the lines of a YAML mapping, each value a JSON string (valid YAML), indented. */
+export function envLines(env: Record<string, string>, indent: string): string {
+  return Object.entries(env)
+    .map(([name, value]) => `${indent}${name}: ${JSON.stringify(value)}`)
+    .join('\n');
+}
+
 /** An X25519 key pair in WireGuard's base64, from Node alone: no `wg` tool needed. */
 export function wireguardKeys(): { privateKey: string; publicKey: string } {
   const { privateKey, publicKey } = generateKeyPairSync('x25519');

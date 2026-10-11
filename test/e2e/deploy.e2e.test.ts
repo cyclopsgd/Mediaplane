@@ -355,14 +355,24 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
 
     // Slice 3b, through the proxy: Mediaplane joined the stack's wiring network to set
     // the shared login in Sonarr, and checked qBittorrent's key there. Its container is
-    // on two networks, both internal, so it still has no route out.
+    // on two networks, both internal, so it still has no route out. Slice 3c: it linked
+    // Sonarr to qBittorrent, and made Sonarr's root folder in a throwaway Sonarr
+    // container, through the proxy.
     expect(
       (
         JSON.parse(first.stdout) as { actions: { resource?: string; detail?: string }[] }
       ).actions
         .filter((a) => a.resource !== undefined)
         .map((a) => [a.resource, a.detail]),
-    ).toEqual([['sonarr.admin', 'created']]);
+    ).toEqual([
+      ['qbittorrent.admin', 'adopted'],
+      ['qbittorrent.preferences', 'adopted'],
+      ['qbittorrent.category_tv', 'created'],
+      ['sonarr.admin', 'created'],
+      ['sonarr.download_client', 'created'],
+      ['sonarr.root_folder', 'created'],
+    ]);
+    expect((await stat(join(data, 'media', 'tv'))).isDirectory()).toBe(true);
     const shown = await mediaplane('credentials', '--json', '--reveal');
     expect(shown.code, shown.stderr).toBe(0);
     const login = parseRevealed(shown.stdout);

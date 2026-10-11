@@ -22,7 +22,13 @@ import {
   wiringMembers,
   type DeployedMediaplane,
 } from './helpers';
-import { startWireGuard, TUNNEL, type WireGuardServer } from './wireguard';
+import {
+  envLines,
+  gluetunEnv,
+  startWireGuard,
+  TUNNEL,
+  type WireGuardServer,
+} from './wireguard';
 
 const PROJECT = `mediaplane-e2e-${String(process.pid)}-vpn`;
 /** qBittorrent's web UI port, moved off the default to check WEBUI_PORT behind Gluetun. */
@@ -70,15 +76,7 @@ apps:
   qbittorrent: { port: ${String(QBT_PORT)} }
   gluetun:
     env:
-      WIREGUARD_ENDPOINT_IP: ${q(wg.gateway)}
-      WIREGUARD_ENDPOINT_PORT: ${q(wg.endpointPort)}
-      WIREGUARD_PUBLIC_KEY: ${q(wg.serverPublicKey)}
-      HEALTH_TARGET_ADDRESSES: ${q(`${wg.echo}:80`)}
-      HEALTH_ICMP_TARGET_IPS: ${q(wg.echo)}
-      DNS_SERVER: "off"
-      PUBLICIP_ENABLED: "off"
-      VERSION_INFORMATION: "off"
-      FIREWALL_OUTBOUND_SUBNETS: ${q(OUTBOUND.join(','))}
+${envLines({ ...gluetunEnv(wg), FIREWALL_OUTBOUND_SUBNETS: OUTBOUND.join(',') }, '      ')}
 `;
 }
 
@@ -435,7 +433,10 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       expect(planned.code, planned.stdout + planned.stderr).toBe(0);
       expect(JSON.parse(planned.stdout)).toMatchObject({
         changed: false,
-        wiring: [{ resource: 'qbittorrent', action: 'unchanged' }],
+        wiring: [
+          { resource: 'qbittorrent.admin', action: 'unchanged' },
+          { resource: 'qbittorrent.preferences', action: 'unchanged' },
+        ],
       });
       // Cleared first, so the teardown below doesn't try a failed removal again.
       const done = deployed;

@@ -39,8 +39,23 @@ function mediaplane(...args: string[]): Promise<ExecResult> {
   });
 }
 
-/** What the video stack wires, in the order apply wires it (Prowlarr after the arrs). */
-const WIRED = ['radarr.admin', 'sonarr.admin', 'prowlarr.admin', 'qbittorrent'];
+/**
+ * What the video stack wires, in the order apply wires it: qBittorrent, then the arrs,
+ * then Prowlarr.
+ */
+const WIRED = [
+  'qbittorrent.admin',
+  'qbittorrent.preferences',
+  'qbittorrent.category_tv',
+  'qbittorrent.category_movies',
+  'radarr.admin',
+  'radarr.download_client',
+  'radarr.root_folder',
+  'sonarr.admin',
+  'sonarr.download_client',
+  'sonarr.root_folder',
+  'prowlarr.admin',
+];
 
 /** Two documentation subnets (RFC 5737), to check Sonarr takes a comma-separated list. */
 const TRUSTED = ['192.0.2.0/24', '198.51.100.0/24'];
@@ -247,8 +262,16 @@ describe('apply against real Docker', () => {
           .filter((a) => a.resource !== undefined)
           .map((a) => [a.resource, a.detail]),
       ).toEqual([
+        ['qbittorrent.admin', 'adopted'],
+        ['qbittorrent.preferences', 'adopted'],
+        ['qbittorrent.category_tv', 'created'],
+        ['qbittorrent.category_movies', 'created'],
         ['radarr.admin', 'created'],
+        ['radarr.download_client', 'created'],
+        ['radarr.root_folder', 'created'],
         ['sonarr.admin', 'created'],
+        ['sonarr.download_client', 'created'],
+        ['sonarr.root_folder', 'created'],
         ['prowlarr.admin', 'created'],
       ]);
       expect(second.plan.wiring.map((w) => w.action)).toEqual(
@@ -256,24 +279,24 @@ describe('apply against real Docker', () => {
       );
       await expectSharedLogin(login);
       const resources = await readFile(join(home, 'state', 'resources.json'), 'utf8');
-      expect(Object.keys((JSON.parse(resources) as Resources).resources)).toEqual([
-        'prowlarr.admin',
-        'radarr.admin',
-        'sonarr.admin',
-      ]);
+      expect(Object.keys((JSON.parse(resources) as Resources).resources)).toEqual(
+        [...WIRED].sort(),
+      );
       expect(
         resources.includes(login.password),
         'resources.json holds the password',
+      ).toBe(false);
+      expect(
+        resources.includes(store.apps.qbittorrent?.apiKey ?? 'no key'),
+        "resources.json holds qBittorrent's key",
       ).toBe(false);
       // Lost state: apply adopts what the apps hold, by name, and changes none of it.
       await rm(join(home, 'state', 'resources.json'));
       const adopted = await apply(options);
       expect(adopted.outcome).toBe('success');
-      expect(adopted.plan.wiring.filter((w) => w.action !== 'unchanged')).toEqual([
-        { resource: 'radarr.admin', action: 'adopt' },
-        { resource: 'sonarr.admin', action: 'adopt' },
-        { resource: 'prowlarr.admin', action: 'adopt' },
-      ]);
+      expect(adopted.plan.wiring.filter((w) => w.action !== 'unchanged')).toEqual(
+        WIRED.map((resource) => ({ resource, action: 'adopt' })),
+      );
       expect(adopted.plan.containers.every((c) => c.action === 'unchanged')).toBe(true);
       expect((await apply(options)).outcome).toBe('no-changes');
       await expectSharedLogin(login);
