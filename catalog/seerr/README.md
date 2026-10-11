@@ -39,7 +39,7 @@ Radarr. Mediaplane runs the upstream image, unmodified (see
 
 ## Not built yet
 
-- **Slice 7:**
+- **Slice 6:**
   - Seerr's first sign-in, as the Jellyfin admin or with your Plex token;
   - its links to the media server, Sonarr and Radarr;
   - `apps.seerr.sonarr_profile` and `radarr_profile`, which choose the quality profiles
@@ -56,7 +56,7 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Known issues
 
-- **Setup is open.** Until Slice 7, Seerr's setup page is open to whoever reaches it
+- **Setup is open.** Until Slice 6, Seerr's setup page is open to whoever reaches it
   first. Finish it yourself as soon as `apply` is done, or keep `network.bind: localhost`
   until you have.
 - **Removing it needs `sudo`.** `appdata/seerr` belongs to uid 1000, so unless you are

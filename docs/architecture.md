@@ -125,9 +125,9 @@ Each part, and where its code is:
 
 Not built yet:
 
-- the rest of the links between the apps: the indexers (Slice 5), the media server
-  (Slice 6) and the requests app (Slice 7);
-- drift detection, with Keep mine (Slice 4).
+- the rest of the links between the apps: the indexers (Slice 4), the media server
+  (Slice 5) and the requests app (Slice 6);
+- drift detection, with Keep mine (Slice 7).
 
 ## `plan`
 
@@ -433,7 +433,7 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
-- the rest of the wiring, app by app (Slices 5 to 7);
-- drift detection (Slice 4);
+- the rest of the wiring, app by app (Slices 4 to 6);
+- drift detection (Slice 7);
 - releases (Slice 8);
 - the web panel (M2).

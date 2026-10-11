@@ -69,11 +69,11 @@ LinuxServer.io image, unmodified.
 
 ## Not built yet
 
-The rest of the wiring arrives in Slices 5 to 7 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
+The rest of the wiring arrives in Slices 4 to 6 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
 
-- **Slice 5:** Prowlarr's link to it.
-- **Slice 6:** the media server connection that refreshes your library on import.
-- **Slice 7:** Seerr's link to it.
+- **Slice 4:** Prowlarr's link to it.
+- **Slice 5:** the media server connection that refreshes your library on import.
+- **Slice 6:** Seerr's link to it.
 
 ## Changing it
 
@@ -109,7 +109,7 @@ The rest of the wiring arrives in Slices 5 to 7 (see the [roadmap](../../docs/pl
   ```
 
   Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
-  `sudo mv`. The old file keeps your settings, to enter again in Sonarr. Slice 4 does
+  `sudo mv`. The old file keeps your settings, to enter again in Sonarr. Slice 7 does
   this for you.
 
   If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the

@@ -130,7 +130,7 @@ mediaplane apply
   └─ records the change in history
 ```
 
-Next, `apply` will wire the rest of the apps through the same APIs (Slices 5 to 7).
+Next, `apply` will wire the rest of the apps through the same APIs (Slices 4 to 6).
 
 A few principles hold throughout:
 
@@ -244,11 +244,11 @@ Admin login for the apps:
   user name  admin
   password   … 24 letters and digits …
 
-Jellyfin     http://127.0.0.1:8096  (its login arrives in Slice 6)
+Jellyfin     http://127.0.0.1:8096  (its login arrives in Slice 5)
 Prowlarr     http://127.0.0.1:9696
 qBittorrent  http://127.0.0.1:8080
 Radarr       http://127.0.0.1:7878
-Seerr        http://127.0.0.1:5055  (its login arrives in Slice 7)
+Seerr        http://127.0.0.1:5055  (its login arrives in Slice 6)
 Sonarr       http://127.0.0.1:8989
 ```
 
@@ -384,8 +384,8 @@ as quality profiles. Mediaplane deploys the whole stack and makes it safe: gener
 secrets, a socket proxy, a tested VPN kill switch, and a private wiring network. It wires
 the apps to each other, with `plan` and `apply` and a history of what it did, and leaves
 the rest of each app's settings to you. Today it sets the shared login, and links Sonarr
-and Radarr to qBittorrent; the indexers, the media server and Seerr come in Slices 5
-to 7.
+and Radarr to qBittorrent; the indexers, the media server and Seerr come in Slices 4
+to 6.
 
 They can be used together. Recyclarr is planned for M4.
 
@@ -433,7 +433,7 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
 - **Merged:** S1 (the pure core), S2a (`plan` against a real host), S2b (`apply`), S2c
   (packaging), S3a (the shared admin and pre-start files), S3d (the VPN's kill-switch
   test and `vpn-check`), S3b (the wiring framework) and S3c (the download path).
-- **Next:** S4 (drift).
+- **Next:** S4 (indexers).
 - **After that:** S5 to S8.
 
 ## Documentation

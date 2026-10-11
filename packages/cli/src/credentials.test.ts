@@ -81,7 +81,7 @@ describe('mediaplane credentials', () => {
         '  user name  admin',
         `  password   ${PASSWORD}`,
         '',
-        'Jellyfin     http://127.0.0.1:8096  (its login arrives in Slice 6)',
+        'Jellyfin     http://127.0.0.1:8096  (its login arrives in Slice 5)',
         'qBittorrent  http://127.0.0.1:8080',
         'Sonarr       http://127.0.0.1:8989',
         '',
@@ -105,7 +105,7 @@ describe('mediaplane credentials', () => {
           name: 'Jellyfin',
           urls: ['http://127.0.0.1:8096'],
           login: 'not-yet',
-          comingIn: 'Slice 6',
+          comingIn: 'Slice 5',
         },
         {
           app: 'qbittorrent',

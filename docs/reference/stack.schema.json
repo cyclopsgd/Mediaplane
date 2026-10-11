@@ -92,7 +92,7 @@
       "default": {
         "username": "admin"
       },
-      "description": "The shared admin login for the apps' web UIs: qBittorrent, Sonarr, Radarr and Prowlarr use it, and Jellyfin will from Slice 6. qBittorrent gets it before its first start. Once the apps run, apply sets it in all four through their API, and again whenever it changes.",
+      "description": "The shared admin login for the apps' web UIs: qBittorrent, Sonarr, Radarr and Prowlarr use it, and Jellyfin will from Slice 5. qBittorrent gets it before its first start. Once the apps run, apply sets it in all four through their API, and again whenever it changes.",
       "type": "object",
       "properties": {
         "username": {
@@ -169,7 +169,7 @@
               "additionalProperties": false
             }
           ],
-          "description": "Your Plex token, as a secret reference. Checked to exist, but not used yet: claiming the server arrives in Slice 6."
+          "description": "Your Plex token, as a secret reference. Checked to exist, but not used yet: claiming the server arrives in Slice 5."
         }
       },
       "required": ["token"],
@@ -901,12 +901,12 @@
                   }
                 },
                 "sonarr_profile": {
-                  "description": "The Sonarr quality profile Seerr requests with. Not used yet (Slice 7).",
+                  "description": "The Sonarr quality profile Seerr requests with. Not used yet (Slice 6).",
                   "type": "string",
                   "minLength": 1
                 },
                 "radarr_profile": {
-                  "description": "The Radarr quality profile Seerr requests with. Not used yet (Slice 7).",
+                  "description": "The Radarr quality profile Seerr requests with. Not used yet (Slice 6).",
                   "type": "string",
                   "minLength": 1
                 }
@@ -996,7 +996,7 @@
     },
     "overrides": {
       "default": {},
-      "description": "Keep mine values, by <app>.<resource>.<field>. Not used yet: drift detection arrives in Slice 4.",
+      "description": "Keep mine values, by <app>.<resource>.<field>. Not used yet: drift detection arrives in Slice 7.",
       "type": "object",
       "propertyNames": {
         "type": "string",
@@ -1008,7 +1008,7 @@
     },
     "managed_by": {
       "default": "mediaplane",
-      "description": "external: Mediaplane never writes this file, for when automation such as Ansible owns it. Today only init writes it, and init never overwrites. Matters from Slice 4.",
+      "description": "external: Mediaplane never writes this file, for when automation such as Ansible owns it. Today only init writes it, and init never overwrites. Matters from Slice 7.",
       "type": "string",
       "enum": ["mediaplane", "external"]
     }

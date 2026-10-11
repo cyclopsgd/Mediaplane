@@ -110,7 +110,7 @@ differ, and a `reason` when it is `unknown`.
     either way: stop the app, set `<ApiKey>` in `appdata/<app>/config.xml` to
     `<app>.apiKey` from `state/secrets.json` (use `sudo` if the file isn't yours), and
     start it. If `plan` says `<app>.not-seeded`, follow the app's README.
-  - Slice 4 restores a key at its source for you.
+  - Slice 7 restores a key at its source for you.
 - **`refused the request (HTTP 403)`, with
   `banned after too many failed authentication attempts`** (`wire.auth`). qBittorrent
   stops an address from signing in for an hour after five failed sign-ins in a row.

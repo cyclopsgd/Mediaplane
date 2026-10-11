@@ -28,19 +28,19 @@ Each field shows its type, then `required` or its default, if it has one.
 - `network.lan_subnet` (string): Your LAN, as a private (RFC 1918) IPv4 CIDR such as 192.168.1.0/24. Left out, it is detected from this host's private addresses, except on a cloud VM, where bind: lan needs it set. Mediaplane trusts it only while the web UIs are published on the LAN. Typed with host bits, such as 192.168.1.10/24, it is read as its network, 192.168.1.0/24.
 - `security` (object; default `{ login_on_lan: true }`): Login settings.
 - `security.login_on_lan` (boolean; default `true`): Ask for a login from your own network too. false lets Sonarr, Radarr and Prowlarr skip it for any local (private) address, and qBittorrent for addresses in the LAN subnet while the web UIs are on the LAN.
-- `admin` (object; default `{ username: admin }`): The shared admin login for the apps' web UIs: qBittorrent, Sonarr, Radarr and Prowlarr use it, and Jellyfin will from Slice 6. qBittorrent gets it before its first start. Once the apps run, apply sets it in all four through their API, and again whenever it changes.
+- `admin` (object; default `{ username: admin }`): The shared admin login for the apps' web UIs: qBittorrent, Sonarr, Radarr and Prowlarr use it, and Jellyfin will from Slice 5. qBittorrent gets it before its first start. Once the apps run, apply sets it in all four through their API, and again whenever it changes.
 - `admin.username` (string; default `admin`): The user name of the shared admin login: 3 to 32 letters, digits, ".", "_" or "-".
 - `admin.password` (secret reference): The admin password, as a secret reference, at least 12 characters long. Left out, Mediaplane generates one; "mediaplane credentials" shows it.
 - `media_server` (`jellyfin` or `plex`; required): The media server, jellyfin or plex. It runs whether or not it is listed under apps.
 - `plex` (object): Plex settings, needed when media_server is plex.
-- `plex.token` (secret reference; required): Your Plex token, as a secret reference. Checked to exist, but not used yet: claiming the server arrives in Slice 6.
+- `plex.token` (secret reference; required): Your Plex token, as a secret reference. Checked to exist, but not used yet: claiming the server arrives in Slice 5.
 - `vpn` (object): The VPN that qBittorrent's traffic goes through, by way of Gluetun. Needed while apps.qbittorrent.vpn is true.
 - `vpn.provider` (string; required): The VPN provider, by its Gluetun name, such as mullvad.
 - `vpn.private_key` (secret reference; required): Your WireGuard private key, as a secret reference.
 - `vpn.addresses` (string): The WireGuard address, for providers that need one, such as Mullvad: the Address line of your provider's WireGuard file, such as 10.64.0.2/32. Several go comma-separated, without spaces. Other Gluetun settings go in apps.gluetun.env.
 - `apps` (object; default `{}`): The apps to run, by id. Listing an app runs it, unless it sets enabled: false. The media server that media_server names runs without being listed, and no other media server can be enabled. Apps also bring along the apps they need, such as Gluetun for qBittorrent.
-- `overrides` (map of name → string, number or boolean; default `{}`): Keep mine values, by \<app>.\<resource>.\<field>. Not used yet: drift detection arrives in Slice 4.
-- `managed_by` (`mediaplane` or `external`; default `mediaplane`): external: Mediaplane never writes this file, for when automation such as Ansible owns it. Today only init writes it, and init never overwrites. Matters from Slice 4.
+- `overrides` (map of name → string, number or boolean; default `{}`): Keep mine values, by \<app>.\<resource>.\<field>. Not used yet: drift detection arrives in Slice 7.
+- `managed_by` (`mediaplane` or `external`; default `mediaplane`): external: Mediaplane never writes this file, for when automation such as Ansible owns it. Today only init writes it, and init never overwrites. Matters from Slice 7.
 
 ## Settings every app takes
 
@@ -54,8 +54,8 @@ Under `apps.<app>`, where `<app>` is one of the apps listed at the end of this p
 ## One app's own settings
 
 - `apps.qbittorrent.vpn` (boolean; default `true`): Route qBittorrent through Gluetun's VPN, so it has no network when the VPN is down. true needs a vpn: block; false makes plan warn every time.
-- `apps.seerr.sonarr_profile` (string): The Sonarr quality profile Seerr requests with. Not used yet (Slice 7).
-- `apps.seerr.radarr_profile` (string): The Radarr quality profile Seerr requests with. Not used yet (Slice 7).
+- `apps.seerr.sonarr_profile` (string): The Sonarr quality profile Seerr requests with. Not used yet (Slice 6).
+- `apps.seerr.radarr_profile` (string): The Radarr quality profile Seerr requests with. Not used yet (Slice 6).
 
 ## Apps
 

@@ -23,20 +23,31 @@ Detailed plans so far:
 Where M1 stands (the README shows the same):
 
 - **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b and S3c.
-- **Next:** S4.
+- **Next:** S4 (indexers).
 - **After that:** S5 to S8.
 
 ## Slices
+
+> **Renumbered on 2026-10-11.** By the owner's decision, drift moved after
+> requests, so that it is designed against every app and a hands-off stack comes
+> sooner. The slices after S3c are now:
+>
+> - S4 indexers (was S5);
+> - S5 media servers (was S6);
+> - S6 requests (was S7);
+> - S7 drift (was S4).
+>
+> Plans written before then use the old numbers.
 
 | # | Slice | Delivers | Spec sections | Proves |
 |---|---|---|---|---|
 | S1 | **Pure core** | Repo scaffold, CI, secret scanning, OSS basics, the `stack.yaml` schema and loader, secret references, the catalog format with all M1 app definitions (pinned), the resolver, the Compose renderer, a file-level `plan`, and the CLI `plan` command | §2.1, §3, §4.1–4.3, §5.2 (plan) | `mediaplane plan` shows exactly the Compose project it would write, and rejects bad input with actionable errors. No Docker is needed |
 | S2 | **Runtime and apply (containers)** | Key generation and persistence, `.env` rendering, the Compose driver, the lock, preflight checks (including the host helper and the same-filesystem check), the container diff, the apply stages (write, pull, start, record), change history, the `apply`, `status`, `history` and `init` commands, the Mediaplane image with `deploy/mediaplane.compose.yaml` and the socket proxy (`mediaplane-system`), and an end-to-end harness | §4.4, §5, §5.1, §7.2 (2–4) | Success criteria 3 (containers) and 6. Containers come up healthy on amd64 and arm64. A second apply reports no changes |
 | S3 | **Wiring framework and the download path** | The integration contract, a typed HTTP client with retries, `resources.json`, pre-start config files (`config.xml`, `qBittorrent.conf` with PBKDF2), the shared admin credential and `credentials`, the Servarr admin bootstrap, Sonarr/Radarr wired to qBittorrent (download clients, root folders, categories), the verify stage, and `vpn-check`. Also a real VPN kill-switch test against a local WireGuard server | §6.1, §6.2 (download rows), §6.4, §8.1 (4) | Success criterion 5. Partly criterion 1 |
-| S4 | **Drift** | The three-way drift model, `drift`, `keep`, a comment-preserving override writer, `unmanaged`, externally managed mode, name-based re-adoption, key recovery from appdata, and shared-key propagation | §6.3, §6.1 (key recovery) | Success criterion 4 |
-| S5 | **Indexers** | Prowlarr application links (fullSync), the Byparr/FlareSolverr indexer proxy and the `cloudflare` tag | §6.2 (Prowlarr rows) | Indexers added in Prowlarr reach both arrs, and proxied requests work |
-| S6 | **Media servers** | Jellyfin bootstrap-before-publish, its API key and libraries, the arr → media-server connections, Plex `plex-login` (PIN flow), the Plex claim and libraries, and a nightly Plex CI job | §6.1 (Jellyfin, Plex), §6.4, §8.1 (Plex) | Both media servers are wired headlessly, except for the single Plex sign-in |
-| S7 | **Requests** | The Seerr first sign-in (through the Jellyfin admin or the Plex token), libraries, the Sonarr/Radarr servers, initialize, and the full-stack end-to-end test | §6.1 (Seerr), §6.2 (Seerr row) | Success criteria 1 and 2 |
+| S4 | **Indexers** | Prowlarr application links (fullSync), the Byparr/FlareSolverr indexer proxy and the `cloudflare` tag | §6.2 (Prowlarr rows) | Indexers added in Prowlarr reach both arrs, and proxied requests work |
+| S5 | **Media servers** | Jellyfin bootstrap-before-publish, its API key and libraries, the arr → media-server connections, Plex `plex-login` (PIN flow), the Plex claim and libraries, and a nightly Plex CI job | §6.1 (Jellyfin, Plex), §6.4, §8.1 (Plex) | Both media servers are wired headlessly, except for the single Plex sign-in |
+| S6 | **Requests** | The Seerr first sign-in (through the Jellyfin admin or the Plex token), libraries, the Sonarr/Radarr servers, initialize, and the full-stack end-to-end test | §6.1 (Seerr), §6.2 (Seerr row) | Success criteria 1 and 2 |
+| S7 | **Drift** | The three-way drift model, `drift`, `keep`, a comment-preserving override writer, `unmanaged`, externally managed mode, name-based re-adoption, key recovery from appdata, and shared-key propagation | §6.3, §6.1 (key recovery) | Success criterion 4 |
 | S8 | **Release and public readiness** | Trivy for the catalog images (Mediaplane's own image is scanned from S2c), SBOM and provenance, release-please, Renovate (a custom manager for catalog pins plus SHA-pinned Actions), a multi-arch release workflow and manifest (arm64 CI itself runs from S2c), the `--json` output shapes in the generated docs (the `stack.yaml`, JSON Schema and CLI references, with their freshness check, arrive in S2c), `migrate`, the full README, the add-an-app guide, the code of conduct, templates and CODEOWNERS | §8.2, §9 | Success criterion 7. Everything is green on both architectures |
 
 ### S2 is delivered in three parts (decided 2026-10-09)
@@ -88,13 +99,13 @@ Every slice writes its own docs as it goes:
 - **ADRs**, when a slice implements the decision:
   - 0001, 0002, 0005 and 0009 in S1;
   - 0010 in S2a, 0004 in S2b, and 0006 and 0008 in S2c;
-  - 0003 in S4.
+  - 0003 in S7.
   - 0007 (books) belongs to M4.
 - **Each app's `catalog/<app>/README.md`**, written in S2c, and updated when that
   app's integration lands.
 - **Runbooks**, written with the feature they cover:
   - "VPN down" in S3d, and "wiring failed" in S3b;
-  - "drift reported" in S4;
+  - "drift reported" in S7;
   - "app won't start" in S2c.
 - **A docs task in every slice plan,** from S2c on (owner, 2026-10-09). It covers the
   spec §9 artefacts the slice touches: it runs `pnpm docs:generate` for the generated
@@ -151,12 +162,12 @@ Verified in S3c (2026-10-11):
 The Slice 1 final review (2026-10-08) approved the merge. It also raised the
 design gaps below, which only matter once Mediaplane writes files or deploys.
 The Slice 2a final review (2026-10-09) added the S2b list and two S3 items.
-The Slice 2b final review (2026-10-09) added the S2c list, two S4 items and an
-M2 item. Slice 2c (2026-10-09) added the last S3 item, the S6 list and the last
+The Slice 2b final review (2026-10-09) added the S2c list, two S7 items and an
+M2 item. Slice 2c (2026-10-09) added the last S3 item, the S5 list and the last
 four S8 items. Slice 3a (2026-10-10) added three S3 items, the S3d list, three
-S4 items, two S6 items, an S8 item and an M2 item. Slice 3d (2026-10-10) added the last
+S7 items, two S5 items, an S8 item and an M2 item. Slice 3d (2026-10-10) added the last
 S3 item, the unscheduled list and extended two S8 items. Slice 3b (2026-10-10) added the
-S3c list, two S4 items and one unscheduled item. Slice 3c (2026-10-11) added three S4
+S3c list, two S7 items and one unscheduled item. Slice 3c (2026-10-11) added three S7
 items. Each slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
@@ -262,7 +273,7 @@ password, which are S3c's (and listed again below).
   - The apps keep their normal network for their own internet traffic.
   - Gluetun's firewall must accept wiring traffic to qBittorrent's port, and S3b's
     end-to-end test proves it.
-  - The plex.tv calls go through a short-lived helper in S6.
+  - The plex.tv calls go through a short-lived helper in S5.
   - This is defence in depth, not a wall, because the proxy still lets Mediaplane
     create containers.
   - S3b writes ADR 0011 on it.
@@ -285,7 +296,7 @@ password, which are S3c's (and listed again below).
   store, so its value must fit too, or the check must apply only to the keys Mediaplane
   generates. Otherwise the next `plan` can't read the store. **Done in S3b:** the rule
   stays for every key, and the store refuses to save one it couldn't read back, naming
-  the key. Jellyfin's (S6) is 32 hex characters, which fits.
+  the key. Jellyfin's (S5) is 32 hex characters, which fits.
 - **qBittorrent stranded by a Gluetun started again on its own (S3b).** When Gluetun
   restarts alone, by hand or after a crash, qBittorrent keeps the old, empty network
   namespace. Compose restarts qBittorrent only when it recreates Gluetun, not when it
@@ -328,7 +339,25 @@ password, which are S3c's (and listed again below).
   works but the server is open. Have `vpn-check` notice that (a request without the
   key that succeeds) and say so, with the fix: restart Gluetun, then qBittorrent.
 
-**S4:**
+**S5:**
+
+- **The Plex claim and `plex-login` need plex.tv.** The Mediaplane container has no
+  route out today (S2c), and stays offline under S3b's decision above (a private wiring
+  network). So make the plex.tv calls from a short-lived helper, and record that in the
+  threat model.
+- **Jellyfin's health check can pass early.** In its first seconds, Jellyfin's
+  `/health` answers 200 with `Degraded` while the server still answers 503 to
+  everything else (S2c). Look at a check that waits for the server itself.
+- **A login of your own for Plex, and for Seerr on Plex.** Plex's login is always
+  your plex.tv account, never the shared admin (spec §6.1). With Plex, Seerr's
+  first sign-in uses that account too. The catalog's `login` (S3a) is `'shared'`
+  or the slice that brings it, so `credentials` says their login arrives in
+  Slice 5 (Plex) or Slice 6 (Seerr). Give `login` a value for your own account,
+  and use it for both.
+- **Plex's web UI is at `/web`.** `credentials` prints `http://<address>:<port>`
+  for every app, so give the catalog a per-app web path.
+
+**S7:**
 
 - Override field names are case-sensitive, so the managed-field comparison must
   match them exactly.
@@ -368,24 +397,6 @@ password, which are S3c's (and listed again below).
 - **The `partial` outcome.** Spec §5 step 12 names `success`, `partial` and `failed`.
   Apply records `failed` when part of the wiring failed (S3b). Decide whether drift's
   re-apply needs `partial`.
-
-**S6:**
-
-- **The Plex claim and `plex-login` need plex.tv.** The Mediaplane container has no
-  route out today (S2c), and stays offline under S3b's decision above (a private wiring
-  network). So make the plex.tv calls from a short-lived helper, and record that in the
-  threat model.
-- **Jellyfin's health check can pass early.** In its first seconds, Jellyfin's
-  `/health` answers 200 with `Degraded` while the server still answers 503 to
-  everything else (S2c). Look at a check that waits for the server itself.
-- **A login of your own for Plex, and for Seerr on Plex.** Plex's login is always
-  your plex.tv account, never the shared admin (spec §6.1). With Plex, Seerr's
-  first sign-in uses that account too. The catalog's `login` (S3a) is `'shared'`
-  or the slice that brings it, so `credentials` says their login arrives in
-  Slice 6 (Plex) or Slice 7 (Seerr). Give `login` a value for your own account,
-  and use it for both.
-- **Plex's web UI is at `/web`.** `credentials` prints `http://<address>:<port>`
-  for every app, so give the catalog a per-app web path.
 
 **S8 (before going public):**
 

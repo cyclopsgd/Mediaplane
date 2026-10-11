@@ -86,7 +86,7 @@ unmodified, and by default puts it behind Gluetun's VPN.
 ## Not built yet
 
 Nothing for qBittorrent itself. Keeping a setting of your own in place of one Mediaplane
-manages ("Keep mine") comes in Slice 4. See the
+manages ("Keep mine") comes in Slice 7. See the
 [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Changing it
@@ -106,7 +106,7 @@ manages ("Keep mine") comes in Slice 4. See the
   see [Gluetun's README](../gluetun/README.md).
 - **A change made in qBittorrent's web UI to what Mediaplane manages is undone** by the
   next `apply`: the login, the save path, Automatic Torrent Management, who may skip the
-  login, and the two categories' save paths. `plan` shows it first. Slice 4 adds "Keep
+  login, and the two categories' save paths. `plan` shows it first. Slice 7 adds "Keep
   mine".
 - **Five failed sign-ins in a row ban an address for an hour.** Mediaplane checks the
   password by signing in, once per `plan` and once per `apply`, and never again after a
@@ -144,7 +144,7 @@ manages ("Keep mine") comes in Slice 4. See the
   Stop it first: qBittorrent writes the file again when it stops. Use your own home,
   and the container name `docker ps` shows. If `mv` is refused, use `sudo mv`. Then
   sign in with what `mediaplane credentials` shows. The old file keeps your settings,
-  to enter again in qBittorrent. Slice 4 does this for you.
+  to enter again in qBittorrent. Slice 7 does this for you.
 
   If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the
   stack's `user:`, not to the user Mediaplane runs as (`MEDIAPLANE_UID` in its

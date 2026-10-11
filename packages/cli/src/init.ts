@@ -326,7 +326,7 @@ async function gatherAnswers(
 export const NOTES = {
   mediaServer: [
     'Media server: jellyfin needs no account. plex needs a Plex',
-    "account; Mediaplane can't claim it for you until Slice 6.",
+    "account; Mediaplane can't claim it for you until Slice 5.",
   ],
   dataPath: [
     'Data folder: one folder for downloads and your library,',

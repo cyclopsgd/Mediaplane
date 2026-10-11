@@ -55,12 +55,12 @@ folder, only its own config folder.
 
 ## What stays yours
 
-Mediaplane never adds indexers. You add them once in Prowlarr, and from Slice 5 they sync
+Mediaplane never adds indexers. You add them once in Prowlarr, and from Slice 4 they sync
 to Sonarr and Radarr.
 
 ## Not built yet
 
-- **Slice 5:**
+- **Slice 4:**
   - the links to Sonarr and Radarr, with full sync;
   - Byparr registered as Prowlarr's indexer proxy, with the tag `cloudflare`. Tag your
     Cloudflare-protected indexers `cloudflare` to route them through it.
@@ -109,7 +109,7 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   ```
 
   Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
-  `sudo mv`. The old file keeps your settings, to enter again in Prowlarr. Slice 4 does
+  `sudo mv`. The old file keeps your settings, to enter again in Prowlarr. Slice 7 does
   this for you.
 
   If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the

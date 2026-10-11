@@ -168,7 +168,7 @@ Controls today:
 What remains:
 
 - On a home network, `init` suggests `bind: lan`, which puts the web UIs on your LAN.
-- Until the wiring lands (Slices 6 and 7), Jellyfin's wizard and Seerr's setup are open
+- Until the wiring lands (Slices 5 and 6), Jellyfin's wizard and Seerr's setup are open
   to whoever reaches them first. Complete them right after the first `apply`, or keep
   `bind: localhost` until you have.
 - With `login_on_lan: false`, anyone on a local address gets into Sonarr, Radarr and
@@ -363,9 +363,9 @@ Controls today:
 What remains:
 
 - One password opens every app that uses it: qBittorrent, Sonarr, Radarr and Prowlarr
-  today, and Jellyfin from Slice 6. A leak from one is a leak for all.
+  today, and Jellyfin from Slice 5. A leak from one is a leak for all.
 - Sonarr, Radarr and Prowlarr give their password hash to anyone who holds their API
-  key. Prowlarr holds Sonarr's and Radarr's keys from Slice 5.
+  key. Prowlarr holds Sonarr's and Radarr's keys from Slice 4.
 - `apply` checks qBittorrent's password by signing in. qBittorrent bans an address from
   signing in for an hour after five failed sign-ins in a row. Mediaplane's sign-in fails
   only while qBittorrent's password differs from the stack's, such as after
@@ -374,7 +374,7 @@ What remains:
   four `plan`s, or declined `apply`s, before the `apply` ban Mediaplane's address, never
   your browser's. Its key still works. The [runbook](../runbooks/wiring-failed.md) says
   what to do.
-- There is no way yet to rotate the generated password (Slice 4).
+- There is no way yet to rotate the generated password (Slice 7).
 
 ### T11. Something on the stack's network uses Gluetun's control server
 

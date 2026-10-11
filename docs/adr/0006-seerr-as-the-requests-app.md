@@ -20,7 +20,7 @@ through its API.
 
 Seerr, version 3.5 or later, is M1's requests app (spec §2.1, §6.1, §6.5):
 
-- **It works with both media servers.** The wiring (Slice 7) will sign in to it as the
+- **It works with both media servers.** The wiring (Slice 6) will sign in to it as the
   Jellyfin admin Mediaplane created (`POST /api/v1/auth/jellyfin`), or with the user's
   Plex token (`POST /api/v1/auth/plex`).
 - **Its settings API covers the wiring:**
@@ -37,7 +37,7 @@ Seerr, version 3.5 or later, is M1's requests app (spec §2.1, §6.1, §6.5):
   `media_server` later as setting Seerr up again (spec §10).
 - **Pinned, with a version floor.** Seerr's settings and library API changed by 3.5, so
   it stays pinned at 3.5 or later, and every bump runs the end-to-end suite.
-- **The key does nothing until a first user exists.** So the wiring (Slice 7) starts
+- **The key does nothing until a first user exists.** So the wiring (Slice 6) starts
   with that first sign-in. Until then, Seerr's setup page is open to whoever reaches it
   first (see [Seerr's README](../../catalog/seerr/README.md)).
 - **A fixed uid.** Seerr's image runs as uid 1000, so Mediaplane gives its appdata folder

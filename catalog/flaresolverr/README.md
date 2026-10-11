@@ -33,7 +33,7 @@ Prowlarr's indexers. Mediaplane runs the upstream image, unmodified, when you li
 
 ## Not built yet
 
-- **Slice 5:** registering FlareSolverr as Prowlarr's indexer proxy, with the tag
+- **Slice 4:** registering FlareSolverr as Prowlarr's indexer proxy, with the tag
   `cloudflare`.
 
 See the [roadmap](../../docs/plans/m1-roadmap.md).

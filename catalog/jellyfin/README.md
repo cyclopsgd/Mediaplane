@@ -34,7 +34,7 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
 
 ## Not built yet
 
-- **Slice 6:**
+- **Slice 5:**
   - first-run setup through Jellyfin's own API, with no port published until it is done;
   - its API key, stored in `state/secrets.json`;
   - the Movies and Shows libraries;
@@ -61,6 +61,6 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Known issues
 
-- **The setup wizard is open.** Until Slice 6, Jellyfin's first-run wizard is open to
+- **The setup wizard is open.** Until Slice 5, Jellyfin's first-run wizard is open to
   whoever reaches its port first. Finish it yourself as soon as `apply` is done, or keep
   `network.bind: localhost` until you have.

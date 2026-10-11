@@ -33,7 +33,7 @@ image, unmodified. Listing Prowlarr turns it on.
 
 ## Not built yet
 
-- **Slice 5:** registering Byparr as Prowlarr's indexer proxy, with the tag `cloudflare`.
+- **Slice 4:** registering Byparr as Prowlarr's indexer proxy, with the tag `cloudflare`.
 
 See the [roadmap](../../docs/plans/m1-roadmap.md).
 

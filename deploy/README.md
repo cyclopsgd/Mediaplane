@@ -12,7 +12,7 @@ The stack Mediaplane deploys is a separate Compose project, `mediaplane`, so `ap
 never touch Mediaplane itself.
 
 > Mediaplane is pre-alpha. Sonarr and Radarr are linked to qBittorrent, but the rest of
-> the apps are not wired to each other yet (Slices 5 to 7 do that). On a home network,
+> the apps are not wired to each other yet (Slices 4 to 6 do that). On a home network,
 > `init` suggests publishing their web UIs on your LAN. Until the wiring lands,
 > Jellyfin's setup wizard and Seerr's setup are open to anyone on your LAN until you
 > complete them, so complete them first.
@@ -140,7 +140,7 @@ nothing. Without a terminal it asks nothing: pass the flags in the
   - With `lan`, it also asks whether your own network must sign in too
     (`security.login_on_lan`; `--no-login-on-lan` says no).
 
-  Until the wiring lands (Slices 6 and 7), Jellyfin's setup wizard and Seerr's setup
+  Until the wiring lands (Slices 5 and 6), Jellyfin's setup wizard and Seerr's setup
   are open to anyone on your LAN until you complete them. Complete them right after the
   first `apply`.
 
