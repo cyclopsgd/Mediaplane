@@ -286,8 +286,11 @@ describe('apply against real Docker', () => {
         resources.includes(login.password),
         'resources.json holds the password',
       ).toBe(false);
+      // Defined first: a missing key would make the check below pass on nothing.
+      const qbittorrentKey = store.apps.qbittorrent?.apiKey ?? '';
+      expect(qbittorrentKey !== '', 'no qbittorrent key stored').toBe(true);
       expect(
-        resources.includes(store.apps.qbittorrent?.apiKey ?? 'no key'),
+        resources.includes(qbittorrentKey),
         "resources.json holds qBittorrent's key",
       ).toBe(false);
       // Lost state: apply adopts what the apps hold, by name, and changes none of it.

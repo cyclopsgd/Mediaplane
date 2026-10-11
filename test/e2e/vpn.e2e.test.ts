@@ -19,6 +19,7 @@ import {
   expectWiringRemoved,
   makeHome,
   REPO,
+  runTeardown,
   wiringMembers,
   type DeployedMediaplane,
 } from './helpers';
@@ -209,30 +210,22 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
     const wg = await startWireGuard(PROJECT);
     let deployed: DeployedMediaplane | undefined;
     /**
-     * Every removal, each whether or not the one before it worked; what failed. Seven
-     * commands, each bounded by TEARDOWN_MS (120 s): the test's timeout leaves room for
-     * them after the body's 20 minutes.
+     * Every removal, each whether or not the one before it worked. Seven commands, each
+     * bounded by TEARDOWN_MS (120 s): the test's timeout leaves room for them after the
+     * body's 20 minutes.
      */
-    const removeAll = async (): Promise<unknown[]> => {
-      const failures: unknown[] = [];
-      const attempt = async (removal: () => Promise<unknown>) => {
-        try {
-          await removal();
-        } catch (failure) {
-          failures.push(failure);
-        }
-      };
-      await attempt(() => deployed?.remove() ?? Promise.resolve());
-      await attempt(async () => {
-        const down = await composeDown(PROJECT);
-        expect(down.code, down.stderr).toBe(0);
-      });
-      // The deployed Mediaplane joined the wiring network, and went down first so the
-      // stack's down could remove it.
-      await attempt(() => expectWiringRemoved(PROJECT));
-      await attempt(() => wg.remove());
-      return failures;
-    };
+    const removeAll = () =>
+      runTeardown([
+        () => deployed?.remove() ?? Promise.resolve(),
+        async () => {
+          const down = await composeDown(PROJECT);
+          expect(down.code, down.stderr).toBe(0);
+        },
+        // The deployed Mediaplane joined the wiring network, and went down first so the
+        // stack's down could remove it.
+        () => expectWiringRemoved(PROJECT),
+        () => wg.remove(),
+      ]);
     try {
       await writeFile(join(home, 'stack.yaml'), vpnStack(join(home, 'data'), wg));
       await mkdir(join(home, 'secrets'), { mode: 0o700 });
@@ -584,11 +577,11 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       );
     } catch (failure) {
       // The body's own failure is the one to show: a removal that fails too is only logged.
-      for (const removal of await removeAll())
-        console.error('teardown failed too:', removal);
+      await removeAll().catch((also: unknown) => {
+        console.error('teardown failed too:', also);
+      });
       throw failure;
     }
-    const failures = await removeAll();
-    if (failures.length > 0) throw new AggregateError(failures, 'teardown failed');
+    await removeAll();
   }, 2_040_000);
 });

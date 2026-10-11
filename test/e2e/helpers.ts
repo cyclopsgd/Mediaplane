@@ -131,6 +131,27 @@ export function composeDown(project: string): Promise<ExecResult> {
 }
 
 /**
+ * Run a test's teardown: every step in order, each whether or not the one before it
+ * worked (a step that rejects or times out, as well as one whose assertion fails), then
+ * throw an AggregateError of what failed, if anything did. Each step should be bounded by
+ * TEARDOWN_MS, so one that hangs fails on its own and the test's timeout leaves room for
+ * the rest.
+ */
+export async function runTeardown(
+  steps: readonly (() => Promise<unknown>)[],
+): Promise<void> {
+  const failures: unknown[] = [];
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (failure) {
+      failures.push(failure);
+    }
+  }
+  if (failures.length > 0) throw new AggregateError(failures, 'teardown failed');
+}
+
+/**
  * Delete a test home, including files the apps created as other users (Seerr runs as
  * uid 1000). Those are removed as root, from a throwaway container.
  */

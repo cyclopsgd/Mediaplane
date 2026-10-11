@@ -19,6 +19,7 @@ import {
   makeHome,
   parseRevealed,
   REPO,
+  runTeardown,
   type DeployedMediaplane,
 } from './helpers';
 import {
@@ -118,6 +119,65 @@ async function api(
   });
 }
 
+/**
+ * A GET of an app's API, as JSON, after checking it answered 2xx. A failure gives the
+ * status, and only the body's length when it isn't JSON: an app's answer can hold a key
+ * (qBittorrent's preferences hold its own), and CI's log is public.
+ */
+async function getJson<T>(
+  port: number,
+  path: string,
+  headers: Record<string, string>,
+): Promise<T> {
+  const response = await api(port, path, headers);
+  const what = `GET ${path} on port ${String(port)}`;
+  expect(response.ok, `${what} answered ${String(response.status)}`).toBe(true);
+  const body = await response.text();
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error(
+      `${what} answered ${String(response.status)} with ${String(body.length)} characters that aren't JSON`,
+    );
+  }
+}
+
+/**
+ * Why an arr refused a request, safe for CI's public log: the status, and each validation
+ * error's `propertyName: errorMessage`, with every one of `secrets` replaced. Never the
+ * raw body, nor an error's `attemptedValue`, which can be the key under test. A body that
+ * isn't such a list gives only its length.
+ */
+async function servarrFailure(
+  response: Response,
+  secrets: readonly string[],
+): Promise<string> {
+  const status = `status ${String(response.status)}`;
+  const body = await response.text();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return `${status}, with ${String(body.length)} characters that aren't JSON`;
+  }
+  if (!Array.isArray(parsed)) {
+    return `${status}, with ${String(body.length)} characters of JSON that isn't a list`;
+  }
+  const text = (value: unknown) => (typeof value === 'string' ? value : '?');
+  const said = parsed.map((item: unknown) => {
+    const { propertyName, errorMessage } = (
+      typeof item === 'object' && item !== null ? item : {}
+    ) as Record<string, unknown>;
+    return `${text(propertyName)}: ${text(errorMessage)}`;
+  });
+  return secrets
+    .filter((secret) => secret !== '')
+    .reduce(
+      (message, secret) => message.replaceAll(secret, '***'),
+      `${status}: ${said.join('; ')}`,
+    );
+}
+
 interface Client {
   id: number;
   name: string;
@@ -153,16 +213,25 @@ async function expectDownloadPath(home: string): Promise<void> {
     },
   );
   expect(signIn.status, 'qBittorrent refused the shared login').toBe(204);
+  // Kept out of every failure message below, whatever an app says.
+  const secrets = [
+    login.password,
+    ...Object.values(store.apps).flatMap((held) => Object.values(held)),
+  ];
   const bearer = { Authorization: `Bearer ${store.apps.qbittorrent?.apiKey ?? ''}` };
-  const categories = (await (
-    await api(QBT_PORT, '/api/v2/torrents/categories', bearer)
-  ).json()) as Record<string, { savePath: string }>;
+  const categories = await getJson<Record<string, { savePath: string }>>(
+    QBT_PORT,
+    '/api/v2/torrents/categories',
+    bearer,
+  );
   expect(
     Object.fromEntries(Object.entries(categories).map(([name, c]) => [name, c.savePath])),
   ).toEqual({ movies: '/data/torrents/movies', tv: '/data/torrents/tv' });
-  const preferences = (await (
-    await api(QBT_PORT, '/api/v2/app/preferences', bearer)
-  ).json()) as { save_path: string; auto_tmm_enabled: boolean };
+  const preferences = await getJson<{ save_path: string; auto_tmm_enabled: boolean }>(
+    QBT_PORT,
+    '/api/v2/app/preferences',
+    bearer,
+  );
   // Only these two: the preferences hold qBittorrent's key too.
   expect([preferences.save_path, preferences.auto_tmm_enabled]).toEqual([
     '/data/torrents',
@@ -170,9 +239,7 @@ async function expectDownloadPath(home: string): Promise<void> {
   ]);
   for (const arr of ARRS) {
     const keyed = { 'X-Api-Key': store.apps[arr.app]?.apiKey ?? '' };
-    const clients = (await (
-      await api(arr.port, '/api/v3/downloadclient', keyed)
-    ).json()) as Client[];
+    const clients = await getJson<Client[]>(arr.port, '/api/v3/downloadclient', keyed);
     expect(
       clients.map((c) => c.name),
       `${arr.app}'s download clients`,
@@ -192,12 +259,13 @@ async function expectDownloadPath(home: string): Promise<void> {
     });
     expect(
       tested.status,
-      `${arr.app}'s test of qBittorrent: ${await tested.text()}`,
+      `${arr.app}'s test of qBittorrent failed: ${await servarrFailure(tested, secrets)}`,
     ).toBe(200);
-    const folders = (await (await api(arr.port, '/api/v3/rootfolder', keyed)).json()) as {
-      path: string;
-      accessible: boolean;
-    }[];
+    const folders = await getJson<{ path: string; accessible: boolean }[]>(
+      arr.port,
+      '/api/v3/rootfolder',
+      keyed,
+    );
     expect(
       folders.map((f) => [f.path, f.accessible]),
       `${arr.app}'s root folders`,
@@ -218,7 +286,7 @@ async function expectDownloadPath(home: string): Promise<void> {
           '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}',
           `${PROJECT}-${service}-1`,
         ],
-        { cwd: '/' },
+        { cwd: '/', timeoutMs: 120_000 },
       );
       expect(inspect.code, inspect.stderr).toBe(0);
       return inspect.stdout.trim();
@@ -250,12 +318,8 @@ async function setPreferences(home: string, values: Record<string, unknown>) {
 async function undoRadarr(home: string): Promise<void> {
   const store = await readSecretStore(home);
   const keyed = { 'X-Api-Key': store.apps.radarr?.apiKey ?? '' };
-  const clients = (await (
-    await api(7878, '/api/v3/downloadclient', keyed)
-  ).json()) as Client[];
-  const folders = (await (await api(7878, '/api/v3/rootfolder', keyed)).json()) as {
-    id: number;
-  }[];
+  const clients = await getJson<Client[]>(7878, '/api/v3/downloadclient', keyed);
+  const folders = await getJson<{ id: number }[]>(7878, '/api/v3/rootfolder', keyed);
   for (const path of [
     ...clients.map((c) => `/api/v3/downloadclient/${String(c.id)}`),
     ...folders.map((f) => `/api/v3/rootfolder/${String(f.id)}`),
@@ -295,27 +359,21 @@ describe('the download path, behind the VPN', () => {
     const wg = await startWireGuard(PROJECT);
     let deployed: DeployedMediaplane | undefined;
     /**
-     * Every removal, each whether or not the one before it worked; what failed. Each
-     * command is bounded by TEARDOWN_MS (120 s): the test's timeout leaves room for them.
+     * Every removal, each whether or not the one before it worked. Each command is bounded
+     * by TEARDOWN_MS (120 s): the test's timeout leaves room for them.
      */
-    const removeAll = async (): Promise<unknown[]> => {
-      const failures: unknown[] = [];
-      const attempt = async (removal: () => Promise<unknown>) => {
-        try {
-          await removal();
-        } catch (failure) {
-          failures.push(failure);
-        }
-      };
-      await attempt(() => deployed?.remove() ?? Promise.resolve());
-      await attempt(async () => {
-        const down = await composeDown(PROJECT);
-        expect(down.code, down.stderr).toBe(0);
-      });
-      await attempt(() => expectWiringRemoved(PROJECT));
-      await attempt(() => wg.remove());
-      return failures;
-    };
+    const removeAll = () =>
+      runTeardown([
+        () => deployed?.remove() ?? Promise.resolve(),
+        async () => {
+          const down = await composeDown(PROJECT);
+          expect(down.code, down.stderr).toBe(0);
+        },
+        // The deployed Mediaplane joined the wiring network, and went down first so the
+        // stack's down could remove it.
+        () => expectWiringRemoved(PROJECT),
+        () => wg.remove(),
+      ]);
     try {
       await writeFile(join(home, 'stack.yaml'), downloadStack(join(home, 'data'), wg));
       await mkdir(join(home, 'secrets'), { mode: 0o700 });
@@ -412,11 +470,11 @@ describe('the download path, behind the VPN', () => {
       expect(JSON.parse(second.stdout)).toMatchObject({ outcome: 'no-changes' });
     } catch (failure) {
       // The body's own failure is the one to show: a removal that fails too is only logged.
-      for (const removal of await removeAll())
-        console.error('teardown failed too:', removal);
+      await removeAll().catch((also: unknown) => {
+        console.error('teardown failed too:', also);
+      });
       throw failure;
     }
-    const failures = await removeAll();
-    if (failures.length > 0) throw new AggregateError(failures, 'teardown failed');
+    await removeAll();
   }, 1_800_000);
 });
