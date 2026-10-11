@@ -339,6 +339,15 @@ password, which are S3c's (and listed again below).
   works but the server is open. Have `vpn-check` notice that (a request without the
   key that succeeds) and say so, with the fix: restart Gluetun, then qBittorrent.
 
+**S4:**
+
+- **The fakes of the arrs' download clients and root folders are kinder than the
+  apps.** In `fakeStackApis` (S3c), Sonarr and Radarr take a root folder whose folder
+  was never made, which the real arrs refuse; their test of a download client ignores its
+  port and `useSsl`; and they save a new client without testing it, which the real
+  arrs do. The end-to-end test shows the real behaviour. Make the fakes stricter when S4
+  extends them.
+
 **S5:**
 
 - **The Plex claim and `plex-login` need plex.tv.** The Mediaplane container has no
@@ -364,6 +373,11 @@ password, which are S3c's (and listed again below).
 - **A root folder whose path changes.** Sonarr and Radarr can't move a root folder, so a
   `root_folder.path` override would add a new one and leave the old, which may hold a
   library (S3c). Decide what drift and Keep mine do with the old one.
+- **A root folder whose folder was deleted.** Mediaplane makes a root folder's folder
+  only when it adds the root folder (S3c). Deleted later, the arr shows the root folder
+  as inaccessible, but Mediaplane finds it as wanted, and `plan` says `unchanged`: it
+  doesn't read the arr's `accessible`. Decide whether drift reports it, and whether
+  `apply` makes the folder again.
 - **qBittorrent's sign-in ban.** qBittorrent bans an address from signing in for an hour
   after five failed sign-ins in a row, and Mediaplane checks its password by signing in
   (S3c). A changed `admin.password` costs one failure per `plan`, and one for the
@@ -411,6 +425,15 @@ password, which are S3c's (and listed again below).
 - **Tests:** tighten the catalog tag test, and add Renovate. Let
   `test/e2e/deploy.e2e.test.ts` deploy with `deployMediaplane()` from
   `test/e2e/helpers.ts` (S3d), as the VPN test does.
+- **Small test gaps from S3c.** None hides a fault, and coverage holds without them:
+  - the folder helper's last two guards have no test: an error from the runtime that
+    isn't a `RuntimeError`, and a mkdir that fails with nothing on stderr;
+  - the download end-to-end test's `servarrFailure` doesn't cut an arr's message to one
+    short line, so a failing run could print a long one in CI's log. It is redacted, and
+    never reads an `attemptedValue`;
+  - the VPN and download end-to-end tests each list the same four teardown steps.
+    Sharing them needs the helpers to take a project name, so it is worth it only if a
+    third such test comes.
 - **Pins outside the catalog.** Renovate must also bump the images pinned in:
   - `Dockerfile` (`node`, `docker:*-cli`);
   - `deploy/mediaplane.compose.yaml` (`wollomatic/socket-proxy`);
@@ -440,6 +463,13 @@ password, which are S3c's (and listed again below).
 - **Servarr `TRUSTEDNETWORKS` and Mediaplane's network (ruling R12).** Once the panel
   proxies requests to the apps, add its network, so Sonarr believes the
   `X-Forwarded-For` header it sends (spec §11, Slice 3a).
+- **A `network.lan_subnet` that covers the stack's Docker networks.** With
+  `security.login_on_lan: false` and the web UIs on the LAN, qBittorrent lets any
+  sign-in from the LAN subnets through (S3c, threat model T2). A hand-typed subnet wide
+  enough to cover a Docker network of the stack, such as `172.16.0.0/12`, lets every
+  container there skip qBittorrent's login, and hides from `plan` a password changed by
+  hand. Detected subnets leave Docker's own networks out. Warn in `plan` when
+  `lan_subnet` overlaps the wiring network or the stack's own.
 
 **Not scheduled yet:**
 

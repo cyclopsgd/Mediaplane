@@ -185,7 +185,8 @@ function masked(held: FakeDownloadClient): FakeDownloadClient {
 /**
  * Sonarr's and Radarr's download clients and root folders, as fakeStackApis answers them.
  * A client's test passes when it names qBittorrent's service (gluetun or qbittorrent)
- * and holds qBittorrent's key; otherwise it fails as Sonarr's does.
+ * and holds qBittorrent's key; otherwise it fails as Sonarr's does. A `testFailure` set
+ * on the app overrides both checks: the test then fails with it, whatever the client.
  */
 function fakeServarrDownloads(
   request: FakeRequest,

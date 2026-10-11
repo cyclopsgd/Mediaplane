@@ -224,16 +224,17 @@ describe('servarrDownloadClient', () => {
       'GET /api/v3/downloadclient/schema': { status: 200, body: [without] },
       'GET /api/v3/downloadclient/1': { status: 200, body: { ...without, id: 1 } },
     });
-    for (const send of [
-      () => client.create(api, wanted()),
-      () => client.update(api, wanted(), HELD),
-    ]) {
+    // Each names what it read: the template, or the client the app holds.
+    for (const [send, read] of [
+      [() => client.create(api, wanted()), '/api/v3/downloadclient/schema'],
+      [() => client.update(api, wanted(), HELD), '/api/v3/downloadclient/1'],
+    ] as const) {
       const failure = await send().catch((thrown: unknown) => thrown);
       expect(failure).toBeInstanceOf(AppApiError);
-      expect(failure).toMatchObject({ kind: 'protocol' });
-      expect((failure as AppApiError).message).toContain(
-        'has no tvCategory, apiKey setting for qBittorrent, which Mediaplane needs',
-      );
+      expect(failure).toMatchObject({
+        kind: 'protocol',
+        message: `Sonarr at http://sonarr:8989 (127.0.0.1) has no tvCategory, apiKey setting for qBittorrent, which Mediaplane needs (GET ${read})`,
+      });
     }
     expect(app.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
       'GET /api/v3/downloadclient/schema',

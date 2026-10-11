@@ -12,7 +12,10 @@ export const DOWNLOAD_CLIENT_NAME = 'qBittorrent (Mediaplane)';
 const CLIENTS = '/api/v3/downloadclient';
 const ROOT_FOLDERS = '/api/v3/rootfolder';
 
-/** The settings a refused sign-in names: Sonarr's key, or a user name or password, is wrong. */
+/**
+ * The settings a refused sign-in names: the key the arr holds for qBittorrent, or a user
+ * name or password, is wrong.
+ */
 const CREDENTIALS = new Set(['ApiKey', 'Username', 'Password']);
 
 /** One setting of a Servarr provider; the rest of it goes back as it came. */
@@ -61,12 +64,14 @@ function fieldsOf(held: z.infer<typeof client>, link: DownloadLink) {
 }
 
 /**
- * `body` with the desired settings, and qBittorrent's key in clear: the one place one
- * app's key goes to another, in a request body. A setting the app doesn't have means a
- * version Mediaplane doesn't know: say so, rather than save a client that can't work.
+ * `body`, as the app gave it at `read`, with the desired settings, and qBittorrent's key
+ * in clear: the one place one app's key goes to another, in a request body. A setting
+ * the app doesn't have means a version Mediaplane doesn't know: say so, rather than save
+ * a client that can't work.
  */
 function withSettings<T extends { fields: z.infer<typeof setting>[] }>(
   api: AppApi,
+  read: string,
   body: T,
   desired: DesiredResource,
   link: DownloadLink,
@@ -85,7 +90,7 @@ function withSettings<T extends { fields: z.infer<typeof setting>[] }>(
   );
   if (missing.length > 0) {
     throw new AppApiError(
-      `${api.name} at ${api.where} has no ${missing.join(', ')} setting for qBittorrent, which Mediaplane needs (GET ${CLIENTS})`,
+      `${api.name} at ${api.where} has no ${missing.join(', ')} setting for qBittorrent, which Mediaplane needs (GET ${read})`,
       { kind: 'protocol' },
     );
   }
@@ -163,12 +168,13 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
       );
     },
     async create(api, desired) {
-      const offered = (await api.get(`${CLIENTS}/schema`, z.array(template))).find(
+      const schema = `${CLIENTS}/schema`;
+      const offered = (await api.get(schema, z.array(template))).find(
         (t) => t.implementation === 'QBittorrent',
       );
       if (offered === undefined) {
         throw new AppApiError(
-          `${api.name} at ${api.where} offers no qBittorrent download client (GET ${CLIENTS}/schema)`,
+          `${api.name} at ${api.where} offers no qBittorrent download client (GET ${schema})`,
           { kind: 'protocol' },
         );
       }
@@ -176,7 +182,7 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
       const { presets, ...body } = offered;
       const made = await api.post(
         `${CLIENTS}?forceSave=true`,
-        withSettings(api, body, desired, link),
+        withSettings(api, schema, body, desired, link),
         created,
       );
       return { id: made.id };
@@ -184,7 +190,10 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
     async update(api, desired, observed) {
       const path = `${CLIENTS}/${String(observed.id)}`;
       const held = await api.get(path, client);
-      await api.put(`${path}?forceSave=true`, withSettings(api, held, desired, link));
+      await api.put(
+        `${path}?forceSave=true`,
+        withSettings(api, path, held, desired, link),
+      );
     },
   };
 }

@@ -51,8 +51,9 @@ export interface AppContext<Options = Record<string, unknown>> {
   settings: AppSettings;
   options: Options;
   /**
-   * LAN subnets: network.lan_subnet, or those of the host's private addresses. Empty on a
-   * cloud VM without lan_subnet, whose private network is not a LAN.
+   * LAN subnets, each as its network address (192.168.1.0/24): network.lan_subnet, its
+   * host bits cleared, or those of the host's private addresses. Empty on a cloud VM
+   * without lan_subnet, whose private network is not a LAN.
    */
   lanSubnets: string[];
   /** Whether the web UIs are published on the LAN: network.bind is lan or all. */
