@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AppContext, AppDefinition, Catalog, PortSpec } from '../catalog/types';
 import type { AppSettings, StackConfig } from '../config/schema';
 import { error, hasErrors, warning, withHint, type Diagnostic } from '../diagnostics';
-import { inSubnet, privateNetworks, type HostFacts } from '../host/facts';
+import { inSubnet, networkOf, privateNetworks, type HostFacts } from '../host/facts';
 import { didYouMean } from '../util/did-you-mean';
 import { compare, unique } from '../util/sort';
 
@@ -70,9 +70,11 @@ export function resolveStack(
 ): ResolveResult {
   const byId = new Map(catalog.map((def) => [def.id, def]));
   const diagnostics = checkListedApps(config, byId);
+  // A typed subnet may carry host bits (192.168.1.10/24): the apps keep its network
+  // (192.168.1.0/24), as detected subnets are, so that is the form wanted.
   const lanSubnets =
     config.network.lan_subnet !== undefined
-      ? [config.network.lan_subnet]
+      ? [networkOf(config.network.lan_subnet)]
       : host.cloud !== undefined
         ? []
         : privateNetworks(host);

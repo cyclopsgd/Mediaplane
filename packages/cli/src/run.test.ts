@@ -130,11 +130,15 @@ async function currentHome(
   }
   // Sonarr and qBittorrent hold what the stack wants, as resources.json records.
   const password = store.shared?.adminPassword ?? '';
+  // qBittorrent takes only the stack's key, and gives it back among its preferences.
+  const key = store.apps.qbittorrent?.apiKey;
+  if (key === undefined) throw new Error('the test stack must store a qBittorrent key');
   apis.apps.set('sonarr', { ...freshAppState(), user: 'admin', password });
   apis.apps.set('qbittorrent', {
     ...freshAppState(),
     user: 'admin',
     password,
+    key,
     categories: { tv: '/data/torrents/tv' },
   });
   await writeResources(home, WIRED);
@@ -540,7 +544,11 @@ describe('mediaplane apply', () => {
     ).toBe(0);
     const qbittorrent = apis.apps.get('qbittorrent');
     if (qbittorrent === undefined) throw new Error('no qBittorrent faked');
-    const password = (await readSecretStore(home)).shared?.adminPassword;
+    const store = await readSecretStore(home);
+    const password = store.shared?.adminPassword;
+    // qBittorrent takes only the stack's key, and gives it back among its preferences.
+    qbittorrent.key = store.apps.qbittorrent?.apiKey ?? '';
+    expect(qbittorrent.key).not.toBe('');
     const changeThenApply = async (plans: number) => {
       qbittorrent.password = 'fake-changed-in-the-web-ui';
       for (let planned = 0; planned < plans; planned++) {
@@ -552,7 +560,7 @@ describe('mediaplane apply', () => {
         applied.io,
         deps(docker),
       );
-      return { code, stderr: applied.stderr() };
+      return { code, stdout: applied.stdout(), stderr: applied.stderr() };
     };
     expect((await changeThenApply(3)).code).toBe(0);
     expect(qbittorrent.password).toBe(password);
@@ -563,6 +571,29 @@ describe('mediaplane apply', () => {
     );
     // The update went through, with the key: only the check after it was refused.
     expect(qbittorrent.password).toBe(password);
+    expectNoSecrets(banned.stdout + banned.stderr, await secretsIn(home));
+  });
+
+  it("settles qBittorrent's trusted LAN when lan_subnet is typed with host bits", async () => {
+    // qBittorrent keeps a whitelisted subnet as its network address, so 192.168.1.10/24
+    // comes back as 192.168.1.0/24: the stack has to want that form, or no plan is empty.
+    const home = await makeHome(
+      STACK.replace(
+        'network: { bind: localhost }',
+        'network: { bind: lan, lan_subnet: 192.168.1.10/24 }\nsecurity: { login_on_lan: false }',
+      ),
+    );
+    const docker = fakeDocker(home);
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(0);
+    expect(apis.apps.get('qbittorrent')?.preferences).toMatchObject({
+      bypass_auth_subnet_whitelist_enabled: true,
+      bypass_auth_subnet_whitelist: '192.168.1.0/24',
+    });
+    const again = capture();
+    expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
+    expect(again.stdout()).toBe('No changes.\n');
   });
 
   it('asks on a terminal, and changes nothing unless the answer is yes', async () => {

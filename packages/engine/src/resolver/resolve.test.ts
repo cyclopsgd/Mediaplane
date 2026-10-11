@@ -343,6 +343,27 @@ describe('resolveStack: binding', () => {
     ]);
   });
 
+  it('keeps an explicit lan_subnet as its network, as the apps store it', () => {
+    // 192.168.1.10/24 names the network 192.168.1.0/24; qBittorrent and the Servarr apps
+    // keep that form, so a subnet left with host bits would never settle.
+    const host: HostFacts = {
+      arch: 'amd64',
+      privateAddresses: [
+        { address: '10.0.0.5', cidr: '10.0.0.5/24' },
+        { address: '192.168.1.10', cidr: '192.168.1.10/24' },
+      ],
+    };
+    const base = lan.replace('bind: lan', 'bind: lan, lan_subnet: 192.168.1.10/24');
+    const stack = resolve('  qbittorrent: {}\n', { base, host });
+    expect(stack.stack?.lanSubnets).toEqual(['192.168.1.0/24']);
+    expect(app(stack, 'qbittorrent')?.context).toMatchObject({
+      lanSubnets: ['192.168.1.0/24'],
+      lanClientSubnets: ['192.168.1.0/24'],
+    });
+    // The addresses it binds to are still those inside the network.
+    expect(stack.stack?.bindAddresses).toEqual(['192.168.1.10']);
+  });
+
   it('knows no LAN subnet on a cloud VM, unless lan_subnet names one', () => {
     const cloud: HostFacts = { ...FIXTURE_HOST, cloud: 'Oracle Cloud' };
     expect(resolve('  qbittorrent: {}\n', { host: cloud }).stack?.lanSubnets).toEqual([]);

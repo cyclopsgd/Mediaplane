@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { Catalog } from '../catalog/types';
+import { networkOf } from '../host/facts';
 import type { WiringSeams } from '../integrations/wiring';
 import type { ResourceSpec } from '../integrations/types';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
@@ -97,7 +98,7 @@ export interface FakeAppState {
   preferences: Record<string, string | boolean>;
   /** qBittorrent's categories: each one's save path, by name. */
   categories: Record<string, string>;
-  /** qBittorrent's API key: the only one it takes, or any when empty. */
+  /** qBittorrent's API key: the only Bearer token it takes, or any when empty. */
   key: string;
   /**
    * qBittorrent's failed sign-ins in a row. From five on it refuses every sign-in (403,
@@ -130,8 +131,8 @@ export function freshAppState(): FakeAppState {
  * Radarr and Prowlarr have /ping, system/status, config/host and /login; qBittorrent has
  * /, app/version, its sign-in (with its ban), preferences and categories, answered as
  * qBittorrent 5.2 answers them, and is `apps`' "qbittorrent" also when reached through
- * Gluetun. Any key is taken, but qBittorrent's `key` when it is set. `seams` send every
- * app's calls there.
+ * Gluetun. Any key is taken, but qBittorrent takes only a Bearer token (X-Api-Key gets a
+ * 403): its `key` when that is set. `seams` send every app's calls there.
  */
 export async function fakeStackApis(): Promise<{
   app: FakeApp;
@@ -152,13 +153,9 @@ export async function fakeStackApis(): Promise<{
     const host = (headers.host ?? '').split(':')[0] ?? '';
     const service = host === 'gluetun' ? 'qbittorrent' : host;
     const state = stateOf(service);
+    if (service === 'qbittorrent') return fakeQbittorrent(request, state);
     const keyed =
       headers['x-api-key'] !== undefined || headers.authorization !== undefined;
-    if (service === 'qbittorrent') {
-      const bearer =
-        state.key === '' ? keyed : headers.authorization === `Bearer ${state.key}`;
-      return fakeQbittorrent(request, state, bearer);
-    }
     if (path === '/ping') return { status: state.up ? 200 : 503, body: { status: 'OK' } };
     if (path === '/login' && method === 'POST') {
       const form = new URLSearchParams(request.body);
@@ -197,6 +194,11 @@ export async function fakeStackApis(): Promise<{
   };
 }
 
+/** The subnets of qBittorrent's whitelist, which takes them separated by commas or lines. */
+function subnetsOf(list: string): string[] {
+  return list.split(/[\s,]+/).filter((subnet) => subnet !== '');
+}
+
 /** A path as qBittorrent gives it back: without a trailing "/". */
 function kept(path: string): string {
   return path.length > 1 ? path.replace(/\/+$/, '') : path;
@@ -204,15 +206,17 @@ function kept(path: string): string {
 
 /**
  * qBittorrent's API, as fakeStackApis answers it, from `state`, as qBittorrent 5.2 does:
- * paths without a trailing "/", the whitelist one subnet per line, its key among the
+ * paths without a trailing "/", the whitelist one subnet per line and each subnet as its
+ * network address (192.168.1.10/24 is kept as 192.168.1.0/24), its key among the
  * preferences, and a ban on signing in after five failures in a row.
  */
-function fakeQbittorrent(
-  request: FakeRequest,
-  state: FakeAppState,
-  keyed: boolean,
-): FakeReply {
-  const { path } = request;
+function fakeQbittorrent(request: FakeRequest, state: FakeAppState): FakeReply {
+  const { path, headers } = request;
+  // Only a Bearer token (X-Api-Key is refused): `key`'s, or any when no key is set.
+  const keyed =
+    state.key === ''
+      ? (headers.authorization ?? '').startsWith('Bearer ')
+      : headers.authorization === `Bearer ${state.key}`;
   const form = new URLSearchParams(request.body);
   if (path === '/') return { status: state.up ? 200 : 503, body: 'login page' };
   if (path === '/api/v2/auth/login') {
@@ -239,10 +243,7 @@ function fakeQbittorrent(
       body: {
         ...state.preferences,
         save_path: kept(String(savePath)),
-        bypass_auth_subnet_whitelist: String(whitelist)
-          .split(/[\s,]+/)
-          .filter((subnet) => subnet !== '')
-          .join('\n'),
+        bypass_auth_subnet_whitelist: subnetsOf(String(whitelist)).join('\n'),
         web_ui_username: state.user,
         web_ui_api_key: state.key,
       },
@@ -254,6 +255,12 @@ function fakeQbittorrent(
     if (typeof user === 'string') state.user = user;
     if (typeof password === 'string') state.password = password;
     Object.assign(state.preferences, rest);
+    const { bypass_auth_subnet_whitelist: whitelist } = rest;
+    if (typeof whitelist === 'string') {
+      state.preferences.bypass_auth_subnet_whitelist = subnetsOf(whitelist)
+        .map(networkOf)
+        .join(',');
+    }
     return { status: 200 };
   }
   if (path === '/api/v2/torrents/categories') {
