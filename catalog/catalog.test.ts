@@ -12,6 +12,16 @@ const appFolders = (await readdir(new URL('.', import.meta.url), { withFileTypes
 
 const NO_OPTIONS = z.strictObject({});
 
+/** Every app whose integration `id`'s comes after, through "after", directly or not. */
+function comesAfter(id: string, seen = new Set<string>()): string[] {
+  for (const other of catalog.find((app) => app.id === id)?.integration?.after ?? []) {
+    if (seen.has(other)) continue;
+    seen.add(other);
+    comesAfter(other, seen);
+  }
+  return [...seen];
+}
+
 describe('catalog', () => {
   it('registers every app folder exactly once, sorted by id', () => {
     expect(catalog.map((app) => app.id)).toEqual(appFolders);
@@ -82,6 +92,27 @@ describe('catalog', () => {
       }
       const names = integration.resources.map((r) => r.name);
       expect(new Set(names).size).toBe(names.length);
+    });
+
+    it('requires only what is wired before it: its own earlier resources, or those of an app it comes after', () => {
+      // plan and the wire step see a requirement only once they have visited it: one
+      // visited later counts as in place, and the arr's test could make a missing
+      // qBittorrent category during plan. The order of the ids must not be what saves it.
+      const before = comesAfter(app.id);
+      for (const [index, resource] of integration.resources.entries()) {
+        for (const needed of resource.requires ?? []) {
+          const [owner, name] = needed.split('.');
+          const what = `${app.id}.${resource.name} requires ${needed}`;
+          if (owner === app.id) {
+            const earlier = integration.resources.slice(0, index).map((r) => r.name);
+            expect(earlier, what).toContain(name);
+          } else {
+            expect(before, `${what}, so it must come after ${String(owner)}`).toContain(
+              owner,
+            );
+          }
+        }
+      }
     });
   });
 
