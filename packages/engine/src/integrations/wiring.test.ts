@@ -20,6 +20,7 @@ import type { ResourceSpec } from './types';
 import {
   joinFailure,
   knownSecrets,
+  PLAN_DEADLINE_MS,
   planWiring,
   settled,
   WIRING_RUNBOOK,
@@ -555,6 +556,53 @@ describe('planWiring', () => {
     expect((await planWiring(options(sonarr, { stack: none }))).changes).toEqual([
       { resource: 'sonarr', action: 'unchanged' },
     ]);
+  });
+
+  it("gives an app that keeps failing plan's 15 s once, not once for each resource", async () => {
+    // Up, and taking the key, then 503 to everything else: each resource would wait.
+    const app = await fakeHttpApp((request) =>
+      ['/ping', '/api/v3/system/status'].includes(request.path)
+        ? { status: 200, body: {} }
+        : { status: 503 },
+    );
+    let clock = 0;
+    const seams: WiringSeams = {
+      endpoint: () => ({ host: '127.0.0.1', port: app.port }),
+      retry: {
+        now: () => clock,
+        sleep: (ms) => {
+          clock += ms;
+          return Promise.resolve();
+        },
+        random: () => 0.1,
+      },
+    };
+    const stack = sonarrWith([
+      { ...FAKE_LOGIN, name: 'first' },
+      { ...FAKE_LOGIN, name: 'second' },
+      FAKE_LOGIN,
+    ]);
+    const planned = await planWiring(
+      options({ seams, addresses: { 'fake-sonarr': '127.0.0.1' } }, { stack }),
+    );
+    const reason = expect.stringContaining(
+      'failed (HTTP 503) (GET /api/v3/login), and still did after 15 s',
+    ) as string;
+    expect(planned.changes).toEqual(
+      ['sonarr.first', 'sonarr.second', 'sonarr.login'].map((resource) => ({
+        resource,
+        action: 'unknown',
+        reason,
+      })),
+    );
+    // The app's warning, once: the rest of it wasn't asked.
+    expect(planned.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'wire.server',
+        hint: `check it with "mediaplane status sonarr", then see ${WIRING_RUNBOOK}`,
+      }),
+    ]);
+    expect(clock).toBeLessThanOrEqual(PLAN_DEADLINE_MS);
   });
 
   it("gives an app that is still starting plan's 15 s, and no more", async () => {

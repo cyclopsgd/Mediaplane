@@ -1275,9 +1275,11 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   keys, its `verify` what the app holds, and it may name `folders` to make first. While a
   managed field differs, the secrets aren't checked, because the update sets them anyway;
   nor are they, in `plan`, until a resource they `require` is in place (`unchanged` or
-  `adopt`) and checked. Apply's wire step doesn't check again a secret its own plan found refused: it
-  sets it. In `plan`, a
-  resource the app refuses leaves the app's others to be checked. `plan` reports a
+  `adopt`) and checked. Apply's wire step doesn't check again a secret its own plan found
+  refused: it sets it. In `plan`, a
+  resource the app refuses leaves the app's others to be checked. An app that stops
+  answering, or keeps failing with a 502, 503 or 504, leaves the rest of it `unknown`, so
+  `plan`'s 15 seconds are the app's, not each resource's. `plan` reports a
   managed field that holds a secret (`wire.secret-field`), which apply refuses.
 - **The typed HTTP client** (§3.2, §5.1) also sends a form with the key (qBittorrent's
   API), runs an app's own test (a 2xx passes; a 400 gives the errors of Servarr's

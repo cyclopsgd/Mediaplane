@@ -53,8 +53,9 @@ the requests app.
 
 - **`mediaplane plan`** warns with the same message, once for the app, and exits 2. It
   lists each of the app's resources under `Wiring:` as `? unknown` when the app refuses
-  the key. When it refuses one resource only, the app's others are still checked; an app
-  that stops answering leaves all that is left of it `unknown`:
+  the key. When it refuses one resource only, the app's others are still checked. An app
+  that stops answering, or keeps failing with a 502, 503 or 504, leaves all that is left
+  of it `unknown`, so `plan` waits for it once:
 
   ```console
   $ mediaplane plan

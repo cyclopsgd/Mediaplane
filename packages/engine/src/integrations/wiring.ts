@@ -472,8 +472,9 @@ export async function planWiring(
         });
       } catch (cause) {
         if (!(cause instanceof AppApiError)) throw cause;
-        if (cause.kind === 'unreachable' || cause.kind === 'timeout') {
-          // The app stopped answering: what is left of it can't be looked at either.
+        if (cause.kind === 'unreachable' || cause.kind === 'timeout' || cause.transient) {
+          // The app stopped answering, or keeps failing for now (502, 503, 504): what is
+          // left of it can't be looked at either, and plan's wait is the app's, once.
           diagnostics.push(unreachableWarning(app, cause));
           for (const left of wanted.slice(index)) {
             add({
