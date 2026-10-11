@@ -12,18 +12,21 @@ import type { DesiredResource, Fields, ResourceSpec, WiringContext } from './typ
 import {
   checkApp,
   examine,
+  fieldHoldingSecret,
   joinFailure,
   knownSecrets,
   notOnNetwork,
   reachApps,
   resourceAddress,
   resourcesInvalid,
+  secretFieldReason,
   wantedResources,
   WIRING_RUNBOOK,
   wiringOrder,
   wiringTargets,
   type Examined,
   type ReachedApp,
+  type WiringChange,
   type WiringSeams,
 } from './wiring';
 
@@ -38,6 +41,11 @@ export interface WireOptions {
   now: () => Date;
   /** Each resource's result, as it comes. */
   record: (action: ActionResult) => void;
+  /**
+   * What apply's own plan said of each resource. A secret it found refused (an `update`
+   * naming it) is set without another check: one failed sign-in per apply, not two.
+   */
+  planned?: readonly WiringChange[];
   seams?: WiringSeams;
 }
 
@@ -132,7 +140,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
     return new WiringFailed(message, diagnostics);
   };
   for (const app of order) {
-    const ctx: WiringContext = { stack, app, admin };
+    const ctx: WiringContext = { stack, app, admin, keys: options.store.apps };
     const targets = wiringTargets(ctx);
     const client = reached.get(app.def.id);
     if (client === undefined) {
@@ -169,17 +177,16 @@ export async function wire(options: WireOptions): Promise<string[]> {
       // secret, so a field that holds one leaves the resource as it is.
       const secretField = fieldHoldingSecret(spec, desired, secrets);
       if (secretField !== undefined) {
-        fail(
-          address,
-          `${address}.${secretField} holds one of the stack's secrets, so Mediaplane won't keep it in state/resources.json; give it another value`,
-          'wire.secret-field',
-        );
+        fail(address, secretFieldReason(address, secretField), 'wire.secret-field');
         continue;
       }
       let result: Examined | undefined;
       let id: string | number | null;
       try {
-        result = await examine(spec, client.api, ctx, known[address]);
+        const planned = options.planned?.find((change) => change.resource === address);
+        result = await examine(spec, client.api, ctx, known[address], {
+          refused: planned?.action === 'update' ? (planned.changes ?? []) : [],
+        });
         if (result === undefined) continue;
         if (result.action === 'unchanged') {
           options.record({
@@ -242,20 +249,6 @@ function failureMessage(failed: readonly string[], skipped: readonly string[]): 
       ? ''
       : `; skipped ${skipped.join(', ')}, which ${skipped.length === 1 ? 'needs' : 'need'} what failed`;
   return `the wiring failed for ${failed.join(', ')}${because}`;
-}
-
-/** The first of the managed fields whose value holds one of `secrets`, by name. */
-function fieldHoldingSecret(
-  spec: ResourceSpec,
-  desired: DesiredResource,
-  secrets: readonly string[],
-): string | undefined {
-  return spec.fields.find((field) => {
-    const value = desired.fields[field];
-    return (
-      value !== undefined && secrets.some((secret) => String(value).includes(secret))
-    );
-  });
 }
 
 /** The managed fields only: what resources.json keeps. */

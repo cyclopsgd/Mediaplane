@@ -236,15 +236,33 @@ export interface Examined {
   changes: string[];
 }
 
+/** How examine treats a resource's secrets. */
+export interface ExamineOptions {
+  /**
+   * false: leave them unchecked, because a resource this one requires is yet to be made
+   * or changed. The check could use what isn't there yet: Sonarr's own test of its
+   * download client makes a missing qBittorrent category, with no save path.
+   */
+  verify?: boolean;
+  /**
+   * The secrets apply's own plan found refused (an `update` naming them). They differ,
+   * and the update sets them, without another check: each check of qBittorrent's
+   * password that fails counts towards its ban.
+   */
+  refused?: readonly string[];
+}
+
 /**
  * Look at one resource: observe it, compare its managed fields, and check its secrets by
- * using them (spec §6.3). Undefined when the stack wants none. Throws AppApiError.
+ * using them (spec §6.3), unless `options` say not to. Undefined when the stack wants
+ * none. Throws AppApiError.
  */
 export async function examine(
   spec: ResourceSpec,
   api: AppApi,
   ctx: WiringContext,
   known: KnownResource | undefined,
+  options: ExamineOptions = {},
 ): Promise<Examined | undefined> {
   const desired = spec.desired(ctx);
   if (desired === undefined) return undefined;
@@ -255,14 +273,45 @@ export async function examine(
   const changes = spec.fields.filter(
     (field) => observed.fields[field] !== desired.fields[field],
   );
-  if (spec.secrets.length > 0 && spec.verify !== undefined) {
-    if (!(await spec.verify(api, desired))) changes.push(...spec.secrets);
+  // A field that differs makes it an update, which sets the secrets too: checking them
+  // would change nothing, and could mislead. A sign-in with a user name the app doesn't
+  // have yet fails as if the password were wrong.
+  if (changes.length === 0 && spec.secrets.length > 0) {
+    const refused = (options.refused ?? []).filter((name) => spec.secrets.includes(name));
+    if (refused.length > 0) {
+      changes.push(...refused);
+    } else if (options.verify !== false && spec.verify !== undefined) {
+      if (!(await spec.verify(api, desired, observed))) changes.push(...spec.secrets);
+    }
   }
   if (changes.length > 0) return { desired, observed, action: 'update', changes };
   const recorded =
     known !== undefined &&
     spec.fields.every((field) => known.fields[field] === desired.fields[field]);
   return { desired, observed, action: recorded ? 'unchanged' : 'adopt', changes };
+}
+
+/**
+ * The first of the resource's managed fields whose value holds one of `secrets`, by name.
+ * resources.json keeps the managed fields and holds no secret, so such a resource is
+ * refused before anything is sent for it.
+ */
+export function fieldHoldingSecret(
+  spec: ResourceSpec,
+  desired: DesiredResource,
+  secrets: readonly string[],
+): string | undefined {
+  return spec.fields.find((field) => {
+    const value = desired.fields[field];
+    return (
+      value !== undefined && secrets.some((secret) => String(value).includes(secret))
+    );
+  });
+}
+
+/** Why a resource whose managed `field` holds a secret is refused. */
+export function secretFieldReason(address: string, field: string): string {
+  return `${address}.${field} holds one of the stack's secrets, so Mediaplane won't keep it in state/resources.json; give it another value`;
 }
 
 /** The warning for an app Mediaplane couldn't ask, with what to do. */
@@ -342,8 +391,21 @@ export async function planWiring(
   const reached = await reachApps(ready, { ...options, deadlineMs: PLAN_DEADLINE_MS });
   const changes: WiringChange[] = [];
   const diagnostics: Diagnostic[] = [];
+  /** Resources apply would make or change, or that couldn't be looked at: not in place. */
+  const pending = new Set<string>();
+  const add = (change: WiringChange) => {
+    changes.push(change);
+    if (change.action !== 'unchanged' && change.action !== 'adopt') {
+      pending.add(change.resource);
+    }
+  };
   for (const app of order) {
-    const ctx: WiringContext = { stack: options.stack, app, admin: options.admin };
+    const ctx: WiringContext = {
+      stack: options.stack,
+      app,
+      admin: options.admin,
+      keys: options.keys,
+    };
     // Only what the stack wants is listed: a resource it doesn't want isn't wiring.
     const targets = wiringTargets(ctx);
     const client = reached.get(app.def.id);
@@ -355,54 +417,77 @@ export async function planWiring(
           hint: `see ${WIRING_RUNBOOK}`,
         }),
       );
-      changes.push(
-        ...targets.map((resource) => ({
-          resource,
-          action: 'unknown' as const,
-          reason,
-        })),
-      );
+      for (const resource of targets) add({ resource, action: 'unknown', reason });
       continue;
     }
     if (client === undefined) {
-      changes.push(
-        ...targets.map((resource) => ({
-          resource,
-          action: 'after-start' as const,
-        })),
-      );
+      for (const resource of targets) add({ resource, action: 'after-start' });
       continue;
     }
-    const wanted = wantedResources(ctx);
-    let looked = 0;
     try {
       await checkApp(client);
-      if (wanted.length === 0)
-        changes.push({ resource: app.def.id, action: 'unchanged' });
-      for (const spec of wanted) {
-        const address = resourceAddress(app, spec);
-        const result = await examine(spec, client.api, ctx, options.known[address]);
-        looked++;
-        // Wanted, and desired() is pure: only a guard.
-        if (result === undefined) continue;
-        changes.push({
-          resource: address,
-          action: result.action,
-          ...(result.changes.length === 0 ? {} : { changes: result.changes }),
-        });
-      }
     } catch (cause) {
       if (!(cause instanceof AppApiError)) throw cause;
       diagnostics.push(unreachableWarning(app, cause));
-      // What is left of the app could not be looked at.
-      const left = targets.slice(wanted.length === 0 ? 0 : looked);
-      changes.push(
-        ...left.map((resource) => ({
-          resource,
-          action: 'unknown' as const,
-          reason: cause.message,
-        })),
-      );
+      for (const resource of targets) {
+        add({ resource, action: 'unknown', reason: cause.message });
+      }
+      continue;
+    }
+    const wanted = wantedResources(ctx);
+    if (wanted.length === 0) add({ resource: app.def.id, action: 'unchanged' });
+    for (const [index, spec] of wanted.entries()) {
+      const address = resourceAddress(app, spec);
+      // What the wire step would refuse, before anything is sent: plan says so first.
+      const desired = spec.desired(ctx);
+      const held =
+        desired === undefined
+          ? undefined
+          : fieldHoldingSecret(spec, desired, options.secrets);
+      if (held !== undefined) {
+        const reason = secretFieldReason(address, held);
+        diagnostics.push(
+          warning('wire.secret-field', reason, { hint: `see ${WIRING_RUNBOOK}` }),
+        );
+        add({ resource: address, action: 'unknown', reason });
+        continue;
+      }
+      // Its secrets are checked only once what it requires is in place: plan changes
+      // nothing, and the check could make what is missing (spec §5.2, §6.3).
+      const waiting = (spec.requires ?? []).some((needed) => pending.has(needed));
+      let result: Examined | undefined;
+      try {
+        result = await examine(spec, client.api, ctx, options.known[address], {
+          verify: !waiting,
+        });
+      } catch (cause) {
+        if (!(cause instanceof AppApiError)) throw cause;
+        if (cause.kind === 'unreachable' || cause.kind === 'timeout') {
+          // The app stopped answering: what is left of it can't be looked at either.
+          diagnostics.push(unreachableWarning(app, cause));
+          for (const left of wanted.slice(index)) {
+            add({
+              resource: resourceAddress(app, left),
+              action: 'unknown',
+              reason: cause.message,
+            });
+          }
+          break;
+        }
+        // The app answered, about this resource: its others are still asked.
+        diagnostics.push(
+          warning(`wire.${cause.kind}`, cause.message, { hint: `see ${WIRING_RUNBOOK}` }),
+        );
+        add({ resource: address, action: 'unknown', reason: cause.message });
+        continue;
+      }
+      // Wanted, and desired() is pure: only a guard.
+      if (result === undefined) continue;
+      add({
+        resource: address,
+        action: result.action,
+        ...(result.changes.length === 0 ? {} : { changes: result.changes }),
+      });
     }
   }
   return { changes, diagnostics };

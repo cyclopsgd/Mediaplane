@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import type { Catalog } from '../catalog/types';
+import { AppApiError } from '../http/client';
 import { JoinFailed, OwnContainerUnknown, WiringRefused } from '../runtime/docker';
 import { RuntimeError } from '../runtime/types';
 import type { SecretStore } from '../secrets/store';
@@ -9,6 +11,7 @@ import { fakeHttpApp } from '../testing/http';
 import {
   FAKE_LOGIN,
   fakeSonarr,
+  WIRED_CATALOG,
   WIRING_RUNNING as RUNNING,
   wiringStack as stackOf,
 } from '../testing/wiring';
@@ -88,11 +91,177 @@ describe('planWiring', () => {
   it('would update a field that differs, and a secret the app refuses, by name only', async () => {
     const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: 'other' });
     expect((await planWiring(options(sonarr, { known: RECORDED }))).changes).toEqual([
-      { resource: 'sonarr.login', action: 'update', changes: ['user', 'password'] },
+      { resource: 'sonarr.login', action: 'update', changes: ['user'] },
     ]);
     sonarr.state.user = 'admin';
     expect((await planWiring(options(sonarr, { known: RECORDED }))).changes).toEqual([
       { resource: 'sonarr.login', action: 'update', changes: ['password'] },
+    ]);
+  });
+
+  it('checks no secret while a field differs: the update sets them all the same', async () => {
+    // The password is right, but under another user name: a sign-in as the wanted user
+    // would fail, and name a password that is fine.
+    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+    expect((await planWiring(options(sonarr, { known: RECORDED }))).changes).toEqual([
+      { resource: 'sonarr.login', action: 'update', changes: ['user'] },
+    ]);
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
+  });
+
+  it("gives a resource the stack's keys, and its check what the app holds", async () => {
+    const seen: unknown[] = [];
+    const linked: ResourceSpec = {
+      ...FAKE_LOGIN,
+      desired: (ctx) => {
+        seen.push(ctx.keys);
+        return FAKE_LOGIN.desired(ctx);
+      },
+      verify: (api, desired, observed) => {
+        seen.push(observed);
+        return FAKE_LOGIN.verify?.(api, desired, observed) ?? Promise.resolve(false);
+      },
+    };
+    const stack = stackOf(
+      WIRED_CATALOG.map((def) =>
+        def.id === 'sonarr'
+          ? { ...def, integration: { after: [], resources: [linked] } }
+          : def,
+      ),
+    );
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const keys = { sonarr: { apiKey: KEY }, qbittorrent: { apiKey: 'fake-qbt-key' } };
+    await planWiring(options(sonarr, { stack, keys, known: RECORDED }));
+    expect(seen).toContainEqual(keys);
+    expect(seen).toContainEqual({ id: null, name: 'login', fields: { user: 'admin' } });
+  });
+
+  /** WIRED_CATALOG, with Sonarr's resources replaced by `resources`. */
+  function sonarrWith(resources: ResourceSpec[]) {
+    return stackOf(
+      WIRED_CATALOG.map((def) =>
+        def.id === 'sonarr' ? { ...def, integration: { after: [], resources } } : def,
+      ),
+    );
+  }
+
+  it('leaves the secrets unchecked while a resource they require is yet to be made', async () => {
+    // "sonarr.first", which holds no secret, is missing, so apply would create it;
+    // "sonarr.login" requires it.
+    const first: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'first',
+      secrets: [],
+      observe: () => Promise.resolve(undefined),
+    };
+    const login: ResourceSpec = { ...FAKE_LOGIN, requires: ['sonarr.first'] };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: 'other' });
+    const stack = sonarrWith([first, login]);
+    expect((await planWiring(options(sonarr, { stack }))).changes).toEqual([
+      { resource: 'sonarr.first', action: 'create' },
+      { resource: 'sonarr.login', action: 'adopt' },
+    ]);
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
+    // Once it is in place, the secrets are checked, and found refused.
+    const there: ResourceSpec = {
+      ...first,
+      observe: () =>
+        Promise.resolve({ id: null, name: 'first', fields: { user: 'admin' } }),
+    };
+    const known: KnownResources = {
+      ...RECORDED,
+      'sonarr.first': {
+        id: null,
+        name: 'first',
+        fields: { user: 'admin' },
+        secrets: [],
+        appliedAt: '2026-10-10T12:00:00.000Z',
+      },
+    };
+    expect(
+      (await planWiring(options(sonarr, { stack: sonarrWith([there, login]), known })))
+        .changes,
+    ).toEqual([
+      { resource: 'sonarr.first', action: 'unchanged' },
+      { resource: 'sonarr.login', action: 'update', changes: ['password'] },
+    ]);
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(true);
+  });
+
+  it("keeps asking an app's other resources when one fails, and stops when the app stops answering", async () => {
+    const refused: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'first',
+      // The fake Sonarr answers 404: a refusal of this resource, not of the app.
+      observe: (api) => api.get('/api/v3/missing', z.unknown()).then(() => undefined),
+    };
+    const sonarr = await fakeSonarr({ key: KEY });
+    const planned = await planWiring(
+      options(sonarr, { stack: sonarrWith([refused, FAKE_LOGIN]) }),
+    );
+    expect(planned.changes).toEqual([
+      {
+        resource: 'sonarr.first',
+        action: 'unknown',
+        reason: expect.stringContaining('refused the request (HTTP 404)') as string,
+      },
+      { resource: 'sonarr.login', action: 'create' },
+    ]);
+    expect(planned.diagnostics).toEqual([
+      expect.objectContaining({ code: 'wire.rejected', hint: `see ${WIRING_RUNBOOK}` }),
+    ]);
+    // Nothing answering is the app's failure: what is left of it is unknown too.
+    const gone: ResourceSpec = {
+      ...refused,
+      observe: () =>
+        Promise.reject(
+          new AppApiError(
+            'sonarr at http://sonarr:8989 could not be reached (ECONNREFUSED)',
+            {
+              kind: 'unreachable',
+              reachedApp: false,
+            },
+          ),
+        ),
+    };
+    const stopped = await planWiring(
+      options(sonarr, { stack: sonarrWith([gone, FAKE_LOGIN]) }),
+    );
+    expect(stopped.changes.map((c) => [c.resource, c.action])).toEqual([
+      ['sonarr.first', 'unknown'],
+      ['sonarr.login', 'unknown'],
+    ]);
+    expect(stopped.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'wire.unreachable',
+        hint: `check it with "mediaplane status sonarr", then see ${WIRING_RUNBOOK}`,
+      }),
+    ]);
+  });
+
+  it('says a managed field that holds a secret is one apply would refuse, and asks nothing of it', async () => {
+    // The user name "admin" holds a value of the stack's secrets.
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const planned = await planWiring(
+      options(sonarr, { secrets: [KEY, PASSWORD, 'dmi'] }),
+    );
+    const reason =
+      "sonarr.login.user holds one of the stack's secrets, so Mediaplane won't keep it in state/resources.json; give it another value";
+    expect(planned.changes).toEqual([
+      { resource: 'sonarr.login', action: 'unknown', reason },
+    ]);
+    expect(planned.diagnostics).toEqual([
+      expect.objectContaining({
+        severity: 'warning',
+        code: 'wire.secret-field',
+        message: reason,
+        hint: `see ${WIRING_RUNBOOK}`,
+      }),
+    ]);
+    // Only the app's own check: the resource was neither looked at nor signed in to.
+    expect(sonarr.app.requests.map((r) => r.path)).toEqual([
+      '/ping',
+      '/api/v3/system/status',
     ]);
   });
 

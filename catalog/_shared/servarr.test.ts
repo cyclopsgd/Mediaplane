@@ -1,4 +1,8 @@
-import { createAppApi, type DesiredResource } from '@mediaplane/engine';
+import {
+  createAppApi,
+  type DesiredResource,
+  type ObservedResource,
+} from '@mediaplane/engine';
 import { fakeHttpApp, type FakeRequest } from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { servarrAdmin } from './servarr';
@@ -30,6 +34,13 @@ const DESIRED: DesiredResource = {
   name: 'admin',
   fields: { username: 'admin' },
   secrets: { password: PASSWORD },
+};
+
+/** The admin the app holds, as observe finds it. */
+const OBSERVED: ObservedResource = {
+  id: null,
+  name: 'admin',
+  fields: { username: 'admin' },
 };
 
 /** A fake Sonarr whose host settings start as `host`, and whose login takes `password`. */
@@ -103,9 +114,9 @@ describe('servarrAdmin', () => {
 
   it('checks the password by signing in with it, without the API key', async () => {
     const { api, app } = await sonarr({ ...HOST, username: 'admin' });
-    expect(await admin.verify?.(api, DESIRED)).toBe(true);
+    expect(await admin.verify?.(api, DESIRED, OBSERVED)).toBe(true);
     expect(
-      await admin.verify?.(api, { ...DESIRED, secrets: { password: 'other' } }),
+      await admin.verify?.(api, { ...DESIRED, secrets: { password: 'other' } }, OBSERVED),
     ).toBe(false);
     const login = app.requests.find((r) => r.path === '/login');
     expect(login?.headers['x-api-key']).toBeUndefined();
@@ -116,9 +127,9 @@ describe('servarrAdmin', () => {
     // that is part of "loginFailed" turns the refusal's redirect into
     // /login?returnUrl=&login***ed=true: a redirect that no longer says it failed.
     const { api } = await sonarr({ ...HOST, username: 'admin' });
-    expect(await admin.verify?.(api, { ...DESIRED, secrets: { password: 'Fail' } })).toBe(
-      false,
-    );
+    expect(
+      await admin.verify?.(api, { ...DESIRED, secrets: { password: 'Fail' } }, OBSERVED),
+    ).toBe(false);
   });
 
   it('changes a user name that differs', async () => {

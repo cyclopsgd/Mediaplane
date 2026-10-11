@@ -32,6 +32,11 @@ export interface WiringContext {
   app: ResolvedApp;
   /** The shared admin login (spec §6.1). */
   admin: { username: string; password: string };
+  /**
+   * The apps' keys from the secrets store, by app, then by name: what a resource holds of
+   * another app's, such as qBittorrent's key in Sonarr's download client.
+   */
+  keys: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
 /**
@@ -59,13 +64,22 @@ export interface ResourceSpec {
     known: KnownResource | undefined,
   ): Promise<ObservedResource | undefined>;
   /**
-   * Whether the app takes the desired secrets: a sign-in, or the app's own test (spec
-   * §6.3, "secrets are verified, never compared"). Required when `secrets` isn't empty.
+   * Whether the app takes the desired secrets: a sign-in, or the app's own test of what it
+   * holds (`observed`) (spec §6.3, "secrets are verified, never compared"). Required when
+   * `secrets` isn't empty. Asked only while every managed field matches: update sets the
+   * secrets with the fields. Throws AppApiError when the app can't say.
    */
-  verify?(api: AppApi, desired: DesiredResource): Promise<boolean>;
+  verify?(
+    api: AppApi,
+    desired: DesiredResource,
+    observed: ObservedResource,
+  ): Promise<boolean>;
   /** Make it. The id the app gave it, or null for a singleton. */
   create(api: AppApi, desired: DesiredResource): Promise<{ id: string | number | null }>;
-  /** Make what the app holds match: the managed fields and the secrets. Idempotent. */
+  /**
+   * Make what the app holds match: the managed fields and the secrets, always both, since
+   * the secrets go unchecked when a field differs. Idempotent.
+   */
   update(
     api: AppApi,
     desired: DesiredResource,

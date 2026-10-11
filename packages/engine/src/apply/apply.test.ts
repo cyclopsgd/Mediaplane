@@ -1322,6 +1322,27 @@ describe('apply: the wiring', () => {
     ]);
   });
 
+  it('signs in once with a password the app refuses, then sets it without asking again', async () => {
+    const home = await makeHome();
+    const sonarr = await fakeSonarr();
+    const docker = fakeDocker(home, { addresses: sonarr.addresses });
+    const wired = { catalog: WIRED_CATALOG, wiring: sonarr.seams };
+    expect((await apply(options(home, docker, wired))).outcome).toBe('success');
+    sonarr.state.password = 'fake-other-password';
+    const signIns = () => sonarr.app.requests.filter((r) => r.path === '/login').length;
+    const before = signIns();
+    const result = await apply(options(home, docker, wired));
+    expect(result.outcome).toBe('success');
+    expect(result.plan.wiring).toEqual([
+      { resource: 'sonarr.login', action: 'update', changes: ['password'] },
+    ]);
+    expect(result.actions.find((a) => a.resource === 'sonarr.login')?.detail).toBe(
+      'updated password',
+    );
+    // Its plan's sign-in failed; the wire step signed in no more; verify's worked.
+    expect(signIns() - before).toBe(2);
+  });
+
   it("fails the wire step with the app's own message, and skips verify", async () => {
     const home = await makeHome();
     const sonarr = await fakeSonarr({ key: 'f'.repeat(32) });

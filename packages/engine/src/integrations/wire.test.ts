@@ -98,7 +98,8 @@ describe('wire', () => {
   it('updates what differs, saying what, and adopts what is already right', async () => {
     const wrong = await fakeSonarr({ key: KEY, user: 'someone', password: 'other' });
     const updated = await wireWith(wrong, { known: RECORDED });
-    expect(await updated.run).toEqual(['sonarr.login updated user, password']);
+    // The user differs, so the update sets the password too, unchecked.
+    expect(await updated.run).toEqual(['sonarr.login updated user']);
     expect(wrong.state).toMatchObject({ user: 'admin', password: PASSWORD });
 
     const right = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
@@ -106,6 +107,19 @@ describe('wire', () => {
     expect(await adopted.run).toEqual(['sonarr.login adopted']);
     expect(right.app.requests.some((r) => r.method === 'PUT')).toBe(false);
     expect(await readResources(adopted.home)).toEqual(RECORDED);
+  });
+
+  it('sets a secret its own plan found refused, without checking it again', async () => {
+    // Each failed check of qBittorrent's password counts towards its ban: apply's plan
+    // made one, so the wire step makes none.
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: 'other' });
+    const { run } = await wireWith(sonarr, {
+      known: RECORDED,
+      planned: [{ resource: 'sonarr.login', action: 'update', changes: ['password'] }],
+    });
+    expect(await run).toEqual(['sonarr.login updated password']);
+    expect(sonarr.state.password).toBe(PASSWORD);
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
   });
 
   it('changes nothing, and writes nothing, when all is as wanted', async () => {

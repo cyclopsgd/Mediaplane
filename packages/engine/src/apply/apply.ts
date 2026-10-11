@@ -217,6 +217,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         record: (action) => {
           steps.record(action);
         },
+        planned: shown.wiring,
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });
       return done.length === 0 ? NONE_NEEDED : done.join('; ');
