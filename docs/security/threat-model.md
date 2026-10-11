@@ -97,6 +97,10 @@ host network, read-only mounts
   in the environment (`NODE_USE_ENV_PROXY`) never sees a key. It carries the app's key in
   a header (`X-Api-Key`, or a Bearer token for qBittorrent), never in the URL. Mediaplane
   signs in to qBittorrent, Sonarr, Radarr and Prowlarr with the shared login, to check it.
+  `plan` checks a download client with the arr's own test, which also makes a missing
+  post-import category in qBittorrent, a setting Mediaplane doesn't manage: one you set
+  in the arr (`tvImportedCategory`, `movieImportedCategory`) and later deleted in
+  qBittorrent.
 - **vpn-check's probe.** `mediaplane vpn-check` runs
   `docker compose run --rm --no-deps -T --user 65534:65534 --entrypoint sh qbittorrent`
   with a short script: a throwaway container of qBittorrent's own image, as nobody, in

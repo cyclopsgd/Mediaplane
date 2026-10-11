@@ -1256,16 +1256,22 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   `qBittorrent (Mediaplane)`, with the fields §6.2 lists and qBittorrent's key as its
   secret. Its host is how the arr reaches qBittorrent: `gluetun` behind the VPN, whose
   network qBittorrent shares, or `qbittorrent`; its port is qBittorrent's own. It is made
-  from the arr's own template, saved with `forceSave` even while qBittorrent is down, and
-  updated by sending the client back as the arr gave it, so its other settings stay the
-  user's. Its key is checked with the arr's own test of the client it holds (the key
-  masked): a refused key is planned as an update; any other failure, such as qBittorrent
-  out of the arr's reach, is the arr's own message (`unknown` in `plan`, a failure in
-  apply and verify). It `requires` qBittorrent's category, because the arr's test makes a
-  missing one with no save path, and Sonarr and Radarr come `after` qBittorrent. While
-  the category is to be made, `plan` checks the client's fields only, never its key, so
-  that the arr's test can't make the category (`plan` changes nothing: §5.2, §6.3); the
-  wire step checks it once the category is there.
+  from the arr's own template. The arr tests a new client as it saves it, with
+  `forceSave` too, which skips only its warnings, so a create fails while the arr can't
+  reach qBittorrent. It is updated by sending the client back as the arr gave it, so its
+  other settings stay the user's, with `forceSave`, which skips the arr's test: an update
+  is saved even while qBittorrent is down. Its key is checked with the arr's own test of
+  the client it holds (the key masked): a refused key is planned as an update; any other
+  failure, such as qBittorrent out of the arr's reach, is the arr's own message
+  (`unknown` in `plan`, a failure in apply and verify). It `requires` qBittorrent's
+  category, because the arr's test makes a missing one with no save path, and Sonarr and
+  Radarr come `after` qBittorrent. While the category is to be made, `plan` checks the
+  client's fields only, never its key, so that the arr's test can't make the category
+  (`plan` changes nothing: §5.2, §6.3); the wire step checks it once the category is
+  there. The arr's test also makes a missing post-import category (Sonarr's
+  `tvImportedCategory`, Radarr's `movieImportedCategory`), which Mediaplane doesn't
+  manage, so a `plan` makes one again in qBittorrent when you set it in the arr and later
+  delete it in qBittorrent.
 - **Sonarr's and Radarr's root folder** (§6.2): `<arr>.root_folder`, `/data/media/tv` or
   `/data/media/movies`, known by its path (the arrs can't change one). The arr needs the
   folder to exist, so the wire step makes it first, with `mkdir -p` in a throwaway

@@ -108,8 +108,10 @@ function withSettings<T extends { fields: z.infer<typeof setting>[] }>(
  * - Its key is checked with the app's own test of the client it holds, as it holds it
  *   (the key masked): a refused sign-in means the key differs, and an update sets it.
  *   Any other failure, such as qBittorrent out of the arr's reach, the app explains.
- * - It is saved with forceSave, so it is saved even while qBittorrent is down; the check
- *   says whether it works.
+ * - It is saved with forceSave. The app then skips its test of an update, which is saved
+ *   even while qBittorrent is down: the check says whether it works. It still tests a
+ *   new client, skipping only the warnings, so a create fails while it can't reach
+ *   qBittorrent.
  */
 export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
   return {

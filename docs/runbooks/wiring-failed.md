@@ -149,14 +149,17 @@ differ, and a `reason` when it is `unknown`.
   restart qBittorrent, which forgets the ban (`docker restart mediaplane-qbittorrent-1`),
   then run `apply` again: it sets the password if it hasn't yet, and its check then
   passes.
-- **`tested qBittorrent (Mediaplane), and it failed`, with
-  `Host: Unable to connect to qBittorrent`.** Sonarr or Radarr can't reach qBittorrent.
+- **`Host: Unable to connect to qBittorrent`.** Sonarr or Radarr can't reach qBittorrent.
   Behind the VPN they reach it through Gluetun, as `gluetun`, at qBittorrent's port:
   check that both run and are healthy (`mediaplane status`), and that the VPN is up
   (`mediaplane vpn-check`). A `compose.override.yaml` that takes Sonarr, Radarr or
   Gluetun off the stack's network breaks it too. Fix that, then run `apply` again. A
   failure that names `ApiKey` is never this one: Mediaplane puts qBittorrent's key back
-  itself.
+  itself. The message takes one of two forms:
+  - from `plan`, verify, or `apply` checking a client the arr holds, it follows
+    `tested qBittorrent (Mediaplane), and it failed:`;
+  - when `apply` makes the client, since the arr tests a new client before it saves
+    it: `refused the request (HTTP 400): Host: Unable to connect to qBittorrent`.
 - **`could not make /data/media/tv for sonarr.root_folder`** (`wire.folders`). Sonarr and
   Radarr need their root folder to exist, so Mediaplane makes it first, as the stack's
   `user:`, in a throwaway container of the app. mkdir's own message follows. Usually the

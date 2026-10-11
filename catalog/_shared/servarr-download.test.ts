@@ -144,7 +144,7 @@ describe('servarrDownloadClient', () => {
     expect(client.desired({ ...contextOf(), keys: {} })).toBeUndefined();
   });
 
-  it("makes it from the app's own template, saved even while qBittorrent is down, and finds it by name", async () => {
+  it("makes it from the app's own template, saved with forceSave, and finds it by name", async () => {
     const { api, app, state } = await sonarr();
     expect(await client.observe(api, undefined)).toBeUndefined();
     expect(await client.create(api, wanted())).toEqual({ id: 1 });
