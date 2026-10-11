@@ -1,6 +1,7 @@
 import { defineApp, warning } from '@mediaplane/engine';
 import { z } from 'zod';
 import { qbittorrentConf } from './conf';
+import integration from './integration';
 
 export default defineApp({
   id: 'qbittorrent',
@@ -30,6 +31,7 @@ export default defineApp({
     key: { secret: 'apiKey', scheme: 'bearer' },
     check: '/api/v2/app/version',
   },
+  integration,
   options: z.strictObject({
     vpn: z
       .boolean()

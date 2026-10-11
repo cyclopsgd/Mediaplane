@@ -67,7 +67,7 @@ describe('renderFacts', () => {
     expect(renderFacts(wired)).toContain(
       '- **Managed in the app:** `prowlarr.admin`: fields `prowlarr.admin.username`; the secret `password`, checked and never shown\n',
     );
-    expect(renderFacts(app('qbittorrent'))).toContain(
+    expect(renderFacts(app('jellyfin'))).toContain(
       '- **Managed in the app:** nothing yet\n',
     );
   });

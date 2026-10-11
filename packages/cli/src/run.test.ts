@@ -19,6 +19,7 @@ import {
   writeSecretStore,
   type ContainerState,
   type HostRequest,
+  type KnownResources,
   type Runtime,
 } from '@mediaplane/engine';
 import {
@@ -27,6 +28,7 @@ import {
   fakeProbe,
   fakeRuntime,
   fakeStackApis,
+  freshAppState,
   running,
   tempDir,
 } from '@mediaplane/engine/testing';
@@ -55,6 +57,45 @@ async function makeHome(stack = STACK): Promise<string> {
   await writeFile(join(home, 'stack.yaml'), stack);
   return home;
 }
+
+const AT = '2026-10-10T12:00:00.000Z';
+
+/** What resources.json records once the test stack is wired, as the fake apps hold it. */
+const WIRED: KnownResources = {
+  'qbittorrent.admin': {
+    id: null,
+    name: 'admin',
+    fields: { username: 'admin' },
+    secrets: ['password'],
+    appliedAt: AT,
+  },
+  'qbittorrent.category_tv': {
+    id: 'tv',
+    name: 'tv',
+    fields: { savePath: '/data/torrents/tv' },
+    secrets: [],
+    appliedAt: AT,
+  },
+  'qbittorrent.preferences': {
+    id: null,
+    name: 'preferences',
+    fields: {
+      savePath: '/data/torrents',
+      autoTmm: true,
+      authSubnetWhitelistEnabled: false,
+      authSubnetWhitelist: '',
+    },
+    secrets: [],
+    appliedAt: AT,
+  },
+  'sonarr.admin': {
+    id: null,
+    name: 'admin',
+    fields: { username: 'admin' },
+    secrets: ['password'],
+    appliedAt: AT,
+  },
+};
 
 /** All zeros: the keys currentHome stores are never printed, so their value is moot. */
 const zeros = (size: number) => Buffer.alloc(size, 0);
@@ -87,18 +128,16 @@ async function currentHome(
     const files = await prestartFilesFor(context.stack, store, {}, zeros);
     await writePrestartFiles(home, files);
   }
-  // Sonarr holds the shared login, as resources.json records.
+  // Sonarr and qBittorrent hold what the stack wants, as resources.json records.
   const password = store.shared?.adminPassword ?? '';
-  apis.apps.set('sonarr', { user: 'admin', password, up: true });
-  await writeResources(home, {
-    'sonarr.admin': {
-      id: null,
-      name: 'admin',
-      fields: { username: 'admin' },
-      secrets: ['password'],
-      appliedAt: '2026-10-10T12:00:00.000Z',
-    },
+  apis.apps.set('sonarr', { ...freshAppState(), user: 'admin', password });
+  apis.apps.set('qbittorrent', {
+    ...freshAppState(),
+    user: 'admin',
+    password,
+    categories: { tv: '/data/torrents/tv' },
   });
+  await writeResources(home, WIRED);
   return home;
 }
 
@@ -218,7 +257,7 @@ describe('mediaplane plan', () => {
       'Secrets to generate: admin.password, gluetun.controlApiKey, qbittorrent.apiKey, sonarr.apiKey\n',
     );
     expect(term.stdout()).toContain(
-      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 2 wiring checks after the start.',
+      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 4 wiring checks after the start.',
     );
     expect(term.stdout()).toContain('+ generated/.env (secret values, not shown)\n');
   });
@@ -476,7 +515,7 @@ describe('mediaplane apply', () => {
     const first = capture();
     expect(await run(['apply', '--home', home, '--yes'], first.io, deps(docker))).toBe(0);
     expect(first.stdout()).toContain(
-      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 2 wiring checks after the start.',
+      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 4 wiring checks after the start.',
     );
     expect(first.stdout()).toContain('  done    images: images present\n');
     expect(first.stdout()).toMatch(
@@ -488,6 +527,42 @@ describe('mediaplane apply', () => {
       0,
     );
     expect(second.stdout()).toBe('No changes.\n');
+  });
+
+  it("is banned from qBittorrent's sign-in by four plans of a changed password, not three", async () => {
+    // qBittorrent bans an address after five failed sign-ins in a row. Each plan of a
+    // changed password makes one, and so does apply's own plan; its wire step makes none,
+    // and the check after the update signs in with the new password.
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(0);
+    const qbittorrent = apis.apps.get('qbittorrent');
+    if (qbittorrent === undefined) throw new Error('no qBittorrent faked');
+    const password = (await readSecretStore(home)).shared?.adminPassword;
+    const changeThenApply = async (plans: number) => {
+      qbittorrent.password = 'fake-changed-in-the-web-ui';
+      for (let planned = 0; planned < plans; planned++) {
+        expect(await run(['plan', '--home', home], capture().io, deps(docker))).toBe(2);
+      }
+      const applied = capture();
+      const code = await run(
+        ['apply', '--home', home, '--yes'],
+        applied.io,
+        deps(docker),
+      );
+      return { code, stderr: applied.stderr() };
+    };
+    expect((await changeThenApply(3)).code).toBe(0);
+    expect(qbittorrent.password).toBe(password);
+    const banned = await changeThenApply(4);
+    expect(banned.code).toBe(1);
+    expect(banned.stderr).toContain(
+      'banned after too many failed authentication attempts',
+    );
+    // The update went through, with the key: only the check after it was refused.
+    expect(qbittorrent.password).toBe(password);
   });
 
   it('asks on a terminal, and changes nothing unless the answer is yes', async () => {
@@ -557,6 +632,9 @@ describe('mediaplane apply', () => {
       ['pull', '', 'done'],
       ['ownership', '', 'done'],
       ['start', '', 'done'],
+      ['wire', 'qbittorrent.admin', 'done'],
+      ['wire', 'qbittorrent.preferences', 'done'],
+      ['wire', 'qbittorrent.category_tv', 'done'],
       ['wire', 'sonarr.admin', 'done'],
       ['wire', '', 'done'],
       ['verify', '', 'done'],
@@ -820,7 +898,7 @@ describe('mediaplane history', () => {
     const list = capture();
     expect(await run(['history', '--home', home], list.io, deps(docker))).toBe(0);
     expect(list.stdout()).toBe(
-      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 1 resource wired\n`,
+      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 4 resources wired\n`,
     );
     const one = capture();
     expect(await run(['history', id, '--home', home], one.io, deps(docker))).toBe(0);
@@ -829,6 +907,7 @@ describe('mediaplane history', () => {
       '  done    containers: every app is running and healthy\n',
     );
     expect(one.stdout()).toContain('  done    wiring sonarr.admin: created\n');
+    expect(one.stdout()).toContain('  done    wiring qbittorrent.category_tv: created\n');
   });
 
   it('prints versioned JSON', async () => {

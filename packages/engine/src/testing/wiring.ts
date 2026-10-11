@@ -5,7 +5,7 @@ import type { ResourceSpec } from '../integrations/types';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { fakeContainer } from './fakes';
 import { FIXTURE_API, FIXTURE_HOST, fixtureCatalog, fixtureConfig } from './fixtures';
-import { fakeHttpApp, type FakeApp } from './http';
+import { fakeHttpApp, type FakeApp, type FakeReply, type FakeRequest } from './http';
 
 /** The stack of the wiring tests: Sonarr, and qBittorrent behind Gluetun. */
 export const WIRING_STACK = `version: 1
@@ -88,18 +88,50 @@ export const WIRED_CATALOG: Catalog = fixtureCatalog.map((def) =>
 
 /** What one fake app of the real catalog holds; a test may change it between calls. */
 export interface FakeAppState {
-  /** Its admin user name and password (Servarr); empty before there is one. */
+  /** Its admin user name and password; empty before there is one. */
   user: string;
   password: string;
   /** false: its readiness path answers 503, as while it starts. */
   up: boolean;
+  /** qBittorrent's preferences, as its API names them, but for the login above. */
+  preferences: Record<string, string | boolean>;
+  /** qBittorrent's categories: each one's save path, by name. */
+  categories: Record<string, string>;
+  /** qBittorrent's API key: the only one it takes, or any when empty. */
+  key: string;
+  /**
+   * qBittorrent's failed sign-ins in a row. From five on it refuses every sign-in (403,
+   * a ban), until a test sets it back to 0, as a restart would; a success resets it.
+   */
+  signInFailures: number;
+}
+
+/** A fake app as it first starts: qBittorrent's settings as its pre-start file sets them. */
+export function freshAppState(): FakeAppState {
+  return {
+    user: '',
+    password: '',
+    up: true,
+    preferences: {
+      save_path: '/data/torrents',
+      auto_tmm_enabled: true,
+      bypass_auth_subnet_whitelist_enabled: false,
+      bypass_auth_subnet_whitelist: '',
+    },
+    categories: {},
+    key: '',
+    signInFailures: 0,
+  };
 }
 
 /**
  * The APIs of the real catalog's apps, as far as Mediaplane uses them, all on one port
  * of 127.0.0.1: told apart by their Host header ("sonarr:8989", "gluetun:8080"). Sonarr,
  * Radarr and Prowlarr have /ping, system/status, config/host and /login; qBittorrent has
- * / and app/version. Any key is taken. `seams` send every app's calls there.
+ * /, app/version, its sign-in (with its ban), preferences and categories, answered as
+ * qBittorrent 5.2 answers them, and is `apps`' "qbittorrent" also when reached through
+ * Gluetun. Any key is taken, but qBittorrent's `key` when it is set. `seams` send every
+ * app's calls there.
  */
 export async function fakeStackApis(): Promise<{
   app: FakeApp;
@@ -111,22 +143,21 @@ export async function fakeStackApis(): Promise<{
   const stateOf = (service: string) => {
     const known = apps.get(service);
     if (known !== undefined) return known;
-    const fresh: FakeAppState = { user: '', password: '', up: true };
+    const fresh = freshAppState();
     apps.set(service, fresh);
     return fresh;
   };
   const app = await fakeHttpApp((request) => {
     const { method, path, headers } = request;
-    const service = (headers.host ?? '').split(':')[0] ?? '';
+    const host = (headers.host ?? '').split(':')[0] ?? '';
+    const service = host === 'gluetun' ? 'qbittorrent' : host;
     const state = stateOf(service);
     const keyed =
       headers['x-api-key'] !== undefined || headers.authorization !== undefined;
-    if (service === 'qbittorrent' || service === 'gluetun') {
-      if (path === '/') return { status: state.up ? 200 : 503, body: 'login page' };
-      if (path === '/api/v2/app/version') {
-        return keyed ? { status: 200, body: 'v5.2.4' } : { status: 403 };
-      }
-      return { status: 404 };
+    if (service === 'qbittorrent') {
+      const bearer =
+        state.key === '' ? keyed : headers.authorization === `Bearer ${state.key}`;
+      return fakeQbittorrent(request, state, bearer);
     }
     if (path === '/ping') return { status: state.up ? 200 : 503, body: { status: 'OK' } };
     if (path === '/login' && method === 'POST') {
@@ -164,6 +195,91 @@ export async function fakeStackApis(): Promise<{
     },
     addresses: onWiring(['gluetun', 'prowlarr', 'qbittorrent', 'radarr', 'sonarr']),
   };
+}
+
+/** A path as qBittorrent gives it back: without a trailing "/". */
+function kept(path: string): string {
+  return path.length > 1 ? path.replace(/\/+$/, '') : path;
+}
+
+/**
+ * qBittorrent's API, as fakeStackApis answers it, from `state`, as qBittorrent 5.2 does:
+ * paths without a trailing "/", the whitelist one subnet per line, its key among the
+ * preferences, and a ban on signing in after five failures in a row.
+ */
+function fakeQbittorrent(
+  request: FakeRequest,
+  state: FakeAppState,
+  keyed: boolean,
+): FakeReply {
+  const { path } = request;
+  const form = new URLSearchParams(request.body);
+  if (path === '/') return { status: state.up ? 200 : 503, body: 'login page' };
+  if (path === '/api/v2/auth/login') {
+    if (state.signInFailures >= 5) {
+      return {
+        status: 403,
+        body: 'Your IP address has been banned after too many failed authentication attempts.',
+      };
+    }
+    const ok =
+      state.user !== '' &&
+      form.get('username') === state.user &&
+      form.get('password') === state.password;
+    state.signInFailures = ok ? 0 : state.signInFailures + 1;
+    return ok ? { status: 204 } : { status: 401, body: 'Unauthorized' };
+  }
+  if (!keyed) return { status: 403 };
+  if (path === '/api/v2/app/version') return { status: 200, body: 'v5.2.4' };
+  if (path === '/api/v2/app/preferences') {
+    const { save_path: savePath, bypass_auth_subnet_whitelist: whitelist } =
+      state.preferences;
+    return {
+      status: 200,
+      body: {
+        ...state.preferences,
+        save_path: kept(String(savePath)),
+        bypass_auth_subnet_whitelist: String(whitelist)
+          .split(/[\s,]+/)
+          .filter((subnet) => subnet !== '')
+          .join('\n'),
+        web_ui_username: state.user,
+        web_ui_api_key: state.key,
+      },
+    };
+  }
+  if (path === '/api/v2/app/setPreferences') {
+    const sent = JSON.parse(form.get('json') ?? '{}') as Record<string, string | boolean>;
+    const { web_ui_username: user, web_ui_password: password, ...rest } = sent;
+    if (typeof user === 'string') state.user = user;
+    if (typeof password === 'string') state.password = password;
+    Object.assign(state.preferences, rest);
+    return { status: 200 };
+  }
+  if (path === '/api/v2/torrents/categories') {
+    return {
+      status: 200,
+      body: Object.fromEntries(
+        Object.entries(state.categories).map(([name, savePath]) => [
+          name,
+          { name, savePath: kept(savePath) },
+        ]),
+      ),
+    };
+  }
+  const name = form.get('category') ?? '';
+  const known = Object.hasOwn(state.categories, name);
+  if (path === '/api/v2/torrents/createCategory') {
+    if (known) return { status: 409, body: 'Unable to create category' };
+    state.categories[name] = form.get('savePath') ?? '';
+    return { status: 200 };
+  }
+  if (path === '/api/v2/torrents/editCategory') {
+    if (!known) return { status: 404, body: 'Category does not exist' };
+    state.categories[name] = form.get('savePath') ?? '';
+    return { status: 200 };
+  }
+  return { status: 404 };
 }
 
 /** What the fake Sonarr holds; a test may change it between calls. */

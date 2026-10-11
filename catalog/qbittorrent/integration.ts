@@ -1,0 +1,215 @@
+import {
+  defineIntegration,
+  type AppApi,
+  type DesiredResource,
+  type ResourceSpec,
+} from '@mediaplane/engine';
+import { z } from 'zod';
+
+/** Where qBittorrent saves a torrent without a category (spec §6.2). */
+export const DEFAULT_SAVE_PATH = '/data/torrents';
+
+/**
+ * The category each arr files its torrents under (spec §6.2), made while that arr is in
+ * the stack. Its save path is DEFAULT_SAVE_PATH/<name>.
+ */
+export const CATEGORIES = [
+  { arr: 'sonarr', name: 'tv' },
+  { arr: 'radarr', name: 'movies' },
+] as const;
+
+const PREFERENCES = '/api/v2/app/preferences';
+const SET_PREFERENCES = '/api/v2/app/setPreferences';
+const CATEGORIES_PATH = '/api/v2/torrents/categories';
+
+/**
+ * What Mediaplane reads of qBittorrent's preferences. They hold its API key too: z.object
+ * drops every other field, so nothing else is kept.
+ */
+const preferences = z.object({
+  web_ui_username: z.string(),
+  save_path: z.string(),
+  auto_tmm_enabled: z.boolean(),
+  bypass_auth_subnet_whitelist_enabled: z.boolean(),
+  bypass_auth_subnet_whitelist: z.string(),
+});
+
+/** qBittorrent's categories, by name. */
+const categories = z.record(z.string(), z.object({ savePath: z.string() }));
+
+/** A path as qBittorrent gives it back: without a trailing "/". */
+function asKept(path: string): string {
+  return path.length > 1 ? path.replace(/\/+$/, '') : path;
+}
+
+/**
+ * Subnets as one comma-separated list, with no space: qBittorrent answers with one per
+ * line, and would keep a space as part of the next subnet.
+ */
+function subnetList(list: string): string {
+  return list
+    .split(/[\s,]+/)
+    .filter((subnet) => subnet !== '')
+    .join(',');
+}
+
+/** The secret `name` that `desired` holds; desired() always gives it. */
+function secretOf(desired: DesiredResource, name: string): string {
+  const value = desired.secrets[name];
+  if (value === undefined) throw new Error(`${desired.name} has no ${name} to send`);
+  return value;
+}
+
+/** Set qBittorrent's preferences: a JSON object in a form's `json` field, with the key. */
+async function setPreferences(
+  api: AppApi,
+  values: Readonly<Record<string, unknown>>,
+  secrets: readonly string[] = [],
+): Promise<void> {
+  await api.form(SET_PREFERENCES, { json: JSON.stringify(values) }, { secrets });
+}
+
+/**
+ * The shared admin login (spec §6.1), after qBittorrent's first start: its user name is a
+ * managed field and its password a secret, checked by signing in with it. Both are set
+ * through its preferences with the key, which needs neither the old password nor a
+ * restart.
+ */
+const admin: ResourceSpec = {
+  name: 'admin',
+  fields: ['username'],
+  secrets: ['password'],
+  desired: ({ admin: login }) => ({
+    name: 'admin',
+    fields: { username: login.username },
+    secrets: { password: login.password },
+  }),
+  async observe(api) {
+    const held = await api.get(PREFERENCES, preferences);
+    return { id: null, name: 'admin', fields: { username: held.web_ui_username } };
+  },
+  async verify(api, desired) {
+    // A 2xx signs in (204 in qBittorrent 5); 401 is a wrong user name or password. After
+    // five of those in a row, qBittorrent bans this address from signing in (403), for an
+    // hour by default, which the client throws: the ban says nothing of the password.
+    const signedIn = await api.login(
+      '/api/v2/auth/login',
+      {
+        username: String(desired.fields.username),
+        password: secretOf(desired, 'password'),
+      },
+      { answers: [401] },
+    );
+    return signedIn.status >= 200 && signedIn.status < 300;
+  },
+  async create(api, desired) {
+    await saveAdmin(api, desired);
+    return { id: null };
+  },
+  update: (api, desired) => saveAdmin(api, desired),
+};
+
+async function saveAdmin(api: AppApi, desired: DesiredResource): Promise<void> {
+  const password = secretOf(desired, 'password');
+  await setPreferences(
+    api,
+    { web_ui_username: desired.fields.username, web_ui_password: password },
+    [password],
+  );
+}
+
+/**
+ * The settings Mediaplane manages in qBittorrent (spec §6.1, §6.2): the default save path,
+ * Automatic Torrent Management (so a torrent follows its category's save path), and who
+ * may skip the login: the LAN subnets, only with `security.login_on_lan: false` and the
+ * web UI published on the LAN, as the pre-start file sets them.
+ */
+const settings: ResourceSpec = {
+  name: 'preferences',
+  fields: ['savePath', 'autoTmm', 'authSubnetWhitelistEnabled', 'authSubnetWhitelist'],
+  secrets: [],
+  desired: ({ stack, app }) => {
+    const whitelist = stack.config.security.login_on_lan
+      ? []
+      : app.context.lanClientSubnets;
+    return {
+      name: 'preferences',
+      fields: {
+        savePath: DEFAULT_SAVE_PATH,
+        autoTmm: true,
+        authSubnetWhitelistEnabled: whitelist.length > 0,
+        authSubnetWhitelist: subnetList(whitelist.join(',')),
+      },
+      secrets: {},
+    };
+  },
+  async observe(api) {
+    const held = await api.get(PREFERENCES, preferences);
+    return {
+      id: null,
+      name: 'preferences',
+      fields: {
+        savePath: asKept(held.save_path),
+        autoTmm: held.auto_tmm_enabled,
+        authSubnetWhitelistEnabled: held.bypass_auth_subnet_whitelist_enabled,
+        authSubnetWhitelist: subnetList(held.bypass_auth_subnet_whitelist),
+      },
+    };
+  },
+  async create(api, desired) {
+    await saveSettings(api, desired);
+    return { id: null };
+  },
+  update: (api, desired) => saveSettings(api, desired),
+};
+
+/** Each value with the type qBittorrent expects: it ignores a wrong one, or misreads it. */
+async function saveSettings(api: AppApi, desired: DesiredResource): Promise<void> {
+  const { fields } = desired;
+  await setPreferences(api, {
+    save_path: String(fields.savePath),
+    auto_tmm_enabled: fields.autoTmm === true,
+    bypass_auth_subnet_whitelist_enabled: fields.authSubnetWhitelistEnabled === true,
+    bypass_auth_subnet_whitelist: String(fields.authSubnetWhitelist),
+  });
+}
+
+/**
+ * The category `name` (spec §6.2), with its save path under DEFAULT_SAVE_PATH, while
+ * `arr` is in the stack. qBittorrent knows a category by its name: it gives it no id.
+ */
+function category(arr: string, name: string): ResourceSpec {
+  const save = (api: AppApi, path: string, desired: DesiredResource) =>
+    api.form(path, { category: name, savePath: String(desired.fields.savePath) });
+  return {
+    name: `category_${name}`,
+    fields: ['savePath'],
+    secrets: [],
+    desired: ({ stack }) =>
+      stack.apps.some((app) => app.def.id === arr)
+        ? { name, fields: { savePath: `${DEFAULT_SAVE_PATH}/${name}` }, secrets: {} }
+        : undefined,
+    async observe(api) {
+      const held = (await api.get(CATEGORIES_PATH, categories))[name];
+      return held === undefined
+        ? undefined
+        : { id: name, name, fields: { savePath: asKept(held.savePath) } };
+    },
+    async create(api, desired) {
+      await save(api, '/api/v2/torrents/createCategory', desired);
+      return { id: name };
+    },
+    async update(api, desired) {
+      await save(api, '/api/v2/torrents/editCategory', desired);
+    },
+  };
+}
+
+/**
+ * What Mediaplane wires in qBittorrent (spec §6.1, §6.2): the shared admin login, its
+ * settings, and a category for each arr in the stack. Sonarr and Radarr come after it.
+ */
+export default defineIntegration({
+  after: [],
+  resources: [admin, settings, ...CATEGORIES.map(({ arr, name }) => category(arr, name))],
+});

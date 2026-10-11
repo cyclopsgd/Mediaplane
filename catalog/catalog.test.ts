@@ -55,7 +55,7 @@ describe('catalog', () => {
   it('gives an integration to the apps Mediaplane wires so far', () => {
     expect(
       catalog.filter((app) => app.integration !== undefined).map((app) => app.id),
-    ).toEqual(['prowlarr', 'radarr', 'sonarr']);
+    ).toEqual(['prowlarr', 'qbittorrent', 'radarr', 'sonarr']);
   });
 
   describe.each(
