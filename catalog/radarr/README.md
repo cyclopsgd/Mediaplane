@@ -50,15 +50,27 @@ LinuxServer.io image, unmodified.
   the list, with commas between the names.
 - **What it needs.** A download client. Listing Radarr does not turn one on: list
   `qbittorrent` too, or `plan` reports an error.
+- **qBittorrent as its download client** (`radarr.download_client`). Once qBittorrent's
+  `movies` category is in place, `apply` adds `qBittorrent (Mediaplane)` to Radarr:
+  - its host is `gluetun` behind the VPN, whose network qBittorrent shares, or
+    `qbittorrent` without it, and its port is qBittorrent's own;
+  - it files downloads under the `movies` category (`movieCategory`), which saves to
+    `/data/torrents/movies`;
+  - its key is qBittorrent's, which Radarr shows masked. `plan` and `apply` check it
+    with Radarr's own test of the client: a refused key is set again, and any other
+    failure is Radarr's own message, such as qBittorrent out of its reach;
+  - its other settings, such as its priority, are yours: `apply` leaves them as they
+    are.
+- **Its root folder** (`radarr.root_folder`), `/data/media/movies`. `apply` makes the
+  folder first, as the stack's `user:`, in a throwaway Radarr container, then adds it to
+  Radarr. It is in the data folder, with the downloads, so an import is a hard link.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its
   address.
 
 ## Not built yet
 
-The rest of the wiring arrives in Slices 3c to 7 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
+The rest of the wiring arrives in Slices 5 to 7 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
 
-- **Slice 3c:** qBittorrent as its download client, and the `/data/media/movies` root
-  folder.
 - **Slice 5:** Prowlarr's link to it.
 - **Slice 6:** the media server connection that refreshes your library on import.
 - **Slice 7:** Seerr's link to it.

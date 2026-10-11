@@ -18,12 +18,13 @@ Detailed plans so far:
 - Slice 3a: [`m1-s3a-admin-and-seed-files.md`](m1-s3a-admin-and-seed-files.md) (done).
 - Slice 3d: [`m1-s3d-vpn-check.md`](m1-s3d-vpn-check.md) (done).
 - Slice 3b: [`m1-s3b-wiring.md`](m1-s3b-wiring.md) (done).
+- Slice 3c: [`m1-s3c-download-path.md`](m1-s3c-download-path.md) (done).
 
 Where M1 stands (the README shows the same):
 
-- **Merged:** S1, S2a, S2b, S2c, S3a, S3d and S3b.
-- **Next:** S3c.
-- **After that:** S4 to S8.
+- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b and S3c.
+- **Next:** S4.
+- **After that:** S5 to S8.
 
 ## Slices
 
@@ -138,6 +139,13 @@ Verified in S3b (2026-10-10):
   comma-separated list. That shows Sonarr reads the list as given; the tests don't show
   it splitting the list to match a client. It runs in CI from Slice 3b.
 
+Verified in S3c (2026-10-11):
+
+- **Sonarr and Radarr reach qBittorrent through Gluetun**, as `gluetun` at qBittorrent's
+  `WEBUI_PORT`: `test/e2e/download.e2e.test.ts` sets `apps.qbittorrent.port: 8090`, and
+  each arr's own test of its download client passes, from source and from the image. It
+  runs in CI from Slice 3c.
+
 ## Inputs for later slices from the reviews
 
 The Slice 1 final review (2026-10-08) approved the merge. It also raised the
@@ -148,8 +156,8 @@ M2 item. Slice 2c (2026-10-09) added the last S3 item, the S6 list and the last
 four S8 items. Slice 3a (2026-10-10) added three S3 items, the S3d list, three
 S4 items, two S6 items, an S8 item and an M2 item. Slice 3d (2026-10-10) added the last
 S3 item, the unscheduled list and extended two S8 items. Slice 3b (2026-10-10) added the
-S3c list, two S4 items and one unscheduled item. Each slice plan must address the items
-for that slice.
+S3c list, two S4 items and one unscheduled item. Slice 3c (2026-10-11) added three S4
+items. Each slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -263,12 +271,14 @@ password, which are S3c's (and listed again below).
     qBittorrent's port, and Mediaplane's container having no default route.
 - **qBittorrent's settings after its first start.** `admin.username`,
   `admin.password`, `login_on_lan` and the LAN subnet reach qBittorrent only through
-  its pre-start file (S3a). S3c manages them through its API.
+  its pre-start file (S3a). S3c manages them through its API. **Done in S3c:** the
+  `qbittorrent.admin` and `qbittorrent.preferences` resources.
 - **The shared admin password, through each app's API.** Apply it through every app's
   API, qBittorrent included, so that a change to `admin.password` reaches every app
   (S3b for Sonarr, Radarr and Prowlarr, S3c for qBittorrent). Today `credentials` shows
   the new password while qBittorrent keeps the one from its first start. **Done in S3b
-  for Sonarr, Radarr and Prowlarr:** the `<app>.admin` resource.
+  for Sonarr, Radarr and Prowlarr:** the `<app>.admin` resource. **Done in S3c for
+  qBittorrent:** `qbittorrent.admin`, set through `setPreferences`.
 - **Keys an app creates must fit the secrets store (S3b).** `state/secrets.json` takes
   only letters, digits and `_` in an app's key (`^[A-Za-z0-9_]+$`), because the keys go
   into the apps' files unescaped. A secret with `createdBy: 'app'` is kept in the same
@@ -286,7 +296,7 @@ password, which are S3c's (and listed again below).
   qBittorrent as `restart`, also when apply starts a stopped Gluetun (the owner's trial),
   and verify runs vpn-check's checks without egress.
 
-**S3c:**
+**S3c:** all of these are in the S3c plan.
 
 - **qBittorrent through its API.** S3b reaches qBittorrent's API already, through Gluetun
   on the wiring network, and checks its key. Add its integration: the categories, the
@@ -295,6 +305,8 @@ password, which are S3c's (and listed again below).
   should `require` the qBittorrent category, so that a failed category skips it (S3b's
   contract has `requires`).
 - **`after` for the arrs.** Sonarr and Radarr come after qBittorrent once they link to it.
+- **Done in S3c:** all three, with the end-to-end test proving the download path through
+  Gluetun from source and from the image behind the real proxy.
 
 **S3d:** all of these are in the S3d plan.
 
@@ -320,6 +332,18 @@ password, which are S3c's (and listed again below).
 
 - Override field names are case-sensitive, so the managed-field comparison must
   match them exactly.
+- **A root folder whose path changes.** Sonarr and Radarr can't move a root folder, so a
+  `root_folder.path` override would add a new one and leave the old, which may hold a
+  library (S3c). Decide what drift and Keep mine do with the old one.
+- **qBittorrent's sign-in ban.** qBittorrent bans an address from signing in for an hour
+  after five failed sign-ins in a row, and Mediaplane checks its password by signing in
+  (S3c). A changed `admin.password` costs one failure per `plan`, and one for the
+  `apply` that sets it. When drift is checked on a schedule (M2), a changed password left
+  unapplied would ban Mediaplane's address within the hour. Decide whether drift checks
+  the password less often, or not at all while it differs.
+- **Settings Mediaplane manages in qBittorrent are put back.** A whitelist, a save path
+  or a category's path changed in qBittorrent's web UI is undone by the next `apply`
+  (S3c). Keep mine must cover them, with the arrs' download clients and root folders.
 - **Appdata ownership is checked only on change.** Apply checks it only when
   something else changes, and never re-checks it for apps that are running.
 - **An override can move an appdata mount.** When `compose.override.yaml`

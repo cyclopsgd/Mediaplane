@@ -188,7 +188,7 @@ const stackShape = {
         )
         .optional()
         .describe(
-          "Your LAN, as a private (RFC 1918) IPv4 CIDR such as 192.168.1.0/24. Left out, it is detected from this host's private addresses, except on a cloud VM, where bind: lan needs it set. Mediaplane trusts it only while the web UIs are published on the LAN.",
+          "Your LAN, as a private (RFC 1918) IPv4 CIDR such as 192.168.1.0/24. Left out, it is detected from this host's private addresses, except on a cloud VM, where bind: lan needs it set. Mediaplane trusts it only while the web UIs are published on the LAN. Typed with host bits, such as 192.168.1.10/24, it is read as its network, 192.168.1.0/24.",
         ),
     })
     .default({ bind: 'lan' })
@@ -221,7 +221,7 @@ const stackShape = {
     })
     .default({ username: 'admin' })
     .describe(
-      "The shared admin login for the apps' web UIs: qBittorrent, Sonarr, Radarr and Prowlarr use it, and Jellyfin will from Slice 6. Apply sets it in Sonarr, Radarr and Prowlarr through their API, and again whenever it changes.",
+      "The shared admin login for the apps' web UIs: qBittorrent, Sonarr, Radarr and Prowlarr use it, and Jellyfin will from Slice 6. qBittorrent gets it before its first start. Once the apps run, apply sets it in all four through their API, and again whenever it changes.",
     ),
   media_server: z
     .enum(['jellyfin', 'plex'])

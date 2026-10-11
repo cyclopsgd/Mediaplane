@@ -42,7 +42,23 @@ unmodified, and by default puts it behind Gluetun's VPN.
 - **Its API, over the wiring network.** `plan` and `apply` check that Mediaplane's key
   still opens qBittorrent's API, sent as a Bearer token. Behind the VPN they reach it
   through Gluetun, which is on the stack's wiring network for it, at qBittorrent's own
-  port. Slice 3c manages its settings through that API.
+  port. Through that API, once qBittorrent runs, `apply` manages:
+  - **the shared admin login** (`qbittorrent.admin`): its user name, and its password,
+    checked by signing in, and set with the key when it differs. So a change of
+    `admin.username` or `admin.password` reaches qBittorrent, with no restart;
+  - **its settings** (`qbittorrent.preferences`): the default save path
+    `/data/torrents`, Automatic Torrent Management on, and who may skip the login: your
+    LAN subnets, only with `security.login_on_lan: false` and the web UI published on
+    your LAN, as the file below sets them;
+  - **a category for each arr in the stack** (`qbittorrent.category_tv` with Sonarr,
+    `qbittorrent.category_movies` with Radarr), saving to `/data/torrents/tv` and
+    `/data/torrents/movies`. With Automatic Torrent Management, a torrent goes to its
+    category's folder.
+- **Sonarr's and Radarr's download client.** Sonarr and Radarr reach qBittorrent as
+  `gluetun` behind the VPN (`qbittorrent` without it), at qBittorrent's own port, with
+  its key. Gluetun counts the stack's networks as local, so its firewall lets them in:
+  an end-to-end test (`test/e2e/download.e2e.test.ts`) runs their own test of it. See
+  [Sonarr's README](../sonarr/README.md).
 - **One port, inside and out.** qBittorrent checks the `Host` header, so the published
   port and its own port must match. `apps.qbittorrent.port` changes both, through
   `WEBUI_PORT`, and `apps.qbittorrent.env` refuses `WEBUI_PORT`.
@@ -51,7 +67,7 @@ unmodified, and by default puts it behind Gluetun's VPN.
   - **the shared admin login:** the user name, and a PBKDF2 hash of the password, never
     the password itself. `mediaplane credentials` shows the login;
   - **its API key** (`WebUI\APIKey`), generated once and kept in `state/secrets.json`.
-    Sonarr and Radarr use it from Slice 3c;
+    Sonarr and Radarr use it too;
   - **the save path** `/data/torrents/`;
   - **Automatic Torrent Management on,** so a torrent follows its category's save path.
     That includes torrents you add by hand;
@@ -63,15 +79,15 @@ unmodified, and by default puts it behind Gluetun's VPN.
     (`network.no-lan-subnet`).
 
   qBittorrent keeps these and adds its own settings, and starts with no temporary
-  password. Mediaplane never changes the file after that: from then on, change settings
-  in qBittorrent's web UI.
+  password. Mediaplane never changes the file after that: from then on, it manages the
+  login and the settings above through qBittorrent's API, and the rest are yours to
+  change in qBittorrent's web UI.
 
 ## Not built yet
 
-- **Slice 3c:** the `tv` and `movies` categories, with save paths under
-  `/data/torrents/`, and the settings above managed through qBittorrent's API.
-
-See the [roadmap](../../docs/plans/m1-roadmap.md).
+Nothing for qBittorrent itself. Keeping a setting of your own in place of one Mediaplane
+manages ("Keep mine") comes in Slice 4. See the
+[roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Changing it
 
@@ -88,21 +104,29 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 - **After Gluetun restarts on its own, qBittorrent has no network** until it restarts
   too. `mediaplane vpn-check` reports it, and `mediaplane apply` restarts qBittorrent;
   see [Gluetun's README](../gluetun/README.md).
-- **`stack.yaml` reaches qBittorrent only at its first start.** Mediaplane never
-  rewrites `qBittorrent.conf`, so changing any of these afterwards doesn't change
-  qBittorrent: `admin.username`, `admin.password`, `security.login_on_lan`,
-  `network.bind` or `network.lan_subnet`.
-  - `mediaplane credentials` shows the new login all the same, so it and qBittorrent's
-    differ. Change the login in qBittorrent's web UI too, under Tools, Options, Web UI.
-  - The same goes for who may skip the login. After changing `security.login_on_lan`,
-    `network.bind` or `network.lan_subnet`, set "Bypass authentication for clients in
-    whitelisted IP subnets" there too. Mediaplane fills it with your LAN subnet only
-    while `login_on_lan` is `false` and the web UIs are on your LAN.
-  - Switching between a password of your own and the generated one is such a change too.
-    Removing `admin.password` brings back the password Mediaplane generated before, if
-    it generated one: it keeps it, and never generates another.
-  - From Slice 3c, `apply` manages these settings through qBittorrent's API, so a change
-    reaches it.
+- **A change made in qBittorrent's web UI to what Mediaplane manages is undone** by the
+  next `apply`: the login, the save path, Automatic Torrent Management, who may skip the
+  login, and the two categories' save paths. `plan` shows it first. Slice 4 adds "Keep
+  mine".
+- **Five failed sign-ins in a row ban an address for an hour.** Mediaplane checks the
+  password by signing in, once per `plan` and once per `apply`, and never again after a
+  timeout, so after you change `admin.password`, run `apply` soon: four `plan`s, or
+  declined `apply`s, before it ban Mediaplane's address (never your browser's), and
+  `plan` then says so. Restarting qBittorrent lifts the ban. See the
+  [wiring failed runbook](../../docs/runbooks/wiring-failed.md).
+- **A `network.lan_subnet` wider than your LAN lets everything in it skip the login,**
+  with `security.login_on_lan: false`. An address inside the whitelisted subnet signs in
+  with any password. If the subnet also covers a Docker network of the stack, such as a
+  hand-typed `172.16.0.0/12`, which covers Docker's `172.17` to `172.31` networks:
+  - every container on those networks skips qBittorrent's login;
+  - `plan` can't see a password changed by hand in qBittorrent, because its check signs
+    in from the wiring network.
+
+  Set `network.lan_subnet` to your LAN itself, such as `192.168.1.0/24`.
+
+- **Removing `admin.password`** brings back the password Mediaplane generated before, if
+  it generated one: it keeps it, and never generates another. `apply` then sets it in
+  qBittorrent.
 - **Set up before Slice 3a.** If qBittorrent first started before Mediaplane wrote its
   `qBittorrent.conf`, it runs with the image's own file. That file has no API key, and
   until you set a password, qBittorrent makes a new temporary one at every start. `plan`

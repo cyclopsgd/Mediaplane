@@ -1,7 +1,7 @@
 # Threat model
 
 This is the threat model for Mediaplane as built today: M1, up to and including Slice 3a,
-and Slices 3d and 3b.
+and Slices 3d, 3b and 3c.
 It makes spec §7 concrete. To report a vulnerability, see [SECURITY.md](../../SECURITY.md).
 
 ## The one thing to know
@@ -16,6 +16,7 @@ that power. None of them removes it.
 | -------------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
 | The host                                     | Everything                                                            | Docker access is root on the host                          |
 | Generated API keys                           | `state/secrets.json`, `generated/.env` (both 0600) and `appdata/`     | They open the apps' APIs                                   |
+| qBittorrent's key, in Sonarr and Radarr      | Their download client's settings, in `appdata/`                       | It opens qBittorrent's API                                 |
 | The shared admin password                    | `state/secrets.json` (0600) or `admin.password`; a hash in `appdata/` | It opens qBittorrent, Sonarr, Radarr and Prowlarr          |
 | Your secrets: VPN key, Plex token, passwords | `secrets/` (0700), or environment variables                           | They are your accounts                                     |
 | App data                                     | `appdata/<app>/`                                                      | The apps' databases and settings, some holding credentials |
@@ -81,12 +82,20 @@ host network, read-only mounts
   `compose.yaml` and `compose.override.yaml`, running `chown` as root on the appdata
   folder where the app mounts it. It belongs to the stack's project, and is removed when
   `chown` exits. Today only Seerr, which runs as uid 1000, needs it.
+- **The folder helper.** During `apply`, before Mediaplane adds a root folder to Sonarr or
+  Radarr, it runs
+  `docker compose run --rm --no-deps -T --user <uid>:<gid> --entrypoint mkdir <arr> -p -- <path>`.
+  That is a container of the arr's own image, with the arr's own settings from
+  `compose.yaml` and `compose.override.yaml`, running `mkdir` as the stack's `user:` to
+  make the root folder inside the data folder, where the arr mounts it. It is removed
+  when `mkdir` exits. It uses the same Docker API calls as the ownership helper, so the
+  proxy allows nothing new for it. T5 says what its environment holds.
 - **The wiring.** `plan` and `apply` call the apps' APIs over the wiring network: from
   the Mediaplane container, or run from source, from the host. Each request goes
   straight to the app's container, through an HTTP agent of Mediaplane's own, so a proxy
   in the environment (`NODE_USE_ENV_PROXY`) never sees a key. It carries the app's key in
   a header (`X-Api-Key`, or a Bearer token for qBittorrent), never in the URL. Mediaplane
-  signs in to Sonarr, Radarr and Prowlarr with the shared login, to check it.
+  signs in to qBittorrent, Sonarr, Radarr and Prowlarr with the shared login, to check it.
 - **vpn-check's probe.** `mediaplane vpn-check` runs
   `docker compose run --rm --no-deps -T --user 65534:65534 --entrypoint sh qbittorrent`
   with a short script: a throwaway container of qBittorrent's own image, as nobody, in
@@ -143,7 +152,8 @@ Controls today:
   on every interface with a warning (`all`).
 - qBittorrent asks for the shared admin login from its first start. Mediaplane writes
   the login into `qBittorrent.conf` before qBittorrent runs, so the image never starts
-  with its temporary password. It asks on localhost too.
+  with its temporary password. It asks on localhost too. After that, `apply` keeps its
+  login, and who may skip it, as `stack.yaml` says, through its API.
 - Sonarr, Radarr and Prowlarr ask for the shared admin login, which `apply` sets through
   their API once they first start. They ask from the LAN too, by default
   (`security.login_on_lan`).
@@ -167,6 +177,13 @@ What remains:
 - Between an app's first start and the wiring step a moment later, Sonarr, Radarr and
   Prowlarr have no user: with `login_on_lan: true` nobody can sign in, and with `false`
   a local address gets in anyway.
+- With `login_on_lan: false`, an address inside the subnet that skips qBittorrent's login
+  can sign in with any password. So a `network.lan_subnet` that also covers a Docker
+  network of the stack, such as a hand-typed `172.16.0.0/12`, which covers Docker's
+  `172.17` to `172.31` networks, lets every container on those networks skip
+  qBittorrent's login. It also hides from `plan` a password changed by hand in
+  qBittorrent, since `plan` signs in from the wiring network. Set `network.lan_subnet` to
+  your LAN itself, not a wider range.
 
 ### T3. A cloud VM's private address is reachable from the internet
 
@@ -210,6 +227,8 @@ What remains:
   answers only the address the name `mediaplane` has there.
 - A compromised app can answer Mediaplane's calls with anything it likes, such as a
   setting that looks right but isn't.
+- Sonarr and Radarr hold qBittorrent's key, as their download client needs, so a
+  compromised one can drive qBittorrent: add a torrent, or change its settings.
 - The apps' calls to each other, and Mediaplane's to them, are plain HTTP on Docker's own
   networks, with keys in them. An app with Docker's default capabilities could try to
   intercept another's traffic on a network they share.
@@ -233,6 +252,21 @@ Controls today:
   hash. Secrets are checked by using them, such as signing in, so none needs keeping.
 - An app's error message, as Mediaplane shows it, has every key and password replaced
   with `***`, and never includes what was sent: a request body is never shown or kept.
+  That holds for each form an app may echo a secret in: as it is, JSON-escaped,
+  percent-encoded, form-encoded or HTML-escaped, and nested, such as a password
+  JSON-escaped inside a form field (as qBittorrent's settings send it), or a JSON body
+  quoted in an HTML page.
+- qBittorrent's key goes to Sonarr and Radarr in their download client's settings, a
+  request body: the one place one app's key goes to another. They show it masked
+  (`********`) afterwards, and Mediaplane tests the masked client, so the key isn't sent
+  again for the check.
+- The admin password goes to qBittorrent only in request bodies: its preferences, sent
+  with its key, and the sign-in that checks it. The session cookie qBittorrent answers
+  with is dropped. Its preferences hold its own key too: Mediaplane keeps only the
+  fields it manages, and never shows them.
+- The folders a root folder needs are made with a command that holds only their paths.
+  The throwaway container that runs it has the arr's own environment, its API key among
+  it, which `docker inspect` shows while it runs, as it does for the arr's own container.
 - Given to Compose in its environment or in the 0600 `generated/.env`, never on its
   command line.
 - Gluetun's control key reaches vpn-check's probe on its standard input, and the probe
@@ -332,11 +366,14 @@ What remains:
   today, and Jellyfin from Slice 6. A leak from one is a leak for all.
 - Sonarr, Radarr and Prowlarr give their password hash to anyone who holds their API
   key. Prowlarr holds Sonarr's and Radarr's keys from Slice 5.
-- Changing `admin.username`, `admin.password`, `login_on_lan`, `network.bind` or
-  `network.lan_subnet` after qBittorrent's first start doesn't reach qBittorrent, whose
-  file is written only once. `mediaplane credentials` shows the new login all the same.
-  Change it in qBittorrent's web UI too, until Slice 3c manages those settings through
-  its API.
+- `apply` checks qBittorrent's password by signing in. qBittorrent bans an address from
+  signing in for an hour after five failed sign-ins in a row. Mediaplane's sign-in fails
+  only while qBittorrent's password differs from the stack's, such as after
+  `admin.password` changed, once per `plan` and once per `apply`: Mediaplane doesn't send
+  that sign-in again once it may have reached qBittorrent, such as after a timeout. So
+  four `plan`s, or declined `apply`s, before the `apply` ban Mediaplane's address, never
+  your browser's. Its key still works. The [runbook](../runbooks/wiring-failed.md) says
+  what to do.
 - There is no way yet to rotate the generated password (Slice 4).
 
 ### T11. Something on the stack's network uses Gluetun's control server

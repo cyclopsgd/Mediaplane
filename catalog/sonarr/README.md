@@ -50,15 +50,27 @@ LinuxServer.io image, unmodified.
   the list, with commas between the names.
 - **What it needs.** A download client. Listing Sonarr does not turn one on: list
   `qbittorrent` too, or `plan` reports an error.
+- **qBittorrent as its download client** (`sonarr.download_client`). Once qBittorrent's
+  `tv` category is in place, `apply` adds `qBittorrent (Mediaplane)` to Sonarr:
+  - its host is `gluetun` behind the VPN, whose network qBittorrent shares, or
+    `qbittorrent` without it, and its port is qBittorrent's own;
+  - it files downloads under the `tv` category (`tvCategory`), which saves to
+    `/data/torrents/tv`;
+  - its key is qBittorrent's, which Sonarr shows masked. `plan` and `apply` check it
+    with Sonarr's own test of the client: a refused key is set again, and any other
+    failure is Sonarr's own message, such as qBittorrent out of its reach;
+  - its other settings, such as its priority, are yours: `apply` leaves them as they
+    are.
+- **Its root folder** (`sonarr.root_folder`), `/data/media/tv`. `apply` makes the
+  folder first, as the stack's `user:`, in a throwaway Sonarr container, then adds it to
+  Sonarr. It is in the data folder, with the downloads, so an import is a hard link.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its
   address.
 
 ## Not built yet
 
-The rest of the wiring arrives in Slices 3c to 7 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
+The rest of the wiring arrives in Slices 5 to 7 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
 
-- **Slice 3c:** qBittorrent as its download client, and the `/data/media/tv` root
-  folder.
 - **Slice 5:** Prowlarr's link to it.
 - **Slice 6:** the media server connection that refreshes your library on import.
 - **Slice 7:** Seerr's link to it.

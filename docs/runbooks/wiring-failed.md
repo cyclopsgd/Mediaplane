@@ -1,8 +1,10 @@
 # Runbook: wiring failed
 
 Wiring is what `apply` does through each app's API once the apps run: today, the shared
-admin login in Sonarr, Radarr and Prowlarr, and a check that Mediaplane's key still
-opens qBittorrent. Later slices add the links between the apps.
+admin login in Sonarr, Radarr, Prowlarr and qBittorrent, qBittorrent's settings and its
+`tv` and `movies` categories, and in Sonarr and Radarr, qBittorrent as their download
+client and their root folders. Later slices add the indexers, the media server and the
+requests app.
 
 ## Symptoms
 
@@ -22,12 +24,19 @@ opens qBittorrent. Later slices add the links between the apps.
   Apply failed: 5 done, 1 failed, 1 skipped. Run apply again to retry. Change record: 20261010T120000Z-0a1b2c3d
   ```
 
-  An app that has no resources of its own, such as qBittorrent, fails as the app: for
-  example `failed  wiring qbittorrent: …`. Later slices add resources that need others.
-  One that needs a failed resource is `skipped`, and the others still run.
+  A resource that needs a failed one is `skipped`, and the others still run. Sonarr's
+  download client needs qBittorrent's `tv` category, and Radarr's its `movies` one. When
+  qBittorrent refuses Mediaplane's key, each of its resources fails, and the download
+  clients are skipped (some lines left out):
+
+  ```console
+    failed  wiring qbittorrent.category_tv: qBittorrent at http://gluetun:8080 (172.20.0.4) refused Mediaplane's API key (HTTP 403): Forbidden (GET /api/v2/app/version)
+    skipped wiring sonarr.download_client: qbittorrent.category_tv failed
+  ```
 
 - **`mediaplane plan`** warns with the same message, lists the resource under `Wiring:`
-  as `? unknown`, and exits 2:
+  as `? unknown`, and exits 2. A refusal of one resource leaves the app's others to be
+  checked; an app that stops answering leaves all that is left of it `unknown`:
 
   ```console
   $ mediaplane plan
@@ -39,7 +48,9 @@ opens qBittorrent. Later slices add the links between the apps.
   ```
 
 - **`apply` fails at verify** with `changes remain after apply: sonarr.admin (update)`:
-  the app took the change, then kept something else.
+  the app took the change, then kept something else. For a download client, verify runs
+  the arr's own test of it: a failure there is `sonarr.download_client (unknown: …)`,
+  with the arr's own words after `tested qBittorrent (Mediaplane), and it failed:`.
 - **`apply` stops at the containers step** with `could not leave the wiring network …`,
   `docker network inspect failed: …`, or
   `docker network inspect printed a line that is not …`. Before starting the apps, it
@@ -53,13 +64,15 @@ opens qBittorrent. Later slices add the links between the apps.
 
 In `--json` output, each `diagnostics` entry has a `code`:
 
-- `wire.auth`: the app refused Mediaplane's key.
+- `wire.auth`: the app refused Mediaplane's key, or qBittorrent refused its sign-in (see
+  its ban, below).
 - `wire.rejected`: the app refused the request itself, with its message.
 - `wire.server`: the app failed.
 - `wire.unreachable` and `wire.timeout`: nothing answered, or not in time.
 - `wire.protocol`: the app answered something Mediaplane doesn't understand.
 - `wire.not-on-network`: the app's container is not on the wiring network.
 - `wire.secret-field`: a managed field holds one of the stack's secrets.
+- `wire.folders`: a folder a resource needs, such as a root folder, couldn't be made.
 - `wire.network`: Mediaplane won't join the wiring network, or Docker refused the join.
 - `resources.invalid`: `state/resources.json` can't be read.
 - `apply.wire-failed`: the wiring step itself failed.
@@ -98,6 +111,38 @@ differ, and a `reason` when it is `unknown`.
     `<app>.apiKey` from `state/secrets.json` (use `sudo` if the file isn't yours), and
     start it. If `plan` says `<app>.not-seeded`, follow the app's README.
   - Slice 4 restores a key at its source for you.
+- **`refused the request (HTTP 403)`, with
+  `banned after too many failed authentication attempts`** (`wire.auth`). qBittorrent
+  stops an address from signing in for an hour after five failed sign-ins in a row.
+  Mediaplane checks qBittorrent's password by signing in: each `plan`, and each `apply`'s
+  own plan, signs in once, and fails while qBittorrent's password differs from the
+  stack's, such as after `admin.password` changed. Mediaplane doesn't send a sign-in again
+  once it may have reached qBittorrent, such as after a timeout, so each costs at most one
+  failure. So four `plan`s, or declined `apply`s, before the `apply` are enough: it sets
+  the password with the key, but its last check is refused, and it stops at verify with
+  `changes remain after apply: qbittorrent.admin (unknown: …)`, which holds the message
+  above. `plan` warns with the same message. Its key still works, and only Mediaplane's
+  address is banned, not your browser's. Wait an hour, or restart qBittorrent, which
+  forgets the ban (`docker restart mediaplane-qbittorrent-1`), then run `apply` again: it
+  sets the password if it hasn't yet, and its check then passes.
+- **`tested qBittorrent (Mediaplane), and it failed`, with
+  `Host: Unable to connect to qBittorrent`.** Sonarr or Radarr can't reach qBittorrent.
+  Behind the VPN they reach it through Gluetun, as `gluetun`, at qBittorrent's port:
+  check that both run and are healthy (`mediaplane status`), and that the VPN is up
+  (`mediaplane vpn-check`). A `compose.override.yaml` that takes Sonarr, Radarr or
+  Gluetun off the stack's network breaks it too. Fix that, then run `apply` again. A
+  failure that names `ApiKey` is never this one: Mediaplane puts qBittorrent's key back
+  itself.
+- **`could not make /data/media/tv for sonarr.root_folder`** (`wire.folders`). Sonarr and
+  Radarr need their root folder to exist, so Mediaplane makes it first, as the stack's
+  `user:`, in a throwaway container of the app. mkdir's own message follows. Usually the
+  folder that holds it, such as `media/` in the data folder, belongs to another user:
+  give it to the stack's user, such as
+  `sudo chown <uid>:<gid> /srv/data/media` with the ids of `user:` in `stack.yaml`, then
+  run `apply` again.
+- **`refused the request (HTTP 400): Name: Should be unique`.** Sonarr or Radarr already
+  has a download client called `qBittorrent (Mediaplane)` that isn't a qBittorrent one.
+  Rename or remove it in the app's web UI, then run `apply` again.
 - **`could not be reached`, `cut the connection` or `did not answer within … s`.** The
   app isn't up, or Mediaplane can't get to it.
   - Wait until `mediaplane status` shows it healthy, then run `apply` again: `apply`

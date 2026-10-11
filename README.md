@@ -11,13 +11,15 @@ Compose and wires the apps together for you.**
 > - **Works today:** `mediaplane plan` checks a real host and shows exactly what it
 >   would do. `mediaplane apply` then starts the stack, confirms that every app is
 >   healthy, and sets one admin login in qBittorrent, Sonarr, Radarr and Prowlarr
->   (`mediaplane credentials` shows it). `mediaplane vpn-check` confirms that
+>   (`mediaplane credentials` shows it). It links Sonarr and Radarr to qBittorrent:
+>   download clients, categories and root folders. `mediaplane vpn-check` confirms that
 >   qBittorrent reaches the internet only through the VPN. Mediaplane runs in its own
 >   hardened container, behind a Docker socket proxy, and reaches the apps over a
 >   private network with no route out.
-> - **Next:** wiring the apps to each other. Until that lands, each app still needs
->   setting up by hand. Jellyfin's wizard and Seerr's setup are open to anyone who
->   can reach them until you complete them, so complete them first.
+> - **Next:** the rest of the wiring: Prowlarr's links to Sonarr and Radarr, the media
+>   server and Seerr. Until that lands, those still need setting up by hand. Jellyfin's
+>   wizard and Seerr's setup are open to anyone who can reach them until you complete
+>   them, so complete them first.
 > - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
 >   your LAN (`network.bind: lan`) or keep them on this machine (`localhost`).
 >
@@ -58,7 +60,8 @@ Mediaplane does that part for you:
 | A VPN kill switch, tested against a real WireGuard server, and `vpn-check`        | Done         |
 | Run in a hardened container, behind a Docker socket proxy                         | Done         |
 | Documentation generated from code: the `stack.yaml` and CLI references, app facts | Done         |
-| Wire the apps together (download clients, indexers, root folders, media server)   | Planned      |
+| Link Sonarr and Radarr to qBittorrent: download clients, categories, root folders | Done         |
+| Wire the rest together (indexers, media server, requests)                         | Planned      |
 | Detect manual changes and offer Re-apply or "Keep mine"                           | Planned      |
 | Web panel with a setup wizard                                                     | Planned (M2) |
 
@@ -121,12 +124,13 @@ mediaplane apply
   ├─ pulls images, starts the apps
   ├─ waits until every app is healthy
   ├─ wires the apps through their
-  │  APIs (the shared login, so far)
+  │  APIs: the shared login, and
+  │  the download path, so far
   ├─ plans again: nothing left to do
   └─ records the change in history
 ```
 
-Next, `apply` will wire the apps to each other through the same APIs (Slices 3c to 7).
+Next, `apply` will wire the rest of the apps through the same APIs (Slices 5 to 7).
 
 A few principles hold throughout:
 
@@ -149,8 +153,7 @@ A few principles hold throughout:
 ## What it looks like
 
 Most of this is real output from a run on an arm64 VM, trimmed where marked. The wiring
-lines came later, with Slice 3b. `plan`'s are from a fresh plan of the same stack.
-`apply`'s are not a capture: they follow the format the CLI's tests check. The stack is
+lines came later, from a run of the same stack with Slice 3c. The stack is
 the example above without the VPN, which is why `plan` warns about qBittorrent, and with
 `network.bind: localhost`.
 
@@ -181,11 +184,18 @@ Containers:
   + create    sonarr
 Secrets to generate: admin.password, prowlarr.apiKey, qbittorrent.apiKey, radarr.apiKey, seerr.apiKey, sonarr.apiKey
 Wiring:
+  > after start qbittorrent.admin
+  > after start qbittorrent.preferences
+  > after start qbittorrent.category_tv
+  > after start qbittorrent.category_movies
   > after start radarr.admin
+  > after start radarr.download_client
+  > after start radarr.root_folder
   > after start sonarr.admin
+  > after start sonarr.download_client
+  > after start sonarr.root_folder
   > after start prowlarr.admin
-  > after start qbittorrent
-Plan: 6 files to write, 7 containers to change, 6 secrets to generate, 4 wiring checks after the start.
+Plan: 6 files to write, 7 containers to change, 6 secrets to generate, 11 wiring checks after the start.
 
 $ mediaplane apply --yes
   … the same plan …
@@ -197,10 +207,18 @@ Pulling images (the first time can take several minutes)…
 Starting containers and waiting until every app is healthy…
   done    containers: every app is running and healthy
 Wiring the apps…
+  done    wiring qbittorrent.admin: adopted
+  done    wiring qbittorrent.preferences: adopted
+  done    wiring qbittorrent.category_tv: created
+  done    wiring qbittorrent.category_movies: created
   done    wiring radarr.admin: created
+  done    wiring radarr.download_client: created
+  done    wiring radarr.root_folder: created
   done    wiring sonarr.admin: created
+  done    wiring sonarr.download_client: created
+  done    wiring sonarr.root_folder: created
   done    wiring prowlarr.admin: created
-  done    wiring: radarr.admin created; sonarr.admin created; prowlarr.admin created
+  done    wiring: qbittorrent.admin adopted; qbittorrent.preferences adopted; … prowlarr.admin created
   done    verify: no changes remain
 
 Apply complete. Change record: 20261010T031836Z-17560c95
@@ -255,8 +273,9 @@ Then follow [`deploy/README.md`](deploy/README.md) to start it and run
 - the containers it would create, recreate, start, restart or remove (`restart` is for
   qBittorrent when Gluetun starts again on its own);
 - the secrets it would generate;
-- the wiring it would do in the apps, under `Wiring:`, such as setting the admin login.
-  An app that Mediaplane only checks, such as qBittorrent, is listed by its name.
+- the wiring it would do in the apps, under `Wiring:`, such as setting the admin login or
+  adding a download client. qBittorrent's login and settings show as `adopt` on a first
+  `apply`: its file from before its first start set them already.
 
 It changes nothing. You need Docker (Engine 24 or newer, with the Compose plugin 2.24 or
 newer), Node 24 and pnpm.
@@ -339,8 +358,9 @@ So Mediaplane isn't instead of a pipeline. It is built to run inside one:
 - `plan` and `apply` run unattended, with exit codes and `--json` output.
 
 The pipeline decides what the stack is, and Mediaplane does the stateful part. Today
-that covers generating the keys, deploying, setting the shared login in the apps, and
-checking. The app-to-app wiring and change detection are what is being built next.
+that covers generating the keys, deploying, setting the shared login in the apps,
+linking Sonarr and Radarr to qBittorrent, and checking. The rest of the wiring and
+change detection are what is being built next.
 
 ### Why not just write the Compose file myself?
 
@@ -354,16 +374,18 @@ and keep. What it adds is everything around the file:
 - qBittorrent routed through the VPN, so it has no network when the VPN is down, with
   an automated test of that and `mediaplane vpn-check` to confirm it on your host;
 - keys that are generated once and kept;
-- next, the wiring between the apps.
+- Sonarr and Radarr linked to qBittorrent, with its categories and their root folders;
+- next, the rest of the wiring between the apps.
 
 ### How is this different from Buildarr or Recyclarr?
 
 Those tools configure apps you already run, and they are good at detailed tuning, such
 as quality profiles. Mediaplane deploys the whole stack and makes it safe: generated
-secrets, a socket proxy, a tested VPN kill switch, and a private wiring network. It will
-wire the apps to each other (Slices 3c to 7), with `plan` and `apply` and a history of
-what it did, and leave the rest of each app's settings to you. Today it sets the shared
-login in Sonarr, Radarr and Prowlarr.
+secrets, a socket proxy, a tested VPN kill switch, and a private wiring network. It wires
+the apps to each other, with `plan` and `apply` and a history of what it did, and leaves
+the rest of each app's settings to you. Today it sets the shared login, and links Sonarr
+and Radarr to qBittorrent; the indexers, the media server and Seerr come in Slices 5
+to 7.
 
 They can be used together. Recyclarr is planned for M4.
 
@@ -410,9 +432,9 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
 
 - **Merged:** S1 (the pure core), S2a (`plan` against a real host), S2b (`apply`), S2c
   (packaging), S3a (the shared admin and pre-start files), S3d (the VPN's kill-switch
-  test and `vpn-check`) and S3b (the wiring framework).
-- **Next:** S3c (the download path).
-- **After that:** S4 to S8.
+  test and `vpn-check`), S3b (the wiring framework) and S3c (the download path).
+- **Next:** S4 (drift).
+- **After that:** S5 to S8.
 
 ## Documentation
 
@@ -434,7 +456,7 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
 - **[Runbook: the VPN is down](docs/runbooks/vpn-down.md):** what `vpn-check` found, and
   what to do about a VPN that is down or a leak.
 - **[Runbook: wiring failed](docs/runbooks/wiring-failed.md):** an app refused Mediaplane's
-  key or a change, or Mediaplane can't reach it.
+  key or a change, an arr can't reach qBittorrent, or Mediaplane can't reach an app.
 - **[Threat model](docs/security/threat-model.md):** what is protected, how, and what
   isn't.
 - **[Architecture decision records](docs/adr/):** why things are the way they are.

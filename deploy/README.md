@@ -11,10 +11,11 @@ Mediaplane runs as two containers in their own Compose project, `mediaplane-syst
 The stack Mediaplane deploys is a separate Compose project, `mediaplane`, so `apply` can
 never touch Mediaplane itself.
 
-> Mediaplane is pre-alpha. The apps are not wired to each other yet (Slices 3c to 7 do
-> that). On a home network, `init` suggests publishing their web UIs on your LAN. Until
-> the wiring lands, Jellyfin's setup wizard and Seerr's setup are open to anyone on your
-> LAN until you complete them, so complete them first.
+> Mediaplane is pre-alpha. Sonarr and Radarr are linked to qBittorrent, but the rest of
+> the apps are not wired to each other yet (Slices 5 to 7 do that). On a home network,
+> `init` suggests publishing their web UIs on your LAN. Until the wiring lands,
+> Jellyfin's setup wizard and Seerr's setup are open to anyone on your LAN until you
+> complete them, so complete them first.
 >
 > qBittorrent, Sonarr, Radarr and Prowlarr have the shared admin login:
 > `mediaplane credentials` shows it. To keep the web UIs on this machine only, answer
@@ -148,13 +149,9 @@ nothing. Without a terminal it asks nothing: pass the flags in the
   (`--admin-password-file secrets/admin-password`, at least 12 characters). After
   `apply`, `mediaplane credentials` shows the login and each app's address. It shows a
   password of your own only with `--reveal`, and its `--json` output leaves out either
-  unless you add `--reveal`. qBittorrent, Sonarr, Radarr and Prowlarr use it. `apply`
-  sets it in Sonarr, Radarr and Prowlarr through their API once they run, and sets it
-  again whenever it changes.
-  - qBittorrent gets the login only at its first start, from a file Mediaplane never
-    rewrites. So if you later change `admin.password`, or switch between yours and the
-    generated one, `credentials` shows the new password but qBittorrent keeps the old
-    one. Change it in qBittorrent's web UI too, until Slice 3c does that for you.
+  unless you add `--reveal`. qBittorrent, Sonarr, Radarr and Prowlarr use it.
+  qBittorrent gets it before its first start. `apply` sets it in all four through their
+  API once they run, and sets it again whenever it changes.
   - Removing your own `admin.password` brings back the password Mediaplane generated
     before, if it generated one. It keeps it, and never generates another.
 - **The VPN address.** With a VPN provider, `init` asks for your WireGuard address

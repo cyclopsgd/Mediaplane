@@ -41,6 +41,12 @@ upstream image, unmodified. It is turned on whenever qBittorrent runs behind the
   `plan` warns (`network.no-lan-subnet`).
 - **What it needs from the host.** It gets `NET_ADMIN` and `/dev/net/tun`, and `plan`
   reports an error when `/dev/net/tun` is missing.
+- **The way in to qBittorrent.** Gluetun is on the stack's wiring network for
+  qBittorrent, whose network it shares. Mediaplane reaches qBittorrent's API through it,
+  and Sonarr and Radarr reach qBittorrent as `gluetun`, at qBittorrent's port: Gluetun
+  counts the stack's networks as local, so its firewall lets them in (an end-to-end test,
+  `test/e2e/download.e2e.test.ts`, runs the arrs' own test of their download client
+  through it).
 - **Its control server** (port 8000) is never published. Apps in its network must not
   use port 8000.
 - **A key for the control server, before its first start.** Mediaplane writes

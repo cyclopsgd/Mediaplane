@@ -45,7 +45,9 @@ share host ports.
 The VPN kill-switch test (`test/e2e/vpn.e2e.test.ts`) runs a WireGuard server in a
 container, which needs the host's `wireguard` kernel module: run
 `sudo modprobe wireguard` once after each boot. CI does this in its end-to-end job. The
-test fails, and never skips, without it.
+test fails, and never skips, without it. The download-path test
+(`test/e2e/download.e2e.test.ts`), which shows Sonarr and Radarr reaching qBittorrent
+through Gluetun, runs a WireGuard server too, so it needs the module as well.
 
 Before committing, run
 `pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check`.

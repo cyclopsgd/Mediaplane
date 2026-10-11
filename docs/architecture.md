@@ -1,8 +1,8 @@
 # Architecture
 
 This page is a condensed version of the [M1 design](design/m1-engine-cli.md), §3 to §6,
-covering what is built so far (Slices 1 to 3a, 3d and 3b). The design describes the whole
-of M1; this page describes what exists.
+covering what is built so far (Slices 1 to 3a, 3d, 3b and 3c). The design describes the
+whole of M1; this page describes what exists.
 
 ## The idea
 
@@ -125,7 +125,8 @@ Each part, and where its code is:
 
 Not built yet:
 
-- the links between the apps, through their APIs (Slices 3c to 7);
+- the rest of the links between the apps: the indexers (Slice 5), the media server
+  (Slice 6) and the requests app (Slice 7);
 - drift detection, with Keep mine (Slice 4).
 
 ## `plan`
@@ -280,13 +281,16 @@ The data folder (`paths.data`) is yours. The apps that handle media files (Sonar
 Radarr, qBittorrent, and Jellyfin or Plex) mount it as `/data`. Keep downloads and media
 inside it, on one filesystem, so moving a finished download into the library is an
 instant hardlink. `plan` checks that `torrents/`, `usenet/` and `media/`, where they
-exist, are on the same filesystem as the folder itself.
+exist, are on the same filesystem as the folder itself. qBittorrent saves into
+`/data/torrents`, a folder per category, and Sonarr's and Radarr's libraries are
+`/data/media/tv` and `/data/media/movies`, which `apply` makes.
 
 ## The wiring
 
 Wiring is what Mediaplane does through each app's API once the apps run. Today that is
-the shared admin login in Sonarr, Radarr and Prowlarr, and a check that Mediaplane's key
-still opens qBittorrent.
+the shared admin login in Sonarr, Radarr, Prowlarr and qBittorrent, and the download
+path: qBittorrent's settings and categories, and Sonarr's and Radarr's download client
+and root folder.
 
 ```text
 mediaplane-system
@@ -319,9 +323,38 @@ mediaplane (the stack)
   Mediaplane manages in it, such as `sonarr.admin`. For each, it says how to read it
   from the app, which of its fields are managed, which secrets it holds, and how to
   create or change it. The app's README lists them.
+- **The download path:**
+
+  ```text
+  sonarr, radarr
+    │ download client
+    │ qBittorrent (Mediaplane):
+    │ gluetun:<qBittorrent's
+    │ port>, its key, category
+    ▼
+  gluetun ─ qbittorrent
+    categories tv, movies:
+    /data/torrents/<category>
+  ```
+
+  - qBittorrent comes first: its login, its settings (the save path `/data/torrents`,
+    Automatic Torrent Management on, and who may skip the login) and a category for each
+    arr in the stack.
+  - Sonarr and Radarr come after it. Each gets `qBittorrent (Mediaplane)` as its download
+    client, which needs qBittorrent's category for it: one that failed skips the
+    client. They reach qBittorrent the way they reach any app: behind the VPN, as
+    `gluetun`, whose network qBittorrent shares, at qBittorrent's own port.
+  - Each arr's root folder, `/data/media/tv` or `/data/media/movies`, is made first in a
+    throwaway container of the arr, as the stack's `user:`, then added to the arr.
+
 - **Each resource** is one of:
   - `create` or `update`: the app lacks it, or a managed field or a secret differs. A
-    secret is checked by using it, such as signing in, never compared.
+    secret is checked by using it, never compared: signing in, or the app's own test, as
+    Sonarr's test of its download client. While a field differs, the secrets aren't
+    checked: the update sets them anyway. Nor are they while a resource they require is
+    yet to be made or changed, since the check could make what is missing, and `plan`
+    changes nothing. `apply` doesn't check again a secret its own plan found refused: it
+    sets it.
   - `adopt`: the app already holds it as wanted, but `state/resources.json` doesn't say
     so yet, such as after lost state.
   - `unchanged`.
@@ -338,9 +371,10 @@ mediaplane (the stack)
   agent of its own, never through a proxy from the environment. It sends the app's key in
   a header, never in the URL. It tries a refused or cut connection, a timeout, or a 502,
   503 or 504 again, waiting longer each time, for up to two minutes in `apply` and 15
-  seconds in `plan`; a create only when nothing reached the app. It reads at most 5 MiB
-  of an answer, checks its shape, and shows only the app's own message about a refusal,
-  with every secret replaced.
+  seconds in `plan`; a create, and qBittorrent's sign-in (each failed one counts towards
+  its ban), only when nothing reached the app. It reads at most 5 MiB of an answer,
+  checks its shape, and shows only the app's own message about a refusal, with every
+  secret replaced.
 
 ## `vpn-check`
 
@@ -399,7 +433,7 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
-- the wiring, app by app (Slices 3c to 7);
+- the rest of the wiring, app by app (Slices 5 to 7);
 - drift detection (Slice 4);
 - releases (Slice 8);
 - the web panel (M2).

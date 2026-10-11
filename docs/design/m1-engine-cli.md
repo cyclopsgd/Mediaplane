@@ -1225,3 +1225,64 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     two before each question says what it is for, and with a VPN provider it takes the
     WireGuard private key on a hidden prompt, checks its shape, and writes it to
     `secrets/wg.key` (0600), never over an existing one.
+
+### Slice 3c: the download path (2026-10-11)
+
+- **qBittorrent through its API, after its first start** (§6.1, §6.2, §6.4). Four
+  resources, all set with its key:
+  - `qbittorrent.admin`: its user name, and its password, checked by signing in (204
+    means it works, 401 that it doesn't) and set through its preferences, which need
+    neither the old password nor a restart. A change of `admin.username` or
+    `admin.password` now reaches qBittorrent. qBittorrent stops an address from signing
+    in for an hour after five failed sign-ins in a row; that answer (403) is reported as
+    it is, never read as a wrong password. A changed password costs one failed sign-in
+    per `plan` and per `apply`, so four `plan`s, or declined `apply`s, before the `apply`
+    are enough for a ban. That sign-in is sent once: it isn't sent again after it may
+    have reached qBittorrent, such as after a timeout or a 5xx, so it never costs a
+    second failure. Servarr's sign-ins keep their retries.
+  - `qbittorrent.preferences`: the default save path `/data/torrents`, Automatic Torrent
+    Management on (§11, Slice 3a), and who may skip the login: the LAN subnets, only with
+    `security.login_on_lan: false` while the web UIs are on the LAN, as its pre-start file
+    sets them. A change of those settings now reaches qBittorrent. This adds
+    Automatic Torrent Management and the whitelist to §6.2's managed fields. §6.4 keeps
+    trusted networks out of the API, but qBittorrent's whitelist is set through it: unlike
+    Servarr's `TRUSTEDNETWORKS`, it has no environment variable and needs no restart. A
+    `network.lan_subnet` typed with host bits, such as `192.168.1.10/24`, is read as its
+    network, `192.168.1.0/24`, the form qBittorrent keeps, so the whitelist settles.
+  - `qbittorrent.category_tv` and `qbittorrent.category_movies`, saving to
+    `/data/torrents/tv` and `/data/torrents/movies`, each while Sonarr or Radarr is in the
+    stack. A category is known by its name.
+- **Sonarr's and Radarr's download client** (§6.2): `<arr>.download_client`, named
+  `qBittorrent (Mediaplane)`, with the fields §6.2 lists and qBittorrent's key as its
+  secret. Its host is how the arr reaches qBittorrent: `gluetun` behind the VPN, whose
+  network qBittorrent shares, or `qbittorrent`; its port is qBittorrent's own. It is made
+  from the arr's own template, saved with `forceSave` even while qBittorrent is down, and
+  updated by sending the client back as the arr gave it, so its other settings stay the
+  user's. Its key is checked with the arr's own test of the client it holds (the key
+  masked): a refused key is planned as an update; any other failure, such as qBittorrent
+  out of the arr's reach, is the arr's own message (`unknown` in `plan`, a failure in
+  apply and verify). It `requires` qBittorrent's category, because the arr's test makes a
+  missing one with no save path, and Sonarr and Radarr come `after` qBittorrent. While
+  the category is to be made, `plan` checks the client's fields only, never its key, so
+  that the arr's test can't make the category (`plan` changes nothing: §5.2, §6.3); the
+  wire step checks it once the category is there.
+- **Sonarr's and Radarr's root folder** (§6.2): `<arr>.root_folder`, `/data/media/tv` or
+  `/data/media/movies`, known by its path (the arrs can't change one). The arr needs the
+  folder to exist, so the wire step makes it first, with `mkdir -p` in a throwaway
+  container of the arr's own service (`compose run`), as the stack's `user:`. A changed
+  path would add a root folder, and leave the old one.
+- **The integration contract** (§3.2) grows: a resource's `desired` sees the stack's
+  keys, its `verify` what the app holds, and it may name `folders` to make first. While a
+  managed field differs, the secrets aren't checked, because the update sets them anyway;
+  nor are they while a resource they `require` is yet to be made or changed. Apply's wire
+  step doesn't check again a secret its own plan found refused: it sets it. In `plan`, a
+  resource the app refuses leaves the app's others to be checked. `plan` reports a
+  managed field that holds a secret (`wire.secret-field`), which apply refuses.
+- **The typed HTTP client** (§3.2, §5.1) also sends a form with the key (qBittorrent's
+  API), runs an app's own test (a 2xx passes; a 400 gives the errors of Servarr's
+  validation list, never a warning or an `attemptedValue`), and takes a sign-in's 401 as
+  its answer. A refusal of a call made without the key no longer blames the key. Its
+  messages keep a secret out in each form an app may echo it in, nested ones too, such as
+  a password JSON-escaped inside a form field, or a JSON body quoted in an HTML page.
+- **No new Docker API call.** The folder helper is a `compose run`, as the ownership
+  helper and vpn-check's probe are; the socket proxy allows nothing new (§7.2(2)).
