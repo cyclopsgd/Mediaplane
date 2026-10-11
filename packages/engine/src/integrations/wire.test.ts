@@ -4,6 +4,7 @@ import { inspect } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import type { ActionResult } from '../history/records';
+import { AppApiError } from '../http/client';
 import { RESOURCES_PATH, STATE_DIR } from '../paths';
 import { JoinFailed, OwnContainerUnknown, WiringRefused } from '../runtime/docker';
 import { RuntimeError, type OneOffCommand } from '../runtime/types';
@@ -496,6 +497,58 @@ describe('wire', () => {
     expect(actions).toEqual([
       { step: 'wire', resource: 'sonarr.login', result: 'failed', error: said },
     ]);
+  });
+
+  it("keeps every secret out of a failure's message, whoever wrote it", async () => {
+    // A resource's own AppApiError, and a mkdir whose stderr the runtime didn't redact:
+    // the wire step redacts what it records, not only what the client and runtime say.
+    const own: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'first',
+      observe: () =>
+        Promise.reject(
+          new AppApiError(`Sonarr would not take ${KEY}`, { kind: 'rejected' }),
+        ),
+    };
+    const folders: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'second',
+      desired: (ctx) => {
+        const desired = FAKE_LOGIN.desired(ctx);
+        return desired && { ...desired, folders: ['/data/media/tv'] };
+      },
+    };
+    const sonarr = await fakeSonarr({ key: KEY });
+    const { run, actions } = await wireWith(sonarr, {
+      stack: stackOf(
+        WIRED_CATALOG.map((def) =>
+          def.id === 'sonarr'
+            ? { ...def, integration: { after: [], resources: [own, folders] } }
+            : def,
+        ),
+      ),
+      runtime: fakeRuntime({
+        containers: RUNNING,
+        addresses: sonarr.addresses,
+        run: () => ({
+          code: 1,
+          stdout: '',
+          stderr: `mkdir: ${PASSWORD}: Permission denied`,
+        }),
+      }),
+    });
+    const failure = await run.catch((thrown: unknown) => thrown);
+    expect((failure as WiringFailed).diagnostics.map((d) => d.message)).toEqual([
+      'Sonarr would not take ***',
+      'could not make /data/media/tv for sonarr.second: mkdir in a throwaway sonarr container exited 1: mkdir: ***: Permission denied',
+    ]);
+    expect(actions.map((a) => a.error)).toEqual([
+      'Sonarr would not take ***',
+      'could not make /data/media/tv for sonarr.second: mkdir in a throwaway sonarr container exited 1: mkdir: ***: Permission denied',
+    ]);
+    expect(JSON.stringify([failure, actions])).not.toMatch(
+      new RegExp(`${KEY}|${PASSWORD}`),
+    );
   });
 
   it('makes no folder for a resource the app already holds', async () => {

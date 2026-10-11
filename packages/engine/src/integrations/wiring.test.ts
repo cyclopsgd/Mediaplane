@@ -239,6 +239,32 @@ describe('planWiring', () => {
     ]);
   });
 
+  it("keeps every secret out of a resource's warning, whoever wrote its message", async () => {
+    // A resource's own AppApiError: the client never saw it, so plan redacts it.
+    const own: ResourceSpec = {
+      ...FAKE_LOGIN,
+      observe: () =>
+        Promise.reject(
+          new AppApiError(`Sonarr would not take ${PASSWORD}`, { kind: 'rejected' }),
+        ),
+    };
+    const sonarr = await fakeSonarr({ key: KEY });
+    const planned = await planWiring(options(sonarr, { stack: sonarrWith([own]) }));
+    expect(planned.changes).toEqual([
+      {
+        resource: 'sonarr.login',
+        action: 'unknown',
+        reason: 'Sonarr would not take ***',
+      },
+    ]);
+    expect(planned.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'wire.rejected',
+        message: 'Sonarr would not take ***',
+      }),
+    ]);
+  });
+
   it('says a managed field that holds a secret is one apply would refuse, and asks nothing of it', async () => {
     // The user name "admin" holds a value of the stack's secrets.
     const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });

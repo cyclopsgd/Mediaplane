@@ -17,6 +17,7 @@ import {
   knownSecrets,
   notOnNetwork,
   reachApps,
+  redactionValues,
   resourceAddress,
   resourcesInvalid,
   secretFieldReason,
@@ -116,7 +117,11 @@ export async function wire(options: WireOptions): Promise<string[]> {
   const failed: string[] = [];
   const skipped: string[] = [];
   const done: string[] = [];
-  const fail = (resource: string, message: string, code: string) => {
+  const values = redactionValues(secrets);
+  // Every failure's message is redacted once, here, whoever wrote it: the client, a
+  // resource's own error, mkdir or Docker.
+  const fail = (resource: string, said: string, code: string) => {
+    const message = redact(said, values);
     failed.push(resource);
     diagnostics.push(error(code, message, { hint: `see ${WIRING_RUNBOOK}` }));
     options.record({ step: 'wire', resource, result: 'failed', error: message });
@@ -130,10 +135,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
     before = '',
   ): WiringFailed => {
     const said = cause instanceof Error ? cause.message : String(cause);
-    const message = redact(
-      `${before}${said}`,
-      Object.fromEntries(secrets.map((s, i) => [i, s])),
-    );
+    const message = redact(`${before}${said}`, values);
     for (const resource of resources) {
       options.record({ step: 'wire', resource, result: 'failed', error: message });
     }
@@ -199,13 +201,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
         }
         id = result.observed?.id ?? null;
         if (result.action === 'create') {
-          const unmade = await makeFolders(
-            options,
-            app,
-            address,
-            result.desired,
-            secrets,
-          );
+          const unmade = await makeFolders(options, app, address, result.desired, values);
           if (unmade !== undefined) {
             fail(address, unmade, 'wire.folders');
             continue;
@@ -257,7 +253,8 @@ export async function wire(options: WireOptions): Promise<string[]> {
  * Make the folders `desired` needs, in a throwaway container of `app`'s own service (its
  * image and its mounts), as the stack's user: the folders are then the data folder's, as
  * the apps see it, and theirs. Undefined when there are none, or they are made; otherwise
- * why not, from mkdir's own last line, or Docker's, with every one of `secrets` replaced.
+ * why not, from mkdir's own last line, or Docker's. The runtime keeps `values`, every
+ * secret the stack knows, out of what it says; the wire step redacts the reason again.
  * A Docker that fails or times out fails this resource only, as the app failing would.
  */
 async function makeFolders(
@@ -265,12 +262,11 @@ async function makeFolders(
   app: ResolvedApp,
   address: string,
   desired: DesiredResource,
-  secrets: readonly string[],
+  values: Readonly<Record<string, string>>,
 ): Promise<string | undefined> {
   const folders = desired.folders ?? [];
   if (folders.length === 0) return undefined;
-  const values = Object.fromEntries(secrets.map((secret, i) => [String(i), secret]));
-  const unmade = `could not make ${folders.join(', ')} for ${address}`;
+  const couldNot = `could not make ${folders.join(', ')} for ${address}`;
   let made;
   try {
     made = await options.runtime.run(app.def.id, {
@@ -281,11 +277,11 @@ async function makeFolders(
     });
   } catch (cause) {
     if (!(cause instanceof RuntimeError)) throw cause;
-    return `${unmade}: ${redact(cause.message, values)}`;
+    return `${couldNot}: ${cause.message}`;
   }
   if (made.code === 0) return undefined;
   const said = made.stderr.trim().split('\n').at(-1)?.trim() ?? '';
-  return `${unmade}: mkdir in a throwaway ${app.def.name} container exited ${String(made.code)}${said === '' ? '' : `: ${said}`}`;
+  return `${couldNot}: mkdir in a throwaway ${app.def.name} container exited ${String(made.code)}${said === '' ? '' : `: ${said}`}`;
 }
 
 /** "the wiring failed for a; skipped b, which needs what failed". */

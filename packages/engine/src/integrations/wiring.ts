@@ -12,6 +12,7 @@ import { runbookUrl } from '../runbooks';
 import { JoinFailed, OwnContainerUnknown, WiringRefused } from '../runtime/docker';
 import type { ContainerState, RuntimeError, Runtime } from '../runtime/types';
 import type { SecretStore } from '../secrets/store';
+import { redact } from '../util/redact';
 import { compare } from '../util/sort';
 import type { KnownResource, KnownResources } from './resources';
 import type {
@@ -218,6 +219,11 @@ export function knownSecrets(
   return [...new Set(all)].filter((value) => value !== '');
 }
 
+/** `secrets` as redact() and the runtime take them, by position. */
+export function redactionValues(secrets: readonly string[]): Record<string, string> {
+  return Object.fromEntries(secrets.map((secret, i) => [String(i), secret]));
+}
+
 /** The app is up, and still takes Mediaplane's key (spec §6.3, "the source"). */
 export async function checkApp(reached: ReachedApp): Promise<void> {
   const spec = reached.app.def.api;
@@ -391,6 +397,7 @@ export async function planWiring(
   const reached = await reachApps(ready, { ...options, deadlineMs: PLAN_DEADLINE_MS });
   const changes: WiringChange[] = [];
   const diagnostics: Diagnostic[] = [];
+  const values = redactionValues(options.secrets);
   /** Resources apply would make or change, or that couldn't be looked at: not in place. */
   const pending = new Set<string>();
   const add = (change: WiringChange) => {
@@ -474,11 +481,13 @@ export async function planWiring(
           }
           break;
         }
-        // The app answered, about this resource: its others are still asked.
+        // The app answered, about this resource: its others are still asked. A resource
+        // can write its own message, which the client never saw: it is redacted here.
+        const said = redact(cause.message, values);
         diagnostics.push(
-          warning(`wire.${cause.kind}`, cause.message, { hint: `see ${WIRING_RUNBOOK}` }),
+          warning(`wire.${cause.kind}`, said, { hint: `see ${WIRING_RUNBOOK}` }),
         );
-        add({ resource: address, action: 'unknown', reason: cause.message });
+        add({ resource: address, action: 'unknown', reason: said });
         continue;
       }
       // Wanted, and desired() is pure: only a guard.
