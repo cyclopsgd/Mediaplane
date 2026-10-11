@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { ActionResult } from '../history/records';
 import { RESOURCES_PATH, STATE_DIR } from '../paths';
 import { JoinFailed, OwnContainerUnknown, WiringRefused } from '../runtime/docker';
-import { RuntimeError } from '../runtime/types';
+import { RuntimeError, type OneOffCommand } from '../runtime/types';
 import { fakeRuntime, type FakeRuntimeOptions } from '../testing/fakes';
 import { tempDir } from '../testing/temp';
 import {
@@ -391,6 +391,123 @@ describe('wire', () => {
       await expect(stat(join(home, RESOURCES_PATH))).rejects.toThrow();
     },
   );
+
+  /** Sonarr with one resource that the app holds none of, and that needs `folders`. */
+  function needingFolders(folders: readonly string[]) {
+    const login: ResourceSpec = {
+      ...FAKE_LOGIN,
+      desired: (ctx) => {
+        const desired = FAKE_LOGIN.desired(ctx);
+        return desired && { ...desired, folders };
+      },
+    };
+    return stackOf(
+      WIRED_CATALOG.map((def) =>
+        def.id === 'sonarr'
+          ? { ...def, integration: { after: [], resources: [login] } }
+          : def,
+      ),
+    );
+  }
+
+  it("makes the folders a resource needs before it creates it, as the stack's user, in the app's own container", async () => {
+    const sonarr = await fakeSonarr({ key: KEY });
+    const calls: string[] = [];
+    const commands: OneOffCommand[] = [];
+    const { run } = await wireWith(sonarr, {
+      stack: needingFolders(['/data/media/tv']),
+      values: { MP_FAKE: 'fake-env-secret' },
+      runtime: fakeRuntime({
+        containers: RUNNING,
+        addresses: sonarr.addresses,
+        calls,
+        run: (_service, command) => {
+          commands.push(command);
+          return { code: 0, stdout: '', stderr: '' };
+        },
+      }),
+    });
+    expect(await run).toEqual(['sonarr.login created']);
+    // The fixture stack runs as the default user, 1000:1000.
+    expect(calls).toContain('run sonarr mkdir as 1000:1000');
+    expect(commands).toEqual([
+      expect.objectContaining({
+        user: { uid: 1000, gid: 1000 },
+        entrypoint: 'mkdir',
+        args: ['-p', '--', '/data/media/tv'],
+      }),
+    ]);
+    // Every secret the stack knows is kept out of what it prints, not only .env's.
+    expect(Object.values(commands[0]?.values ?? {})).toEqual(
+      expect.arrayContaining(['fake-env-secret', KEY, PASSWORD]),
+    );
+    // Made first, then created.
+    expect(sonarr.state.user).toBe('admin');
+  });
+
+  it("fails a resource whose folders can't be made, saying why, and sends nothing for it", async () => {
+    const sonarr = await fakeSonarr({ key: KEY });
+    const { run, actions, home } = await wireWith(sonarr, {
+      stack: needingFolders(['/data/media/tv']),
+      runtime: fakeRuntime({
+        containers: RUNNING,
+        addresses: sonarr.addresses,
+        run: () => ({
+          code: 1,
+          stdout: '',
+          stderr:
+            " Container mediaplane-sonarr-run-0 Creating\nmkdir: can't create directory '/data/media/tv': Permission denied\n",
+        }),
+      }),
+    });
+    const failure = await run.catch((thrown: unknown) => thrown);
+    const said =
+      "could not make /data/media/tv for sonarr.login: mkdir in a throwaway sonarr container exited 1: mkdir: can't create directory '/data/media/tv': Permission denied";
+    expect((failure as WiringFailed).diagnostics).toEqual([
+      expect.objectContaining({ code: 'wire.folders', message: said }),
+    ]);
+    expect(actions).toEqual([
+      { step: 'wire', resource: 'sonarr.login', result: 'failed', error: said },
+    ]);
+    expect(sonarr.app.requests.some((r) => r.method === 'PUT')).toBe(false);
+    await expect(stat(join(home, RESOURCES_PATH))).rejects.toThrow();
+  });
+
+  it('fails only that resource when Docker fails to make its folders', async () => {
+    const sonarr = await fakeSonarr({ key: KEY });
+    const { run, actions } = await wireWith(sonarr, {
+      stack: needingFolders(['/data/media/tv']),
+      runtime: fakeRuntime({
+        containers: RUNNING,
+        addresses: sonarr.addresses,
+        run: () => {
+          throw new RuntimeError(`docker compose run timed out after 300 s (${KEY})`);
+        },
+      }),
+    });
+    const failure = await run.catch((thrown: unknown) => thrown);
+    const said =
+      'could not make /data/media/tv for sonarr.login: docker compose run timed out after 300 s (***)';
+    // The step goes on, and fails with the resource, as when the app refuses it.
+    expect((failure as WiringFailed).message).toBe('the wiring failed for sonarr.login');
+    expect((failure as WiringFailed).diagnostics).toEqual([
+      expect.objectContaining({ code: 'wire.folders', message: said }),
+    ]);
+    expect(actions).toEqual([
+      { step: 'wire', resource: 'sonarr.login', result: 'failed', error: said },
+    ]);
+  });
+
+  it('makes no folder for a resource the app already holds', async () => {
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const calls: string[] = [];
+    const { run } = await wireWith(sonarr, {
+      stack: needingFolders(['/data/media/tv']),
+      runtime: fakeRuntime({ containers: RUNNING, addresses: sonarr.addresses, calls }),
+    });
+    expect(await run).toEqual(['sonarr.login adopted']);
+    expect(calls.some((call) => call.startsWith('run '))).toBe(false);
+  });
 
   it('keeps only the managed fields in resources.json', async () => {
     // desired() gives a field the spec doesn't manage: it goes to the app, but isn't kept.

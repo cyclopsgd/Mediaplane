@@ -16,6 +16,12 @@ export interface DesiredResource {
   fields: Fields;
   /** The secret values it holds: applied and verified, never compared, kept or shown. */
   secrets: Readonly<Record<string, string>>;
+  /**
+   * Folders, as the app's container sees them, that must exist before the app can make
+   * it, such as a root folder's (spec §6.2). The wire step makes them first, as the
+   * stack's user, in a throwaway container of the app's own service.
+   */
+  folders?: readonly string[];
 }
 
 /** What the app holds now (spec §6.3: O): its id, its name and its managed fields. */

@@ -2,7 +2,7 @@ import { error, type Diagnostic } from '../diagnostics';
 import { AppApiError, APP_DEADLINE_MS } from '../http/client';
 import type { ActionResult } from '../history/records';
 import { PROJECT_NAME, WIRING_NETWORK } from '../render/compose';
-import type { ResolvedStack } from '../resolver/resolve';
+import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { RuntimeError, type Runtime } from '../runtime/types';
 import { adminLogin } from '../secrets/admin';
 import type { SecretStore } from '../secrets/store';
@@ -199,6 +199,17 @@ export async function wire(options: WireOptions): Promise<string[]> {
         }
         id = result.observed?.id ?? null;
         if (result.action === 'create') {
+          const unmade = await makeFolders(
+            options,
+            app,
+            address,
+            result.desired,
+            secrets,
+          );
+          if (unmade !== undefined) {
+            fail(address, unmade, 'wire.folders');
+            continue;
+          }
           ({ id } = await spec.create(client.api, result.desired));
         } else if (result.action === 'update' && result.observed !== undefined) {
           await spec.update(client.api, result.desired, result.observed);
@@ -240,6 +251,41 @@ export async function wire(options: WireOptions): Promise<string[]> {
     });
   }
   return done;
+}
+
+/**
+ * Make the folders `desired` needs, in a throwaway container of `app`'s own service (its
+ * image and its mounts), as the stack's user: the folders are then the data folder's, as
+ * the apps see it, and theirs. Undefined when there are none, or they are made; otherwise
+ * why not, from mkdir's own last line, or Docker's, with every one of `secrets` replaced.
+ * A Docker that fails or times out fails this resource only, as the app failing would.
+ */
+async function makeFolders(
+  options: WireOptions,
+  app: ResolvedApp,
+  address: string,
+  desired: DesiredResource,
+  secrets: readonly string[],
+): Promise<string | undefined> {
+  const folders = desired.folders ?? [];
+  if (folders.length === 0) return undefined;
+  const values = Object.fromEntries(secrets.map((secret, i) => [String(i), secret]));
+  const unmade = `could not make ${folders.join(', ')} for ${address}`;
+  let made;
+  try {
+    made = await options.runtime.run(app.def.id, {
+      user: options.stack.config.user,
+      entrypoint: 'mkdir',
+      args: ['-p', '--', ...folders],
+      values,
+    });
+  } catch (cause) {
+    if (!(cause instanceof RuntimeError)) throw cause;
+    return `${unmade}: ${redact(cause.message, values)}`;
+  }
+  if (made.code === 0) return undefined;
+  const said = made.stderr.trim().split('\n').at(-1)?.trim() ?? '';
+  return `${unmade}: mkdir in a throwaway ${app.def.name} container exited ${String(made.code)}${said === '' ? '' : `: ${said}`}`;
 }
 
 /** "the wiring failed for a; skipped b, which needs what failed". */
