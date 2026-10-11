@@ -890,6 +890,169 @@ describe('createAppApi', () => {
     ).toMatchObject({ kind: 'server', status: 500 });
   });
 
+  describe('a password that a form sends inside JSON', () => {
+    // qBittorrent's setPreferences takes JSON in a form field: the password is
+    // JSON-escaped, and then form-encoded. These forms are written out, not made by the
+    // client.
+    const NESTED_FORMS = {
+      'form-encoded JSON-escaped': 'fake%3Cpass%26x%5C%22pw%5C%5C%21+',
+      'form-encoded JSON-escaped, in lowercase hex': 'fake%3cpass%26x%5c%22pw%5c%5c%21+',
+      'percent-encoded JSON-escaped': 'fake%3Cpass%26x%5C%22pw%5C%5C!%20',
+      'HTML-escaped JSON-escaped': 'fake&lt;pass&amp;x\\&quot;pw\\\\! ',
+    };
+
+    it.each([
+      [
+        'the raw body',
+        (request: { body: string }) => ({ status: 400, body: `Bad: ${request.body}` }),
+      ],
+      [
+        'the decoded JSON, HTML-escaped',
+        () => ({
+          status: 400,
+          body: 'Bad: {&quot;web_ui_password&quot;:&quot;fake&lt;pass&amp;x\\&quot;pw\\\\! &quot;}',
+        }),
+      ],
+    ])('stays out of what an app says when it echoes %s', async (_echo, handler) => {
+      const { api } = await sonarr(handler, { secrets: [] });
+      const error = await failure(
+        api.form(
+          '/api/v2/app/setPreferences',
+          { json: JSON.stringify({ web_ui_password: PW }) },
+          { secrets: [PW] },
+        ),
+      );
+      expect(error.message).toContain('***');
+      for (const [name, form] of Object.entries(NESTED_FORMS)) {
+        expect(error.message, name).not.toContain(form);
+      }
+      for (const part of PW_PARTS) expect(error.message).not.toContain(part);
+    });
+  });
+
+  it('sends a sign-in that names its own answers once it may have reached the app', async () => {
+    // qBittorrent counts each failed sign-in towards a ban, so a resend could spend more.
+    const { api, app, slept } = await sonarr(() => ({ status: 503, body: 'busy' }));
+    const error = await failure(
+      api.login(
+        '/api/v2/auth/login',
+        { username: 'admin', password: PASSWORD },
+        { answers: [401] },
+      ),
+    );
+    expect(error).toMatchObject({ kind: 'server', status: 503 });
+    expect(app.requests).toHaveLength(1);
+    expect(slept).toEqual([]);
+  });
+
+  it('tries a sign-in with no answers of its own again while the app is starting', async () => {
+    const answers = [503, 503, 302];
+    const { api, app, slept } = await sonarr(() => {
+      const status = answers.shift() ?? 302;
+      return { status, headers: { Location: '/' }, body: status === 302 ? '' : 'busy' };
+    });
+    expect(await api.login('/login', { username: 'admin', password: PASSWORD })).toEqual({
+      status: 302,
+      location: '/',
+    });
+    expect(app.requests).toHaveLength(3);
+    expect(slept).toEqual([500, 1000]);
+  });
+
+  it('sends a form or an app test once when the app answered 503, as a POST', async () => {
+    const form = await sonarr(() => ({ status: 503, body: 'busy' }));
+    expect(
+      await failure(form.api.form('/api/v2/torrents/createCategory', { category: 'tv' })),
+    ).toMatchObject({ kind: 'server', status: 503 });
+    expect(form.app.requests).toHaveLength(1);
+    expect(form.slept).toEqual([]);
+    const test = await sonarr(() => ({ status: 503, body: 'busy' }));
+    expect(await failure(test.api.test('/api/v3/downloadclient/test', {}))).toMatchObject(
+      { kind: 'server', status: 503 },
+    );
+    expect(test.app.requests).toHaveLength(1);
+    expect(test.slept).toEqual([]);
+  });
+
+  it('tries a form again while the connection is refused, and sends it once the app is up', async () => {
+    const port = await closedPort();
+    const clock = fakeClock();
+    const received: string[] = [];
+    // The app starts listening while the client waits for the first time.
+    const api = createAppApi({
+      name: 'qBittorrent',
+      service: 'qbittorrent',
+      port: 8080,
+      endpoint: { host: '127.0.0.1', port },
+      secrets: [],
+      retry: {
+        ...clock.retry,
+        sleep: async (ms) => {
+          await clock.retry.sleep(ms);
+          if (clock.slept.length > 1) return;
+          const server = createServer((req, res) => {
+            req.on('data', (chunk: Buffer) => received.push(chunk.toString('utf8')));
+            req.on('end', () => res.writeHead(200).end());
+          });
+          await new Promise<void>((done) => server.listen(port, '127.0.0.1', done));
+          onTestFinished(
+            () =>
+              new Promise<void>((done) => {
+                server.closeAllConnections();
+                server.close(() => {
+                  done();
+                });
+              }),
+          );
+        },
+      },
+    });
+    await api.form('/api/v2/torrents/createCategory', { category: 'tv' });
+    expect(clock.slept.length).toBeGreaterThan(0);
+    expect(received).toEqual(['category=tv']);
+  });
+
+  it('shows what an app test says as one plain line, whatever the app put in it', async () => {
+    const secret = 'fake pass';
+    const key = `qbt_${'1'.repeat(28)}`;
+    const { api } = await sonarr(
+      () => ({
+        status: 400,
+        body: [
+          {
+            // A newline and an escape sequence, a secret that the newline splits, and a
+            // property that is a secret itself.
+            propertyName: `Key ${key}`,
+            errorMessage: 'Bad\n\u001b[31mred\u001b[0m token fake\npass here',
+            detailedDescription: `Try ${key}\r\nagain`,
+          },
+          {
+            propertyName: 'Host',
+            errorMessage: `${'x'.repeat(150)} ${'y'.repeat(100)}`,
+          },
+        ],
+      }),
+      { secrets: [KEY, secret, key] },
+    );
+    const result = await api.test('/api/v3/downloadclient/test', {});
+    expect(result.failures).toEqual([
+      { property: 'Key ***', message: 'Bad [31mred [0m token *** here (Try *** again)' },
+      { property: 'Host', message: `${'x'.repeat(150)} ${'y'.repeat(48)}…` },
+    ]);
+    // 199 characters and the ellipsis, as appMessage cuts.
+    expect(result.failures[1]?.message).toHaveLength(200);
+    // C0, DEL and C1.
+    const control = (char: string) =>
+      char < ' ' || (char >= '\u007f' && char <= '\u009f');
+    for (const item of result.failures) {
+      for (const text of [item.property, item.message]) {
+        expect(text).not.toContain(secret);
+        expect(text).not.toContain(key);
+        expect(Array.from(text).some(control)).toBe(false);
+      }
+    }
+  });
+
   it('waits for the app to be ready, without the key', async () => {
     const answers = [503, 503, 200];
     const { api, app } = await sonarr(() => ({ status: answers.shift() ?? 200 }));

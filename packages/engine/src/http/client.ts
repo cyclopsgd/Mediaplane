@@ -135,6 +135,10 @@ export interface AppApi {
    * POST a form, without the key and never following a redirect: an app's own sign-in
    * page. Its status and Location; its cookies are dropped. A 2xx or 3xx answer is the
    * answer, and so is any status in `answers` (qBittorrent's 401 for a wrong password).
+   * Without `answers`, a sign-in is tried again like a GET (a starting app). With them, it
+   * is sent like `post`, again only when nothing reached the app: an app that answers a
+   * wrong password itself counts each failure towards a ban, and a resend after a timeout
+   * or a 5xx could spend another.
    */
   login(
     path: string,
@@ -509,7 +513,7 @@ export function createAppApi(options: AppApiOptions): AppApi {
       // A redirect is the answer: where it leads says whether the login worked.
       const answer = await send(
         call,
-        true,
+        answers.length === 0,
         (a) => (a.status >= 200 && a.status < 400) || answers.includes(a.status),
       );
       return {
@@ -540,10 +544,25 @@ function toValues(secrets: readonly string[]): Record<string, string> {
  * hex (.NET's `HttpUtility.UrlEncode` writes `%5b`); and HTML-escaped (an error page),
  * where apps differ in how they write a quote (`&quot;`, `&#34;`, or as it is) and an
  * apostrophe (`&#39;`, `&#x27;`, or as it is).
+ *
+ * Each of those is also written for the JSON-escaped secret, when that differs: it is
+ * what a secret sent JSON-escaped inside a form field (qBittorrent's `setPreferences`)
+ * or quoted in a page looks like once the field is form-encoded or the page escaped.
  */
 function formsOf(secret: string): string[] {
+  const escaped = JSON.stringify(secret).slice(1, -1);
+  return [
+    ...new Set([
+      ...encodingsOf(secret),
+      ...(escaped === secret ? [] : encodingsOf(escaped)),
+    ]),
+  ];
+}
+
+/** `text` as it is, percent-encoded, form-encoded (both in either hex case) and HTML-escaped. */
+function encodingsOf(text: string): string[] {
   const html = (quote: string, apostrophe: string) =>
-    secret
+    text
       .replaceAll('&', '&amp;')
       .replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;')
@@ -551,11 +570,10 @@ function formsOf(secret: string): string[] {
       .replaceAll("'", apostrophe);
   const lowerHex = (encoded: string) =>
     encoded.replace(/%[0-9A-F]{2}/g, (escape) => escape.toLowerCase());
-  const percent = encodeURIComponent(secret);
-  const form = new URLSearchParams({ v: secret }).toString().slice(2);
+  const percent = encodeURIComponent(text);
+  const form = new URLSearchParams({ v: text }).toString().slice(2);
   return [
-    secret,
-    JSON.stringify(secret).slice(1, -1),
+    text,
     percent,
     lowerHex(percent),
     form,
