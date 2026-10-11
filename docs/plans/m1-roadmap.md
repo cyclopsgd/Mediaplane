@@ -384,6 +384,13 @@ password, which are S3c's (and listed again below).
   `apply` that sets it. When drift is checked on a schedule (M2), a changed password left
   unapplied would ban Mediaplane's address within the hour. Decide whether drift checks
   the password less often, or not at all while it differs.
+- **`plan` can make a post-import category in qBittorrent.** The arr's own test, which
+  `plan` runs to check a download client's key, makes a missing post-import category
+  (`tvImportedCategory`, `movieImportedCategory`). Mediaplane doesn't manage that
+  setting, so this happens only if you set one yourself and later deleted it in
+  qBittorrent (S3c, probed on the pinned images). That is a small exception to "`plan`
+  changes nothing". `plan` already reads qBittorrent's categories, so it could skip the
+  test while that category is missing.
 - **Settings Mediaplane manages in qBittorrent are put back.** A whitelist, a save path
   or a category's path changed in qBittorrent's web UI is undone by the next `apply`
   (S3c). Keep mine must cover them, with the arrs' download clients and root folders.
