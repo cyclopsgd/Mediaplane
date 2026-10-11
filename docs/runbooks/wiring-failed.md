@@ -3,48 +3,68 @@
 Wiring is what `apply` does through each app's API once the apps run: today, the shared
 admin login in Sonarr, Radarr, Prowlarr and qBittorrent, qBittorrent's settings and its
 `tv` and `movies` categories, and in Sonarr and Radarr, qBittorrent as their download
-client and their root folders. Later slices add the indexers, the media server and the
-requests app.
+client and their root folders. Later slices add Prowlarr's links, the media server and
+the requests app.
 
 ## Symptoms
 
 - **`mediaplane apply` stops at the wiring step,** with each failed resource on its own
-  line and the app's own message:
+  line and the app's own message. An app that refuses Mediaplane's key fails all of its
+  resources the same way: Sonarr has three (`admin`, `download_client` and
+  `root_folder`). The plan that `apply` shows first has already warned about it, so the
+  final error doesn't repeat the message (trimmed):
+
+  ```console
+  warning: Sonarr at http://sonarr:8989 (172.19.0.3) refused Mediaplane's API key (HTTP 401) (GET /api/v3/system/status)
+    hint: check it with "mediaplane status sonarr", then see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md
+  … the plan, and the steps before the wiring …
+  Wiring the apps…
+    done    wiring qbittorrent.admin: unchanged
+    done    wiring qbittorrent.preferences: unchanged
+    done    wiring qbittorrent.category_tv: unchanged
+    failed  wiring sonarr.admin: Sonarr at http://sonarr:8989 (172.19.0.3) refused Mediaplane's API key (HTTP 401) (GET /api/v3/system/status)
+    failed  wiring sonarr.download_client: Sonarr at http://sonarr:8989 (172.19.0.3) refused Mediaplane's API key (HTTP 401) (GET /api/v3/system/status)
+    failed  wiring sonarr.root_folder: Sonarr at http://sonarr:8989 (172.19.0.3) refused Mediaplane's API key (HTTP 401) (GET /api/v3/system/status)
+    failed  wiring
+    skipped verify
+  error: the wiring failed for sonarr.admin, sonarr.download_client, sonarr.root_folder
+    hint: the apps' own messages are above; fix what they say, then run apply again. See https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md
+
+  Apply failed: 8 done, 3 failed, 1 skipped. Run apply again to retry. Change record: 20261011T131435Z-439e27ae
+  ```
+
+  When the plan couldn't ask the app (it was still starting, say), each failed resource
+  also prints its message as an `error:` line, with a hint.
+
+  A resource that needs a failed one is `skipped`, and the others still run. Sonarr's
+  download client needs qBittorrent's `tv` category, and Radarr's its `movies` one. So
+  when qBittorrent refuses the key, its resources fail and the download client is skipped
+  (the wiring lines only):
 
   ```console
   Wiring the apps…
-    failed  wiring sonarr.admin: Sonarr at http://sonarr:8989 (172.20.0.3) refused Mediaplane's API key (HTTP 401) (GET /api/v3/system/status)
-    failed  wiring
-    skipped verify
-  error: Sonarr at http://sonarr:8989 (172.20.0.3) refused Mediaplane's API key (HTTP 401) (GET /api/v3/system/status)
-    hint: see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md
-  error: the wiring failed for sonarr.admin
-    hint: the apps' own messages are above; fix what they say, then run apply again. See https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md
-
-  Apply failed: 5 done, 1 failed, 1 skipped. Run apply again to retry. Change record: 20261010T120000Z-0a1b2c3d
-  ```
-
-  A resource that needs a failed one is `skipped`, and the others still run. Sonarr's
-  download client needs qBittorrent's `tv` category, and Radarr's its `movies` one. When
-  qBittorrent refuses Mediaplane's key, each of its resources fails, and the download
-  clients are skipped (some lines left out):
-
-  ```console
-    failed  wiring qbittorrent.category_tv: qBittorrent at http://gluetun:8080 (172.20.0.4) refused Mediaplane's API key (HTTP 403): Forbidden (GET /api/v2/app/version)
+    failed  wiring qbittorrent.admin: qBittorrent at http://qbittorrent:8080 (172.19.0.2) refused Mediaplane's API key (HTTP 403): Forbidden (GET /api/v2/app/version)
+    failed  wiring qbittorrent.preferences: qBittorrent at http://qbittorrent:8080 (172.19.0.2) refused Mediaplane's API key (HTTP 403): Forbidden (GET /api/v2/app/version)
+    failed  wiring qbittorrent.category_tv: qBittorrent at http://qbittorrent:8080 (172.19.0.2) refused Mediaplane's API key (HTTP 403): Forbidden (GET /api/v2/app/version)
+    done    wiring sonarr.admin: unchanged
     skipped wiring sonarr.download_client: qbittorrent.category_tv failed
+    done    wiring sonarr.root_folder: unchanged
   ```
 
-- **`mediaplane plan`** warns with the same message, lists the resource under `Wiring:`
-  as `? unknown`, and exits 2. A refusal of one resource leaves the app's others to be
-  checked; an app that stops answering leaves all that is left of it `unknown`:
+- **`mediaplane plan`** warns with the same message, once for the app, and exits 2. It
+  lists each of the app's resources under `Wiring:` as `? unknown` when the app refuses
+  the key. When it refuses one resource only, the app's others are still checked; an app
+  that stops answering leaves all that is left of it `unknown`:
 
   ```console
   $ mediaplane plan
-  warning: Sonarr at http://sonarr:8989 (172.20.0.3) refused Mediaplane's API key (HTTP 401) (GET /api/v3/system/status)
+  warning: Sonarr at http://sonarr:8989 (172.19.0.3) refused Mediaplane's API key (HTTP 401) (GET /api/v3/system/status)
     hint: check it with "mediaplane status sonarr", then see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md
   Wiring:
     ? unknown     sonarr.admin
-  Plan: 1 wiring check that could not be made.
+    ? unknown     sonarr.download_client
+    ? unknown     sonarr.root_folder
+  Plan: 3 wiring checks that could not be made.
   ```
 
 - **`apply` fails at verify** with `changes remain after apply: sonarr.admin (update)`:
@@ -116,15 +136,18 @@ differ, and a `reason` when it is `unknown`.
   stops an address from signing in for an hour after five failed sign-ins in a row.
   Mediaplane checks qBittorrent's password by signing in: each `plan`, and each `apply`'s
   own plan, signs in once, and fails while qBittorrent's password differs from the
-  stack's, such as after `admin.password` changed. Mediaplane doesn't send a sign-in again
-  once it may have reached qBittorrent, such as after a timeout, so each costs at most one
-  failure. So four `plan`s, or declined `apply`s, before the `apply` are enough: it sets
-  the password with the key, but its last check is refused, and it stops at verify with
-  `changes remain after apply: qbittorrent.admin (unknown: …)`, which holds the message
-  above. `plan` warns with the same message. Its key still works, and only Mediaplane's
-  address is banned, not your browser's. Wait an hour, or restart qBittorrent, which
-  forgets the ban (`docker restart mediaplane-qbittorrent-1`), then run `apply` again: it
-  sets the password if it hasn't yet, and its check then passes.
+  stack's, such as after `admin.password` changed. Mediaplane doesn't send a sign-in
+  again once it may have reached qBittorrent, such as after a timeout, so each costs at
+  most one failure. So four `plan`s, or declined `apply`s, before the `apply` are enough:
+  it sets the password with the key, but its last check is refused, and it stops at
+  verify with `changes remain after apply: qbittorrent.admin (unknown: …)`, which holds
+  the message above. After five or more, `apply`'s own plan is already refused, and it
+  stops earlier, at the wiring step, with `failed  wiring qbittorrent.admin:` and the same
+  message, before it sets the password. `plan` warns with the same message. Its key still
+  works, and only Mediaplane's address is banned, not your browser's. Wait an hour, or
+  restart qBittorrent, which forgets the ban (`docker restart mediaplane-qbittorrent-1`),
+  then run `apply` again: it sets the password if it hasn't yet, and its check then
+  passes.
 - **`tested qBittorrent (Mediaplane), and it failed`, with
   `Host: Unable to connect to qBittorrent`.** Sonarr or Radarr can't reach qBittorrent.
   Behind the VPN they reach it through Gluetun, as `gluetun`, at qBittorrent's port:
@@ -176,8 +199,9 @@ differ, and a `reason` when it is `unknown`.
   remove it to go back to the tested image.
 - **`holds one of the stack's secrets`** (`wire.secret-field`). A value that Mediaplane
   keeps in `state/resources.json`, such as `admin.username`, is the same as a key or the
-  password. That file never holds a secret, so Mediaplane sets nothing in that app until
-  the value is another one. Change it in `stack.yaml`, then run `apply` again.
+  password. That file never holds a secret, so Mediaplane sets nothing in that resource
+  until the value is another one; the app's other resources are still set. Change it in
+  `stack.yaml`, then run `apply` again.
 - **`resources.invalid`.** `state/resources.json` can't be read, and Mediaplane leaves it
   as it is. Fix it from the message, or move it aside and run `plan` again. Mediaplane
   finds what it made in each app by name, adopts it, and writes the file anew at the

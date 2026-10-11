@@ -88,8 +88,9 @@ host network, read-only mounts
   That is a container of the arr's own image, with the arr's own settings from
   `compose.yaml` and `compose.override.yaml`, running `mkdir` as the stack's `user:` to
   make the root folder inside the data folder, where the arr mounts it. It is removed
-  when `mkdir` exits. It uses the same Docker API calls as the ownership helper, so the
-  proxy allows nothing new for it. T5 says what its environment holds.
+  when `mkdir` exits. It uses the Docker API calls that the ownership helper and
+  Mediaplane's own join of the wiring network already make, so the proxy allows nothing
+  new for it. T5 says what its environment holds.
 - **The wiring.** `plan` and `apply` call the apps' APIs over the wiring network: from
   the Mediaplane container, or run from source, from the host. Each request goes
   straight to the app's container, through an HTTP agent of Mediaplane's own, so a proxy
@@ -177,8 +178,9 @@ What remains:
 - Between an app's first start and the wiring step a moment later, Sonarr, Radarr and
   Prowlarr have no user: with `login_on_lan: true` nobody can sign in, and with `false`
   a local address gets in anyway.
-- With `login_on_lan: false`, an address inside the subnet that skips qBittorrent's login
-  can sign in with any password. So a `network.lan_subnet` that also covers a Docker
+- With `login_on_lan: false` and the web UIs published on the LAN, an address inside the
+  subnet that skips qBittorrent's login can sign in with any password. So a
+  `network.lan_subnet` that also covers a Docker
   network of the stack, such as a hand-typed `172.16.0.0/12`, which covers Docker's
   `172.17` to `172.31` networks, lets every container on those networks skip
   qBittorrent's login. It also hides from `plan` a password changed by hand in

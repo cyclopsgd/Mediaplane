@@ -125,8 +125,8 @@ Each part, and where its code is:
 
 Not built yet:
 
-- the rest of the links between the apps: the indexers (Slice 4), the media server
-  (Slice 5) and the requests app (Slice 6);
+- the rest of the links between the apps: Prowlarr's to Sonarr and Radarr (Slice 4),
+  the media server (Slice 5) and the requests app (Slice 6);
 - drift detection, with Keep mine (Slice 7).
 
 ## `plan`
@@ -351,10 +351,10 @@ mediaplane (the stack)
   - `create` or `update`: the app lacks it, or a managed field or a secret differs. A
     secret is checked by using it, never compared: signing in, or the app's own test, as
     Sonarr's test of its download client. While a field differs, the secrets aren't
-    checked: the update sets them anyway. Nor are they while a resource they require is
-    yet to be made or changed, since the check could make what is missing, and `plan`
-    changes nothing. `apply` doesn't check again a secret its own plan found refused: it
-    sets it.
+    checked: the update sets them anyway. In `plan`, nor are they checked until a
+    resource they require is in place (`unchanged` or `adopt`), since the check could make
+    what is missing, and `plan` changes nothing. `apply` doesn't check again a secret its
+    own plan found refused: it sets it.
   - `adopt`: the app already holds it as wanted, but `state/resources.json` doesn't say
     so yet, such as after lost state.
   - `unchanged`.

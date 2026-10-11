@@ -61,7 +61,7 @@ Mediaplane does that part for you:
 | Run in a hardened container, behind a Docker socket proxy                         | Done         |
 | Documentation generated from code: the `stack.yaml` and CLI references, app facts | Done         |
 | Link Sonarr and Radarr to qBittorrent: download clients, categories, root folders | Done         |
-| Wire the rest together (indexers, media server, requests)                         | Planned      |
+| Wire the rest together (Prowlarr's links, media server, requests)                 | Planned      |
 | Detect manual changes and offer Re-apply or "Keep mine"                           | Planned      |
 | Web panel with a setup wizard                                                     | Planned (M2) |
 
@@ -384,8 +384,8 @@ as quality profiles. Mediaplane deploys the whole stack and makes it safe: gener
 secrets, a socket proxy, a tested VPN kill switch, and a private wiring network. It wires
 the apps to each other, with `plan` and `apply` and a history of what it did, and leaves
 the rest of each app's settings to you. Today it sets the shared login, and links Sonarr
-and Radarr to qBittorrent; the indexers, the media server and Seerr come in Slices 4
-to 6.
+and Radarr to qBittorrent; Prowlarr's links, the media server and Seerr come in
+Slices 4 to 6.
 
 They can be used together. Recyclarr is planned for M4.
 

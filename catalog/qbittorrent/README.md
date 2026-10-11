@@ -110,12 +110,13 @@ manages ("Keep mine") comes in Slice 7. See the
   mine".
 - **Five failed sign-ins in a row ban an address for an hour.** Mediaplane checks the
   password by signing in, once per `plan` and once per `apply`, and never again after a
-  timeout, so after you change `admin.password`, run `apply` soon: four `plan`s, or
-  declined `apply`s, before it ban Mediaplane's address (never your browser's), and
-  `plan` then says so. Restarting qBittorrent lifts the ban. See the
+  timeout. So after you change `admin.password`, run `apply` soon: four `plan`s, or
+  declined `apply`s, are enough to get Mediaplane's address banned (never your browser's),
+  and `plan` then says so. Restarting qBittorrent lifts the ban. See the
   [wiring failed runbook](../../docs/runbooks/wiring-failed.md).
 - **A `network.lan_subnet` wider than your LAN lets everything in it skip the login,**
-  with `security.login_on_lan: false`. An address inside the whitelisted subnet signs in
+  with `security.login_on_lan: false` and the web UIs published on your LAN
+  (`network.bind` is not `localhost`). An address inside the whitelisted subnet signs in
   with any password. If the subnet also covers a Docker network of the stack, such as a
   hand-typed `172.16.0.0/12`, which covers Docker's `172.17` to `172.31` networks:
   - every container on those networks skips qBittorrent's login;

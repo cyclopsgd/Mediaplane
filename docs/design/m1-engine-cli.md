@@ -1274,8 +1274,9 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 - **The integration contract** (§3.2) grows: a resource's `desired` sees the stack's
   keys, its `verify` what the app holds, and it may name `folders` to make first. While a
   managed field differs, the secrets aren't checked, because the update sets them anyway;
-  nor are they while a resource they `require` is yet to be made or changed. Apply's wire
-  step doesn't check again a secret its own plan found refused: it sets it. In `plan`, a
+  nor are they, in `plan`, until a resource they `require` is in place (`unchanged` or
+  `adopt`). Apply's wire step doesn't check again a secret its own plan found refused: it
+  sets it. In `plan`, a
   resource the app refuses leaves the app's others to be checked. `plan` reports a
   managed field that holds a secret (`wire.secret-field`), which apply refuses.
 - **The typed HTTP client** (§3.2, §5.1) also sends a form with the key (qBittorrent's
