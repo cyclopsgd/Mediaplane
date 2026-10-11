@@ -4,7 +4,13 @@ import {
   type ResolvedStack,
   type WiringContext,
 } from '@mediaplane/engine';
-import { fakeStackApis, freshAppState, wiringStack } from '@mediaplane/engine/testing';
+import {
+  fakeHttpApp,
+  fakeStackApis,
+  freshAppState,
+  wiringStack,
+  type FakeReply,
+} from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { catalog } from '../index';
 import {
@@ -66,6 +72,49 @@ function wanted(ctx: WiringContext = contextOf()) {
   const desired = client.desired(ctx);
   if (desired === undefined) throw new Error('the download client is wanted');
   return desired;
+}
+
+/** Two of the settings Mediaplane sets in a client. */
+const NEEDED = ['apiKey', 'tvCategory'];
+
+/** Sonarr's qBittorrent template, as `…/schema` gives it. */
+function template() {
+  return {
+    name: '',
+    enable: false,
+    implementation: 'QBittorrent',
+    fields: [
+      { name: 'host', value: 'localhost' },
+      { name: 'port', value: 8080 },
+      { name: 'useSsl', value: false },
+      { name: 'apiKey' },
+      { name: 'tvCategory', value: 'tv-sonarr' },
+    ],
+  };
+}
+
+/** The client as observed: the app's id 1. */
+const HELD = {
+  id: 1,
+  name: DOWNLOAD_CLIENT_NAME,
+  fields: { host: 'gluetun', port: 8080, useSsl: false, category: 'tv', enable: true },
+};
+
+/** A Sonarr that gives only `answers`, by "<method> <path>", and a client for it. */
+async function sonarrAnswering(answers: Record<string, FakeReply>) {
+  const app = await fakeHttpApp(
+    (request) => answers[`${request.method} ${request.path}`] ?? { status: 404 },
+  );
+  const api = createAppApi({
+    name: 'Sonarr',
+    service: 'sonarr',
+    port: 8989,
+    endpoint: { host: '127.0.0.1', port: app.port },
+    key: { scheme: 'x-api-key', value: SONARR_KEY },
+    secrets: [SONARR_KEY, QBT_KEY],
+    retry: { deadlineMs: 0 },
+  });
+  return { api, app };
 }
 
 describe('servarrDownloadClient', () => {
@@ -165,6 +214,78 @@ describe('servarrDownloadClient', () => {
     expect(failure).toBeInstanceOf(AppApiError);
     expect((failure as AppApiError).message).toBe(
       'Sonarr at http://sonarr:8989 (127.0.0.1) tested qBittorrent (Mediaplane), and it failed: Host: Unable to connect to qBittorrent (Name does not resolve (nohost:8080)) (POST /api/v3/downloadclient/test)',
+    );
+  });
+
+  it('refuses a template or a client without a setting it needs, naming it, and sends nothing', async () => {
+    const { fields, ...rest } = template();
+    const without = { ...rest, fields: fields.filter((f) => !NEEDED.includes(f.name)) };
+    const { api, app } = await sonarrAnswering({
+      'GET /api/v3/downloadclient/schema': { status: 200, body: [without] },
+      'GET /api/v3/downloadclient/1': { status: 200, body: { ...without, id: 1 } },
+    });
+    for (const send of [
+      () => client.create(api, wanted()),
+      () => client.update(api, wanted(), HELD),
+    ]) {
+      const failure = await send().catch((thrown: unknown) => thrown);
+      expect(failure).toBeInstanceOf(AppApiError);
+      expect(failure).toMatchObject({ kind: 'protocol' });
+      expect((failure as AppApiError).message).toContain(
+        'has no tvCategory, apiKey setting for qBittorrent, which Mediaplane needs',
+      );
+    }
+    expect(app.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      'GET /api/v3/downloadclient/schema',
+      'GET /api/v3/downloadclient/1',
+    ]);
+  });
+
+  it('refuses an app that offers no qBittorrent download client', async () => {
+    const { api, app } = await sonarrAnswering({
+      'GET /api/v3/downloadclient/schema': {
+        status: 200,
+        body: [{ ...template(), implementation: 'Transmission' }],
+      },
+    });
+    const failure = await client.create(api, wanted()).catch((thrown: unknown) => thrown);
+    expect(failure).toBeInstanceOf(AppApiError);
+    expect(failure).toMatchObject({
+      kind: 'protocol',
+      message:
+        'Sonarr at http://sonarr:8989 (127.0.0.1) offers no qBittorrent download client (GET /api/v3/downloadclient/schema)',
+    });
+    expect(app.requests.map((r) => r.method)).toEqual(['GET']);
+  });
+
+  it.each(['ApiKey', 'Username', 'Password'])(
+    'takes a test that names %s as a key qBittorrent refused: an update sets it',
+    async (property) => {
+      const { api } = await sonarrAnswering({
+        'GET /api/v3/downloadclient/1': { status: 200, body: { ...template(), id: 1 } },
+        'POST /api/v3/downloadclient/test': {
+          status: 400,
+          body: [{ propertyName: property, errorMessage: 'Authentication Failure' }],
+        },
+      });
+      expect(await client.verify?.(api, wanted(), HELD)).toBe(false);
+    },
+  );
+
+  it("gives the app's bare words for a failure that names no setting", async () => {
+    const { api } = await sonarrAnswering({
+      'GET /api/v3/downloadclient/1': { status: 200, body: { ...template(), id: 1 } },
+      'POST /api/v3/downloadclient/test': {
+        status: 400,
+        body: [{ propertyName: '', errorMessage: 'Unknown exception: fake' }],
+      },
+    });
+    const failure = await client
+      .verify?.(api, wanted(), HELD)
+      .catch((thrown: unknown) => thrown);
+    expect(failure).toBeInstanceOf(AppApiError);
+    expect((failure as AppApiError).message).toBe(
+      'Sonarr at http://sonarr:8989 (127.0.0.1) tested qBittorrent (Mediaplane), and it failed: Unknown exception: fake (POST /api/v3/downloadclient/test)',
     );
   });
 

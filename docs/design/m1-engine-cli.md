@@ -1275,7 +1275,7 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   keys, its `verify` what the app holds, and it may name `folders` to make first. While a
   managed field differs, the secrets aren't checked, because the update sets them anyway;
   nor are they, in `plan`, until a resource they `require` is in place (`unchanged` or
-  `adopt`). Apply's wire step doesn't check again a secret its own plan found refused: it
+  `adopt`) and checked. Apply's wire step doesn't check again a secret its own plan found refused: it
   sets it. In `plan`, a
   resource the app refuses leaves the app's others to be checked. `plan` reports a
   managed field that holds a secret (`wire.secret-field`), which apply refuses.

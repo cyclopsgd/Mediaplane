@@ -123,6 +123,22 @@ describe('wire', () => {
     expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
   });
 
+  it('checks again a field its plan found differing: only the secrets it found refused go unchecked', async () => {
+    // The plan said the user differed, and it was put right meanwhile: nothing is set, and
+    // nothing is said to be. The password is checked, since no secret was found refused.
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const { run, actions } = await wireWith(sonarr, {
+      known: RECORDED,
+      planned: [{ resource: 'sonarr.login', action: 'update', changes: ['user'] }],
+    });
+    expect(await run).toEqual([]);
+    expect(actions).toEqual([
+      { step: 'wire', resource: 'sonarr.login', result: 'done', detail: 'unchanged' },
+    ]);
+    expect(sonarr.app.requests.some((r) => r.method === 'PUT')).toBe(false);
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(true);
+  });
+
   it('changes nothing, and writes nothing, when all is as wanted', async () => {
     const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
     const { run, home, actions } = await wireWith(sonarr, { known: RECORDED });
@@ -415,6 +431,12 @@ describe('wire', () => {
     const sonarr = await fakeSonarr({ key: KEY });
     const calls: string[] = [];
     const commands: OneOffCommand[] = [];
+    // One log, in order, of the app's requests and the runtime's mkdir.
+    const log: string[] = [];
+    const catchUp = () => {
+      const seen = log.filter((entry) => entry !== 'mkdir').length;
+      log.push(...sonarr.app.requests.slice(seen).map((r) => `${r.method} ${r.path}`));
+    };
     const { run } = await wireWith(sonarr, {
       stack: needingFolders(['/data/media/tv']),
       values: { MP_FAKE: 'fake-env-secret' },
@@ -423,12 +445,23 @@ describe('wire', () => {
         addresses: sonarr.addresses,
         calls,
         run: (_service, command) => {
+          catchUp();
+          log.push('mkdir');
           commands.push(command);
           return { code: 0, stdout: '', stderr: '' };
         },
       }),
     });
     expect(await run).toEqual(['sonarr.login created']);
+    catchUp();
+    // Made first, once the app was found to hold none, then created.
+    expect(log).toEqual([
+      'GET /ping',
+      'GET /api/v3/system/status',
+      'GET /api/v3/login',
+      'mkdir',
+      'PUT /api/v3/login',
+    ]);
     // The fixture stack runs as the default user, 1000:1000.
     expect(calls).toContain('run sonarr mkdir as 1000:1000');
     expect(commands).toEqual([
@@ -442,7 +475,6 @@ describe('wire', () => {
     expect(Object.values(commands[0]?.values ?? {})).toEqual(
       expect.arrayContaining(['fake-env-secret', KEY, PASSWORD]),
     );
-    // Made first, then created.
     expect(sonarr.state.user).toBe('admin');
   });
 
@@ -497,6 +529,7 @@ describe('wire', () => {
     expect(actions).toEqual([
       { step: 'wire', resource: 'sonarr.login', result: 'failed', error: said },
     ]);
+    expect(sonarr.app.requests.some((r) => r.method === 'PUT')).toBe(false);
   });
 
   it("keeps every secret out of a failure's message, whoever wrote it", async () => {

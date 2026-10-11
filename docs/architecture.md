@@ -352,8 +352,8 @@ mediaplane (the stack)
     secret is checked by using it, never compared: signing in, or the app's own test, as
     Sonarr's test of its download client. While a field differs, the secrets aren't
     checked: the update sets them anyway. In `plan`, nor are they checked until a
-    resource they require is in place (`unchanged` or `adopt`), since the check could make
-    what is missing, and `plan` changes nothing. `apply` doesn't check again a secret its
+    resource they require is in place (`unchanged` or `adopt`) and checked, since the
+    check could make what is missing, and `plan` changes nothing. `apply` doesn't check again a secret its
     own plan found refused: it sets it.
   - `adopt`: the app already holds it as wanted, but `state/resources.json` doesn't say
     so yet, such as after lost state.

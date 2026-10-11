@@ -398,7 +398,10 @@ export async function planWiring(
   const changes: WiringChange[] = [];
   const diagnostics: Diagnostic[] = [];
   const values = redactionValues(options.secrets);
-  /** Resources apply would make or change, or that couldn't be looked at: not in place. */
+  /**
+   * Resources apply would make or change, that couldn't be looked at, or whose secrets
+   * went unchecked: not known to be in place.
+   */
   const pending = new Set<string>();
   const add = (change: WiringChange) => {
     changes.push(change);
@@ -497,6 +500,9 @@ export async function planWiring(
         action: result.action,
         ...(result.changes.length === 0 ? {} : { changes: result.changes }),
       });
+      // Its secrets went unchecked, so it isn't known to be in place either: what
+      // requires it waits too.
+      if (waiting) pending.add(address);
     }
   }
   return { changes, diagnostics };

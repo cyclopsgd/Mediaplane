@@ -188,6 +188,127 @@ describe('planWiring', () => {
     expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(true);
   });
 
+  it('leaves the secrets unchecked while a resource they require is to be updated, or could not be looked at', async () => {
+    // "sonarr.first" holds another user, so apply would update it; then the app refuses
+    // it (404), so plan can't say. Either way it isn't in place yet.
+    const differs: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'first',
+      secrets: [],
+      observe: () =>
+        Promise.resolve({ id: null, name: 'first', fields: { user: 'someone' } }),
+    };
+    const refused: ResourceSpec = {
+      ...differs,
+      observe: (api) => api.get('/api/v3/missing', z.unknown()).then(() => undefined),
+    };
+    const login: ResourceSpec = { ...FAKE_LOGIN, requires: ['sonarr.first'] };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: 'other' });
+    const planned = (resources: ResourceSpec[]) =>
+      planWiring(options(sonarr, { stack: sonarrWith(resources) })).then((p) =>
+        p.changes.map((c) => [c.resource, c.action]),
+      );
+    expect(await planned([differs, login])).toEqual([
+      ['sonarr.first', 'update'],
+      ['sonarr.login', 'adopt'],
+    ]);
+    expect(await planned([refused, login])).toEqual([
+      ['sonarr.first', 'unknown'],
+      ['sonarr.login', 'adopt'],
+    ]);
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
+  });
+
+  it('leaves the secrets unchecked while what they require of another app is checked after the start', async () => {
+    // Apply changes qBittorrent's container, so its "thing" is checked after the start.
+    const thing: ResourceSpec = { ...FAKE_LOGIN, name: 'thing', secrets: [] };
+    const login: ResourceSpec = { ...FAKE_LOGIN, requires: ['qbittorrent.thing'] };
+    const stack = stackOf(
+      WIRED_CATALOG.map((def) => {
+        if (def.id === 'qbittorrent') {
+          return {
+            ...def,
+            api: FIXTURE_API,
+            integration: { after: [], resources: [thing] },
+          };
+        }
+        return def.id === 'sonarr'
+          ? { ...def, integration: { after: ['qbittorrent'], resources: [login] } }
+          : def;
+      }),
+    );
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: 'other' });
+    const planned = await planWiring(
+      options(sonarr, { stack, changing: new Set(['qbittorrent']) }),
+    );
+    expect(planned.changes).toEqual([
+      { resource: 'qbittorrent.thing', action: 'after-start' },
+      { resource: 'sonarr.login', action: 'adopt' },
+    ]);
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
+  });
+
+  it('leaves unchecked what requires a resource whose own secrets went unchecked', async () => {
+    // "first" is to be made, so "second"'s password goes unchecked, and may be wrong:
+    // "third", which requires "second", isn't checked either.
+    const first: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'first',
+      secrets: [],
+      observe: () => Promise.resolve(undefined),
+    };
+    const second: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'second',
+      requires: ['sonarr.first'],
+    };
+    const third: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'third',
+      requires: ['sonarr.second'],
+    };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: 'other' });
+    const planned = await planWiring(
+      options(sonarr, { stack: sonarrWith([first, second, third]) }),
+    );
+    expect(planned.changes).toEqual([
+      { resource: 'sonarr.first', action: 'create' },
+      { resource: 'sonarr.second', action: 'adopt' },
+      { resource: 'sonarr.third', action: 'adopt' },
+    ]);
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
+  });
+
+  it('stops at an app that no longer answers in time, as at one that stops answering', async () => {
+    const slow: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'first',
+      observe: () =>
+        Promise.reject(
+          new AppApiError(
+            'sonarr at http://sonarr:8989 did not answer within 30 s (GET /api/v3/login)',
+            { kind: 'timeout', transient: true },
+          ),
+        ),
+    };
+    const sonarr = await fakeSonarr({ key: KEY });
+    const planned = await planWiring(
+      options(sonarr, { stack: sonarrWith([slow, FAKE_LOGIN]) }),
+    );
+    expect(planned.changes.map((c) => [c.resource, c.action])).toEqual([
+      ['sonarr.first', 'unknown'],
+      ['sonarr.login', 'unknown'],
+    ]);
+    expect(planned.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'wire.timeout',
+        hint: `check it with "mediaplane status sonarr", then see ${WIRING_RUNBOOK}`,
+      }),
+    ]);
+    // The second resource wasn't asked.
+    expect(sonarr.app.requests.some((r) => r.path === '/api/v3/login')).toBe(false);
+  });
+
   it("keeps asking an app's other resources when one fails, and stops when the app stops answering", async () => {
     const refused: ResourceSpec = {
       ...FAKE_LOGIN,
