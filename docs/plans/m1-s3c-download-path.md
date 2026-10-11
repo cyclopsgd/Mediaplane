@@ -22,7 +22,9 @@ proxy.
   and its `verify` what the app holds; the wire step makes a resource's folders first,
   in a throwaway container of the app; the HTTP client sends forms, runs an app's own
   test, and takes a sign-in's 401 as an answer. Two S3b leftovers fold in: no secret is
-  checked while a field differs, and `plan` predicts `wire.secret-field`.
+  checked while a field differs, and `plan` predicts `wire.secret-field`. And fewer
+  checks of a secret: `plan` checks none while what it requires is to be made, and the
+  wire step none that apply's own plan found refused.
 
 **Tech Stack:** as Slice 3b (Node 24, pnpm 10.15.0, TypeScript 6.0, Zod 4, `yaml` 2,
 Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no new image.
@@ -120,8 +122,10 @@ These are added or restated for this slice:
     with `z.object`, which keeps only the fields Mediaplane manages, and are never
     printed.
   - **The folder helper** (`compose run … mkdir -p -- <path>`) carries only the
-    catalog's container paths on its command line, and the stack's secret values only
-    to be redacted from what it prints.
+    catalog's container paths on its command line, and every secret the stack knows
+    only to be redacted from what it prints. Its container has the arr's own
+    environment, the arr's key among it, as the arr's own container has (threat model
+    T5).
   - End-to-end assertions that see a key or the password say only whether they passed.
 - **No new socket-proxy permission.** `deploy/mediaplane.compose.yaml` and
   `deploy/deploy.test.ts` don't change. Anything that would need a new Docker API call is
@@ -184,7 +188,7 @@ aarch64) while writing this plan, unless it says otherwise.
      `/data/torrents`), and the whitelist with one subnet per line, though it takes
      them comma-separated. `observe` reads both that way.
 2. **(check) qBittorrent's password is checked by signing in, and qBittorrent's ban**
-   (Tasks 3, 4).
+   (Tasks 1, 3, 4).
    - `POST /api/v2/auth/login` answers 204 to the right login and 401 to a wrong user
      name or password. After five failures in a row from one address, it answers 403
      ("Your IP address has been banned after too many failed authentication attempts.")
@@ -192,13 +196,22 @@ aarch64) while writing this plan, unless it says otherwise.
      `web_ui_ban_duration: 3600`). A success resets the count. The ban stops sign-ins
      only: the Bearer key still works, and `setPreferences` too.
    - So `verify` takes 401 as an answer (`login(…, { answers: [401] })`), and lets the
-     403 throw: `plan` shows `unknown` with qBittorrent's own words, and apply fails that
-     resource. A ban is never read as a wrong password.
+     403 throw: `plan` shows that resource `unknown` with qBittorrent's own words
+     (decision 14), and apply fails it. A ban is never read as a wrong password.
    - A sign-in fails only while qBittorrent's password differs from the stack's, and
-     only while the user name matches (decision 8). A changed `admin.password` costs two
-     failures (`plan`, then the wire step's look), and the check after the update signs
-     in, which resets the count. Five `plan`s between changing the password and applying
-     it would ban Mediaplane's address: from source the wiring network's gateway, from
+     only while the user name matches (decision 8). Each `plan` then costs one failure.
+     An `apply` costs one too, its own plan's: apply passes the wire step what its plan
+     found (`planned: shown.wiring`), and a secret planned as refused (`update`, with
+     `password` in its `changes`) is set with the key, without signing in again. The
+     check after the update signs in with the new password, which resets the count.
+   - So four `plan`s, or declined `apply`s, between the change and the `apply` are
+     enough for a ban; three are not. With four, the `apply`'s own plan is the fifth
+     failure: its update still sets the password with the key, but verify's sign-in gets
+     403, and `apply` fails, and `plan` shows `unknown`, until the ban ends (an hour, or a
+     restart of qBittorrent). A unit test with a fake qBittorrent that bans after five
+     failures pins both (Task 4). With a second check in the wire step, as first planned,
+     three were enough: the preflight scan found that, and that check is gone.
+   - The ban is on Mediaplane's address: from source the wiring network's gateway, from
      the image Mediaplane's own address there; never the browser's, which reaches the
      published port from another network. The runbook says what to do.
    - Rejected: reading the PBKDF2 hash from `qBittorrent.conf` (the file is the app's
@@ -225,11 +238,15 @@ aarch64) while writing this plan, unless it says otherwise.
    - **`requires: ['qbittorrent.category_<category>']`** (the roadmap's S3c item): the
      arr's own test makes a missing category with an empty save path (research F11,
      seen again), so a failed category skips the client. Sonarr and Radarr come
-     `after: ['qbittorrent']`, so the category is in place first (spec §6.2).
+     `after: ['qbittorrent']`, so the category is in place first (spec §6.2). `plan`
+     honours it too: while a resource it requires is planned as anything but
+     `unchanged` or `adopt`, `plan` checks the client's fields only, and never runs the
+     arr's test (decision 4).
    - A template without one of the settings Mediaplane sets (`host`, `port`, `useSsl`,
      `apiKey`, the category) fails with `wire.protocol`, naming it, rather than saving a
      client that can't work.
-4. **(check) A download client's key is checked with the arr's own test** (Tasks 3, 5).
+4. **(check) A download client's key is checked with the arr's own test** (Tasks 1, 3,
+   5).
    `verify` reads the client as the arr holds it (its key masked) and POSTs it, with its
    id, to `/api/v3/downloadclient/test`:
    - a 2xx passes, and so does a 400 with only warnings (`isWarning: true`), as the
@@ -243,6 +260,13 @@ aarch64) while writing this plan, unless it says otherwise.
      unique"), so the test always carries it. The test runs in the arr's own container,
      so verify passing shows that the arr reaches qBittorrent through Gluetun's
      firewall: spec §6.2's secret check.
+   - **(check) `plan` runs the test only once the category is in place** (Task 1). With
+     `qbittorrent.category_tv` planned as `create`, say, the arr's test would make the
+     category in qBittorrent, with no save path, and `plan` (and `apply`'s own plan,
+     before the question) changes nothing in the stack (spec §5.2, §6.3). So `planWiring`
+     keeps the resources it plans as anything but `unchanged` or `adopt`, and examines a
+     resource that requires one of them with `verify: false`. The wire step makes the
+     category first, and then checks the client.
 5. **(check) Root folders, and their folders** (Tasks 2, 5). `sonarr.root_folder`
    (`/data/media/tv`) and `radarr.root_folder` (`/data/media/movies`), field `path`:
    - the arrs give a root folder no name and can't change one (`PUT` answers 405), so it
@@ -272,8 +296,10 @@ aarch64) while writing this plan, unless it says otherwise.
    through whatever it called.
 7. **The contract grows, additively** (Tasks 1, 2): `WiringContext.keys` (the store's
    app keys, for a resource that holds another app's), `verify(api, desired, observed)`
-   (for an app's own test of what it holds), and `DesiredResource.folders`. The Servarr
-   admin's code doesn't change; its tests pass `verify` the third argument.
+   (for an app's own test of what it holds), and `DesiredResource.folders`. `examine`
+   takes `ExamineOptions` (`verify`, `refused`), and the wire step `planned`, apply's
+   own plan of the wiring (decisions 2, 4). The Servarr admin's code doesn't change; its
+   tests pass `verify` the third argument.
 8. **(check) While a managed field differs, the secrets aren't checked** (Task 1; the
    S3b final review's minor 17). Update always sets the fields and the secrets together
    (the contract now says so), so checking them would change nothing, and it misled:
@@ -323,13 +349,43 @@ aarch64) while writing this plan, unless it says otherwise.
       accessible; and qBittorrent, Sonarr and Radarr mount one folder at `/data`.
     - It passes with Compose 5.5.1 and 2.38.2 as the host plugin: the image's `apply`
       may recreate the apps (the two hash bind volumes differently), and the test reads
-      nothing that recreating changes. The apply, deploy and VPN tests change only their
-      lists of what is wired.
+      nothing that recreating changes. The apply, deploy and VPN tests change their lists
+      of what is wired, and two checks join them: the apply test checks that
+      `resources.json` holds no qBittorrent key, and the deploy test that Sonarr's root
+      folder was made, through the proxy.
+    - The suite's time: on the dev box, `pnpm test:e2e` takes about 5 minutes with
+      Compose 5.5.1 and 6 with 2.38.2, the new file about 1 minute of it. CI's e2e job
+      allows 60 minutes, and took 10 on amd64 for S3b, so `ci.yml` keeps its timeout.
 13. **The docs** (Task 7): the wiring-failed runbook (the new messages, `wire.folders`,
-    the ban), the architecture, the threat model (T2, T4, T5, T10), the README's status,
-    capabilities and example, the three app READMEs and the deploy guide (the "until
-    Slice 3c" notes go), the spec (a "Slice 3c" entry in §11) and the roadmap (S3c done,
+    the ban), the architecture, the threat model (T2, T4, T5, T10, with the folder
+    helper's environment in T5), the README's status, capabilities and example, the
+    three app READMEs and the deploy guide (the "until Slice 3c" notes go), the spec (a
+    "Slice 3c" entry in §11, which also says why qBittorrent's whitelist goes through
+    its API although §6.4 keeps trusted networks out of it) and the roadmap (S3c done,
     and what it leaves for S4).
+14. **`plan` asks each resource on its own** (Task 1). Once an app is up and takes the
+    key, a resource it refuses, fails or answers strangely is `unknown` on its own, with
+    a warning of its own (`wire.<kind>`, the runbook as its hint), and the app's other
+    resources are still checked, as the wire step does. Only an app that stops answering
+    (`unreachable`, `timeout`) leaves what is left of it `unknown`, with the app's
+    warning ("check it with `mediaplane status <app>`"). So a download client whose test
+    fails, or qBittorrent's banned sign-in, no longer hides the root folder, or
+    qBittorrent's settings and categories.
+15. **An app's own test is read strictly** (Task 3). A 400 is a verdict only when it is
+    a non-empty list whose every item is an object with a string `errorMessage`; then
+    it fails on its errors, and passes when all are warnings. Anything else (`[]`,
+    `["bad"]`, an item without a message) throws, as `post` would: it is never a pass.
+16. **The folder helper redacts every secret the stack knows, and a Docker failure
+    fails only its resource** (Task 2). Its `values` are the wire step's own secrets
+    (`knownSecrets`: `.env`'s, the store's keys, the admin passwords), not `.env`'s
+    alone. A `RuntimeError` from `runtime.run` (Docker that can't start, or the run's
+    300 s timeout) fails that resource with `wire.folders`, and the other apps are still
+    wired.
+17. **One fake of qBittorrent's API** (Task 4). `fakeStackApis`' qBittorrent answers as
+    qBittorrent 5.2 does: paths without a trailing "/", the whitelist one subnet per
+    line, its key among the preferences, a Bearer key (`key`, any when empty) and a ban
+    after five failed sign-ins in a row (`signInFailures`). `integration.test.ts` uses
+    it, ban included, and keeps no fake of its own.
 
 ## File structure (new and changed in this slice)
 
@@ -337,16 +393,20 @@ aarch64) while writing this plan, unless it says otherwise.
 
 - `integrations/types.ts`: `WiringContext.keys`, `verify`'s `observed`,
   `DesiredResource.folders`, and the rule that `update` sets fields and secrets together.
-- `integrations/wiring.ts` (+test): `examine` checks no secret while a field differs;
-  `planWiring` gives each resource the keys, and predicts `wire.secret-field`, with
-  `fieldHoldingSecret` and `secretFieldReason`, now shared.
-- `integrations/wire.ts` (+test): the keys in each resource's context, and the folders a
-  resource needs, made before it is created (`makeFolders`).
+- `integrations/wiring.ts` (+test): `examine` checks no secret while a field differs,
+  and takes `ExamineOptions` (`verify`, `refused`); `planWiring` gives each resource the
+  keys, predicts `wire.secret-field` (with `fieldHoldingSecret` and `secretFieldReason`,
+  now shared), checks no secret while what it requires is pending, and asks each
+  resource on its own.
+- `integrations/wire.ts` (+test): the keys in each resource's context, apply's own plan
+  (`planned`) for the secrets it found refused, and the folders a resource needs, made
+  before it is created (`makeFolders`).
+- `apply/apply.ts` (+test): passes its plan's wiring to the wire step.
 - `http/client.ts` (+test): `form`, `test` (`TestFailure`), `login`'s `answers`, and the
   wording of a refused call made without the key.
 - `testing/wiring.ts`: `fakeStackApis` gains qBittorrent's preferences, categories and
-  sign-in, and Sonarr's and Radarr's download clients and root folders;
-  `freshAppState`, `FakeDownloadClient`.
+  sign-in, answered as qBittorrent 5.2 does (ban included), and Sonarr's and Radarr's
+  download clients and root folders; `freshAppState`, `FakeDownloadClient`.
 
 `catalog/`:
 
@@ -375,7 +435,9 @@ Elsewhere:
 **Tasks:**
 
 1. The contract, for the download path: a resource's keys and what the app holds; no
-   secret checked while a field differs; `plan` predicts `wire.secret-field`.
+   secret checked while a field differs, or while what it requires is pending, or again
+   after apply's plan found it refused; `plan` asks each resource on its own, and
+   predicts `wire.secret-field`.
 2. The wire step makes the folders a resource needs.
 3. The HTTP client: forms, an app's own test, and a sign-in's own answers.
 4. qBittorrent's integration: its login, its settings and its categories.
@@ -402,6 +464,10 @@ A download client holds another app's key, and its check is the arr's own test o
 it holds: the contract gives a resource the stack's keys and gives `verify` what the app
 holds. Two leftovers of the S3b final review fold in: no secret is checked while a
 managed field differs (decision 8), and `plan` predicts `wire.secret-field` (decision 9).
+The rest spares checks that cost or change something: none in `plan` while what a
+resource requires is pending (decision 4), none in the wire step for a secret apply's
+own plan found refused (decision 2), and a failure that marks only its own resource
+`unknown` (decision 14).
 
 Decision: `WiringContext.keys` is the store's `apps` (in `plan`, the preview with the
 keys apply would generate), and `verify(api, desired, observed)`; both additive (decision
@@ -411,12 +477,24 @@ the fields and the secrets together, as every resource's already does (decision 
 Decision: `planWiring` checks each wanted resource with the wire step's own
 `fieldHoldingSecret` before it asks the app; such a resource is `unknown`, with the
 warning `wire.secret-field` and the wire step's message (decision 9).
+Decision: `examine(spec, api, ctx, known, options)` takes `ExamineOptions`: `verify:
+false` leaves the secrets unchecked, and `refused` names secrets to count as changed
+without a check. `planWiring` keeps a set of the addresses it plans as anything but
+`unchanged` or `adopt` (`pending`), and passes `verify: false` to a resource whose
+`requires` names one. The wire step takes `planned` (apply passes `shown.wiring`), and
+passes as `refused` the `changes` of a resource planned as `update` (decisions 2, 4).
+Decision: once `checkApp` has passed, `planWiring` catches an `AppApiError` per
+resource: `unknown`, with `wire.<kind>` and the runbook as its hint, and on to the next;
+only `unreachable` or `timeout` marks the rest of the app `unknown`, with the app's
+warning (decision 14).
 
 **Files:**
 - Modify: `packages/engine/src/integrations/types.ts`,
-  `packages/engine/src/integrations/wiring.ts`, `packages/engine/src/integrations/wire.ts`
+  `packages/engine/src/integrations/wiring.ts`, `packages/engine/src/integrations/wire.ts`,
+  `packages/engine/src/apply/apply.ts`
 - Test: `packages/engine/src/integrations/wiring.test.ts`,
-  `packages/engine/src/integrations/wire.test.ts`, `catalog/_shared/servarr.test.ts`
+  `packages/engine/src/integrations/wire.test.ts`,
+  `packages/engine/src/apply/apply.test.ts`, `catalog/_shared/servarr.test.ts`
 
 **Interfaces:**
 - **Consumes:** S3b's contract (`ResourceSpec`, `WiringContext`, `examine`,
@@ -426,7 +504,10 @@ warning `wire.secret-field` and the wire step's message (decision 9).
   - `ResourceSpec.verify?(api: AppApi, desired: DesiredResource, observed: ObservedResource): Promise<boolean>`;
   - `fieldHoldingSecret(spec: ResourceSpec, desired: DesiredResource, secrets: readonly string[]): string | undefined`
     and `secretFieldReason(address: string, field: string): string`, exported from
-    `integrations/wiring.ts`.
+    `integrations/wiring.ts`;
+  - `examine(spec, api, ctx, known, options?: ExamineOptions)`, with
+    `ExamineOptions = { verify?: boolean; refused?: readonly string[] }`;
+  - `WireOptions.planned?: readonly WiringChange[]`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -434,19 +515,25 @@ warning `wire.secret-field` and the wire step's message (decision 9).
 
 ```diff
 diff --git a/packages/engine/src/integrations/wiring.test.ts b/packages/engine/src/integrations/wiring.test.ts
-index 0078b5b..86d5ec9 100644
+index 0078b5b..152118c 100644
 --- a/packages/engine/src/integrations/wiring.test.ts
 +++ b/packages/engine/src/integrations/wiring.test.ts
-@@ -11,2 +11,3 @@ import {
+@@ -1,3 +1,5 @@
+ import { describe, expect, it } from 'vitest';
++import { z } from 'zod';
+ import type { Catalog } from '../catalog/types';
++import { AppApiError } from '../http/client';
+ import { JoinFailed, OwnContainerUnknown, WiringRefused } from '../runtime/docker';
+@@ -11,2 +13,3 @@ import {
    fakeSonarr,
 +  WIRED_CATALOG,
    WIRING_RUNNING as RUNNING,
-@@ -90,3 +91,3 @@ describe('planWiring', () => {
+@@ -90,3 +93,3 @@ describe('planWiring', () => {
      expect((await planWiring(options(sonarr, { known: RECORDED }))).changes).toEqual([
 -      { resource: 'sonarr.login', action: 'update', changes: ['user', 'password'] },
 +      { resource: 'sonarr.login', action: 'update', changes: ['user'] },
      ]);
-@@ -98,2 +99,65 @@ describe('planWiring', () => {
+@@ -98,2 +101,168 @@ describe('planWiring', () => {
  
 +  it('checks no secret while a field differs: the update sets them all the same', async () => {
 +    // The password is right, but under another user name: a sign-in as the wanted user
@@ -485,6 +572,109 @@ index 0078b5b..86d5ec9 100644
 +    expect(seen).toContainEqual({ id: null, name: 'login', fields: { user: 'admin' } });
 +  });
 +
++  /** WIRED_CATALOG, with Sonarr's resources replaced by `resources`. */
++  function sonarrWith(resources: ResourceSpec[]) {
++    return stackOf(
++      WIRED_CATALOG.map((def) =>
++        def.id === 'sonarr' ? { ...def, integration: { after: [], resources } } : def,
++      ),
++    );
++  }
++
++  it('leaves the secrets unchecked while a resource they require is yet to be made', async () => {
++    // "sonarr.first", which holds no secret, is missing, so apply would create it;
++    // "sonarr.login" requires it.
++    const first: ResourceSpec = {
++      ...FAKE_LOGIN,
++      name: 'first',
++      secrets: [],
++      observe: () => Promise.resolve(undefined),
++    };
++    const login: ResourceSpec = { ...FAKE_LOGIN, requires: ['sonarr.first'] };
++    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: 'other' });
++    const stack = sonarrWith([first, login]);
++    expect((await planWiring(options(sonarr, { stack }))).changes).toEqual([
++      { resource: 'sonarr.first', action: 'create' },
++      { resource: 'sonarr.login', action: 'adopt' },
++    ]);
++    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
++    // Once it is in place, the secrets are checked, and found refused.
++    const there: ResourceSpec = {
++      ...first,
++      observe: () =>
++        Promise.resolve({ id: null, name: 'first', fields: { user: 'admin' } }),
++    };
++    const known: KnownResources = {
++      ...RECORDED,
++      'sonarr.first': {
++        id: null,
++        name: 'first',
++        fields: { user: 'admin' },
++        secrets: [],
++        appliedAt: '2026-10-10T12:00:00.000Z',
++      },
++    };
++    expect(
++      (await planWiring(options(sonarr, { stack: sonarrWith([there, login]), known })))
++        .changes,
++    ).toEqual([
++      { resource: 'sonarr.first', action: 'unchanged' },
++      { resource: 'sonarr.login', action: 'update', changes: ['password'] },
++    ]);
++    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(true);
++  });
++
++  it("keeps asking an app's other resources when one fails, and stops when the app stops answering", async () => {
++    const refused: ResourceSpec = {
++      ...FAKE_LOGIN,
++      name: 'first',
++      // The fake Sonarr answers 404: a refusal of this resource, not of the app.
++      observe: (api) => api.get('/api/v3/missing', z.unknown()).then(() => undefined),
++    };
++    const sonarr = await fakeSonarr({ key: KEY });
++    const planned = await planWiring(
++      options(sonarr, { stack: sonarrWith([refused, FAKE_LOGIN]) }),
++    );
++    expect(planned.changes).toEqual([
++      {
++        resource: 'sonarr.first',
++        action: 'unknown',
++        reason: expect.stringContaining('refused the request (HTTP 404)') as string,
++      },
++      { resource: 'sonarr.login', action: 'create' },
++    ]);
++    expect(planned.diagnostics).toEqual([
++      expect.objectContaining({ code: 'wire.rejected', hint: `see ${WIRING_RUNBOOK}` }),
++    ]);
++    // Nothing answering is the app's failure: what is left of it is unknown too.
++    const gone: ResourceSpec = {
++      ...refused,
++      observe: () =>
++        Promise.reject(
++          new AppApiError(
++            'sonarr at http://sonarr:8989 could not be reached (ECONNREFUSED)',
++            {
++              kind: 'unreachable',
++              reachedApp: false,
++            },
++          ),
++        ),
++    };
++    const stopped = await planWiring(
++      options(sonarr, { stack: sonarrWith([gone, FAKE_LOGIN]) }),
++    );
++    expect(stopped.changes.map((c) => [c.resource, c.action])).toEqual([
++      ['sonarr.first', 'unknown'],
++      ['sonarr.login', 'unknown'],
++    ]);
++    expect(stopped.diagnostics).toEqual([
++      expect.objectContaining({
++        code: 'wire.unreachable',
++        hint: `check it with "mediaplane status sonarr", then see ${WIRING_RUNBOOK}`,
++      }),
++    ]);
++  });
++
 +  it('says a managed field that holds a secret is one apply would refuse, and asks nothing of it', async () => {
 +    // The user name "admin" holds a value of the stack's secrets.
 +    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
@@ -518,7 +708,7 @@ index 0078b5b..86d5ec9 100644
 
 ```diff
 diff --git a/packages/engine/src/integrations/wire.test.ts b/packages/engine/src/integrations/wire.test.ts
-index 3ecdc37..1982192 100644
+index 3ecdc37..3822615 100644
 --- a/packages/engine/src/integrations/wire.test.ts
 +++ b/packages/engine/src/integrations/wire.test.ts
 @@ -100,3 +100,4 @@ describe('wire', () => {
@@ -527,6 +717,55 @@ index 3ecdc37..1982192 100644
 +    // The user differs, so the update sets the password too, unchecked.
 +    expect(await updated.run).toEqual(['sonarr.login updated user']);
      expect(wrong.state).toMatchObject({ user: 'admin', password: PASSWORD });
+@@ -110,2 +111,15 @@ describe('wire', () => {
+ 
++  it('sets a secret its own plan found refused, without checking it again', async () => {
++    // Each failed check of qBittorrent's password counts towards its ban: apply's plan
++    // made one, so the wire step makes none.
++    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: 'other' });
++    const { run } = await wireWith(sonarr, {
++      known: RECORDED,
++      planned: [{ resource: 'sonarr.login', action: 'update', changes: ['password'] }],
++    });
++    expect(await run).toEqual(['sonarr.login updated password']);
++    expect(sonarr.state.password).toBe(PASSWORD);
++    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
++  });
++
+   it('changes nothing, and writes nothing, when all is as wanted', async () => {
+```
+
+**Change** `packages/engine/src/apply/apply.test.ts`:
+
+```diff
+diff --git a/packages/engine/src/apply/apply.test.ts b/packages/engine/src/apply/apply.test.ts
+index be91b29..88cfa39 100644
+--- a/packages/engine/src/apply/apply.test.ts
++++ b/packages/engine/src/apply/apply.test.ts
+@@ -1324,2 +1324,23 @@ describe('apply: the wiring', () => {
+ 
++  it('signs in once with a password the app refuses, then sets it without asking again', async () => {
++    const home = await makeHome();
++    const sonarr = await fakeSonarr();
++    const docker = fakeDocker(home, { addresses: sonarr.addresses });
++    const wired = { catalog: WIRED_CATALOG, wiring: sonarr.seams };
++    expect((await apply(options(home, docker, wired))).outcome).toBe('success');
++    sonarr.state.password = 'fake-other-password';
++    const signIns = () => sonarr.app.requests.filter((r) => r.path === '/login').length;
++    const before = signIns();
++    const result = await apply(options(home, docker, wired));
++    expect(result.outcome).toBe('success');
++    expect(result.plan.wiring).toEqual([
++      { resource: 'sonarr.login', action: 'update', changes: ['password'] },
++    ]);
++    expect(result.actions.find((a) => a.resource === 'sonarr.login')?.detail).toBe(
++      'updated password',
++    );
++    // Its plan's sign-in failed; the wire step signed in no more; verify's worked.
++    expect(signIns() - before).toBe(2);
++  });
++
+   it("fails the wire step with the app's own message, and skips verify", async () => {
 ```
 
 **Change** `catalog/_shared/servarr.test.ts`:
@@ -575,11 +814,15 @@ index c822f43..de20ad9 100644
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `pnpm vitest run packages/engine/src/integrations catalog/_shared`
-Expected: FAIL, 5 tests: in `wiring.test.ts`, "would update a field that differs…"
+Run: `pnpm vitest run packages/engine/src/integrations packages/engine/src/apply catalog/_shared`
+Expected: FAIL, 9 tests: in `wiring.test.ts`, "would update a field that differs…"
 (`['user', 'password']` for `['user']`), "checks no secret while a field differs…",
-"gives a resource the stack's keys…" and "says a managed field that holds a secret…";
-in `wire.test.ts`, "updates what differs, saying what…" (`updated user, password`).
+"gives a resource the stack's keys…", "leaves the secrets unchecked while a resource
+they require is yet to be made", "keeps asking an app's other resources when one
+fails…" and "says a managed field that holds a secret…"; in `wire.test.ts`, "updates
+what differs, saying what…" (`updated user, password`) and "sets a secret its own plan
+found refused…"; in `apply.test.ts`, "signs in once with a password the app refuses…"
+(3 sign-ins for 2).
 
 - [ ] **Step 3: Write the implementation**
 
@@ -627,20 +870,53 @@ index 39efd08..2916f69 100644
 
 ```diff
 diff --git a/packages/engine/src/integrations/wiring.ts b/packages/engine/src/integrations/wiring.ts
-index aa7e166..77a19af 100644
+index aa7e166..f125e65 100644
 --- a/packages/engine/src/integrations/wiring.ts
 +++ b/packages/engine/src/integrations/wiring.ts
-@@ -257,4 +257,7 @@ export async function examine(
+@@ -238,5 +238,22 @@ export interface Examined {
+ 
++/** How examine treats a resource's secrets. */
++export interface ExamineOptions {
++  /**
++   * false: leave them unchecked, because a resource this one requires is yet to be made
++   * or changed. The check could use what isn't there yet: Sonarr's own test of its
++   * download client makes a missing qBittorrent category, with no save path.
++   */
++  verify?: boolean;
++  /**
++   * The secrets apply's own plan found refused (an `update` naming them). They differ,
++   * and the update sets them, without another check: each check of qBittorrent's
++   * password that fails counts towards its ban.
++   */
++  refused?: readonly string[];
++}
++
+ /**
+  * Look at one resource: observe it, compare its managed fields, and check its secrets by
+- * using them (spec §6.3). Undefined when the stack wants none. Throws AppApiError.
++ * using them (spec §6.3), unless `options` say not to. Undefined when the stack wants
++ * none. Throws AppApiError.
+  */
+@@ -247,2 +264,3 @@ export async function examine(
+   known: KnownResource | undefined,
++  options: ExamineOptions = {},
+ ): Promise<Examined | undefined> {
+@@ -257,4 +275,12 @@ export async function examine(
    );
 -  if (spec.secrets.length > 0 && spec.verify !== undefined) {
 -    if (!(await spec.verify(api, desired))) changes.push(...spec.secrets);
 +  // A field that differs makes it an update, which sets the secrets too: checking them
 +  // would change nothing, and could mislead. A sign-in with a user name the app doesn't
 +  // have yet fails as if the password were wrong.
-+  if (changes.length === 0 && spec.secrets.length > 0 && spec.verify !== undefined) {
-+    if (!(await spec.verify(api, desired, observed))) changes.push(...spec.secrets);
++  if (changes.length === 0 && spec.secrets.length > 0) {
++    const refused = (options.refused ?? []).filter((name) => spec.secrets.includes(name));
++    if (refused.length > 0) {
++      changes.push(...refused);
++    } else if (options.verify !== false && spec.verify !== undefined) {
++      if (!(await spec.verify(api, desired, observed))) changes.push(...spec.secrets);
++    }
    }
-@@ -267,2 +270,25 @@ export async function examine(
+@@ -267,2 +293,25 @@ export async function examine(
  
 +/**
 + * The first of the resource's managed fields whose value holds one of `secrets`, by name.
@@ -666,7 +942,16 @@ index aa7e166..77a19af 100644
 +}
 +
  /** The warning for an app Mediaplane couldn't ask, with what to do. */
-@@ -345,3 +371,8 @@ export async function planWiring(
+@@ -344,4 +393,17 @@ export async function planWiring(
+   const diagnostics: Diagnostic[] = [];
++  /** Resources apply would make or change, or that couldn't be looked at: not in place. */
++  const pending = new Set<string>();
++  const add = (change: WiringChange) => {
++    changes.push(change);
++    if (change.action !== 'unchanged' && change.action !== 'adopt') {
++      pending.add(change.resource);
++    }
++  };
    for (const app of order) {
 -    const ctx: WiringContext = { stack: options.stack, app, admin: options.admin };
 +    const ctx: WiringContext = {
@@ -676,31 +961,125 @@ index aa7e166..77a19af 100644
 +      keys: options.keys,
 +    };
      // Only what the stack wants is listed: a resource it doesn't want isn't wiring.
-@@ -383,2 +414,17 @@ export async function planWiring(
-         const address = resourceAddress(app, spec);
-+        // What the wire step would refuse, before anything is sent: plan says so first.
-+        const desired = spec.desired(ctx);
-+        const held =
-+          desired === undefined
-+            ? undefined
-+            : fieldHoldingSecret(spec, desired, options.secrets);
-+        if (held !== undefined) {
-+          const reason = secretFieldReason(address, held);
-+          diagnostics.push(
-+            warning('wire.secret-field', reason, { hint: `see ${WIRING_RUNBOOK}` }),
-+          );
-+          changes.push({ resource: address, action: 'unknown', reason });
-+          looked++;
-+          continue;
+@@ -357,9 +419,3 @@ export async function planWiring(
+       );
+-      changes.push(
+-        ...targets.map((resource) => ({
+-          resource,
+-          action: 'unknown' as const,
+-          reason,
+-        })),
+-      );
++      for (const resource of targets) add({ resource, action: 'unknown', reason });
+       continue;
+@@ -367,28 +423,7 @@ export async function planWiring(
+     if (client === undefined) {
+-      changes.push(
+-        ...targets.map((resource) => ({
+-          resource,
+-          action: 'after-start' as const,
+-        })),
+-      );
++      for (const resource of targets) add({ resource, action: 'after-start' });
+       continue;
+     }
+-    const wanted = wantedResources(ctx);
+-    let looked = 0;
+     try {
+       await checkApp(client);
+-      if (wanted.length === 0)
+-        changes.push({ resource: app.def.id, action: 'unchanged' });
+-      for (const spec of wanted) {
+-        const address = resourceAddress(app, spec);
+-        const result = await examine(spec, client.api, ctx, options.known[address]);
+-        looked++;
+-        // Wanted, and desired() is pure: only a guard.
+-        if (result === undefined) continue;
+-        changes.push({
+-          resource: address,
+-          action: result.action,
+-          ...(result.changes.length === 0 ? {} : { changes: result.changes }),
+-        });
+-      }
+     } catch (cause) {
+@@ -396,11 +431,61 @@ export async function planWiring(
+       diagnostics.push(unreachableWarning(app, cause));
+-      // What is left of the app could not be looked at.
+-      const left = targets.slice(wanted.length === 0 ? 0 : looked);
+-      changes.push(
+-        ...left.map((resource) => ({
+-          resource,
+-          action: 'unknown' as const,
+-          reason: cause.message,
+-        })),
+-      );
++      for (const resource of targets) {
++        add({ resource, action: 'unknown', reason: cause.message });
++      }
++      continue;
++    }
++    const wanted = wantedResources(ctx);
++    if (wanted.length === 0) add({ resource: app.def.id, action: 'unchanged' });
++    for (const [index, spec] of wanted.entries()) {
++      const address = resourceAddress(app, spec);
++      // What the wire step would refuse, before anything is sent: plan says so first.
++      const desired = spec.desired(ctx);
++      const held =
++        desired === undefined
++          ? undefined
++          : fieldHoldingSecret(spec, desired, options.secrets);
++      if (held !== undefined) {
++        const reason = secretFieldReason(address, held);
++        diagnostics.push(
++          warning('wire.secret-field', reason, { hint: `see ${WIRING_RUNBOOK}` }),
++        );
++        add({ resource: address, action: 'unknown', reason });
++        continue;
++      }
++      // Its secrets are checked only once what it requires is in place: plan changes
++      // nothing, and the check could make what is missing (spec §5.2, §6.3).
++      const waiting = (spec.requires ?? []).some((needed) => pending.has(needed));
++      let result: Examined | undefined;
++      try {
++        result = await examine(spec, client.api, ctx, options.known[address], {
++          verify: !waiting,
++        });
++      } catch (cause) {
++        if (!(cause instanceof AppApiError)) throw cause;
++        if (cause.kind === 'unreachable' || cause.kind === 'timeout') {
++          // The app stopped answering: what is left of it can't be looked at either.
++          diagnostics.push(unreachableWarning(app, cause));
++          for (const left of wanted.slice(index)) {
++            add({
++              resource: resourceAddress(app, left),
++              action: 'unknown',
++              reason: cause.message,
++            });
++          }
++          break;
 +        }
-         const result = await examine(spec, client.api, ctx, options.known[address]);
++        // The app answered, about this resource: its others are still asked.
++        diagnostics.push(
++          warning(`wire.${cause.kind}`, cause.message, { hint: `see ${WIRING_RUNBOOK}` }),
++        );
++        add({ resource: address, action: 'unknown', reason: cause.message });
++        continue;
++      }
++      // Wanted, and desired() is pure: only a guard.
++      if (result === undefined) continue;
++      add({
++        resource: address,
++        action: result.action,
++        ...(result.changes.length === 0 ? {} : { changes: result.changes }),
++      });
+     }
 ```
 
 **Change** `packages/engine/src/integrations/wire.ts`:
 
 ```diff
 diff --git a/packages/engine/src/integrations/wire.ts b/packages/engine/src/integrations/wire.ts
-index 80a47dd..f5a69d8 100644
+index 80a47dd..c5ca226 100644
 --- a/packages/engine/src/integrations/wire.ts
 +++ b/packages/engine/src/integrations/wire.ts
 @@ -14,2 +14,3 @@ import {
@@ -711,12 +1090,24 @@ index 80a47dd..f5a69d8 100644
    resourcesInvalid,
 +  secretFieldReason,
    wantedResources,
-@@ -134,3 +136,3 @@ export async function wire(options: WireOptions): Promise<string[]> {
+@@ -26,2 +28,3 @@ import {
+   type ReachedApp,
++  type WiringChange,
+   type WiringSeams,
+@@ -40,2 +43,7 @@ export interface WireOptions {
+   record: (action: ActionResult) => void;
++  /**
++   * What apply's own plan said of each resource. A secret it found refused (an `update`
++   * naming it) is set without another check: one failed sign-in per apply, not two.
++   */
++  planned?: readonly WiringChange[];
+   seams?: WiringSeams;
+@@ -134,3 +142,3 @@ export async function wire(options: WireOptions): Promise<string[]> {
    for (const app of order) {
 -    const ctx: WiringContext = { stack, app, admin };
 +    const ctx: WiringContext = { stack, app, admin, keys: options.store.apps };
      const targets = wiringTargets(ctx);
-@@ -171,7 +173,3 @@ export async function wire(options: WireOptions): Promise<string[]> {
+@@ -171,7 +179,3 @@ export async function wire(options: WireOptions): Promise<string[]> {
        if (secretField !== undefined) {
 -        fail(
 -          address,
@@ -725,7 +1116,15 @@ index 80a47dd..f5a69d8 100644
 -        );
 +        fail(address, secretFieldReason(address, secretField), 'wire.secret-field');
          continue;
-@@ -246,16 +244,2 @@ function failureMessage(failed: readonly string[], skipped: readonly string[]):
+@@ -181,3 +185,6 @@ export async function wire(options: WireOptions): Promise<string[]> {
+       try {
+-        result = await examine(spec, client.api, ctx, known[address]);
++        const planned = options.planned?.find((change) => change.resource === address);
++        result = await examine(spec, client.api, ctx, known[address], {
++          refused: planned?.action === 'update' ? (planned.changes ?? []) : [],
++        });
+         if (result === undefined) continue;
+@@ -246,16 +253,2 @@ function failureMessage(failed: readonly string[], skipped: readonly string[]):
  
 -/** The first of the managed fields whose value holds one of `secrets`, by name. */
 -function fieldHoldingSecret(
@@ -744,16 +1143,29 @@ index 80a47dd..f5a69d8 100644
  /** The managed fields only: what resources.json keeps. */
 ```
 
+**Change** `packages/engine/src/apply/apply.ts`:
+
+```diff
+diff --git a/packages/engine/src/apply/apply.ts b/packages/engine/src/apply/apply.ts
+index 23d57ab..86cb30c 100644
+--- a/packages/engine/src/apply/apply.ts
++++ b/packages/engine/src/apply/apply.ts
+@@ -219,2 +219,3 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+         },
++        planned: shown.wiring,
+         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
+```
+
 - [ ] **Step 4: Run them to see them pass**
 
-Run: `pnpm vitest run packages/engine/src/integrations catalog/_shared`
+Run: `pnpm vitest run packages/engine/src/integrations packages/engine/src/apply catalog/_shared`
 Expected: PASS.
 
 - [ ] **Step 5: The full check, and commit**
 
 ```bash
 pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check
-git add packages/engine/src/integrations catalog/_shared/servarr.test.ts
+git add packages/engine/src/integrations packages/engine/src/apply catalog/_shared/servarr.test.ts
 git commit -m "feat(engine): give a resource the stack's keys and what the app holds, and check no secret while a field differs" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -768,9 +1180,12 @@ the data folder as the app does.
 
 Decision: `DesiredResource.folders` names container paths; before `create` only, the
 wire step runs `runtime.run(app.def.id, { user: stack.config.user, entrypoint: 'mkdir',
-args: ['-p', '--', ...folders], values })`. A non-zero exit fails the resource with
-`wire.folders` and mkdir's last line, and sends nothing to the app. `plan` names no
-folder: `create` covers it.
+args: ['-p', '--', ...folders], values })`, where `values` are every secret the stack
+knows (the wire step's `knownSecrets`). A non-zero exit fails the resource with
+`wire.folders` and mkdir's last line, and sends nothing to the app; so does a
+`RuntimeError` (Docker that can't start, or the run's timeout), with Docker's message,
+and the step goes on to the other resources (decision 16). `plan` names no folder:
+`create` covers it.
 
 **Files:**
 - Modify: `packages/engine/src/integrations/types.ts`,
@@ -778,7 +1193,8 @@ folder: `create` covers it.
 - Test: `packages/engine/src/integrations/wire.test.ts`
 
 **Interfaces:**
-- **Consumes:** `Runtime.run(service, OneOffCommand)` (S3d), `WireOptions.values`.
+- **Consumes:** `Runtime.run(service, OneOffCommand)` (S3d), and the wire step's
+  `secrets` (`knownSecrets`, S3b).
 - **Produces:** `DesiredResource.folders?: readonly string[]`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -787,7 +1203,7 @@ folder: `create` covers it.
 
 ```diff
 diff --git a/packages/engine/src/integrations/wire.test.ts b/packages/engine/src/integrations/wire.test.ts
-index 1982192..62f4970 100644
+index 3822615..9fb22d9 100644
 --- a/packages/engine/src/integrations/wire.test.ts
 +++ b/packages/engine/src/integrations/wire.test.ts
 @@ -8,3 +8,3 @@ import { RESOURCES_PATH, STATE_DIR } from '../paths';
@@ -795,7 +1211,7 @@ index 1982192..62f4970 100644
 -import { RuntimeError } from '../runtime/types';
 +import { RuntimeError, type OneOffCommand } from '../runtime/types';
  import { fakeRuntime, type FakeRuntimeOptions } from '../testing/fakes';
-@@ -381,2 +381,91 @@ describe('wire', () => {
+@@ -394,2 +394,119 @@ describe('wire', () => {
  
 +  /** Sonarr with one resource that the app holds none of, and that needs `folders`. */
 +  function needingFolders(folders: readonly string[]) {
@@ -836,13 +1252,16 @@ index 1982192..62f4970 100644
 +    // The fixture stack runs as the default user, 1000:1000.
 +    expect(calls).toContain('run sonarr mkdir as 1000:1000');
 +    expect(commands).toEqual([
-+      {
++      expect.objectContaining({
 +        user: { uid: 1000, gid: 1000 },
 +        entrypoint: 'mkdir',
 +        args: ['-p', '--', '/data/media/tv'],
-+        values: { MP_FAKE: 'fake-env-secret' },
-+      },
++      }),
 +    ]);
++    // Every secret the stack knows is kept out of what it prints, not only .env's.
++    expect(Object.values(commands[0]?.values ?? {})).toEqual(
++      expect.arrayContaining(['fake-env-secret', KEY, PASSWORD]),
++    );
 +    // Made first, then created.
 +    expect(sonarr.state.user).toBe('admin');
 +  });
@@ -875,6 +1294,31 @@ index 1982192..62f4970 100644
 +    await expect(stat(join(home, RESOURCES_PATH))).rejects.toThrow();
 +  });
 +
++  it('fails only that resource when Docker fails to make its folders', async () => {
++    const sonarr = await fakeSonarr({ key: KEY });
++    const { run, actions } = await wireWith(sonarr, {
++      stack: needingFolders(['/data/media/tv']),
++      runtime: fakeRuntime({
++        containers: RUNNING,
++        addresses: sonarr.addresses,
++        run: () => {
++          throw new RuntimeError(`docker compose run timed out after 300 s (${KEY})`);
++        },
++      }),
++    });
++    const failure = await run.catch((thrown: unknown) => thrown);
++    const said =
++      'could not make /data/media/tv for sonarr.login: docker compose run timed out after 300 s (***)';
++    // The step goes on, and fails with the resource, as when the app refuses it.
++    expect((failure as WiringFailed).message).toBe('the wiring failed for sonarr.login');
++    expect((failure as WiringFailed).diagnostics).toEqual([
++      expect.objectContaining({ code: 'wire.folders', message: said }),
++    ]);
++    expect(actions).toEqual([
++      { step: 'wire', resource: 'sonarr.login', result: 'failed', error: said },
++    ]);
++  });
++
 +  it('makes no folder for a resource the app already holds', async () => {
 +    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
 +    const calls: string[] = [];
@@ -892,9 +1336,10 @@ index 1982192..62f4970 100644
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `pnpm vitest run packages/engine/src/integrations/wire.test.ts`
-Expected: FAIL, 2 tests: "makes the folders a resource needs…" (no `run sonarr mkdir`)
-and "fails a resource whose folders can't be made…". "makes no folder for a resource the
-app already holds" passes already: it guards the next step.
+Expected: FAIL, 3 tests: "makes the folders a resource needs…" (no `run sonarr mkdir`),
+"fails a resource whose folders can't be made…" and "fails only that resource when
+Docker fails to make its folders". "makes no folder for a resource the app already
+holds" passes already: it guards the next step.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -920,7 +1365,7 @@ index 2916f69..86b4759 100644
 
 ```diff
 diff --git a/packages/engine/src/integrations/wire.ts b/packages/engine/src/integrations/wire.ts
-index f5a69d8..e7c2b15 100644
+index c5ca226..1db4ea3 100644
 --- a/packages/engine/src/integrations/wire.ts
 +++ b/packages/engine/src/integrations/wire.ts
 @@ -4,3 +4,3 @@ import type { ActionResult } from '../history/records';
@@ -928,39 +1373,55 @@ index f5a69d8..e7c2b15 100644
 -import type { ResolvedStack } from '../resolver/resolve';
 +import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
  import { RuntimeError, type Runtime } from '../runtime/types';
-@@ -192,2 +192,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
+@@ -201,2 +201,13 @@ export async function wire(options: WireOptions): Promise<string[]> {
          if (result.action === 'create') {
-+          const unmade = await makeFolders(options, app, address, result.desired);
++          const unmade = await makeFolders(
++            options,
++            app,
++            address,
++            result.desired,
++            secrets,
++          );
 +          if (unmade !== undefined) {
 +            fail(address, unmade, 'wire.folders');
 +            continue;
 +          }
            ({ id } = await spec.create(client.api, result.desired));
-@@ -235,2 +240,27 @@ export async function wire(options: WireOptions): Promise<string[]> {
+@@ -244,2 +255,37 @@ export async function wire(options: WireOptions): Promise<string[]> {
  
 +/**
 + * Make the folders `desired` needs, in a throwaway container of `app`'s own service (its
 + * image and its mounts), as the stack's user: the folders are then the data folder's, as
 + * the apps see it, and theirs. Undefined when there are none, or they are made; otherwise
-+ * why not, from mkdir's own last line.
++ * why not, from mkdir's own last line, or Docker's, with every one of `secrets` replaced.
++ * A Docker that fails or times out fails this resource only, as the app failing would.
 + */
 +async function makeFolders(
 +  options: WireOptions,
 +  app: ResolvedApp,
 +  address: string,
 +  desired: DesiredResource,
++  secrets: readonly string[],
 +): Promise<string | undefined> {
 +  const folders = desired.folders ?? [];
 +  if (folders.length === 0) return undefined;
-+  const made = await options.runtime.run(app.def.id, {
-+    user: options.stack.config.user,
-+    entrypoint: 'mkdir',
-+    args: ['-p', '--', ...folders],
-+    values: { ...options.values },
-+  });
++  const values = Object.fromEntries(secrets.map((secret, i) => [String(i), secret]));
++  const unmade = `could not make ${folders.join(', ')} for ${address}`;
++  let made;
++  try {
++    made = await options.runtime.run(app.def.id, {
++      user: options.stack.config.user,
++      entrypoint: 'mkdir',
++      args: ['-p', '--', ...folders],
++      values,
++    });
++  } catch (cause) {
++    if (!(cause instanceof RuntimeError)) throw cause;
++    return `${unmade}: ${redact(cause.message, values)}`;
++  }
 +  if (made.code === 0) return undefined;
 +  const said = made.stderr.trim().split('\n').at(-1)?.trim() ?? '';
-+  return `could not make ${folders.join(', ')} for ${address}: mkdir in a throwaway ${app.def.name} container exited ${String(made.code)}${said === '' ? '' : `: ${said}`}`;
++  return `${unmade}: mkdir in a throwaway ${app.def.name} container exited ${String(made.code)}${said === '' ? '' : `: ${said}`}`;
 +}
 +
  /** "the wiring failed for a; skipped b, which needs what failed". */
@@ -990,6 +1451,8 @@ with 401 (decision 10).
 Decision: `form` is retried only when nothing reached the app, like `post`. `test` takes
 a 2xx or a 400 as the answer, and reads the 400 with `testFailures`, which shares
 `appMessage`'s pipeline (`oneLine`: redact, one plain line, redact again, then cut).
+`testFailures` gives undefined, so `test` throws, unless the list is non-empty and every
+item has a string `errorMessage` (decision 15).
 `login`'s `answers` are added to the 2xx and 3xx it takes already. A 401 or 403 to a call
 without the key says "refused the request".
 
@@ -1011,10 +1474,10 @@ without the key says "refused the request".
 
 ```diff
 diff --git a/packages/engine/src/http/client.test.ts b/packages/engine/src/http/client.test.ts
-index 5b942a6..68a081c 100644
+index 5b942a6..be2001d 100644
 --- a/packages/engine/src/http/client.test.ts
 +++ b/packages/engine/src/http/client.test.ts
-@@ -740,2 +740,146 @@ describe('createAppApi', () => {
+@@ -740,2 +740,154 @@ describe('createAppApi', () => {
  
 +  it('takes a status the caller names as the answer to a sign-in', async () => {
 +    // qBittorrent answers a wrong password with 401, and a right one with 204.
@@ -1154,6 +1617,14 @@ index 5b942a6..68a081c 100644
 +    expect(error.message).toContain(
 +      'refused the request (HTTP 400): One or more errors.; id: Bad id (POST /api/v3/downloadclient/test)',
 +    );
++    // A list that says nothing is no verdict either, never a pass.
++    for (const body of [[], ['bad'], [{ propertyName: 'Host' }]]) {
++      const unreadable = await sonarr(() => ({ status: 400, body }));
++      expect(
++        await failure(unreadable.api.test('/api/v3/downloadclient/test', {})),
++        JSON.stringify(body),
++      ).toMatchObject({ kind: 'rejected', status: 400 });
++    }
 +    const broken = await sonarr(() => ({ status: 500, body: 'Oops' }));
 +    expect(
 +      await failure(broken.api.test('/api/v3/downloadclient/test', {})),
@@ -1176,7 +1647,7 @@ refused…" (`refused Mediaplane's API key (HTTP 403)`), and the four on `form` 
 
 ```diff
 diff --git a/packages/engine/src/http/client.ts b/packages/engine/src/http/client.ts
-index 8eec330..bf5ca18 100644
+index 8eec330..5c179d0 100644
 --- a/packages/engine/src/http/client.ts
 +++ b/packages/engine/src/http/client.ts
 @@ -56,2 +56,10 @@ export class AppApiError extends Error {
@@ -1190,7 +1661,7 @@ index 8eec330..bf5ca18 100644
 +}
 +
  /** Where to connect: the container's address, and its port. */
-@@ -105,5 +113,25 @@ export interface AppApi {
+@@ -105,5 +113,26 @@ export interface AppApi {
    post<T>(path: string, body: unknown, schema: z.ZodType<T>): Promise<T>;
 +  /**
 +   * POST a form with the key, as qBittorrent's API takes one; any 2xx answer is success.
@@ -1204,8 +1675,9 @@ index 8eec330..bf5ca18 100644
 +  /**
 +   * POST a JSON body with the key to an app's own test of a setting (Servarr's
 +   * `…/test`). A 2xx answer passes; a 400 is the app's verdict: the errors of its
-+   * validation list, never a warning, nor the value it was given. Any other answer, or a
-+   * 400 that isn't such a list, throws as `post` would.
++   * validation list, never a warning, nor the value it was given; warnings alone pass.
++   * Any other answer, or a 400 that isn't such a list (an empty one, or one with an item
++   * without a message), throws as `post` would.
 +   */
 +  test(
 +    path: string,
@@ -1217,11 +1689,11 @@ index 8eec330..bf5ca18 100644
 +   * page. Its status and Location; its cookies are dropped. A 2xx or 3xx answer is the
 +   * answer, and so is any status in `answers` (qBittorrent's 401 for a wrong password).
     */
-@@ -112,2 +140,3 @@ export interface AppApi {
+@@ -112,2 +141,3 @@ export interface AppApi {
      fields: Readonly<Record<string, string>>,
 +    options?: { answers?: readonly number[] },
    ): Promise<{ status: number; location: string | undefined }>;
-@@ -313,10 +342,8 @@ export function createAppApi(options: AppApiOptions): AppApi {
+@@ -313,10 +343,8 @@ export function createAppApi(options: AppApiOptions): AppApi {
      if (status === 401 || status === 403) {
 -      return failure(
 -        call,
@@ -1238,7 +1710,7 @@ index 8eec330..bf5ca18 100644
 +        status,
 +      });
      }
-@@ -441,3 +468,30 @@ export function createAppApi(options: AppApiOptions): AppApi {
+@@ -441,3 +469,30 @@ export function createAppApi(options: AppApiOptions): AppApi {
      },
 -    async login(path, fields) {
 +    async form(path, fields, extra = {}) {
@@ -1270,7 +1742,7 @@ index 8eec330..bf5ca18 100644
 +    async login(path, fields, extra = {}) {
 +      const answers = extra.answers ?? [];
        const call: Call = {
-@@ -454,3 +508,7 @@ export function createAppApi(options: AppApiOptions): AppApi {
+@@ -454,3 +509,7 @@ export function createAppApi(options: AppApiOptions): AppApi {
        // A redirect is the answer: where it leads says whether the login worked.
 -      const answer = await send(call, true, (a) => a.status >= 200 && a.status < 400);
 +      const answer = await send(
@@ -1279,7 +1751,7 @@ index 8eec330..bf5ca18 100644
 +        (a) => (a.status >= 200 && a.status < 400) || answers.includes(a.status),
 +      );
        return {
-@@ -561,4 +619,12 @@ export function appMessage(
+@@ -561,4 +620,12 @@ export function appMessage(
    if (said === undefined) return undefined;
 +  const message = oneLine(said, clean);
 +  return message === '' ? undefined : message;
@@ -1293,38 +1765,42 @@ index 8eec330..bf5ca18 100644
    const message = clean(plain(clean(said)));
 -  if (message === '') return undefined;
    return message.length > MESSAGE_LIMIT
-@@ -568,2 +634,34 @@ export function appMessage(
+@@ -568,2 +635,38 @@ export function appMessage(
  
 +/**
 + * The errors of Servarr's validation list, from a test's answer: each one's property, and
 + * its message with its details, made safe as appMessage makes a message. A warning is
 + * not an error, and an `attemptedValue` is never read. Undefined for an answer that
-+ * isn't such a list.
++ * isn't such a list: an empty one, or one with anything but items with a message, which
++ * would otherwise read as a pass.
 + */
 +function testFailures(
 +  body: string,
 +  clean: (text: string) => string,
 +): TestFailure[] | undefined {
 +  const json = parseJson(body);
-+  if (json === undefined || !Array.isArray(json.value)) return undefined;
-+  return json.value.flatMap((item: unknown) => {
-+    if (typeof item !== 'object' || item === null) return [];
++  if (json === undefined || !Array.isArray(json.value) || json.value.length === 0) {
++    return undefined;
++  }
++  const failures: TestFailure[] = [];
++  for (const item of json.value as unknown[]) {
++    if (typeof item !== 'object' || item === null) return undefined;
 +    const { propertyName, errorMessage, detailedDescription, isWarning } = item as Record<
 +      string,
 +      unknown
 +    >;
-+    if (isWarning === true || typeof errorMessage !== 'string') return [];
++    if (typeof errorMessage !== 'string') return undefined;
++    if (isWarning === true) continue;
 +    const details =
 +      typeof detailedDescription === 'string' && detailedDescription !== ''
 +        ? ` (${detailedDescription})`
 +        : '';
-+    return [
-+      {
-+        property: typeof propertyName === 'string' ? oneLine(propertyName, clean) : '',
-+        message: oneLine(`${errorMessage}${details}`, clean),
-+      },
-+    ];
-+  });
++    failures.push({
++      property: typeof propertyName === 'string' ? oneLine(propertyName, clean) : '',
++      message: oneLine(`${errorMessage}${details}`, clean),
++    });
++  }
++  return failures;
 +}
 +
  function parseJson(text: string): { value: unknown } | undefined {
@@ -1358,10 +1834,15 @@ Decision: `admin.verify` signs in with `login(…, { answers: [401] })`: a 2xx i
 401 false, and a 403 (the ban) throws (decision 2).
 Decision: `fakeStackApis` grows a qBittorrent that keeps its login, preferences and
 categories (`freshAppState()`: the settings its pre-start file leaves, and no user until
-a test or `apply` sets one), answers its sign-in with 204 or 401, and is the same app
-whether reached as `qbittorrent` or through `gluetun`.
-`run.test.ts`'s current home holds what the stack wants in qBittorrent too, and
-`resources.json` records it.
+a test or `apply` sets one), answers its sign-in with 204 or 401, and 403 once five
+sign-ins in a row failed (`signInFailures`), takes only its `key` when one is set, gives
+paths back without a trailing "/" and the whitelist one subnet per line, and is the same
+app whether reached as `qbittorrent` or through `gluetun`. `integration.test.ts` runs on
+it, and keeps no fake of its own (decision 17). `run.test.ts`'s current home holds what
+the stack wants in qBittorrent too, and `resources.json` records it.
+Decision: a `run.test.ts` test pins the ban's threshold (decision 2): after a first
+`apply`, qBittorrent's password changes; with three `plan`s before it, `apply` succeeds;
+with four, it exits 1 with qBittorrent's "banned" message, though the password was set.
 Decision: the catalog-facts test's app with nothing managed becomes Jellyfin, since
 qBittorrent now has an integration.
 
@@ -1382,8 +1863,9 @@ qBittorrent now has an integration.
   - resource addresses `qbittorrent.admin`, `qbittorrent.preferences`,
     `qbittorrent.category_tv` (which Task 5's Sonarr client requires) and
     `qbittorrent.category_movies` (Radarr's);
-  - `FakeAppState` gains `preferences`, `categories` (and, in Task 5, more), and
-    `freshAppState(): FakeAppState` in `@mediaplane/engine/testing`.
+  - `FakeAppState` gains `preferences`, `categories`, `key` and `signInFailures` (and,
+    in Task 5, more), and `freshAppState(): FakeAppState` in
+    `@mediaplane/engine/testing`.
 
 - [ ] **Step 1: Write the failing tests, and the fake qBittorrent they use**
 
@@ -1396,7 +1878,12 @@ import {
   type ResourceSpec,
   type WiringContext,
 } from '@mediaplane/engine';
-import { fakeHttpApp, wiringStack, type FakeRequest } from '@mediaplane/engine/testing';
+import {
+  fakeStackApis,
+  freshAppState,
+  wiringStack,
+  type FakeAppState,
+} from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { catalog } from '../index';
 import integration from './integration';
@@ -1436,90 +1923,30 @@ function resource(name: string): ResourceSpec {
   return found;
 }
 
-/** What the fake qBittorrent holds, as its API names it. */
-interface Held {
-  user: string;
-  password: string;
-  preferences: Record<string, unknown>;
-  categories: Record<string, { name: string; savePath: string }>;
-}
-
 /**
- * A fake qBittorrent 5.2 behind Gluetun: its preferences, categories and sign-in, with a
- * Bearer key. Its preferences answer the whitelist one subnet per line, and paths without
- * a trailing "/", as qBittorrent does.
+ * qBittorrent behind Gluetun, as fakeStackApis fakes it, holding the shared login and its
+ * key, then `held`; and a client for it.
  */
-async function qbittorrent(held: Partial<Held> = {}) {
-  const state: Held = {
+async function qbittorrent(held: Partial<FakeAppState> = {}) {
+  const apis = await fakeStackApis();
+  const state: FakeAppState = {
+    ...freshAppState(),
     user: 'admin',
     password: PASSWORD,
-    preferences: {
-      save_path: '/data/torrents',
-      auto_tmm_enabled: true,
-      bypass_auth_subnet_whitelist_enabled: false,
-      bypass_auth_subnet_whitelist: '',
-      web_ui_api_key: KEY,
-    },
-    categories: {},
+    key: KEY,
     ...held,
   };
-  const app = await fakeHttpApp((request: FakeRequest) => {
-    const form = new URLSearchParams(request.body);
-    if (request.path === '/api/v2/auth/login') {
-      if (request.headers.authorization !== undefined) return { status: 400 };
-      return form.get('username') === state.user &&
-        form.get('password') === state.password
-        ? { status: 204, headers: { 'Set-Cookie': 'SID=fake-session' } }
-        : { status: 401, body: 'Unauthorized' };
-    }
-    if (request.headers.authorization !== `Bearer ${KEY}`) return { status: 403 };
-    if (request.path === '/api/v2/app/preferences') {
-      return { status: 200, body: { ...state.preferences, web_ui_username: state.user } };
-    }
-    if (request.path === '/api/v2/app/setPreferences') {
-      const sent = JSON.parse(form.get('json') ?? '{}') as Record<string, unknown>;
-      const { web_ui_username: user, web_ui_password: password, ...rest } = sent;
-      if (typeof user === 'string') state.user = user;
-      if (typeof password === 'string') state.password = password;
-      const list = rest.bypass_auth_subnet_whitelist;
-      state.preferences = {
-        ...state.preferences,
-        ...rest,
-        ...(typeof list === 'string'
-          ? { bypass_auth_subnet_whitelist: list.split(',').join('\n') }
-          : {}),
-      };
-      return { status: 200 };
-    }
-    if (request.path === '/api/v2/torrents/categories') {
-      return { status: 200, body: state.categories };
-    }
-    const name = form.get('category') ?? '';
-    const savePath = (form.get('savePath') ?? '').replace(/\/+$/, '');
-    if (request.path === '/api/v2/torrents/createCategory') {
-      if (name in state.categories)
-        return { status: 409, body: 'Unable to create category' };
-      state.categories[name] = { name, savePath };
-      return { status: 200 };
-    }
-    if (request.path === '/api/v2/torrents/editCategory') {
-      if (!(name in state.categories))
-        return { status: 404, body: 'Category does not exist' };
-      state.categories[name] = { name, savePath };
-      return { status: 200 };
-    }
-    return { status: 404 };
-  });
+  apis.apps.set('qbittorrent', state);
   const api = createAppApi({
     name: 'qBittorrent',
     service: 'gluetun',
     port: 8080,
-    endpoint: { host: '127.0.0.1', port: app.port },
+    endpoint: { host: '127.0.0.1', port: apis.app.port },
     key: { scheme: 'bearer', value: KEY },
     secrets: [KEY, PASSWORD],
     retry: { deadlineMs: 0 },
   });
-  return { api, app, state };
+  return { api, app: apis.app, state };
 }
 
 describe("qBittorrent's integration", () => {
@@ -1582,29 +2009,25 @@ describe("qBittorrent's integration", () => {
     });
 
     it('says when qBittorrent has banned the address from signing in, never that the password is wrong', async () => {
-      const { api } = await qbittorrent();
-      const banned = await fakeHttpApp(() => ({
-        status: 403,
-        body: 'Your IP address has been banned after too many failed authentication attempts.',
-      }));
-      const bannedApi = createAppApi({
-        name: 'qBittorrent',
-        service: 'gluetun',
-        port: 8080,
-        endpoint: { host: '127.0.0.1', port: banned.port },
-        key: { scheme: 'bearer', value: KEY },
-        secrets: [KEY, PASSWORD],
-        retry: { deadlineMs: 0 },
-      });
+      // Five wrong passwords in a row, and qBittorrent refuses every sign-in.
+      const { api, state } = await qbittorrent({ password: 'changed-in-the-web-ui' });
       const observed = await admin.observe(api, undefined);
       if (observed === undefined) throw new Error('no admin observed');
+      for (let failed = 0; failed < 5; failed++) {
+        expect(await admin.verify?.(api, desired, observed)).toBe(false);
+      }
+      state.password = PASSWORD;
       const failure = await admin
-        .verify?.(bannedApi, desired, observed)
+        .verify?.(api, desired, observed)
         .catch((thrown: unknown) => thrown);
       expect(failure).toBeInstanceOf(AppApiError);
       expect((failure as AppApiError).message).toContain(
         'refused the request (HTTP 403): Your IP address has been banned after too many failed authentication attempts.',
       );
+      // Its key still works, so the password can still be set; a restart lifts the ban.
+      await admin.update(api, desired, observed);
+      state.signInFailures = 0;
+      expect(await admin.verify?.(api, desired, observed)).toBe(true);
     });
   });
 
@@ -1704,10 +2127,8 @@ apps:
       const desired = tv.desired(contextOf());
       if (desired === undefined) throw new Error('the tv category is wanted');
       expect(await tv.create(api, desired)).toEqual({ id: 'tv' });
-      expect(state.categories).toEqual({
-        tv: { name: 'tv', savePath: '/data/torrents/tv' },
-      });
-      state.categories.tv = { name: 'tv', savePath: '/data/elsewhere/' };
+      expect(state.categories).toEqual({ tv: '/data/torrents/tv' });
+      state.categories.tv = '/data/elsewhere/';
       const observed = await tv.observe(api, undefined);
       expect(observed).toEqual({
         id: 'tv',
@@ -1716,15 +2137,11 @@ apps:
       });
       if (observed === undefined) throw new Error('no category observed');
       await tv.update(api, desired, observed);
-      expect(state.categories).toEqual({
-        tv: { name: 'tv', savePath: '/data/torrents/tv' },
-      });
+      expect(state.categories).toEqual({ tv: '/data/torrents/tv' });
     });
 
     it("says qBittorrent's own words when it refuses", async () => {
-      const { api } = await qbittorrent({
-        categories: { tv: { name: 'tv', savePath: '/data/torrents/tv' } },
-      });
+      const { api } = await qbittorrent({ categories: { tv: '/data/torrents/tv' } });
       const desired = tv.desired(contextOf());
       if (desired === undefined) throw new Error('the tv category is wanted');
       const failure = await tv.create(api, desired).catch((thrown: unknown) => thrown);
@@ -1768,7 +2185,7 @@ index 5e22ab2..7856d70 100644
 
 ```diff
 diff --git a/packages/engine/src/testing/wiring.ts b/packages/engine/src/testing/wiring.ts
-index 560ac9f..c2ed925 100644
+index 560ac9f..07375d8 100644
 --- a/packages/engine/src/testing/wiring.ts
 +++ b/packages/engine/src/testing/wiring.ts
 @@ -7,3 +7,3 @@ import { fakeContainer } from './fakes';
@@ -1781,12 +2198,19 @@ index 560ac9f..c2ed925 100644
 -  /** Its admin user name and password (Servarr); empty before there is one. */
 +  /** Its admin user name and password; empty before there is one. */
    user: string;
-@@ -95,2 +95,22 @@ export interface FakeAppState {
+@@ -95,2 +95,31 @@ export interface FakeAppState {
    up: boolean;
 +  /** qBittorrent's preferences, as its API names them, but for the login above. */
 +  preferences: Record<string, string | boolean>;
 +  /** qBittorrent's categories: each one's save path, by name. */
 +  categories: Record<string, string>;
++  /** qBittorrent's API key: the only one it takes, or any when empty. */
++  key: string;
++  /**
++   * qBittorrent's failed sign-ins in a row. From five on it refuses every sign-in (403,
++   * a ban), until a test sets it back to 0, as a restart would; a success resets it.
++   */
++  signInFailures: number;
 +}
 +
 +/** A fake app as it first starts: qBittorrent's settings as its pre-start file sets them. */
@@ -1802,27 +2226,30 @@ index 560ac9f..c2ed925 100644
 +      bypass_auth_subnet_whitelist: '',
 +    },
 +    categories: {},
++    key: '',
++    signInFailures: 0,
 +  };
  }
-@@ -101,3 +121,5 @@ export interface FakeAppState {
+@@ -101,3 +130,6 @@ export interface FakeAppState {
   * Radarr and Prowlarr have /ping, system/status, config/host and /login; qBittorrent has
 - * / and app/version. Any key is taken. `seams` send every app's calls there.
-+ * /, app/version, its sign-in, preferences and categories, and is `apps`' "qbittorrent"
-+ * also when reached through Gluetun. Any key is taken. `seams` send every app's calls
-+ * there.
++ * /, app/version, its sign-in (with its ban), preferences and categories, answered as
++ * qBittorrent 5.2 answers them, and is `apps`' "qbittorrent" also when reached through
++ * Gluetun. Any key is taken, but qBittorrent's `key` when it is set. `seams` send every
++ * app's calls there.
   */
-@@ -113,3 +135,3 @@ export async function fakeStackApis(): Promise<{
+@@ -113,3 +145,3 @@ export async function fakeStackApis(): Promise<{
      if (known !== undefined) return known;
 -    const fresh: FakeAppState = { user: '', password: '', up: true };
 +    const fresh = freshAppState();
      apps.set(service, fresh);
-@@ -119,3 +141,4 @@ export async function fakeStackApis(): Promise<{
+@@ -119,3 +151,4 @@ export async function fakeStackApis(): Promise<{
      const { method, path, headers } = request;
 -    const service = (headers.host ?? '').split(':')[0] ?? '';
 +    const host = (headers.host ?? '').split(':')[0] ?? '';
 +    const service = host === 'gluetun' ? 'qbittorrent' : host;
      const state = stateOf(service);
-@@ -123,9 +146,3 @@ export async function fakeStackApis(): Promise<{
+@@ -123,8 +156,6 @@ export async function fakeStackApis(): Promise<{
        headers['x-api-key'] !== undefined || headers.authorization !== undefined;
 -    if (service === 'qbittorrent' || service === 'gluetun') {
 -      if (path === '/') return { status: state.up ? 200 : 503, body: 'login page' };
@@ -1830,12 +2257,23 @@ index 560ac9f..c2ed925 100644
 -        return keyed ? { status: 200, body: 'v5.2.4' } : { status: 403 };
 -      }
 -      return { status: 404 };
--    }
-+    if (service === 'qbittorrent') return fakeQbittorrent(request, state, keyed);
-     if (path === '/ping') return { status: state.up ? 200 : 503, body: { status: 'OK' } };
-@@ -168,2 +185,57 @@ export async function fakeStackApis(): Promise<{
++    if (service === 'qbittorrent') {
++      const bearer =
++        state.key === '' ? keyed : headers.authorization === `Bearer ${state.key}`;
++      return fakeQbittorrent(request, state, bearer);
+     }
+@@ -168,2 +199,87 @@ export async function fakeStackApis(): Promise<{
  
-+/** qBittorrent's API, as fakeStackApis answers it, from `state`. */
++/** A path as qBittorrent gives it back: without a trailing "/". */
++function kept(path: string): string {
++  return path.length > 1 ? path.replace(/\/+$/, '') : path;
++}
++
++/**
++ * qBittorrent's API, as fakeStackApis answers it, from `state`, as qBittorrent 5.2 does:
++ * paths without a trailing "/", the whitelist one subnet per line, its key among the
++ * preferences, and a ban on signing in after five failures in a row.
++ */
 +function fakeQbittorrent(
 +  request: FakeRequest,
 +  state: FakeAppState,
@@ -1845,16 +2283,37 @@ index 560ac9f..c2ed925 100644
 +  const form = new URLSearchParams(request.body);
 +  if (path === '/') return { status: state.up ? 200 : 503, body: 'login page' };
 +  if (path === '/api/v2/auth/login') {
++    if (state.signInFailures >= 5) {
++      return {
++        status: 403,
++        body: 'Your IP address has been banned after too many failed authentication attempts.',
++      };
++    }
 +    const ok =
 +      state.user !== '' &&
 +      form.get('username') === state.user &&
 +      form.get('password') === state.password;
++    state.signInFailures = ok ? 0 : state.signInFailures + 1;
 +    return ok ? { status: 204 } : { status: 401, body: 'Unauthorized' };
 +  }
 +  if (!keyed) return { status: 403 };
 +  if (path === '/api/v2/app/version') return { status: 200, body: 'v5.2.4' };
 +  if (path === '/api/v2/app/preferences') {
-+    return { status: 200, body: { ...state.preferences, web_ui_username: state.user } };
++    const { save_path: savePath, bypass_auth_subnet_whitelist: whitelist } =
++      state.preferences;
++    return {
++      status: 200,
++      body: {
++        ...state.preferences,
++        save_path: kept(String(savePath)),
++        bypass_auth_subnet_whitelist: String(whitelist)
++          .split(/[\s,]+/)
++          .filter((subnet) => subnet !== '')
++          .join('\n'),
++        web_ui_username: state.user,
++        web_ui_api_key: state.key,
++      },
++    };
 +  }
 +  if (path === '/api/v2/app/setPreferences') {
 +    const sent = JSON.parse(form.get('json') ?? '{}') as Record<string, string | boolean>;
@@ -1870,7 +2329,7 @@ index 560ac9f..c2ed925 100644
 +      body: Object.fromEntries(
 +        Object.entries(state.categories).map(([name, savePath]) => [
 +          name,
-+          { name, savePath },
++          { name, savePath: kept(savePath) },
 +        ]),
 +      ),
 +    };
@@ -1897,7 +2356,7 @@ index 560ac9f..c2ed925 100644
 
 ```diff
 diff --git a/packages/cli/src/run.test.ts b/packages/cli/src/run.test.ts
-index 7abd6bb..8c0ee15 100644
+index 7abd6bb..e583065 100644
 --- a/packages/cli/src/run.test.ts
 +++ b/packages/cli/src/run.test.ts
 @@ -21,2 +21,3 @@ import {
@@ -1984,18 +2443,57 @@ index 7abd6bb..8c0ee15 100644
 -      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 2 wiring checks after the start.',
 +      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 4 wiring checks after the start.',
      );
-@@ -559,2 +598,5 @@ describe('mediaplane apply', () => {
+@@ -492,2 +531,38 @@ describe('mediaplane apply', () => {
+ 
++  it("is banned from qBittorrent's sign-in by four plans of a changed password, not three", async () => {
++    // qBittorrent bans an address after five failed sign-ins in a row. Each plan of a
++    // changed password makes one, and so does apply's own plan; its wire step makes none,
++    // and the check after the update signs in with the new password.
++    const home = await makeHome();
++    const docker = fakeDocker(home);
++    expect(
++      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
++    ).toBe(0);
++    const qbittorrent = apis.apps.get('qbittorrent');
++    if (qbittorrent === undefined) throw new Error('no qBittorrent faked');
++    const password = (await readSecretStore(home)).shared?.adminPassword;
++    const changeThenApply = async (plans: number) => {
++      qbittorrent.password = 'fake-changed-in-the-web-ui';
++      for (let planned = 0; planned < plans; planned++) {
++        expect(await run(['plan', '--home', home], capture().io, deps(docker))).toBe(2);
++      }
++      const applied = capture();
++      const code = await run(
++        ['apply', '--home', home, '--yes'],
++        applied.io,
++        deps(docker),
++      );
++      return { code, stderr: applied.stderr() };
++    };
++    expect((await changeThenApply(3)).code).toBe(0);
++    expect(qbittorrent.password).toBe(password);
++    const banned = await changeThenApply(4);
++    expect(banned.code).toBe(1);
++    expect(banned.stderr).toContain(
++      'banned after too many failed authentication attempts',
++    );
++    // The update went through, with the key: only the check after it was refused.
++    expect(qbittorrent.password).toBe(password);
++  });
++
+   it('asks on a terminal, and changes nothing unless the answer is yes', async () => {
+@@ -559,2 +634,5 @@ describe('mediaplane apply', () => {
        ['start', '', 'done'],
 +      ['wire', 'qbittorrent.admin', 'done'],
 +      ['wire', 'qbittorrent.preferences', 'done'],
 +      ['wire', 'qbittorrent.category_tv', 'done'],
        ['wire', 'sonarr.admin', 'done'],
-@@ -822,3 +864,3 @@ describe('mediaplane history', () => {
+@@ -822,3 +900,3 @@ describe('mediaplane history', () => {
      expect(list.stdout()).toBe(
 -      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 1 resource wired\n`,
 +      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 4 resources wired\n`,
      );
-@@ -831,2 +873,3 @@ describe('mediaplane history', () => {
+@@ -831,2 +909,3 @@ describe('mediaplane history', () => {
      expect(one.stdout()).toContain('  done    wiring sonarr.admin: created\n');
 +    expect(one.stdout()).toContain('  done    wiring qbittorrent.category_tv: created\n');
    });
@@ -2004,11 +2502,11 @@ index 7abd6bb..8c0ee15 100644
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `pnpm vitest run catalog scripts packages/cli/src/run.test.ts`
-Expected: FAIL: `catalog/qbittorrent/integration.test.ts` can't load `./integration`;
-`catalog.test.ts`'s "gives an integration to the apps Mediaplane wires so far"; and four
-`run.test.ts` tests that count or list the wiring: the fresh plan and the apply with
-`--yes` ("4 wiring checks after the start"), the JSON actions, and the history ("4
-resources wired").
+Expected: FAIL, `catalog/qbittorrent/integration.test.ts` can't load `./integration`;
+`catalog.test.ts`'s "gives an integration to the apps Mediaplane wires so far"; and five
+`run.test.ts` tests: the fresh plan and the apply with `--yes` ("4 wiring checks after
+the start"), the JSON actions, the history ("4 resources wired"), and "is banned from
+qBittorrent's sign-in by four plans of a changed password, not three".
 
 - [ ] **Step 3: Write the implementation**
 
@@ -2284,6 +2782,9 @@ masked as `********` in what they answer, kept when a PUT sends it masked) and r
 folders. Their test passes when the client names `gluetun` or `qbittorrent` and holds
 qBittorrent's key (`FakeAppState.key`, any when empty), and fails as Sonarr's does
 otherwise (`Host: Unable to connect to qBittorrent`, `ApiKey: Authentication Failure`).
+Decision: a `run.test.ts` test pins decision 4 on the real catalog: with qBittorrent's
+`tv` category missing, `plan` plans it as `create` and sends Sonarr no
+`/api/v3/downloadclient/test`; with the category back, it does.
 
 **Files:**
 - Create: `catalog/_shared/servarr-download.ts`, `catalog/_shared/servarr-download.test.ts`
@@ -2302,7 +2803,7 @@ otherwise (`Host: Unable to connect to qBittorrent`, `ApiKey: Authentication Fai
   - `servarrRootFolder(path: string): ResourceSpec`;
   - `DOWNLOAD_CLIENT_NAME = 'qBittorrent (Mediaplane)'`;
   - `servarrIntegration(version, after = [], more: readonly ResourceSpec[] = [])`;
-  - `FakeAppState` gains `key`, `downloadClients: FakeDownloadClient[]` and
+  - `FakeAppState` gains `downloadClients: FakeDownloadClient[]` and
     `rootFolders: { id: number; path: string }[]`.
 
 - [ ] **Step 1: Write the failing tests, and the fake arrs they use**
@@ -2537,13 +3038,11 @@ describe('servarrRootFolder', () => {
 
 ```diff
 diff --git a/packages/engine/src/testing/wiring.ts b/packages/engine/src/testing/wiring.ts
-index c2ed925..b560779 100644
+index 07375d8..2073b04 100644
 --- a/packages/engine/src/testing/wiring.ts
 +++ b/packages/engine/src/testing/wiring.ts
-@@ -99,2 +99,18 @@ export interface FakeAppState {
-   categories: Record<string, string>;
-+  /** qBittorrent's API key: the only one it takes, or any when empty. */
-+  key: string;
+@@ -106,2 +106,16 @@ export interface FakeAppState {
+   signInFailures: number;
 +  /** Sonarr's or Radarr's download clients, their keys in clear. */
 +  downloadClients: FakeDownloadClient[];
 +  /** Sonarr's or Radarr's root folders. */
@@ -2559,9 +3058,8 @@ index c2ed925..b560779 100644
 +  priority: number;
 +  fields: { name: string; value?: unknown }[];
  }
-@@ -114,2 +130,39 @@ export function freshAppState(): FakeAppState {
-     categories: {},
-+    key: '',
+@@ -123,2 +137,38 @@ export function freshAppState(): FakeAppState {
+     signInFailures: 0,
 +    downloadClients: [],
 +    rootFolders: [],
 +  };
@@ -2599,7 +3097,7 @@ index c2ed925..b560779 100644
 +      f.name === 'apiKey' && f.value !== undefined ? { ...f, value: '********' } : f,
 +    ),
    };
-@@ -117,2 +170,110 @@ export function freshAppState(): FakeAppState {
+@@ -126,2 +176,110 @@ export function freshAppState(): FakeAppState {
  
 +/**
 + * Sonarr's and Radarr's download clients and root folders, as fakeStackApis answers them.
@@ -2710,28 +3208,20 @@ index c2ed925..b560779 100644
 +}
 +
  /**
-@@ -120,6 +281,7 @@ export function freshAppState(): FakeAppState {
+@@ -129,7 +287,7 @@ export function freshAppState(): FakeAppState {
   * of 127.0.0.1: told apart by their Host header ("sonarr:8989", "gluetun:8080"). Sonarr,
 - * Radarr and Prowlarr have /ping, system/status, config/host and /login; qBittorrent has
-- * /, app/version, its sign-in, preferences and categories, and is `apps`' "qbittorrent"
-- * also when reached through Gluetun. Any key is taken. `seams` send every app's calls
-- * there.
+- * /, app/version, its sign-in (with its ban), preferences and categories, answered as
+- * qBittorrent 5.2 answers them, and is `apps`' "qbittorrent" also when reached through
+- * Gluetun. Any key is taken, but qBittorrent's `key` when it is set. `seams` send every
+- * app's calls there.
 + * Radarr and Prowlarr have /ping, system/status, config/host and /login, and the arrs
-+ * their download clients and root folders; qBittorrent has /, app/version, its sign-in,
-+ * preferences and categories, and is `apps`' "qbittorrent" also when reached through
-+ * Gluetun. Any key is taken, but qBittorrent's `key` when it is set. `seams` send every
-+ * app's calls there.
++ * their download clients and root folders; qBittorrent has /, app/version, its sign-in
++ * (with its ban), preferences and categories, answered as qBittorrent 5.2 answers them,
++ * and is `apps`' "qbittorrent" also when reached through Gluetun. Any key is taken, but
++ * qBittorrent's `key` when it is set. `seams` send every app's calls there.
   */
-@@ -146,3 +308,7 @@ export async function fakeStackApis(): Promise<{
-       headers['x-api-key'] !== undefined || headers.authorization !== undefined;
--    if (service === 'qbittorrent') return fakeQbittorrent(request, state, keyed);
-+    if (service === 'qbittorrent') {
-+      const bearer =
-+        state.key === '' ? keyed : headers.authorization === `Bearer ${state.key}`;
-+      return fakeQbittorrent(request, state, bearer);
-+    }
-     if (path === '/ping') return { status: state.up ? 200 : 503, body: { status: 'OK' } };
-@@ -172,3 +338,7 @@ export async function fakeStackApis(): Promise<{
+@@ -186,3 +344,7 @@ export async function fakeStackApis(): Promise<{
      }
 -    return { status: 404 };
 +    return (
@@ -2746,7 +3236,7 @@ index c2ed925..b560779 100644
 
 ```diff
 diff --git a/packages/cli/src/run.test.ts b/packages/cli/src/run.test.ts
-index 8c0ee15..6a96eeb 100644
+index e583065..ebdcc21 100644
 --- a/packages/cli/src/run.test.ts
 +++ b/packages/cli/src/run.test.ts
 @@ -97,2 +97,16 @@ const WIRED: KnownResources = {
@@ -2797,27 +3287,53 @@ index 8c0ee15..6a96eeb 100644
 -      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 4 wiring checks after the start.',
 +      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 6 wiring checks after the start.',
      );
-@@ -320,3 +355,3 @@ describe('mediaplane plan', () => {
+@@ -309,2 +344,25 @@ describe('mediaplane plan', () => {
+ 
++  it("asks no arr to test its download client while qBittorrent's category is to be made", async () => {
++    // Sonarr's own test would make the missing category, with no save path, and plan
++    // changes nothing: the client's key is checked once the category is there.
++    const runtime = fakeRuntime({
++      hashes: { ok: true, hashes: HASHES },
++      containers: running(HASHES),
++    });
++    const home = await currentHome(runtime);
++    const qbittorrent = apis.apps.get('qbittorrent');
++    if (qbittorrent === undefined) throw new Error('no qBittorrent faked');
++    const tested = () =>
++      apis.app.requests.filter((r) => r.path === '/api/v3/downloadclient/test').length;
++    qbittorrent.categories = {};
++    const missing = capture();
++    expect(await run(['plan', '--home', home], missing.io, deps(runtime))).toBe(2);
++    expect(missing.stdout()).toMatch(/\+ create +qbittorrent\.category_tv\n/);
++    expect(tested()).toBe(0);
++    // With the category in place, the test runs.
++    qbittorrent.categories = { tv: '/data/torrents/tv' };
++    expect(await run(['plan', '--home', home], capture().io, deps(runtime))).toBe(0);
++    expect(tested()).toBe(1);
++  });
++
+   it('exits 2 and names the apps it would wait for when only their health is left', async () => {
+@@ -320,3 +378,3 @@ describe('mediaplane plan', () => {
      expect(term.stdout()).toBe(
 -      'Not healthy yet: sonarr (unhealthy)\nWiring:\n  > after start sonarr.admin\nPlan: 1 app to wait for, 1 wiring check after the start.\n',
 +      'Not healthy yet: sonarr (unhealthy)\nWiring:\n  > after start sonarr.admin\n  > after start sonarr.download_client\n  > after start sonarr.root_folder\nPlan: 1 app to wait for, 3 wiring checks after the start.\n',
      );
-@@ -517,3 +552,3 @@ describe('mediaplane apply', () => {
+@@ -517,3 +575,3 @@ describe('mediaplane apply', () => {
      expect(first.stdout()).toContain(
 -      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 4 wiring checks after the start.',
 +      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 6 wiring checks after the start.',
      );
-@@ -602,2 +637,4 @@ describe('mediaplane apply', () => {
+@@ -638,2 +696,4 @@ describe('mediaplane apply', () => {
        ['wire', 'sonarr.admin', 'done'],
 +      ['wire', 'sonarr.download_client', 'done'],
 +      ['wire', 'sonarr.root_folder', 'done'],
        ['wire', '', 'done'],
-@@ -864,3 +901,3 @@ describe('mediaplane history', () => {
+@@ -900,3 +960,3 @@ describe('mediaplane history', () => {
      expect(list.stdout()).toBe(
 -      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 4 resources wired\n`,
 +      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 6 resources wired\n`,
      );
-@@ -874,2 +911,3 @@ describe('mediaplane history', () => {
+@@ -910,2 +970,3 @@ describe('mediaplane history', () => {
      expect(one.stdout()).toContain('  done    wiring qbittorrent.category_tv: created\n');
 +    expect(one.stdout()).toContain('  done    wiring sonarr.download_client: created\n');
    });
@@ -2826,11 +3342,12 @@ index 8c0ee15..6a96eeb 100644
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `pnpm vitest run catalog packages/cli/src/run.test.ts`
-Expected: FAIL: `catalog/_shared/servarr-download.test.ts` can't load
-`./servarr-download`, and five `run.test.ts` tests that count or list the wiring: the
-fresh plan and the apply with `--yes` ("6 wiring checks after the start"), the plan that
-waits for Sonarr (three `after start` lines), the JSON actions, and the history ("6
-resources wired").
+Expected: FAIL, `catalog/_shared/servarr-download.test.ts` can't load
+`./servarr-download`, and six `run.test.ts` tests: the fresh plan and the apply with
+`--yes` ("6 wiring checks after the start"), the plan that waits for Sonarr (three
+`after start` lines), the JSON actions, the history ("6 resources wired"), and "asks no
+arr to test its download client while qBittorrent's category is to be made" (no test
+once the category is back).
 
 - [ ] **Step 3: Write the implementation**
 
@@ -3172,9 +3689,11 @@ Decision: the image's `apply` runs after Radarr's link is taken apart by hand (i
 client, its root folder and the folder, qBittorrent's `movies` category) and
 qBittorrent's password changed, so it makes each one again through the proxy: the folder
 helper's `compose run` of Radarr, which is on two networks, among them (decision 6).
-Decision: the apply, deploy and VPN tests change only what they list as wired. The apply
-test also checks that `resources.json` holds no qBittorrent key, and the deploy test that
-Sonarr's root folder was made, through the proxy.
+Decision: the apply, deploy and VPN tests change what they list as wired, and gain two
+checks: the apply test checks that `resources.json` holds no qBittorrent key, and the
+deploy test that Sonarr's root folder was made, through the proxy (decision 12).
+Decision: the suite's time is recorded in Step 4; CI's e2e job (`timeout-minutes: 60`)
+has room for it, so `ci.yml` doesn't change (decision 12).
 
 **Files:**
 - Create: `test/e2e/download.e2e.test.ts`
@@ -3821,7 +4340,9 @@ DOCKER_CONFIG=<dir> docker compose version
 DOCKER_CONFIG=<dir> pnpm test:e2e
 ```
 
-Expected: `Docker Compose version v2.38.2`, then PASS, 6 files. Afterwards:
+Expected: `Docker Compose version v2.38.2`, then PASS, 6 files. On the dev box the
+suite took about 5 minutes (304 s) with Compose 5.5.1 and about 6 (367 s) with 2.38.2; CI's e2e job allows
+60 minutes, and took 10 on amd64 for S3b, so its timeout stays. Afterwards:
 
 ```bash
 docker ps -a --filter name=mediaplane-e2e --format '{{.Names}}'
@@ -3847,27 +4368,33 @@ The §9 documentation set for what Tasks 1 to 6 built and tested, and nothing mo
 diagram is a `text` block of at most 40 columns.
 
 Decision: the wiring-failed runbook adds what S3c can say: a skipped download client and
-its example, verify's failure for a download client, `wire.folders`, and four fixes
-(qBittorrent's ban, an arr that can't reach qBittorrent, a root folder's folder that
-can't be made, a client name taken). The example lines follow the format the CLI's tests
-check.
+its example, verify's failure for a download client, `wire.folders`, `plan`'s failures
+resource by resource, and four fixes (qBittorrent's ban, with its real threshold, four
+`plan`s or declined `apply`s; an arr that can't reach qBittorrent; a root folder's folder
+that can't be made; a client name taken). The example lines follow the format the CLI's
+tests check.
 Decision: the architecture adds the download path (a diagram and three points), the data
-folder's layout, and secrets checked by the app's own test; "Not built yet" and "What
-comes next" move on to Slices 5 to 7.
+folder's layout, and secrets checked by the app's own test, and when they aren't checked
+(decisions 2, 4 and 8); "Not built yet" and "What comes next" move on to Slices 5 to 7.
 Decision: the threat model covers Slice 3c: qBittorrent's key held by the arrs (an asset,
 T4 and T5), the admin password and qBittorrent's preferences in request bodies only, the
-folder helper's command line (T5), qBittorrent's login kept through its API (T2), and the
-ban in place of "until Slice 3c" (T10).
+folder helper's command line and environment (T5), qBittorrent's login kept through its
+API (T2), and the ban, with its real threshold, in place of "until Slice 3c" (T10).
 Decision: the README's status, capabilities, flow and questions say what works now; its
 example's wiring lines are a real run of the same stack with this slice (the last
-`wire` line trimmed, as marked).
+`wire` line trimmed, as marked), and its change record stays the one the `status` below
+it shows. "Next" names Prowlarr's links to Sonarr and Radarr, never indexers, which
+Mediaplane doesn't add (spec §6.2).
 Decision: the app READMEs and the deploy guide lose their "until Slice 3c" notes and say
 what `apply` manages now; Gluetun's says how the arrs reach qBittorrent through it.
 Decision: the spec gains a "Slice 3c" entry in §11, which records that §6.2's managed
-fields for qBittorrent now include Automatic Torrent Management and the whitelist. The
-roadmap marks S3c done, records the verified Gluetun path, and adds three S4 items: a
-root folder whose path changes, qBittorrent's ban with drift checked on a schedule, and
-Keep mine for what Mediaplane now puts back in qBittorrent.
+fields for qBittorrent now include Automatic Torrent Management and the whitelist, why
+the whitelist goes through the API although §6.4 keeps trusted networks out of it (it
+has no environment variable and needs no restart), that `plan` checks no download
+client's key while its category is to be made, and the ban's threshold. The roadmap
+marks S3c done, records the verified Gluetun path, and adds three S4 items: a root
+folder whose path changes, qBittorrent's ban with drift checked on a schedule, and Keep
+mine for what Mediaplane now puts back in qBittorrent.
 
 **Files:**
 - Modify: `docs/runbooks/wiring-failed.md`, `docs/architecture.md`,
@@ -3885,7 +4412,7 @@ Keep mine for what Mediaplane now puts back in qBittorrent.
 
 ````diff
 diff --git a/docs/runbooks/wiring-failed.md b/docs/runbooks/wiring-failed.md
-index 784311e..5284ca0 100644
+index 784311e..76320f6 100644
 --- a/docs/runbooks/wiring-failed.md
 +++ b/docs/runbooks/wiring-failed.md
 @@ -3,4 +3,6 @@
@@ -3897,7 +4424,7 @@ index 784311e..5284ca0 100644
 +client and their root folders. Later slices add the indexers, the media server and the
 +requests app.
  
-@@ -24,5 +26,11 @@ opens qBittorrent. Later slices add the links between the apps.
+@@ -24,8 +26,15 @@ opens qBittorrent. Later slices add the links between the apps.
  
 -  An app that has no resources of its own, such as qBittorrent, fails as the app: for
 -  example `failed  wiring qbittorrent: …`. Later slices add resources that need others.
@@ -3912,27 +4439,34 @@ index 784311e..5284ca0 100644
 +    skipped wiring sonarr.download_client: qbittorrent.category_tv failed
 +  ```
  
-@@ -41,3 +49,5 @@ opens qBittorrent. Later slices add the links between the apps.
+ - **`mediaplane plan`** warns with the same message, lists the resource under `Wiring:`
+-  as `? unknown`, and exits 2:
++  as `? unknown`, and exits 2. A refusal of one resource leaves the app's others to be
++  checked; an app that stops answering leaves all that is left of it `unknown`:
+ 
+@@ -41,3 +50,5 @@ opens qBittorrent. Later slices add the links between the apps.
  - **`apply` fails at verify** with `changes remain after apply: sonarr.admin (update)`:
 -  the app took the change, then kept something else.
 +  the app took the change, then kept something else. For a download client, verify runs
 +  the arr's own test of it: a failure there is `sonarr.download_client (unknown: …)`,
 +  with the arr's own words after `tested qBittorrent (Mediaplane), and it failed:`.
  - **`apply` stops at the containers step** with `could not leave the wiring network …`,
-@@ -62,2 +72,3 @@ In `--json` output, each `diagnostics` entry has a `code`:
+@@ -62,2 +73,3 @@ In `--json` output, each `diagnostics` entry has a `code`:
  - `wire.secret-field`: a managed field holds one of the stack's secrets.
 +- `wire.folders`: a folder a resource needs, such as a root folder, couldn't be made.
  - `wire.network`: Mediaplane won't join the wiring network, or Docker refused the join.
-@@ -100,2 +111,28 @@ differ, and a `reason` when it is `unknown`.
+@@ -100,2 +112,30 @@ differ, and a `reason` when it is `unknown`.
    - Slice 4 restores a key at its source for you.
 +- **qBittorrent's `banned after too many failed authentication attempts`** (HTTP 403,
 +  `wire.auth`). qBittorrent stops an address from signing in for an hour after five
-+  failed sign-ins in a row. Mediaplane checks qBittorrent's password by
-+  signing in, so this happens when `admin.password` changed and `plan` ran five times
-+  before `apply`. Its key still works, and only Mediaplane's address is banned, not your
-+  browser's. Wait an hour, or restart qBittorrent, which forgets the ban
-+  (`docker restart mediaplane-qbittorrent-1`), then run `apply`, which sets the new
-+  password.
++  failed sign-ins in a row. Mediaplane checks qBittorrent's password by signing in: each
++  `plan`, and each `apply`'s own plan, signs in once, and fails while qBittorrent's
++  password differs from the stack's, such as after `admin.password` changed. So four
++  `plan`s, or declined `apply`s, before the `apply` are enough: it sets the password
++  with the key, but its last check is refused. Its key still works, and only
++  Mediaplane's address is banned, not your browser's. Wait an hour, or restart
++  qBittorrent, which forgets the ban (`docker restart mediaplane-qbittorrent-1`), then
++  run `apply` again: it sets the password if it hasn't yet, and its check then passes.
 +- **`tested qBittorrent (Mediaplane), and it failed`, with
 +  `Host: Unable to connect to qBittorrent`.** Sonarr or Radarr can't reach qBittorrent.
 +  Behind the VPN they reach it through Gluetun, as `gluetun`, at qBittorrent's port:
@@ -3960,7 +4494,7 @@ index 784311e..5284ca0 100644
 
 ````diff
 diff --git a/docs/architecture.md b/docs/architecture.md
-index 2f24eaf..9475846 100644
+index 2f24eaf..be2f789 100644
 --- a/docs/architecture.md
 +++ b/docs/architecture.md
 @@ -127,3 +127,4 @@ Not built yet:
@@ -3984,7 +4518,7 @@ index 2f24eaf..9475846 100644
 +path: qBittorrent's settings and categories, and Sonarr's and Radarr's download client
 +and root folder.
  
-@@ -321,5 +325,31 @@ mediaplane (the stack)
+@@ -321,5 +325,34 @@ mediaplane (the stack)
    create or change it. The app's README lists them.
 +- **The download path:**
 +
@@ -4015,9 +4549,12 @@ index 2f24eaf..9475846 100644
 -    secret is checked by using it, such as signing in, never compared.
 +    secret is checked by using it, never compared: signing in, or the app's own test, as
 +    Sonarr's test of its download client. While a field differs, the secrets aren't
-+    checked: the update sets them anyway.
++    checked: the update sets them anyway. Nor are they while a resource they require is
++    yet to be made or changed, since the check could make what is missing, and `plan`
++    changes nothing. `apply` doesn't check again a secret its own plan found refused: it
++    sets it.
    - `adopt`: the app already holds it as wanted, but `state/resources.json` doesn't say
-@@ -401,3 +431,3 @@ The [roadmap](plans/m1-roadmap.md) has the order:
+@@ -401,3 +434,3 @@ The [roadmap](plans/m1-roadmap.md) has the order:
  
 -- the wiring, app by app (Slices 3c to 7);
 +- the rest of the wiring, app by app (Slices 5 to 7);
@@ -4028,7 +4565,7 @@ index 2f24eaf..9475846 100644
 
 ```diff
 diff --git a/docs/security/threat-model.md b/docs/security/threat-model.md
-index 87643f1..fd193e8 100644
+index 87643f1..7bdc428 100644
 --- a/docs/security/threat-model.md
 +++ b/docs/security/threat-model.md
 @@ -3,3 +3,3 @@
@@ -4051,7 +4588,7 @@ index 87643f1..fd193e8 100644
 +- Sonarr and Radarr hold qBittorrent's key, as their download client needs, so a
 +  compromised one can drive qBittorrent: add a torrent, or change its settings.
  - The apps' calls to each other, and Mediaplane's to them, are plain HTTP on Docker's own
-@@ -235,2 +239,11 @@ Controls today:
+@@ -235,2 +239,13 @@ Controls today:
    with `***`, and never includes what was sent: a request body is never shown or kept.
 +- qBittorrent's key goes to Sonarr and Radarr in their download client's settings, a
 +  request body: the one place one app's key goes to another. They show it masked
@@ -4062,8 +4599,10 @@ index 87643f1..fd193e8 100644
 +  with is dropped. Its preferences hold its own key too: Mediaplane keeps only the
 +  fields it manages, and never shows them.
 +- The folders a root folder needs are made with a command that holds only their paths.
++  The throwaway container that runs it has the arr's own environment, its API key among
++  it, which `docker inspect` shows while it runs, as it does for the arr's own container.
  - Given to Compose in its environment or in the 0600 `generated/.env`, never on its
-@@ -334,7 +347,8 @@ What remains:
+@@ -334,7 +349,8 @@ What remains:
    key. Prowlarr holds Sonarr's and Radarr's keys from Slice 5.
 -- Changing `admin.username`, `admin.password`, `login_on_lan`, `network.bind` or
 -  `network.lan_subnet` after qBittorrent's first start doesn't reach qBittorrent, whose
@@ -4073,9 +4612,9 @@ index 87643f1..fd193e8 100644
 +- `apply` checks qBittorrent's password by signing in. qBittorrent bans an address from
 +  signing in for an hour after five failed sign-ins in a row. Mediaplane's sign-in fails
 +  only while qBittorrent's password differs from the stack's, such as after
-+  `admin.password` changed, so running `plan` five times before `apply` bans
-+  Mediaplane's address, never your browser's. Its key still works. The
-+  [runbook](../runbooks/wiring-failed.md) says what to do.
++  `admin.password` changed, once per `plan` and once per `apply`. So four `plan`s, or
++  declined `apply`s, before the `apply` ban Mediaplane's address, never your browser's.
++  Its key still works. The [runbook](../runbooks/wiring-failed.md) says what to do.
  - There is no way yet to rotate the generated password (Slice 4).
 ```
 
@@ -4085,7 +4624,7 @@ index 87643f1..fd193e8 100644
 
 ```diff
 diff --git a/README.md b/README.md
-index 3cf4ec0..b432042 100644
+index 3cf4ec0..a5a219d 100644
 --- a/README.md
 +++ b/README.md
 @@ -13,3 +13,4 @@ Compose and wires the apps together for you.**
@@ -4099,10 +4638,10 @@ index 3cf4ec0..b432042 100644
 -> - **Next:** wiring the apps to each other. Until that lands, each app still needs
 ->   setting up by hand. Jellyfin's wizard and Seerr's setup are open to anyone who
 ->   can reach them until you complete them, so complete them first.
-+> - **Next:** the rest of the wiring: Prowlarr's indexers, the media server and Seerr.
-+>   Until that lands, those still need setting up by hand. Jellyfin's wizard and Seerr's
-+>   setup are open to anyone who can reach them until you complete them, so complete
-+>   them first.
++> - **Next:** the rest of the wiring: Prowlarr's links to Sonarr and Radarr, the media
++>   server and Seerr. Until that lands, those still need setting up by hand. Jellyfin's
++>   wizard and Seerr's setup are open to anyone who can reach them until you complete
++>   them, so complete them first.
  > - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
 @@ -60,3 +62,4 @@ Mediaplane does that part for you:
  | Documentation generated from code: the `stack.yaml` and CLI references, app facts | Done         |
@@ -4144,7 +4683,7 @@ index 3cf4ec0..b432042 100644
 -Plan: 6 files to write, 7 containers to change, 6 secrets to generate, 4 wiring checks after the start.
 +Plan: 6 files to write, 7 containers to change, 6 secrets to generate, 11 wiring checks after the start.
  
-@@ -199,9 +209,17 @@ Starting containers and waiting until every app is healthy…
+@@ -199,6 +209,14 @@ Starting containers and waiting until every app is healthy…
  Wiring the apps…
 +  done    wiring qbittorrent.admin: adopted
 +  done    wiring qbittorrent.preferences: adopted
@@ -4160,10 +4699,6 @@ index 3cf4ec0..b432042 100644
 -  done    wiring: radarr.admin created; sonarr.admin created; prowlarr.admin created
 +  done    wiring: qbittorrent.admin adopted; qbittorrent.preferences adopted; … prowlarr.admin created
    done    verify: no changes remain
- 
--Apply complete. Change record: 20261010T031836Z-17560c95
-+Apply complete. Change record: 20261011T081852Z-a523d923
- 
 @@ -257,4 +275,5 @@ Then follow [`deploy/README.md`](deploy/README.md) to start it and run
  - the secrets it would generate;
 -- the wiring it would do in the apps, under `Wiring:`, such as setting the admin login.
@@ -4218,7 +4753,7 @@ index 3cf4ec0..b432042 100644
 
 ```diff
 diff --git a/catalog/qbittorrent/README.md b/catalog/qbittorrent/README.md
-index 5345ea9..2275876 100644
+index 5345ea9..6e68123 100644
 --- a/catalog/qbittorrent/README.md
 +++ b/catalog/qbittorrent/README.md
 @@ -44,3 +44,19 @@ unmodified, and by default puts it behind Gluetun's VPN.
@@ -4265,7 +4800,7 @@ index 5345ea9..2275876 100644
 +manages ("Keep mine") comes in Slice 4. See the
 +[roadmap](../../docs/plans/m1-roadmap.md).
  
-@@ -90,17 +106,14 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
+@@ -90,17 +106,15 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
    see [Gluetun's README](../gluetun/README.md).
 -- **`stack.yaml` reaches qBittorrent only at its first start.** Mediaplane never
 -  rewrites `qBittorrent.conf`, so changing any of these afterwards doesn't change
@@ -4287,9 +4822,10 @@ index 5345ea9..2275876 100644
 +  login, and the two categories' save paths. `plan` shows it first. Slice 4 adds "Keep
 +  mine".
 +- **Five failed sign-ins in a row ban an address for an hour.** Mediaplane checks the
-+  password by signing in, so after you change `admin.password`, run `apply` soon: five
-+  `plan`s before it ban Mediaplane's address (never your browser's), and `plan` then
-+  says so. Restarting qBittorrent lifts the ban. See the
++  password by signing in, once per `plan` and once per `apply`, so after you change
++  `admin.password`, run `apply` soon: four `plan`s, or declined `apply`s, before it ban
++  Mediaplane's address (never your browser's), and `plan` then says so. Restarting
++  qBittorrent lifts the ban. See the
 +  [wiring failed runbook](../../docs/runbooks/wiring-failed.md).
 +- **Removing `admin.password`** brings back the password Mediaplane generated before, if
 +  it generated one: it keeps it, and never generates another. `apply` then sets it in
@@ -4421,10 +4957,10 @@ index f82ca43..81a65d0 100644
 
 ```diff
 diff --git a/docs/design/m1-engine-cli.md b/docs/design/m1-engine-cli.md
-index 7a9219f..112f326 100644
+index 7a9219f..3a1f62b 100644
 --- a/docs/design/m1-engine-cli.md
 +++ b/docs/design/m1-engine-cli.md
-@@ -1227 +1227,47 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
+@@ -1227 +1227,56 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
      `secrets/wg.key` (0600), never over an existing one.
 +
 +### Slice 3c: the download path (2026-10-11)
@@ -4436,12 +4972,16 @@ index 7a9219f..112f326 100644
 +    neither the old password nor a restart. A change of `admin.username` or
 +    `admin.password` now reaches qBittorrent. qBittorrent stops an address from signing
 +    in for an hour after five failed sign-ins in a row; that answer (403) is reported as
-+    it is, never read as a wrong password.
++    it is, never read as a wrong password. A changed password costs one failed sign-in
++    per `plan` and per `apply`, so four `plan`s, or declined `apply`s, before the `apply`
++    are enough for a ban.
 +  - `qbittorrent.preferences`: the default save path `/data/torrents`, Automatic Torrent
 +    Management on (§11, Slice 3a), and who may skip the login: the LAN subnets, only with
 +    `security.login_on_lan: false` while the web UIs are on the LAN, as its pre-start file
 +    sets them. A change of those settings now reaches qBittorrent. This adds
-+    Automatic Torrent Management and the whitelist to §6.2's managed fields.
++    Automatic Torrent Management and the whitelist to §6.2's managed fields. §6.4 keeps
++    trusted networks out of the API, but qBittorrent's whitelist is set through it: unlike
++    Servarr's `TRUSTEDNETWORKS`, it has no environment variable and needs no restart.
 +  - `qbittorrent.category_tv` and `qbittorrent.category_movies`, saving to
 +    `/data/torrents/tv` and `/data/torrents/movies`, each while Sonarr or Radarr is in the
 +    stack. A category is known by its name.
@@ -4455,7 +4995,10 @@ index 7a9219f..112f326 100644
 +  masked): a refused key is planned as an update; any other failure, such as qBittorrent
 +  out of the arr's reach, is the arr's own message (`unknown` in `plan`, a failure in
 +  apply and verify). It `requires` qBittorrent's category, because the arr's test makes a
-+  missing one with no save path, and Sonarr and Radarr come `after` qBittorrent.
++  missing one with no save path, and Sonarr and Radarr come `after` qBittorrent. While
++  the category is to be made, `plan` checks the client's fields only, never its key, so
++  that the arr's test can't make the category (`plan` changes nothing: §5.2, §6.3); the
++  wire step checks it once the category is there.
 +- **Sonarr's and Radarr's root folder** (§6.2): `<arr>.root_folder`, `/data/media/tv` or
 +  `/data/media/movies`, known by its path (the arrs can't change one). The arr needs the
 +  folder to exist, so the wire step makes it first, with `mkdir -p` in a throwaway
@@ -4463,9 +5006,11 @@ index 7a9219f..112f326 100644
 +  path would add a root folder, and leave the old one.
 +- **The integration contract** (§3.2) grows: a resource's `desired` sees the stack's
 +  keys, its `verify` what the app holds, and it may name `folders` to make first. While a
-+  managed field differs, the secrets aren't checked, because the update sets them anyway.
-+  `plan` reports a managed field that holds a secret (`wire.secret-field`), which apply
-+  refuses.
++  managed field differs, the secrets aren't checked, because the update sets them anyway;
++  nor are they while a resource they `require` is yet to be made or changed. Apply's wire
++  step doesn't check again a secret its own plan found refused: it sets it. In `plan`, a
++  resource the app refuses leaves the app's others to be checked. `plan` reports a
++  managed field that holds a secret (`wire.secret-field`), which apply refuses.
 +- **The typed HTTP client** (§3.2, §5.1) also sends a form with the key (qBittorrent's
 +  API), runs an app's own test (a 2xx passes; a 400 gives the errors of Servarr's
 +  validation list, never a warning or an `attemptedValue`), and takes a sign-in's 401 as
@@ -4478,7 +5023,7 @@ index 7a9219f..112f326 100644
 
 ```diff
 diff --git a/docs/plans/m1-roadmap.md b/docs/plans/m1-roadmap.md
-index 2e24565..458dd0b 100644
+index 2e24565..a6d7633 100644
 --- a/docs/plans/m1-roadmap.md
 +++ b/docs/plans/m1-roadmap.md
 @@ -20,2 +20,3 @@ Detailed plans so far:
@@ -4540,10 +5085,10 @@ index 2e24565..458dd0b 100644
 +  library (S3c). Decide what drift and Keep mine do with the old one.
 +- **qBittorrent's sign-in ban.** qBittorrent bans an address from signing in for an hour
 +  after five failed sign-ins in a row, and Mediaplane checks its password by signing in
-+  (S3c). A changed `admin.password` costs two failures before apply sets it. When drift
-+  is checked on a schedule (M2), a changed password left unapplied would ban
-+  Mediaplane's address within the hour. Decide whether drift checks the password less
-+  often, or not at all while it differs.
++  (S3c). A changed `admin.password` costs one failure per `plan`, and one for the
++  `apply` that sets it. When drift is checked on a schedule (M2), a changed password left
++  unapplied would ban Mediaplane's address within the hour. Decide whether drift checks
++  the password less often, or not at all while it differs.
 +- **Settings Mediaplane manages in qBittorrent are put back.** A whitelist, a save path
 +  or a category's path changed in qBittorrent's web UI is undone by the next `apply`
 +  (S3c). Keep mine must cover them, with the arrs' download clients and root folders.
@@ -4582,8 +5127,11 @@ git commit -m "docs: the download path (runbook, architecture, threat model, REA
   deploy/mediaplane.compose.yaml deploy/deploy.test.ts` prints nothing (decision 6).
   `d401c2e` is `main` after S3b.
 - [ ] No secret shows: the tests that check it pass (the client's form and test
-  redaction, the download client's masked test, the e2e checks that `resources.json`
-  holds neither the password nor qBittorrent's key).
+  redaction, the folder helper's redaction, the download client's masked test, the e2e
+  checks that `resources.json` holds neither the password nor qBittorrent's key).
+- [ ] `plan` changes nothing in the apps: with a category missing it sends no arr's test
+  (Task 5), and a changed password costs one failed sign-in per `plan` and per `apply`
+  (Tasks 1 and 4).
 - [ ] No committed file contains a real path, user name, host name or address from this
   machine: `git grep -n -i -e cyclopsgd -e '/home/' -- ':!docs/plans'` prints nothing
   outside the GitHub URLs (`https://github.com/cyclopsgd/Mediaplane/…`).
@@ -4593,14 +5141,16 @@ git commit -m "docs: the download path (runbook, architecture, threat model, REA
 - [ ] Every task is committed, and `git status` is clean.
 - [ ] Nothing has been pushed. Report to the controller:
   - the (check) decisions, for the controller and the owner to confirm or reverse, in
-    particular 2 (qBittorrent's password checked by signing in, and its ban), 5 (root
-    folders known by their path, made by a `compose run` helper) and 11 (qBittorrent's
-    whitelist managed both ways);
+    particular 2 (qBittorrent's password checked by signing in, its ban, and the wire
+    step's check cut), 4 (`plan` runs no arr's test while its category is to be made), 5
+    (root folders known by their path, made by a `compose run` helper) and 11
+    (qBittorrent's whitelist managed both ways);
   - that the e2e tests on Compose v2.38.2 and Docker 28 are confirmed by the slice PR's
     first CI run, as they were locally with Compose 2.38.2;
   - for the owner's manual-steps list: after changing `admin.password`, run
-    `mediaplane apply` soon, since five `plan`s before it ban Mediaplane from signing in
-    to qBittorrent for an hour (a restart of qBittorrent lifts it); and settings changed
+    `mediaplane apply` soon, since four `plan`s, or declined `apply`s, before it ban
+    Mediaplane from signing in to qBittorrent for an hour (a restart of qBittorrent lifts
+    it); and settings changed
     in qBittorrent's web UI that Mediaplane manages (the save path, Automatic Torrent
     Management, the whitelist, the two categories' paths) are put back by the next
     `apply`.
