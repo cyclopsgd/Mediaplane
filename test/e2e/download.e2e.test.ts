@@ -66,8 +66,11 @@ const ARRS = [
     root: '/data/media/movies',
   },
 ] as const;
+const [SONARR, RADARR] = ARRS;
 /** A password that isn't the shared one: what a hand-made change leaves in qBittorrent. */
 const OTHER_PASSWORD = 'fake-other-password-1';
+/** A key that isn't qBittorrent's: what a hand-made change leaves in Sonarr's client. */
+const WRONG_KEY = `qbt_${'9'.repeat(28)}`;
 
 const MAIN = join(REPO, 'packages', 'cli', 'src', 'main.ts');
 
@@ -192,7 +195,8 @@ interface Client {
  * - Sonarr and Radarr each hold "qBittorrent (Mediaplane)", aimed at Gluetun on
  *   qBittorrent's port, and their own test of it passes: through Gluetun's firewall;
  * - their root folders exist under /data/media, which shares one mount with the downloads.
- * Each assertion that could see a key or the password says only whether it passed.
+ * Each assertion that could see a key or the password says only whether it passed, but
+ * the arr's test, which says each setting it refused and why, every secret replaced.
  */
 async function expectDownloadPath(home: string): Promise<void> {
   const store = await readSecretStore(home);
@@ -318,13 +322,18 @@ async function setPreferences(home: string, values: Record<string, unknown>) {
 async function undoRadarr(home: string): Promise<void> {
   const store = await readSecretStore(home);
   const keyed = { 'X-Api-Key': store.apps.radarr?.apiKey ?? '' };
-  const clients = await getJson<Client[]>(7878, '/api/v3/downloadclient', keyed);
-  const folders = await getJson<{ id: number }[]>(7878, '/api/v3/rootfolder', keyed);
+  const clients = await getJson<Client[]>(RADARR.port, '/api/v3/downloadclient', keyed);
+  const folders = await getJson<{ id: number }[]>(
+    RADARR.port,
+    '/api/v3/rootfolder',
+    keyed,
+  );
   for (const path of [
     ...clients.map((c) => `/api/v3/downloadclient/${String(c.id)}`),
     ...folders.map((f) => `/api/v3/rootfolder/${String(f.id)}`),
   ]) {
-    expect((await api(7878, path, keyed, { method: 'DELETE' })).status, path).toBe(200);
+    const deleted = await api(RADARR.port, path, keyed, { method: 'DELETE' });
+    expect(deleted.status, path).toBe(200);
   }
   await rm(join(home, 'data', 'media', 'movies'), { recursive: true });
   const removed = await api(
@@ -339,6 +348,40 @@ async function undoRadarr(home: string): Promise<void> {
   );
   expect(removed.status).toBe(200);
   await setPreferences(home, { web_ui_password: OTHER_PASSWORD });
+}
+
+/**
+ * Give Sonarr's download client a key that isn't qBittorrent's, as a hand-made change
+ * would: saved with forceSave, since Sonarr's own test of it fails.
+ */
+async function wrongSonarrKey(home: string): Promise<void> {
+  const store = await readSecretStore(home);
+  const keyed = { 'X-Api-Key': store.apps.sonarr?.apiKey ?? '' };
+  const [held] = await getJson<Client[]>(SONARR.port, '/api/v3/downloadclient', keyed);
+  if (held === undefined) throw new Error('sonarr has no download client');
+  const put = await api(
+    SONARR.port,
+    `/api/v3/downloadclient/${String(held.id)}?forceSave=true`,
+    keyed,
+    {
+      method: 'PUT',
+      body: JSON.stringify({
+        ...held,
+        fields: held.fields.map((f) =>
+          f.name === 'apiKey' ? { ...f, value: WRONG_KEY } : f,
+        ),
+      }),
+      type: 'application/json',
+    },
+  );
+  const secrets = [
+    WRONG_KEY,
+    ...Object.values(store.apps).flatMap((keys) => Object.values(keys)),
+  ];
+  expect(
+    put.status,
+    `Sonarr did not save the client: ${await servarrFailure(put, secrets)}`,
+  ).toBe(202);
 }
 
 interface WireActions {
@@ -433,11 +476,13 @@ describe('the download path, behind the VPN', () => {
 
       // From the image, behind the socket proxy. Radarr's link, taken apart by hand, is made
       // again through the proxy: its folder in a throwaway Radarr container, its root folder
-      // and download client, qBittorrent's category, and the password. Where the host's
-      // Compose isn't the image's (CI's is 2.38), it also recreates the apps with bind
-      // volumes: the two hash them differently (ADR 0010).
+      // and download client, qBittorrent's category, and the password. Sonarr's own test
+      // refuses the wrong key its client was given, naming it, so the key is set again.
+      // Where the host's Compose isn't the image's (CI's is 2.38), it also recreates the
+      // apps with bind volumes: the two hash them differently (ADR 0010).
       deployed = await deployMediaplane({ home, stack: PROJECT });
       await undoRadarr(home);
+      await wrongSonarrKey(home);
       const inImage = await deployed.mediaplane(['apply', '--yes', '--json']);
       expect(inImage.code, inImage.stdout + inImage.stderr).toBe(0);
       const appliedInImage = JSON.parse(inImage.stdout) as WireActions;
@@ -451,7 +496,7 @@ describe('the download path, behind the VPN', () => {
         ['radarr.download_client', 'created'],
         ['radarr.root_folder', 'created'],
         ['sonarr.admin', 'unchanged'],
-        ['sonarr.download_client', 'unchanged'],
+        ['sonarr.download_client', 'updated apiKey'],
         ['sonarr.root_folder', 'unchanged'],
       ]);
       expect(appliedInImage.actions.find((a) => a.step === 'verify')?.detail).toBe(
