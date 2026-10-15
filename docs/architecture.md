@@ -333,7 +333,10 @@ up --wait again
   unpublished unless its appdata says the setup is done: then only its key is to make.
   `plan` lists it under `First-run setup:` (`bootstrap` in `--json`), shows its container
   recreated when it runs published, and checks its wiring after the start. It never
-  runs the setup.
+  runs the setup. A file Mediaplane can't read says nothing: with the key stored, the
+  key decides, and `plan` warns (`bootstrap.unreadable`) that it can't tell. An app with
+  a setup can't run inside another app's network, which would publish its ports: `plan`
+  fails with `bootstrap.network-via`.
 - **No port at all.** The file Compose gets on its standard input, after
   `compose.override.yaml`, sets the app's `ports` to `!reset []`, so the override's ports
   go too. `compose.yaml` itself always has the ports, so the stack runs as written
@@ -341,7 +344,9 @@ up --wait again
 - **The setup** reaches the app on the wiring network without a key, finishes its
   wizard, and keeps the key it makes in `state/secrets.json` at once. Then Mediaplane
   steps off the wiring network, `up` runs again, without the extra file, and Compose
-  recreates the app with its ports. An app
+  recreates the app with its ports. Before that, the engine asks the app once more
+  whether its setup is still open, and publishes it only if it is not. If it still looks
+  open, or can't be asked, the step fails and that app is not published. An app
   whose setup failed while it is still open stays unpublished; one whose setup is done
   is published even when making its key failed.
 - **No new Docker call:** the proxy allows nothing new.

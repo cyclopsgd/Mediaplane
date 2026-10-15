@@ -63,6 +63,11 @@
   `Healthy`. In the first seconds of every start, it answers `Degraded`, then Jellyfin
   restarts its server, which answers 503 for a few seconds more (seen on Jellyfin 12.2).
   Read its log (check 3) for what it is doing.
+- **Jellyfin runs, but its port isn't open.** `apply` starts Jellyfin with no published
+  port while its first-run setup is open, and publishes it only once the setup is
+  finished and Mediaplane has asked once more that it is. If `apply` failed at its
+  first-run setup step, or `plan` lists Jellyfin under `First-run setup:`, see
+  [wiring failed](wiring-failed.md).
 - **A slow start.** With the health checks Mediaplane sets, failed checks don't count
   during an app's start period: 60 seconds, or 120 for Jellyfin and Plex. After that,
   five failed checks in a row, 30 seconds apart, mark the app unhealthy, and `apply`

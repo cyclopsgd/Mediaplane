@@ -83,6 +83,18 @@ and Plex.
     hint: fix what the error says, then run apply again: an app whose setup is still open keeps its ports unpublished until then. See https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md
   ```
 
+- **`apply` stops at the same step** with a setup that reported success:
+  `error: the first-run setup failed: Jellyfin's setup reported success, but the app still
+looks open (or can't be asked), so it stays unpublished`. Before publishing an app,
+  Mediaplane asks it once more whether its setup is still open, and publishes it only if
+  it is not. Jellyfin's key is already kept.
+- **`mediaplane plan` warns about a setup it can't read:** `Mediaplane can't read the
+file in Jellyfin's appdata that says whether its first-run setup is done, so it can't
+tell whether the setup is open; the stored key decides`
+  (`bootstrap.unreadable`), with the hint `check the permissions of appdata/jellyfin`.
+- **`mediaplane plan` fails** with `Jellyfin has a first-run setup but runs inside
+<app>'s network, which publishes its ports` (`bootstrap.network-via`). No app in the
+  catalog does this today.
 - **`mediaplane plan`** warns with the same message, once for the app, and exits 2. It
   lists each of the app's resources under `Wiring:` as `? unknown` when the app refuses
   the key. When it refuses one resource only, the app's others are still checked. An app
@@ -131,6 +143,10 @@ In `--json` output, each `diagnostics` entry has a `code`:
 - `wire.folders`: a folder a resource needs, such as a root folder, couldn't be made.
 - `wire.network`: Mediaplane won't join the wiring network, or Docker refused the join.
 - `resources.invalid`: `state/resources.json` can't be read.
+- `bootstrap.unreadable` (a warning): Mediaplane can't read an app's setup-done file
+  while its key is stored, so it can't tell whether the setup is open.
+- `bootstrap.network-via` (an error): an app with a first-run setup runs inside another
+  app's network.
 - `apply.bootstrap-failed`: the first-run setup step failed.
 - `apply.wire-failed`: the wiring step itself failed.
 - `apply.start-failed`: the containers step failed. For this runbook, that is a failure
@@ -237,6 +253,27 @@ differ, and a `reason` when it is `unknown`.
   `tested Jellyfin (Mediaplane), and it failed:`; when `apply` makes the connection, the
   arr tests it before it saves it, so it follows `refused the request (HTTP 400):`. While
   Jellyfin is still to be set up, or refuses its key, `plan` doesn't run the test.
+- **`the app still looks open (or can't be asked), so it stays unpublished`**
+  (`apply.bootstrap-failed`). The setup finished, and Mediaplane kept the key, but the
+  re-check before publishing says Jellyfin's wizard is still open, or Jellyfin didn't
+  answer it. Jellyfin is not published. Read Jellyfin's log (`docker compose -p mediaplane
+logs --tail 100 jellyfin`), check that it is healthy (`mediaplane status jellyfin`),
+  and run `apply` again. If its wizard stays open, start Jellyfin afresh, as above.
+- **`Mediaplane can't read the file in Jellyfin's appdata`** (`bootstrap.unreadable`). With
+  Jellyfin's key stored, `plan` takes its setup as done, but it can't check: the folder
+  or `system.xml` in `appdata/jellyfin` isn't readable by the user Mediaplane runs as.
+  Either give the file to that user (`sudo chown -R <uid>:<gid> appdata/jellyfin`, with
+  the ids of `user:` in `stack.yaml`), or run Mediaplane as the user that owns it. Then
+  run `plan` again. Until then, an emptied `appdata/jellyfin` isn't noticed.
+- **`runs inside <app>'s network, which publishes its ports`** (`bootstrap.network-via`).
+  Mediaplane can't keep an app unpublished while its setup is open when the app shares
+  another app's network, because that app publishes the ports. Run the app in its own
+  network. No app in the catalog has this setting today.
+- **`has no onDownload, … property for Jellyfin, which Mediaplane turns on`**
+  (`wire.protocol`, for `<arr>.connection_jellyfin`). The arr's template for an Emby /
+  Jellyfin connection lacks one of the triggers that Mediaplane turns on, so it made
+  nothing. A Sonarr or Radarr version Mediaplane hasn't tested can do this: leave out
+  `version:` for the tested one (see Prevention), then run `apply` again.
 - **`could not make /data/media/tv for sonarr.root_folder`** (`wire.folders`). Sonarr and
   Radarr need their root folder to exist, and Jellyfin its libraries', so Mediaplane
   makes it first, as the stack's `user:`, in a throwaway container of the app. mkdir's
@@ -386,6 +423,8 @@ Then run `mediaplane apply`. It plans again and does only what is left
   shows what `apply` would change.
 - **Leave the keys as Mediaplane set them,** and don't make one anew in an app's web UI.
   In Jellyfin's dashboard, leave the API key named `Mediaplane`.
+- **Keep `appdata/jellyfin` readable** by the user Mediaplane runs as, so `plan` can tell
+  whether Jellyfin's setup is open.
 - **Leave the wiring network out of `compose.override.yaml`**
   ([ADR 0011](../adr/0011-a-private-wiring-network.md)).
 - **Bring `mediaplane-system` down before the stack.** While Mediaplane is on the wiring

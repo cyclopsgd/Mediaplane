@@ -84,12 +84,13 @@ host network, read-only mounts
   folder where the app mounts it. It belongs to the stack's project, and is removed when
   `chown` exits. Today only Seerr, which runs as uid 1000, needs it.
 - **The folder helper.** During `apply`, before Mediaplane adds a root folder to Sonarr or
-  Radarr, it runs
-  `docker compose run --rm --no-deps -T --user <uid>:<gid> --entrypoint mkdir <arr> -p -- <path>`.
-  That is a container of the arr's own image, with the arr's own settings from
-  `compose.yaml` and `compose.override.yaml`, running `mkdir` as the stack's `user:` to
-  make the root folder inside the data folder, where the arr mounts it. It is removed
-  when `mkdir` exits. It uses the Docker API calls that the ownership helper and
+  Radarr, or makes a library in Jellyfin, it runs
+  `docker compose run --rm --no-deps -T --user <uid>:<gid> --entrypoint mkdir <app> -p -- <path>`.
+  A library's folder is made when the library is created, and again before an update
+  that adds a path. That is a container of the app's own image, with the app's own
+  settings from `compose.yaml` and `compose.override.yaml`, running `mkdir` as the
+  stack's `user:` to make the folder inside the data folder, where the app mounts it. It
+  is removed when `mkdir` exits. It uses the Docker API calls that the ownership helper and
   Mediaplane's own join of the wiring network already make, so the proxy allows nothing
   new for it. T5 says what its environment holds.
 - **The first-run setup.** An app whose setup anyone who reaches it could finish, which
@@ -308,9 +309,9 @@ Controls today:
   with its key, and the sign-in that checks it. The session cookie qBittorrent answers
   with is dropped. Its preferences hold its own key too: Mediaplane keeps only the
   fields it manages, and never shows them.
-- The folders a root folder needs are made with a command that holds only their paths.
-  The throwaway container that runs it has the arr's own environment, its API key among
-  it, which `docker inspect` shows while it runs, as it does for the arr's own container.
+- The folders a root folder or a library needs are made with a command that holds only
+  their paths. The throwaway container that runs it has the app's own environment, its
+  API key among it, which `docker inspect` shows while it runs, as it does for the arr's own container.
 - Given to Compose in its environment or in the 0600 `generated/.env`, never on its
   command line.
 - Gluetun's control key reaches vpn-check's probe on its standard input, and the probe
@@ -595,6 +596,12 @@ Controls today:
 - Mediaplane signs in as the shared admin before it completes the wizard. If the first
   user isn't one the shared admin can sign in as, someone else set it, and Mediaplane
   leaves the wizard open, Jellyfin unpublished, and stops with what it found.
+- Before it publishes an app, Mediaplane asks the app once more whether its setup is
+  still open. It publishes the app only if it is not. If the app still looks open, or
+  can't be asked, the step fails and that app is not published.
+- An app with a first-run setup can't run inside another app's network. That app would
+  publish its ports, and Mediaplane could not hold them back, so `plan` fails with
+  `bootstrap.network-via`. No app in the catalog does this today.
 
 What remains:
 
@@ -602,7 +609,14 @@ What remains:
   can reach Jellyfin on the stack's networks. A compromised app could claim it first:
   Mediaplane's sign-in then fails, and `apply` stops, completing no wizard for it.
 - An appdata Mediaplane can't read says nothing: with Jellyfin's key stored, Mediaplane
-  takes the setup as done.
+  takes the setup as done, and `plan` warns (`bootstrap.unreadable`) that it can't tell.
+  Fix the file's ownership, or the user Mediaplane runs as.
+- `compose.override.yaml` can void the guarantee that Jellyfin is set up before it is
+  published. Mediaplane resets Jellyfin's `ports`, so ports the override adds to Jellyfin
+  are held back too. But `!reset` covers only `ports`. An override that gives Jellyfin
+  `network_mode: host`, or any network setting that publishes it through another
+  service, publishes it while its wizard is open. Keep such settings out of the
+  override.
 - Run outside Mediaplane (the ejectable command, or a restart of a published Jellyfin
   whose appdata was emptied), Jellyfin starts published with its wizard open: stop it
   before emptying its appdata, and set it up with `apply`.

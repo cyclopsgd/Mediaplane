@@ -50,7 +50,12 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
   ```
 
   `plan` lists it under `First-run setup:`, and never runs it. A Jellyfin whose wizard is
-  done, as its `system.xml` says, is never unpublished again.
+  done, as its `system.xml` says, is never unpublished again. Before `apply` publishes
+  Jellyfin, it asks once more whether its wizard is still open, and publishes it only if
+  it is not: if it still looks open, `apply` stops and does not publish it. If Mediaplane
+  can't read `system.xml`, with Jellyfin's key stored, `plan` warns
+  (`bootstrap.unreadable`) that it can't tell whether the wizard is open: fix the
+  ownership of `appdata/jellyfin`, or the user Mediaplane runs as.
 
 - **The shared admin** (`jellyfin.admin`) is the user the wizard made, named as
   `admin.username`. A change of `admin.username` or `admin.password` reaches it through

@@ -386,8 +386,9 @@ password, which are S3c's (and listed again below).
     the proxy's create, record and idempotent re-plan, and a link skipped when its
     arr's admin fails.
   - **Done in S5:** all five. The fakes take a provider without `enable` as off, and their
-    tests of another app read it without adding it; `secretOf` and `numberOf` live in
-    `servarr-provider.ts`; `serviceAddress` gives every app's address; and
+    tests of another app read it without adding it; `secretOf` is defined in
+    `catalog/_shared/secret.ts` and re-exported by `servarr-provider.ts`, and `numberOf`
+    lives in `servarr-provider.ts`; `serviceAddress` gives every app's address; and
     `packages/cli/src/run.test.ts` applies a stack with Prowlarr.
 
 **S6:**
@@ -547,6 +548,9 @@ password, which are S3c's (and listed again below).
     echo-server setup. Sharing it isn't a plain move;
   - `wireguard.ts` sets its "removed" flag before removing, so a failed removal isn't
     tried again. Nothing calls its `remove()` twice.
+- **A first-run setup that never gets ready waits twice its deadline** before it reports
+  (S5): the `ready` wait, then the `open()` re-check. Give the re-check a short per-call
+  deadline.
 - **Pins outside the catalog.** Renovate must also bump the images pinned in:
   - `Dockerfile` (`node`, `docker:*-cli`);
   - `deploy/mediaplane.compose.yaml` (`wollomatic/socket-proxy`);
