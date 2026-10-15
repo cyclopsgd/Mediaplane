@@ -9,6 +9,7 @@ import {
 } from '../http/client';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { runbookUrl } from '../runbooks';
+import { serviceOf } from './address';
 import { JoinFailed, OwnContainerUnknown, WiringRefused } from '../runtime/docker';
 import type { ContainerState, RuntimeError, Runtime } from '../runtime/types';
 import type { SecretStore } from '../secrets/store';
@@ -117,11 +118,6 @@ export function wiringTargets(ctx: WiringContext): string[] {
 /** Why Mediaplane can't ask `app`: its container isn't on the stack's wiring network. */
 export function notOnNetwork(app: ResolvedApp): string {
   return `${app.def.name}'s container is not on the stack's wiring network, so Mediaplane can't reach it`;
-}
-
-/** The service whose container serves the app's API: Gluetun's, for qBittorrent. */
-function serviceOf(app: ResolvedApp): string {
-  return app.networkVia ?? app.def.id;
 }
 
 /**

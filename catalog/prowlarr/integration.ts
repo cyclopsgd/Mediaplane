@@ -1,5 +1,6 @@
 import {
   provides,
+  serviceAddress,
   type AppApi,
   type DesiredResource,
   type ResourceSpec,
@@ -9,6 +10,8 @@ import { servarrIntegration } from '../_shared/servarr';
 import {
   createProvider,
   findProvider,
+  numberOf,
+  secretOf,
   settingOf,
   testProvider,
   textOf,
@@ -83,16 +86,12 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
     of: link.implementation,
   };
   const name = `${link.implementation} (Mediaplane)`;
-  const settingsOf = (desired: DesiredResource) => {
-    const key = desired.secrets.apiKey;
-    if (key === undefined) throw new Error(`${desired.name} has no apiKey to send`);
-    return {
-      prowlarrUrl: desired.fields.prowlarrUrl,
-      baseUrl: desired.fields.baseUrl,
-      apiKey: key,
-      syncCategories: String(desired.fields.syncCategories).split(',').map(Number),
-    };
-  };
+  const settingsOf = (desired: DesiredResource) => ({
+    prowlarrUrl: desired.fields.prowlarrUrl,
+    baseUrl: desired.fields.baseUrl,
+    apiKey: secretOf(desired, 'apiKey'),
+    syncCategories: String(desired.fields.syncCategories).split(',').map(Number),
+  });
   const topOf = (desired: DesiredResource) => ({
     name: desired.name,
     syncLevel: desired.fields.syncLevel,
@@ -103,17 +102,18 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
     secrets: ['apiKey'],
     requires: [`${link.arr}.admin`],
     desired: ({ stack, app, keys }) => {
-      const arr = stack.apps.find((a) => a.def.id === link.arr);
-      const port = arr?.containerPorts.web;
-      const own = app.containerPorts.web;
+      const arr = serviceAddress(
+        stack.apps.find((a) => a.def.id === link.arr),
+        'web',
+      );
+      const own = serviceAddress(app, 'web');
       const key = keys[link.arr]?.apiKey;
-      if (arr === undefined || port === undefined || own === undefined) return undefined;
-      if (key === undefined) return undefined;
+      if (arr === undefined || own === undefined || key === undefined) return undefined;
       return {
         name,
         fields: {
-          prowlarrUrl: `http://${app.def.id}:${String(own)}`,
-          baseUrl: `http://${arr.networkVia ?? arr.def.id}:${String(port)}`,
+          prowlarrUrl: `http://${own.host}:${String(own.port)}`,
+          baseUrl: `http://${arr.host}:${String(arr.port)}`,
           syncLevel: 'fullSync',
           syncCategories: categoriesOf(link.categories),
         },
@@ -172,13 +172,15 @@ const indexerProxy: ResourceSpec = {
   fields: ['host', 'requestTimeout', 'tags'],
   secrets: [],
   desired: ({ stack }) => {
-    const solver = stack.apps.find((a) => provides(a.def, 'cloudflare-solver'));
-    const port = solver?.containerPorts.api;
-    if (solver === undefined || port === undefined) return undefined;
+    const solver = serviceAddress(
+      stack.apps.find((a) => provides(a.def, 'cloudflare-solver')),
+      'api',
+    );
+    if (solver === undefined) return undefined;
     return {
       name: PROXY_NAME,
       fields: {
-        host: `http://${solver.def.id}:${String(port)}/`,
+        host: `http://${solver.host}:${String(solver.port)}/`,
         requestTimeout: REQUEST_TIMEOUT,
         tags: PROXY_TAG,
       },
@@ -192,13 +194,12 @@ const indexerProxy: ResourceSpec = {
       (await api.get(TAGS, z.array(tag))).map((t) => [t.id, t.label]),
     );
     const ids = tagIds.safeParse(held.tags);
-    const timeout = settingOf(held, 'requestTimeout');
     return {
       id: held.id,
       name: held.name,
       fields: {
         host: textOf(settingOf(held, 'host')),
-        requestTimeout: typeof timeout === 'number' ? timeout : 0,
+        requestTimeout: numberOf(settingOf(held, 'requestTimeout')),
         tags: (ids.success ? ids.data : [])
           .map((id) => labels.get(id) ?? String(id))
           .sort()

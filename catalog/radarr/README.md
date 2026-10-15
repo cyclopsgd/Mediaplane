@@ -17,7 +17,7 @@ LinuxServer.io image, unmodified.
 - **Health check:** `curl -fsS http://localhost:7878/ping`, every 30s (timeout 10s, 5 retries, 60s to start)
 - **Secrets:** `apiKey`: 32 random hex characters, generated once and kept in `state/secrets.json`
 - **API:** on its `web` port, which Mediaplane reaches over the stack's wiring network, with `apiKey` in the `X-Api-Key` header
-- **Managed in the app:** `radarr.admin`: fields `radarr.admin.username`; the secret `password`, checked and never shown. `radarr.download_client`: fields `radarr.download_client.host`, `radarr.download_client.port`, `radarr.download_client.useSsl`, `radarr.download_client.category`, `radarr.download_client.enable`; the secret `apiKey`, checked and never shown. `radarr.root_folder`: fields `radarr.root_folder.path`
+- **Managed in the app:** `radarr.admin`: fields `radarr.admin.username`; the secret `password`, checked and never shown. `radarr.download_client`: fields `radarr.download_client.host`, `radarr.download_client.port`, `radarr.download_client.useSsl`, `radarr.download_client.category`, `radarr.download_client.enable`; the secret `apiKey`, checked and never shown. `radarr.root_folder`: fields `radarr.root_folder.path`. `radarr.connection_jellyfin`: fields `radarr.connection_jellyfin.host`, `radarr.connection_jellyfin.port`, `radarr.connection_jellyfin.updateLibrary`; the secret `apiKey`, checked and never shown
 - **Needs:** `download-client`
 - **Provides:** `pvr:movies`
 - **Also turns on:** nothing

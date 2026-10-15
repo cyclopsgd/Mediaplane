@@ -1,8 +1,15 @@
-import type { DesiredResource, Fields, ResourceSpec } from '@mediaplane/engine';
+import {
+  serviceAddress,
+  type DesiredResource,
+  type Fields,
+  type ResourceSpec,
+} from '@mediaplane/engine';
 import { z } from 'zod';
 import {
   createProvider,
   findProvider,
+  numberOf,
+  secretOf,
   settingOf,
   testProvider,
   textOf,
@@ -41,10 +48,9 @@ export interface DownloadLink {
 
 /** The managed fields of a download client, from the app's settings. */
 function fieldsOf(held: Provider, link: DownloadLink): Fields {
-  const port = settingOf(held, 'port');
   return {
     host: textOf(settingOf(held, 'host')),
-    port: typeof port === 'number' ? port : 0,
+    port: numberOf(settingOf(held, 'port')),
     useSsl: settingOf(held, 'useSsl') === true,
     category: textOf(settingOf(held, link.setting)),
     enable: held.enable === true,
@@ -59,14 +65,12 @@ function settingsOf(
   desired: DesiredResource,
   link: DownloadLink,
 ): Record<string, unknown> {
-  const key = desired.secrets.apiKey;
-  if (key === undefined) throw new Error(`${desired.name} has no apiKey to send`);
   return {
     host: desired.fields.host,
     port: desired.fields.port,
     useSsl: desired.fields.useSsl,
     [link.setting]: desired.fields.category,
-    apiKey: key,
+    apiKey: secretOf(desired, 'apiKey'),
   };
 }
 
@@ -96,17 +100,17 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
     secrets: ['apiKey'],
     requires: [`qbittorrent.category_${link.category}`],
     desired: ({ stack, keys }) => {
-      const qbittorrent = stack.apps.find((app) => app.def.id === 'qbittorrent');
-      const port = qbittorrent?.containerPorts.web;
+      const at = serviceAddress(
+        stack.apps.find((app) => app.def.id === 'qbittorrent'),
+        'web',
+      );
       const key = keys.qbittorrent?.apiKey;
-      if (qbittorrent === undefined || port === undefined || key === undefined) {
-        return undefined;
-      }
+      if (at === undefined || key === undefined) return undefined;
       return {
         name: DOWNLOAD_CLIENT_NAME,
         fields: {
-          host: qbittorrent.networkVia ?? qbittorrent.def.id,
-          port,
+          host: at.host,
+          port: at.port,
           useSsl: false,
           category: link.category,
           enable: true,

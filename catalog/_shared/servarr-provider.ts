@@ -1,6 +1,7 @@
 import {
   AppApiError,
   type AppApi,
+  type DesiredResource,
   type KnownResource,
   type ObservedResource,
 } from '@mediaplane/engine';
@@ -49,6 +50,21 @@ export function settingOf(held: Provider, name: string): unknown {
 /** A setting's text, or "" when it holds none. */
 export function textOf(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+/** A setting's number, or 0 when it holds none. */
+export function numberOf(value: unknown): number {
+  return typeof value === 'number' ? value : 0;
+}
+
+/**
+ * The secret `name` that `desired` holds, to send in clear in a request body: one app's
+ * key, given to another. desired() gives it whenever it wants the provider.
+ */
+export function secretOf(desired: DesiredResource, name: string): string {
+  const value = desired.secrets[name];
+  if (value === undefined) throw new Error(`${desired.name} has no ${name} to send`);
+  return value;
 }
 
 /**

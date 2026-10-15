@@ -17,7 +17,7 @@ LinuxServer.io image, unmodified.
 - **Health check:** `curl -fsS http://localhost:8989/ping`, every 30s (timeout 10s, 5 retries, 60s to start)
 - **Secrets:** `apiKey`: 32 random hex characters, generated once and kept in `state/secrets.json`
 - **API:** on its `web` port, which Mediaplane reaches over the stack's wiring network, with `apiKey` in the `X-Api-Key` header
-- **Managed in the app:** `sonarr.admin`: fields `sonarr.admin.username`; the secret `password`, checked and never shown. `sonarr.download_client`: fields `sonarr.download_client.host`, `sonarr.download_client.port`, `sonarr.download_client.useSsl`, `sonarr.download_client.category`, `sonarr.download_client.enable`; the secret `apiKey`, checked and never shown. `sonarr.root_folder`: fields `sonarr.root_folder.path`
+- **Managed in the app:** `sonarr.admin`: fields `sonarr.admin.username`; the secret `password`, checked and never shown. `sonarr.download_client`: fields `sonarr.download_client.host`, `sonarr.download_client.port`, `sonarr.download_client.useSsl`, `sonarr.download_client.category`, `sonarr.download_client.enable`; the secret `apiKey`, checked and never shown. `sonarr.root_folder`: fields `sonarr.root_folder.path`. `sonarr.connection_jellyfin`: fields `sonarr.connection_jellyfin.host`, `sonarr.connection_jellyfin.port`, `sonarr.connection_jellyfin.updateLibrary`; the secret `apiKey`, checked and never shown
 - **Needs:** `download-client`
 - **Provides:** `pvr:tv`
 - **Also turns on:** nothing

@@ -10,6 +10,7 @@ import {
   nodeProbe,
   planStack,
   prestartFilesFor,
+  readResources,
   readSecretStore,
   renderEnvFile,
   secretValues,
@@ -144,6 +145,13 @@ const WIRED: KnownResources = {
     secrets: [],
     appliedAt: AT,
   },
+  'sonarr.connection_jellyfin': {
+    id: 1,
+    name: 'Jellyfin (Mediaplane)',
+    fields: { host: 'jellyfin', port: 8096, updateLibrary: true },
+    secrets: ['apiKey'],
+    appliedAt: AT,
+  },
 };
 
 /** All zeros: the keys currentHome stores are never printed, so their value is moot. */
@@ -229,6 +237,21 @@ async function currentHome(
       },
     ],
     rootFolders: [{ id: 1, path: '/data/media/tv' }],
+    connections: [
+      {
+        id: 1,
+        name: 'Jellyfin (Mediaplane)',
+        implementation: 'MediaBrowser',
+        onDownload: true,
+        fields: [
+          { name: 'host', value: 'jellyfin' },
+          { name: 'port', value: 8096 },
+          { name: 'useSsl', value: false },
+          { name: 'apiKey', value: JELLYFIN_KEY },
+          { name: 'updateLibrary', value: true },
+        ],
+      },
+    ],
   });
   apis.apps.set('qbittorrent', {
     ...freshAppState(),
@@ -366,7 +389,7 @@ describe('mediaplane plan', () => {
       'Secrets to generate: admin.password, gluetun.controlApiKey, qbittorrent.apiKey, sonarr.apiKey\n',
     );
     expect(term.stdout()).toContain(
-      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 1 app to set up, 9 wiring checks after the start.',
+      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 1 app to set up, 10 wiring checks after the start.',
     );
     expect(term.stdout()).toContain('+ generated/.env (secret values, not shown)\n');
   });
@@ -472,7 +495,7 @@ describe('mediaplane plan', () => {
     const term = capture();
     expect(await run(['plan', '--home', home], term.io, deps(runtime))).toBe(2);
     expect(term.stdout()).toBe(
-      'Not healthy yet: sonarr (unhealthy)\nWiring:\n  > after start sonarr.admin\n  > after start sonarr.download_client\n  > after start sonarr.root_folder\nPlan: 1 app to wait for, 3 wiring checks after the start.\n',
+      'Not healthy yet: sonarr (unhealthy)\nWiring:\n  > after start sonarr.admin\n  > after start sonarr.download_client\n  > after start sonarr.root_folder\n  > after start sonarr.connection_jellyfin\nPlan: 1 app to wait for, 4 wiring checks after the start.\n',
     );
     const json = capture();
     expect(await run(['plan', '--home', home, '--json'], json.io, deps(runtime))).toBe(2);
@@ -669,7 +692,7 @@ describe('mediaplane apply', () => {
     const first = capture();
     expect(await run(['apply', '--home', home, '--yes'], first.io, deps(docker))).toBe(0);
     expect(first.stdout()).toContain(
-      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 1 app to set up, 9 wiring checks after the start.',
+      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 1 app to set up, 10 wiring checks after the start.',
     );
     expect(first.stdout()).toContain('  done    images: images present\n');
     expect(first.stdout()).toMatch(
@@ -914,6 +937,7 @@ describe('mediaplane apply', () => {
       ['wire', 'sonarr.admin', 'done'],
       ['wire', 'sonarr.download_client', 'done'],
       ['wire', 'sonarr.root_folder', 'done'],
+      ['wire', 'sonarr.connection_jellyfin', 'done'],
       ['wire', '', 'done'],
       ['verify', '', 'done'],
     ]);
@@ -1058,6 +1082,59 @@ describe('mediaplane apply', () => {
   });
 });
 
+describe('mediaplane apply: Prowlarr in the stack', () => {
+  const WITH_PROWLARR = STACK.replace(
+    '  qbittorrent: {}',
+    '  qbittorrent: {}\n  prowlarr: {}',
+  );
+
+  it('links Prowlarr to Sonarr and makes its indexer proxy, records them, then leaves them as they are', async () => {
+    const home = await makeHome(WITH_PROWLARR);
+    const docker = fakeDocker(home);
+    const first = capture();
+    expect(await run(['apply', '--home', home, '--yes'], first.io, deps(docker))).toBe(0);
+    expect(first.stdout()).toContain(
+      '  done    wiring prowlarr.application_sonarr: created\n',
+    );
+    expect(first.stdout()).toContain(
+      '  done    wiring prowlarr.indexer_proxy: created\n',
+    );
+    const known = await readResources(home);
+    expect(known['prowlarr.application_sonarr']).toMatchObject({
+      name: 'Sonarr (Mediaplane)',
+      fields: { baseUrl: 'http://sonarr:8989', prowlarrUrl: 'http://prowlarr:9696' },
+      secrets: ['apiKey'],
+    });
+    expect(known['prowlarr.indexer_proxy']).toMatchObject({
+      name: 'Cloudflare (Mediaplane)',
+      fields: { host: 'http://byparr:8191/', requestTimeout: 60, tags: 'cloudflare' },
+      secrets: [],
+    });
+    // Sonarr's key went to Prowlarr; neither the output nor resources.json shows it.
+    const secrets = await secretsIn(home);
+    expectNoSecrets(first.stdout() + first.stderr(), secrets);
+    expectNoSecrets(JSON.stringify(known), secrets);
+    const again = capture();
+    expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
+    expect(again.stdout()).toBe('No changes.\n');
+  });
+
+  it("skips Prowlarr's link to Sonarr when Sonarr's admin fails, and still makes the proxy", async () => {
+    const home = await makeHome(WITH_PROWLARR);
+    // Sonarr never becomes ready, so nothing of it can be set: its admin fails.
+    apis.apps.set('sonarr', { ...freshAppState(), up: false });
+    const term = capture();
+    expect(
+      await run(['apply', '--home', home, '--yes'], term.io, deps(fakeDocker(home))),
+    ).toBe(1);
+    expect(term.stdout()).toContain(
+      '  skipped wiring prowlarr.application_sonarr: sonarr.admin failed\n',
+    );
+    expect(term.stdout()).toContain('  done    wiring prowlarr.indexer_proxy: created\n');
+    expect(apis.apps.get('prowlarr')?.applications).toEqual([]);
+  });
+});
+
 describe('mediaplane status', () => {
   async function appliedHome() {
     const home = await makeHome();
@@ -1176,7 +1253,7 @@ describe('mediaplane history', () => {
     const list = capture();
     expect(await run(['history', '--home', home], list.io, deps(docker))).toBe(0);
     expect(list.stdout()).toBe(
-      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 9 resources wired\n`,
+      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 10 resources wired\n`,
     );
     const one = capture();
     expect(await run(['history', id, '--home', home], one.io, deps(docker))).toBe(0);
