@@ -177,8 +177,8 @@ and the last four S9 items. Slice 3a (2026-10-10) added three S3 items, the S3d 
 three S8 items, two S7 items, an S9 item and an M2 item. Slice 3d (2026-10-10) added the
 last S3 item, the unscheduled list and extended two S9 items. Slice 3b (2026-10-10) added
 the S3c list, two S8 items and one unscheduled item. Slice 3c (2026-10-11) added the S4
-item and five S8 items. Slice 4 (2026-10-15) added three S8 items. Each slice plan must
-address the items for that slice.
+item, five S8 items, an S9 item and an M2 item. Slice 4 (2026-10-15) added four S8 items.
+Each slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -439,15 +439,16 @@ password, which are S3c's (and listed again below).
 - **Links to an app that leaves the stack.** Remove Sonarr or Radarr from `stack.yaml`,
   and Prowlarr keeps its link to it (S4), as the arrs keep their download client when
   qBittorrent goes; so does Prowlarr's indexer proxy, when the stack drops its
-  Cloudflare solver, and indexers tagged `cloudflare` then fail. Spec §8.1(3) step 4
-  asks that an app's links go with it. Decide whether `apply` removes what it made, or
-  drift reports it.
+  Cloudflare solver, and requests of indexers tagged `cloudflare` that meet a Cloudflare
+  challenge then fail. Spec §8.1(3) step 4 asks that an app's links go with it. Decide
+  whether `apply` removes what it made, or drift reports it.
 - **Settings Mediaplane manages in Prowlarr are put back.** A link's addresses, sync
   level or categories, or the proxy's host, timeout or tags, changed in Prowlarr's web
   UI, are undone by the next `apply` (S4). Keep mine must cover them.
-- **The indexer proxy is never checked once it is made.** It holds no secret, so `plan`
-  runs no test of it (S4): Prowlarr's would have the solver fetch a page of Prowlarr's
-  own service. Decide whether drift checks it, and how often.
+- **Mediaplane never tests the indexer proxy.** It holds no secret, so `plan` sends no
+  test of it (S4). Prowlarr tests it once itself, when it creates it, by having the
+  solver fetch a page of Prowlarr's own service. Decide whether drift tests it, and how
+  often.
 - **`plan`'s key checks can record a failing status in the app; drift runs them on a
   schedule.** A failing test of a download client (S3c) or a Prowlarr link (S4) records
   a failure in the app's status of it (`DownloadClientStatus`, `ApplicationStatus`),

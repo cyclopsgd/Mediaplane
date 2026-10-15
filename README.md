@@ -104,8 +104,10 @@ Secrets never go in `stack.yaml`: it only points to them, with `{ file: … }` o
 
 Mediaplane works like `terraform plan` and `apply`. `plan` validates `stack.yaml`, checks
 the host, renders the Compose project and diffs it against what is running. It shows you
-the changes and touches nothing in your stack. `apply` does the same, then makes those
-changes.
+the changes and touches nothing in your stack, apart from two small marks that checking a
+key can leave in an app: a category in qBittorrent, and a failure in an app's own status
+of a client or link. The [threat model](docs/security/threat-model.md#what-runs-and-who-can-reach-it)
+says more. `apply` does the same, then makes those changes.
 
 ```text
 stack.yaml + secrets/

@@ -246,6 +246,9 @@ What remains:
   compromised one can drive qBittorrent: add a torrent, or change its settings.
 - Prowlarr holds Sonarr's and Radarr's keys, as its links need, so a compromised Prowlarr
   can drive both: change their settings, or read their password hash (see T10).
+- A link stays in Prowlarr when its arr leaves the stack, and keeps that arr's key,
+  until it is removed by hand (in Prowlarr's web UI) or, if Slice 8 does that, by drift
+  detection.
 - The apps' calls to each other, and Mediaplane's to them, are plain HTTP on Docker's own
   networks, with keys in them. An app with Docker's default capabilities could try to
   intercept another's traffic on a network they share.

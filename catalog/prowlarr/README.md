@@ -54,8 +54,12 @@ folder, only its own config folder.
   sync, so that the indexers you add in Prowlarr reach the arr:
   - Prowlarr reaches the arr as `http://sonarr:8989` or `http://radarr:7878`, and the arr
     reaches Prowlarr back as `http://prowlarr:9696`, on the stack's network;
-  - it syncs Prowlarr's own categories for that app: TV (5000 and its subcategories) to
-    Sonarr, and Movies (2000 and its subcategories) to Radarr;
+  - it syncs Prowlarr's own default categories for that app:
+    - to Sonarr: 5000, 5010, 5020, 5030, 5040, 5045, 5050 and 5090, which is TV without
+      5060 and 5080 (sport and documentary). Sonarr's anime categories, 5070, stay as
+      Prowlarr set them, and are yours;
+    - to Radarr: 2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060, 2070, 2080 and 2090, which
+      is all of Movies;
   - its key is the arr's, which Prowlarr shows masked. `plan` and `apply` check it with
     Prowlarr's own test of the link, which calls the arr with the key and has the arr
     call Prowlarr back: a refused key is set again, and any other failure is Prowlarr's
@@ -69,7 +73,7 @@ folder, only its own config folder.
   makes in Prowlarr when it isn't there.
 - **Byparr.** Listing Prowlarr also turns on Byparr, the Cloudflare challenge solver,
   unless you list FlareSolverr instead or set `byparr: { enabled: false }`. Without a
-  solver, there is no indexer proxy.
+  solver, Mediaplane adds no indexer proxy.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its
   address.
 
@@ -130,6 +134,11 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 - **A link stays when its arr leaves the stack.** Remove Sonarr or Radarr from
   `stack.yaml`, and Mediaplane stops managing its link, but leaves it in Prowlarr, which
   then reports it as failing. Delete it in Prowlarr's web UI (Settings, then Apps).
+- **The indexer proxy stays when the stack drops its Cloudflare solver.** With no Byparr
+  and no FlareSolverr, Mediaplane stops managing the proxy, but leaves it in Prowlarr,
+  which still sends the challenged requests of indexers tagged `cloudflare` to it. Delete
+  it in Prowlarr's web UI (Settings, then Indexers, under Indexer Proxies), or turn a
+  solver on again.
 - **Set up before Slice 3a.** If Prowlarr first started before Mediaplane wrote its
   `config.xml`, the file has no API key, and `plan` stops with `prowlarr.not-seeded`. To
   fix it, stop Prowlarr, move the file aside, and apply again: Mediaplane writes a new

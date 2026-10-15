@@ -37,9 +37,9 @@ Seerr, version 3.5 or later, is M1's requests app (spec §2.1, §6.1, §6.5):
   `media_server` later as setting Seerr up again (spec §10).
 - **Pinned, with a version floor.** Seerr's settings and library API changed by 3.5, so
   it stays pinned at 3.5 or later, and every bump runs the end-to-end suite.
-- **The key does nothing until a first user exists.** So the wiring (Slice 6) starts
-  with that first sign-in. Until then, Seerr's setup page is open to whoever reaches it
-  first (see [Seerr's README](../../catalog/seerr/README.md)).
+- **The key does nothing until a first user exists.** So the wiring (Slice 6, or
+  Slice 7 with Plex) starts with that first sign-in. Until then, Seerr's setup page is
+  open to whoever reaches it first (see [Seerr's README](../../catalog/seerr/README.md)).
 - **A fixed uid.** Seerr's image runs as uid 1000, so Mediaplane gives its appdata folder
   to 1000:1000 before it starts (Slice 2b).
 - **One API quirk to respect.** Once the media server is configured, the wiring must

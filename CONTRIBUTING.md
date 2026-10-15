@@ -51,9 +51,10 @@ through Gluetun, runs a WireGuard server too, so it needs the module as well.
 
 The indexers test (`test/e2e/indexers.e2e.test.ts`) serves made-up indexers of its own,
 from a container outside the stack, so it never touches a real one. It needs the
-internet all the same, as the apply test does: Byparr's health check loads a web page,
-and Prowlarr tests its new proxy by having Byparr fetch a page of Prowlarr's own
-service.
+internet all the same, and so does the apply test (`test/e2e/apply.e2e.test.ts`), which
+makes Prowlarr's proxy too. They are the two tests that run Prowlarr: Byparr's health
+check loads a web page, and Prowlarr tests its new proxy by having Byparr fetch a page
+of Prowlarr's own service (`prowlarr.servarr.com`).
 
 Before committing, run
 `pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check`.

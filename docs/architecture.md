@@ -10,7 +10,10 @@ You describe the stack you want in one file, `stack.yaml`. Mediaplane then works
 `terraform plan` and `apply`:
 
 - `plan` works out what would change, and changes nothing in your stack (in the image,
-  it joins the stack's wiring network, to ask the apps: see [The wiring](#the-wiring));
+  it joins the stack's wiring network, to ask the apps: see [The wiring](#the-wiring)).
+  Checking a key can leave two small marks in an app: a post-import category made in
+  qBittorrent, and a failure recorded in an app's status of a client or link. The
+  [threat model](security/threat-model.md#what-runs-and-who-can-reach-it) says more;
 - `apply` makes those changes, then plans again to check that nothing is left.
 
 What it writes is an ordinary Docker Compose project, which runs without Mediaplane.
@@ -373,9 +376,11 @@ mediaplane (the stack)
     a link's key is the same test: Prowlarr calls the arr with the key, and the arr calls
     Prowlarr back.
   - The indexer proxy is the stack's Cloudflare solver, Byparr or FlareSolverr, as a
-    proxy of type FlareSolverr, tagged `cloudflare`. Prowlarr's test of a new proxy has
-    the solver fetch a page of Prowlarr's own service on the internet. The proxy holds no
-    secret, so nothing checks it again.
+    proxy of type FlareSolverr, tagged `cloudflare`. Prowlarr tests it once, itself, when
+    it creates it: it has the solver fetch a page of Prowlarr's own service on the
+    internet, so that `apply` needs the internet. The proxy holds no secret, so
+    Mediaplane never runs that test, and `plan` never sends it; `plan` does compare the
+    proxy's host, timeout and tags on every run.
   - The indexers are yours: you add them in Prowlarr, which syncs them to the arrs, and
     sends those tagged `cloudflare` through the solver when their site answers with a
     challenge.

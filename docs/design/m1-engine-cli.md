@@ -1328,11 +1328,12 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   (Prowlarr's default), and its `tags` `cloudflare`, compared as labels. Apply asks
   Prowlarr for the tag as it makes or updates the proxy: Prowlarr gives back the one it
   has, or makes it.
-  - It holds no secret, so nothing checks it once it is made (§6.3). §6.2's secret-check
-    column names Prowlarr's test of it; Prowlarr runs that test itself, as it saves a new
-    proxy: it has the solver fetch `https://prowlarr.servarr.com/v1/ping`. So the `apply`
-    that makes the proxy needs that page within the solver's reach, and `plan` never runs
-    the test.
+  - It holds no secret, so Mediaplane never tests it (§6.3). §6.2's secret-check column
+    names Prowlarr's test of it; Prowlarr runs that test itself, once, when it creates
+    the proxy: it has the solver fetch `https://prowlarr.servarr.com/v1/ping`. So the
+    `apply` that makes the proxy needs that page within the solver's reach, and `plan`
+    never sends the test. `plan` still reads the proxy and compares its host, timeout
+    and tags.
   - FlareSolverr gets a health check (`/health`), so that `up --wait` waits for it before
     the wire step makes the proxy. Byparr has one already.
 - **Indexers stay yours** (§6.2). The end-to-end test adds made-up Torznab indexers,
@@ -1346,7 +1347,8 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   Mediaplane doesn't remove what it made yet. Slice 8 decides, with §8.1(3) step 4.
 - **One way to wire a Servarr provider.** The arrs' download client and Prowlarr's links
   and proxy share how they are found (by id, else by name, among the app's providers of
-  that kind), made from the app's template, updated, and tested.
+  that kind), made from the app's template, and updated; the download client and the
+  links are also tested.
 - **No new Docker API call.** The new calls are the apps' APIs over the wiring network
   (§7.2(2)).
 - **The slices after S4 are renumbered** (the owner's decision, 2026-10-15): S5 Jellyfin,
