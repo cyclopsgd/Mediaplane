@@ -48,22 +48,48 @@ folder, only its own config folder.
   web UI is published on. `localhost` and `127.0.0.1` always work. To use another name,
   such as your host's, set the variable yourself in `apps.prowlarr.env`, keeping `prowlarr` in
   the list, with commas between the names.
+- **Its links to Sonarr and Radarr** (`prowlarr.application_sonarr` and
+  `prowlarr.application_radarr`). For each of them in the stack, `apply` adds an
+  application to Prowlarr, `Sonarr (Mediaplane)` or `Radarr (Mediaplane)`, with full
+  sync, so that the indexers you add in Prowlarr reach the arr:
+  - Prowlarr reaches the arr as `http://sonarr:8989` or `http://radarr:7878`, and the arr
+    reaches Prowlarr back as `http://prowlarr:9696`, on the stack's network;
+  - it syncs Prowlarr's own categories for that app: TV (5000 and its subcategories) to
+    Sonarr, and Movies (2000 and its subcategories) to Radarr;
+  - its key is the arr's, which Prowlarr shows masked. `plan` and `apply` check it with
+    Prowlarr's own test of the link, which calls the arr with the key and has the arr
+    call Prowlarr back: a refused key is set again, and any other failure is Prowlarr's
+    own message. While the arr isn't up, or its admin login is yet to be set, `plan`
+    leaves that check to `apply`;
+  - its other settings, such as its tags, are yours: `apply` leaves them as they are.
+- **The indexer proxy** (`prowlarr.indexer_proxy`). `apply` adds the stack's Cloudflare
+  solver to Prowlarr as an indexer proxy, `Cloudflare (Mediaplane)`, of type FlareSolverr,
+  which Byparr answers too: `http://byparr:8191/`, or `http://flaresolverr:8191/` when you
+  list FlareSolverr, with a 60-second timeout and the tag `cloudflare`, which `apply`
+  makes in Prowlarr when it isn't there.
 - **Byparr.** Listing Prowlarr also turns on Byparr, the Cloudflare challenge solver,
-  unless you list FlareSolverr instead or set `byparr: { enabled: false }`.
+  unless you list FlareSolverr instead or set `byparr: { enabled: false }`. Without a
+  solver, there is no indexer proxy.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its
   address.
 
 ## What stays yours
 
-Mediaplane never adds indexers. You add them once in Prowlarr, and from Slice 4 they sync
-to Sonarr and Radarr.
+Mediaplane never adds indexers. You add them once in Prowlarr, and it syncs them to Sonarr
+and Radarr, where they show as `<name> (Prowlarr)`. Change them in Prowlarr, not in the
+arrs: Prowlarr puts its own settings back.
+
+To send an indexer through the Cloudflare solver, give it the tag `cloudflare` in
+Prowlarr (Indexers, then edit the indexer, then Tags). Prowlarr sends an indexer through a
+proxy only when they share a tag. Even then it asks the indexer itself first, and turns
+to the solver only when the site answers with a Cloudflare challenge.
 
 ## Not built yet
 
-- **Slice 4:**
-  - the links to Sonarr and Radarr, with full sync;
-  - Byparr registered as Prowlarr's indexer proxy, with the tag `cloudflare`. Tag your
-    Cloudflare-protected indexers `cloudflare` to route them through it.
+- **Slice 8:** keeping a setting of your own in place of one Mediaplane manages ("Keep
+  mine"). Until then, the next `apply` puts back a link's addresses, sync level or
+  categories, or the proxy's host, timeout or tags, changed in Prowlarr's web UI. `plan`
+  shows it first.
 
 See the [roadmap](../../docs/plans/m1-roadmap.md).
 
@@ -95,6 +121,15 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Known issues
 
+- **The indexer proxy needs the internet to be made.** Prowlarr tests a new proxy as it
+  saves it: it has the solver fetch a page of Prowlarr's own service,
+  `https://prowlarr.servarr.com/v1/ping`. Without the internet, `apply` fails with
+  `Unable to connect to proxy: HTTP request failed: [502:BadGateway]`; the
+  [runbook](../../docs/runbooks/wiring-failed.md) says what to do. Byparr needs the
+  internet anyway: its health check loads a web page.
+- **A link stays when its arr leaves the stack.** Remove Sonarr or Radarr from
+  `stack.yaml`, and Mediaplane stops managing its link, but leaves it in Prowlarr, which
+  then reports it as failing. Delete it in Prowlarr's web UI (Settings, then Apps).
 - **Set up before Slice 3a.** If Prowlarr first started before Mediaplane wrote its
   `config.xml`, the file has no API key, and `plan` stops with `prowlarr.not-seeded`. To
   fix it, stop Prowlarr, move the file aside, and apply again: Mediaplane writes a new
@@ -109,7 +144,7 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   ```
 
   Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
-  `sudo mv`. The old file keeps your settings, to enter again in Prowlarr. Slice 7 does
+  `sudo mv`. The old file keeps your settings, to enter again in Prowlarr. Slice 8 does
   this for you.
 
   If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the

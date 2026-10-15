@@ -23,6 +23,6 @@ export default defineApp({
     startPeriod: '120s',
   },
   env: () => ({ VERSION: 'docker' }),
-  login: { comingIn: 'Slice 5' },
+  login: { comingIn: 'Slice 7' },
   experimental: false,
 });

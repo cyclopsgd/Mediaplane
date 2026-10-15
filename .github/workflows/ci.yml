@@ -137,7 +137,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Native on each runner: no emulation. A multi-arch manifest comes with publishing (S8).
+      # Native on each runner: no emulation. A multi-arch manifest comes with publishing (S9).
       # The image scanned here and the one the e2e tests build are two builds of the same
       # Dockerfile. They are the same image only because every input of the Dockerfile is
       # pinned; an unpinned layer would let them differ.

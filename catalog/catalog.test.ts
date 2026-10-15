@@ -62,6 +62,18 @@ describe('catalog', () => {
     for (const app of catalog) visit(app.id, []);
   });
 
+  it('names the slice that brings each login still to come', () => {
+    expect(
+      Object.fromEntries(
+        catalog.flatMap((app) =>
+          app.login === undefined || app.login === 'shared'
+            ? []
+            : [[app.id, app.login.comingIn]],
+        ),
+      ),
+    ).toEqual({ jellyfin: 'Slice 5', plex: 'Slice 7', seerr: 'Slice 6' });
+  });
+
   it("gives each Cloudflare solver a health check, and its API on the port Prowlarr's proxy names", () => {
     // Prowlarr tests a new indexer proxy as it saves it: up --wait must wait until the
     // solver answers, or the wire step's create would race its start.

@@ -940,7 +940,7 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 
 - **Where the deployment lives.** It is `deploy/mediaplane.compose.yaml`,
   started with `docker compose -f deploy/mediaplane.compose.yaml up -d`. Until
-  images are published (S8), it needs `MEDIAPLANE_IMAGE`, the image to run. It
+  images are published (S9), it needs `MEDIAPLANE_IMAGE`, the image to run. It
   also needs `DOCKER_GID`, the group that owns the Docker socket.
 - **The host helper does more than addresses.** Inside the container,
   Mediaplane can see neither the host's ports, nor its folders outside the home,
@@ -960,15 +960,15 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 - **Trivy for Mediaplane's own image runs from S2c** (§7.2(7)), and so does
   `pnpm audit` of the CLI's production dependencies, which the image scan can't
   see because they are bundled. Neither sees Node itself. Scanning the catalog
-  images, the SBOM and provenance stay in S8.
+  images, the SBOM and provenance stay in S9.
 - **CI runs on arm64 from S2c** (§8.2), on GitHub's `ubuntu-24.04-arm` runners,
   which are free because the repo is public. The image is built, scanned and
   tested end to end natively on each architecture. A multi-arch manifest comes
-  with publishing, in S8.
+  with publishing, in S9.
 - **Generated references from S2c.** The `stack.yaml` reference, its JSON Schema at
   `docs/reference/stack.schema.json` (§4.2, §9) and the CLI reference are generated
-  from code, and CI fails when they are stale. They move here from S8, by the owner's
-  decision. The `--json` shapes stay in S8.
+  from code, and CI fails when they are stale. They move here from S9, by the owner's
+  decision. The `--json` shapes stay in S9.
 
 ### Slice 3a: shared admin and pre-start files (2026-10-10)
 
@@ -1000,7 +1000,7 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   without `ApiKey`, a `qBittorrent.conf` without `WebUI\APIKey`, or Gluetun's
   `auth/config.toml` without Mediaplane's role (`name = "mediaplane"`) fails `plan`
   with `<app>.not-seeded`, and its hint gives the steps. A file Mediaplane can't read
-  counts as seeded, because there is no way to tell. Slice 7 automates the fix, with
+  counts as seeded, because there is no way to tell. Slice 8 automates the fix, with
   the rest of "restore the key at the source" (§6.3).
 - **The shared admin (§6.1).** `admin.username` is 3 to 32 letters, digits, `.`, `_`
   or `-`. A password of your own must be at least 12 characters
@@ -1271,7 +1271,9 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   there. The arr's test also makes a missing post-import category (Sonarr's
   `tvImportedCategory`, Radarr's `movieImportedCategory`), which Mediaplane doesn't
   manage, so a `plan` makes one again in qBittorrent when you set it in the arr and later
-  delete it in qBittorrent.
+  delete it in qBittorrent. A test that fails also records a failure in the arr's status
+  of that client (`DownloadClientStatus`), as a test from the arr's web UI does, and a
+  later pass resets it (probed in Slice 4).
 - **Sonarr's and Radarr's root folder** (§6.2): `<arr>.root_folder`, `/data/media/tv` or
   `/data/media/movies`, known by its path (the arrs can't change one). The arr needs the
   folder to exist, so the wire step makes it first, with `mkdir -p` in a throwaway
@@ -1295,3 +1297,57 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   a password JSON-escaped inside a form field, or a JSON body quoted in an HTML page.
 - **No new Docker API call.** The folder helper is a `compose run`, as the ownership
   helper and vpn-check's probe are; the socket proxy allows nothing new (§7.2(2)).
+
+### Slice 4: indexers (2026-10-15)
+
+- **Prowlarr's links to Sonarr and Radarr** (§6.2): `prowlarr.application_sonarr` and
+  `prowlarr.application_radarr`, Prowlarr's applications `Sonarr (Mediaplane)` and
+  `Radarr (Mediaplane)`, each while that arr is in the stack.
+  - The managed fields are §6.2's: `prowlarrUrl` (`http://prowlarr:9696`, how the arr
+    reaches Prowlarr back), `baseUrl` (`http://sonarr:8989` or `http://radarr:7878`, how
+    Prowlarr reaches the arr), `syncLevel` (`fullSync`) and `syncCategories`, Prowlarr
+    2.6's own default categories for that app, kept as one sorted list. `apiKey` is the
+    link's secret, not a compared field, as qBittorrent's key is the download client's
+    (Slice 3c): Prowlarr shows it masked.
+  - The key is checked with Prowlarr's own test of the link it holds, sent masked with
+    its id, which calls the arr with the key and has the arr call Prowlarr back: a
+    failure that names `ApiKey` is an update; any other is Prowlarr's own message. A link
+    is made from Prowlarr's template with `forceSave`, which still tests a new one, and
+    updated with `forceSave`, which doesn't. A test that fails records a failure in
+    Prowlarr's status of that link (`ApplicationStatus`), as a test from its web UI does,
+    and a later pass resets it, so a `plan` that finds a key refused leaves that record
+    (probed).
+  - Each `requires` its arr's `admin`, the first thing Mediaplane checks in the arr. While
+    the arr isn't up, refuses its key, or has its admin yet to be set, `plan` leaves the
+    link's key unchecked, rather than report Prowlarr's test failing on the arr, and the
+    wire step skips the link when the arr's admin fails (§5.1).
+- **The indexer proxy** (§6.2): `prowlarr.indexer_proxy`, named `Cloudflare (Mediaplane)`
+  whichever solver runs, so a change of solver is an update, and lost state finds it by
+  name. Its type is FlareSolverr, which Byparr answers too. Its `host` is
+  `http://byparr:8191/`, or `http://flaresolverr:8191/`, its `requestTimeout` 60 seconds
+  (Prowlarr's default), and its `tags` `cloudflare`, compared as labels. Apply asks
+  Prowlarr for the tag as it makes or updates the proxy: Prowlarr gives back the one it
+  has, or makes it.
+  - It holds no secret, so nothing checks it once it is made (§6.3). §6.2's secret-check
+    column names Prowlarr's test of it; Prowlarr runs that test itself, as it saves a new
+    proxy: it has the solver fetch `https://prowlarr.servarr.com/v1/ping`. So the `apply`
+    that makes the proxy needs that page within the solver's reach, and `plan` never runs
+    the test.
+  - FlareSolverr gets a health check (`/health`), so that `up --wait` waits for it before
+    the wire step makes the proxy. Byparr has one already.
+- **Indexers stay yours** (§6.2). The end-to-end test adds made-up Torznab indexers,
+  served by a container of its own outside the stack, and never a real one: Prowlarr
+  syncs them to Sonarr and Radarr, and fetches those tagged `cloudflare`, behind a
+  stand-in Cloudflare challenge, through Byparr's browser, then FlareSolverr's (§10,
+  Byparr's risks). Byparr's health check and Prowlarr's test of the proxy need the
+  internet.
+- **A link stays when its arr leaves the stack**, and Prowlarr's indexer proxy, when the
+  stack drops its Cloudflare solver, as a download client stays when qBittorrent leaves:
+  Mediaplane doesn't remove what it made yet. Slice 8 decides, with §8.1(3) step 4.
+- **One way to wire a Servarr provider.** The arrs' download client and Prowlarr's links
+  and proxy share how they are found (by id, else by name, among the app's providers of
+  that kind), made from the app's template, updated, and tested.
+- **No new Docker API call.** The new calls are the apps' APIs over the wiring network
+  (§7.2(2)).
+- **The slices after S4 are renumbered** (the owner's decision, 2026-10-15): S5 Jellyfin,
+  S6 requests, S7 Plex, S8 drift and S9 release. The roadmap keeps the history.

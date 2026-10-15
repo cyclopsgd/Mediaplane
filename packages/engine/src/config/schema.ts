@@ -231,7 +231,7 @@ const stackShape = {
   plex: z
     .strictObject({
       token: secretRefSchema.describe(
-        'Your Plex token, as a secret reference. Checked to exist, but not used yet: claiming the server arrives in Slice 5.',
+        'Your Plex token, as a secret reference. Checked to exist, but not used yet: claiming the server arrives in Slice 7.',
       ),
     })
     .optional()
@@ -277,13 +277,13 @@ const stackShape = {
     )
     .default({})
     .describe(
-      'Keep mine values, by <app>.<resource>.<field>. Not used yet: drift detection arrives in Slice 7.',
+      'Keep mine values, by <app>.<resource>.<field>. Not used yet: drift detection arrives in Slice 8.',
     ),
   managed_by: z
     .enum(['mediaplane', 'external'])
     .default('mediaplane')
     .describe(
-      'external: Mediaplane never writes this file, for when automation such as Ansible owns it. Today only init writes it, and init never overwrites. Matters from Slice 7.',
+      'external: Mediaplane never writes this file, for when automation such as Ansible owns it. Today only init writes it, and init never overwrites. Matters from Slice 8.',
     ),
 };
 

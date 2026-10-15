@@ -64,16 +64,20 @@ LinuxServer.io image, unmodified.
 - **Its root folder** (`radarr.root_folder`), `/data/media/movies`. `apply` makes the
   folder first, as the stack's `user:`, in a throwaway Radarr container, then adds it to
   Radarr. It is in the data folder, with the downloads, so an import is a hard link.
+- **Prowlarr's link to it.** With Prowlarr in the stack, `apply` adds Radarr to Prowlarr
+  (`prowlarr.application_radarr`, see [Prowlarr's README](../prowlarr/README.md)), with
+  Radarr's key. Prowlarr then adds the indexers you add in Prowlarr to Radarr, as
+  `<name> (Prowlarr)`, and keeps them in step: change them in Prowlarr, not here.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its
   address.
 
 ## Not built yet
 
-The rest of the wiring arrives in Slices 4 to 6 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
+The rest of the wiring arrives in Slices 5 to 7 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
 
-- **Slice 4:** Prowlarr's link to it.
-- **Slice 5:** the media server connection that refreshes your library on import.
+- **Slice 5:** the Jellyfin connection that refreshes your library on import.
 - **Slice 6:** Seerr's link to it.
+- **Slice 7:** the same connection for Plex.
 
 ## Changing it
 
@@ -118,7 +122,7 @@ The rest of the wiring arrives in Slices 4 to 6 (see the [roadmap](../../docs/pl
   ```
 
   Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
-  `sudo mv`. The old file keeps your settings, to enter again in Radarr. Slice 7 does
+  `sudo mv`. The old file keeps your settings, to enter again in Radarr. Slice 8 does
   this for you.
 
   If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the

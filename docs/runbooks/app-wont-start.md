@@ -44,6 +44,11 @@
   `vpn.private_key` points to (`secrets/wg.key` in the starter), `vpn.provider` and
   `vpn.addresses`, and read Gluetun's log for the VPN's own error (see
   [Gluetun's README](../../catalog/gluetun/README.md)).
+- **Byparr never becomes healthy.** Its health check loads a web page from the internet,
+  so Byparr is marked unhealthy, and `apply` fails naming `byparr`, when it has no way
+  out. Look for what keeps it off the internet, such as a firewall or a DNS that fails.
+  A Cloudflare solver is of no use without the internet: to run without one, and so
+  without Prowlarr's indexer proxy, set `byparr: { enabled: false }`.
 - **The port is taken.** `plan` says the port "is already in use on this host"
   (`preflight.port-in-use`). Stop whatever holds it, or set `apps.<app>.port`.
 - **The app can't write its folders.** The data folder must be writable by `stack.yaml`'s

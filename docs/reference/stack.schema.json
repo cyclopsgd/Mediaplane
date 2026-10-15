@@ -169,7 +169,7 @@
               "additionalProperties": false
             }
           ],
-          "description": "Your Plex token, as a secret reference. Checked to exist, but not used yet: claiming the server arrives in Slice 5."
+          "description": "Your Plex token, as a secret reference. Checked to exist, but not used yet: claiming the server arrives in Slice 7."
         }
       },
       "required": ["token"],
@@ -996,7 +996,7 @@
     },
     "overrides": {
       "default": {},
-      "description": "Keep mine values, by <app>.<resource>.<field>. Not used yet: drift detection arrives in Slice 7.",
+      "description": "Keep mine values, by <app>.<resource>.<field>. Not used yet: drift detection arrives in Slice 8.",
       "type": "object",
       "propertyNames": {
         "type": "string",
@@ -1008,7 +1008,7 @@
     },
     "managed_by": {
       "default": "mediaplane",
-      "description": "external: Mediaplane never writes this file, for when automation such as Ansible owns it. Today only init writes it, and init never overwrites. Matters from Slice 7.",
+      "description": "external: Mediaplane never writes this file, for when automation such as Ansible owns it. Today only init writes it, and init never overwrites. Matters from Slice 8.",
       "type": "string",
       "enum": ["mediaplane", "external"]
     }

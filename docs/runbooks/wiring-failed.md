@@ -2,9 +2,9 @@
 
 Wiring is what `apply` does through each app's API once the apps run: today, the shared
 admin login in Sonarr, Radarr, Prowlarr and qBittorrent, qBittorrent's settings and its
-`tv` and `movies` categories, and in Sonarr and Radarr, qBittorrent as their download
-client and their root folders. Later slices add Prowlarr's links, the media server and
-the requests app.
+`tv` and `movies` categories, in Sonarr and Radarr, qBittorrent as their download client
+and their root folders, and in Prowlarr, its links to Sonarr and Radarr and its indexer
+proxy. Later slices add the media server and the requests app.
 
 ## Symptoms
 
@@ -37,9 +37,10 @@ the requests app.
   also prints its message as an `error:` line, with a hint.
 
   A resource that needs a failed one is `skipped`, and the others still run. Sonarr's
-  download client needs qBittorrent's `tv` category, and Radarr's its `movies` one. So
-  when qBittorrent refuses the key, its resources fail and the download client is skipped
-  (the wiring lines only):
+  download client needs qBittorrent's `tv` category, and Radarr's its `movies` one;
+  Prowlarr's link to Sonarr needs `sonarr.admin`, and its link to Radarr `radarr.admin`.
+  So when qBittorrent refuses the key, its resources fail and the download client is
+  skipped (the wiring lines only):
 
   ```console
   Wiring the apps…
@@ -49,6 +50,21 @@ the requests app.
     done    wiring sonarr.admin: unchanged
     skipped wiring sonarr.download_client: qbittorrent.category_tv failed
     done    wiring sonarr.root_folder: unchanged
+  ```
+
+  A resource can fail on its own, while its app's others are done. Here Prowlarr couldn't
+  add its indexer proxy, because Byparr couldn't reach the page Prowlarr's test of a new
+  proxy asks for (trimmed):
+
+  ```console
+  Wiring the apps…
+    …
+    done    wiring prowlarr.admin: unchanged
+    done    wiring prowlarr.application_sonarr: unchanged
+    done    wiring prowlarr.application_radarr: unchanged
+    failed  wiring prowlarr.indexer_proxy: Prowlarr at http://prowlarr:9696 (172.20.0.4) refused the request (HTTP 400): Host: Unable to connect to proxy: HTTP request failed: [502:BadGateway] [POST] at [http://byparr:8191/v1]. Check the log surrounding this error for details (POST /api/v1/indexerproxy)
+    failed  wiring
+    skipped verify
   ```
 
 - **`mediaplane plan`** warns with the same message, once for the app, and exits 2. It
@@ -71,7 +87,10 @@ the requests app.
 - **`apply` fails at verify** with `changes remain after apply: sonarr.admin (update)`:
   the app took the change, then kept something else. For a download client, verify runs
   the arr's own test of it: a failure there is `sonarr.download_client (unknown: …)`,
-  with the arr's own words after `tested qBittorrent (Mediaplane), and it failed:`.
+  with the arr's own words after `tested qBittorrent (Mediaplane), and it failed:`. For
+  Prowlarr's links, it runs Prowlarr's test: a failure is
+  `prowlarr.application_sonarr (unknown: …)`, with Prowlarr's own words after
+  `tested Sonarr (Mediaplane), and it failed:`.
 - **`apply` stops at the containers step** with `could not leave the wiring network …`,
   `docker network inspect failed: …`, or
   `docker network inspect printed a line that is not …`. Before starting the apps, it
@@ -131,7 +150,7 @@ differ, and a `reason` when it is `unknown`.
     either way: stop the app, set `<ApiKey>` in `appdata/<app>/config.xml` to
     `<app>.apiKey` from `state/secrets.json` (use `sudo` if the file isn't yours), and
     start it. If `plan` says `<app>.not-seeded`, follow the app's README.
-  - Slice 7 restores a key at its source for you.
+  - Slice 8 restores a key at its source for you.
 - **`refused the request (HTTP 403)`, with
   `banned after too many failed authentication attempts`** (`wire.auth`). qBittorrent
   stops an address from signing in for an hour after five failed sign-ins in a row.
@@ -167,9 +186,37 @@ differ, and a `reason` when it is `unknown`.
   give it to the stack's user, such as
   `sudo chown <uid>:<gid> /srv/data/media` with the ids of `user:` in `stack.yaml`, then
   run `apply` again.
+- **`Host: Unable to connect to proxy`, for `prowlarr.indexer_proxy`.** Prowlarr tests a
+  new indexer proxy as it saves it: it has the Cloudflare solver fetch
+  `https://prowlarr.servarr.com/v1/ping`, a page of Prowlarr's own service.
+  - With `HTTP request failed: [502:BadGateway]`, the solver answered, but couldn't load
+    that page. Byparr's log says why: run
+    `docker compose -p mediaplane logs --tail 20 byparr`, and look for
+    `Could not reach the target`. Look for what keeps the solver off the internet, such
+    as a firewall, a DNS that fails, or a `compose.override.yaml` that changes its
+    network, then run `apply` again. With FlareSolverr, read its log the same way.
+  - With `Resource temporarily unavailable (byparr:8191)` or `Connection refused`,
+    Prowlarr couldn't reach the solver at all: check that it runs and is healthy
+    (`mediaplane status byparr`).
+- **`tested Sonarr (Mediaplane), and it failed`** (or Radarr). Prowlarr's own test of its
+  link failed for another reason than the key, which Mediaplane would set again itself.
+  Prowlarr's words say which way:
+  - `BaseUrl: Unable to complete application test, cannot connect to Sonarr`: Prowlarr
+    can't reach Sonarr at `http://sonarr:8989`. Check that Sonarr runs and is healthy.
+  - `ProwlarrUrl: Prowlarr URL is invalid, Sonarr cannot connect to Prowlarr`: Sonarr
+    can't reach Prowlarr back at `http://prowlarr:9696`.
+
+  A `compose.override.yaml` that takes either app off the stack's network breaks both.
+  Fix that, then run `apply` again. When `apply` makes the link, the same words follow
+  `refused the request (HTTP 400):`, since Prowlarr tests a new link before it saves it.
+  While Sonarr isn't up, or its admin login is yet to be set, `plan` doesn't run the
+  test.
+
 - **`refused the request (HTTP 400): Name: Should be unique`.** Sonarr or Radarr already
-  has a download client called `qBittorrent (Mediaplane)` that isn't a qBittorrent one.
-  Rename or remove it in the app's web UI, then run `apply` again.
+  has a download client called `qBittorrent (Mediaplane)` that isn't a qBittorrent one,
+  or Prowlarr has an application called `Sonarr (Mediaplane)` or `Radarr (Mediaplane)`
+  of another kind, or an indexer proxy called `Cloudflare (Mediaplane)` that isn't a
+  FlareSolverr one. Rename or remove it in the app's web UI, then run `apply` again.
 - **`could not be reached`, `cut the connection` or `did not answer within … s`.** The
   app isn't up, or Mediaplane can't get to it.
   - Wait until `mediaplane status` shows it healthy, then run `apply` again: `apply`

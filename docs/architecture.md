@@ -1,8 +1,8 @@
 # Architecture
 
 This page is a condensed version of the [M1 design](design/m1-engine-cli.md), §3 to §6,
-covering what is built so far (Slices 1 to 3a, 3d, 3b and 3c). The design describes the
-whole of M1; this page describes what exists.
+covering what is built so far (Slices 1 to 4). The design describes the whole of M1;
+this page describes what exists.
 
 ## The idea
 
@@ -125,9 +125,9 @@ Each part, and where its code is:
 
 Not built yet:
 
-- the rest of the links between the apps: Prowlarr's to Sonarr and Radarr (Slice 4),
-  the media server (Slice 5) and the requests app (Slice 6);
-- drift detection, with Keep mine (Slice 7).
+- the rest of the links between the apps: Jellyfin (Slice 5), the requests app
+  (Slice 6) and Plex (Slice 7);
+- drift detection, with Keep mine (Slice 8).
 
 ## `plan`
 
@@ -288,9 +288,10 @@ exist, are on the same filesystem as the folder itself. qBittorrent saves into
 ## The wiring
 
 Wiring is what Mediaplane does through each app's API once the apps run. Today that is
-the shared admin login in Sonarr, Radarr, Prowlarr and qBittorrent, and the download
-path: qBittorrent's settings and categories, and Sonarr's and Radarr's download client
-and root folder.
+the shared admin login in Sonarr, Radarr, Prowlarr and qBittorrent; the download path:
+qBittorrent's settings and categories, and Sonarr's and Radarr's download client and
+root folder; and the indexers: Prowlarr's links to Sonarr and Radarr, and its indexer
+proxy.
 
 ```text
 mediaplane-system
@@ -347,14 +348,46 @@ mediaplane (the stack)
   - Each arr's root folder, `/data/media/tv` or `/data/media/movies`, is made first in a
     throwaway container of the arr, as the stack's `user:`, then added to the arr.
 
+- **The indexers:**
+
+  ```text
+  prowlarr
+    │ link "<arr> (Mediaplane)":
+    │ full sync, the arr's key
+    ▼
+  sonarr, radarr
+    your indexers, synced:
+    "<name> (Prowlarr)"
+
+  prowlarr ─► byparr
+    or flaresolverr: only for
+    indexers tagged cloudflare
+  ```
+
+  - Prowlarr comes after Sonarr and Radarr. For each, Prowlarr gets a link with full
+    sync: it reaches the arr at `http://<arr>:<port>`, and the arr reaches it back at
+    `http://prowlarr:9696`. Each link needs the arr's admin in place first: while the arr
+    isn't up, or its admin login is yet to be set, `plan` leaves the link's key for
+    `apply` to check.
+  - Prowlarr tests a link, and a proxy, as it saves a new one, and Mediaplane's check of
+    a link's key is the same test: Prowlarr calls the arr with the key, and the arr calls
+    Prowlarr back.
+  - The indexer proxy is the stack's Cloudflare solver, Byparr or FlareSolverr, as a
+    proxy of type FlareSolverr, tagged `cloudflare`. Prowlarr's test of a new proxy has
+    the solver fetch a page of Prowlarr's own service on the internet. The proxy holds no
+    secret, so nothing checks it again.
+  - The indexers are yours: you add them in Prowlarr, which syncs them to the arrs, and
+    sends those tagged `cloudflare` through the solver when their site answers with a
+    challenge.
+
 - **Each resource** is one of:
   - `create` or `update`: the app lacks it, or a managed field or a secret differs. A
     secret is checked by using it, never compared: signing in, or the app's own test, as
-    Sonarr's test of its download client. While a field differs, the secrets aren't
-    checked: the update sets them anyway. `plan` also leaves them unchecked until a
-    resource they require is in place (`unchanged` or `adopt`) and checked, since the
-    check could make what is missing, and `plan` changes nothing. `apply` doesn't check
-    again a secret its own plan found refused: it sets it.
+    Sonarr's test of its download client, or Prowlarr's of its link to Sonarr. While a
+    field differs, the secrets aren't checked: the update sets them anyway. `plan` also
+    leaves them unchecked until a resource they require is in place (`unchanged` or
+    `adopt`) and checked, since the check could make what is missing, and `plan` changes
+    nothing. `apply` doesn't check again a secret its own plan found refused: it sets it.
   - `adopt`: the app already holds it as wanted, but `state/resources.json` doesn't say
     so yet, such as after lost state.
   - `unchanged`.
@@ -433,7 +466,8 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
-- the rest of the wiring, app by app (Slices 4 to 6);
-- drift detection (Slice 7);
-- releases (Slice 8);
+- the rest of the wiring, app by app: Jellyfin (Slice 5), the requests app (Slice 6)
+  and Plex (Slice 7);
+- drift detection (Slice 8);
+- releases (Slice 9);
 - the web panel (M2).

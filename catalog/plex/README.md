@@ -35,11 +35,12 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
 
 ## Not built yet
 
-- **Slice 5:**
+- **Slice 7:**
   - `mediaplane plex-login`, which signs in through plex.tv and saves your token;
   - claiming the server with it on first start;
   - the Movies and TV Shows libraries;
-  - the connections from Sonarr and Radarr.
+  - the connections from Sonarr and Radarr;
+  - with Seerr in the stack, its sign-in with your token, and its link to Plex.
 
 See the [roadmap](../../docs/plans/m1-roadmap.md).
 
@@ -62,7 +63,7 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Known issues
 
-- **Plex starts unclaimed.** Until Slice 5 claims it for you, you can claim it yourself.
+- **Plex starts unclaimed.** Until Slice 7 claims it for you, you can claim it yourself.
   Get a claim token at `https://plex.tv/claim`. It expires within four minutes, so save it
   to `secrets/plex-claim` in the home and run `mediaplane apply` straight away, with:
 

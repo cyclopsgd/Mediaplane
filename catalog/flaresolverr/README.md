@@ -28,15 +28,13 @@ Prowlarr's indexers. Mediaplane runs the upstream image, unmodified, when you li
 
 - **It runs FlareSolverr** inside the stack only. Its port is never published.
 - **`LOG_LEVEL=info`.**
-- **No health check.** The image has none, and Mediaplane adds none, so `apply` waits
-  only for it to be running.
-
-## Not built yet
-
-- **Slice 4:** registering FlareSolverr as Prowlarr's indexer proxy, with the tag
-  `cloudflare`.
-
-See the [roadmap](../../docs/plans/m1-roadmap.md).
+- **A health check of its own.** The image has none, so Mediaplane asks FlareSolverr's
+  `/health` every 30 seconds, and `apply` waits until it answers. Prowlarr tests a new
+  indexer proxy as it saves it, so FlareSolverr must answer before `apply` adds it.
+- **Prowlarr's indexer proxy.** `apply` adds FlareSolverr to Prowlarr as its indexer
+  proxy, `Cloudflare (Mediaplane)`, with the tag `cloudflare`, in place of Byparr. Tag an
+  indexer `cloudflare` in Prowlarr to send it through FlareSolverr:
+  [Prowlarr's README](../prowlarr/README.md) says how, and how Prowlarr tests the proxy.
 
 ## Changing it
 

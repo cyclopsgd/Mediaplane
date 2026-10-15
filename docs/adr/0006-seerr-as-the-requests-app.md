@@ -20,9 +20,9 @@ through its API.
 
 Seerr, version 3.5 or later, is M1's requests app (spec §2.1, §6.1, §6.5):
 
-- **It works with both media servers.** The wiring (Slice 6) will sign in to it as the
-  Jellyfin admin Mediaplane created (`POST /api/v1/auth/jellyfin`), or with the user's
-  Plex token (`POST /api/v1/auth/plex`).
+- **It works with both media servers.** The wiring will sign in to it as the Jellyfin
+  admin Mediaplane created (`POST /api/v1/auth/jellyfin`, Slice 6), or with the user's
+  Plex token (`POST /api/v1/auth/plex`, Slice 7).
 - **Its settings API covers the wiring:**
   - the media server, and its libraries;
   - Sonarr and Radarr, each with a default profile and root folder;

@@ -29,18 +29,19 @@ image, unmodified. Listing Prowlarr turns it on.
 - **Its own health check.** Mediaplane checks it every 30 seconds. The image's built-in
   check runs only every 15 minutes. If its first check ran before the server was
   listening, the container would stay "starting" until the next check, 15 minutes later,
-  so `apply` would reach its ten-minute limit and fail.
-
-## Not built yet
-
-- **Slice 4:** registering Byparr as Prowlarr's indexer proxy, with the tag `cloudflare`.
-
-See the [roadmap](../../docs/plans/m1-roadmap.md).
+  so `apply` would reach its ten-minute limit and fail. Byparr's health check loads a web
+  page, so it needs the internet to pass.
+- **Prowlarr's indexer proxy.** `apply` adds Byparr to Prowlarr as its indexer proxy,
+  `Cloudflare (Mediaplane)`, with the tag `cloudflare`. Tag an indexer `cloudflare` in
+  Prowlarr to send it through Byparr: [Prowlarr's README](../prowlarr/README.md) says
+  how, and how Prowlarr tests the proxy.
 
 ## Changing it
 
 - **To use FlareSolverr instead,** list `flaresolverr: {}`. Prowlarr then doesn't turn
-  Byparr on. Listing both is an error.
-- **To run without a solver,** set `byparr: { enabled: false }`.
+  Byparr on, and `apply` aims Prowlarr's proxy at FlareSolverr. Listing both is an
+  error.
+- **To run without a solver,** set `byparr: { enabled: false }`. Mediaplane then adds no
+  proxy to Prowlarr, and leaves one it added before.
 - **In `stack.yaml`,** under `apps.byparr`, you can also set `version` and `env`.
 - **Anything else** goes in `compose.override.yaml` in the Mediaplane home.

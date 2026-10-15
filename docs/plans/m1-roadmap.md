@@ -2,8 +2,8 @@
 
 **Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md)
 
-M1 is too large for one implementation plan, so it is delivered in eight
-vertical slices. Each slice:
+M1 is too large for one implementation plan, so it is delivered in 14 vertical
+slices: S1, S2 in three parts, S3 in four, and S4 to S9. Each slice:
 
 - ends with working, tested software and a green CI;
 - gets its **own detailed plan**, written when the previous slice has landed, so
@@ -19,25 +19,24 @@ Detailed plans so far:
 - Slice 3d: [`m1-s3d-vpn-check.md`](m1-s3d-vpn-check.md) (done).
 - Slice 3b: [`m1-s3b-wiring.md`](m1-s3b-wiring.md) (done).
 - Slice 3c: [`m1-s3c-download-path.md`](m1-s3c-download-path.md) (done).
+- Slice 4: [`m1-s4-indexers.md`](m1-s4-indexers.md) (done).
 
 Where M1 stands (the README shows the same):
 
-- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b and S3c.
-- **Next:** S4 (indexers).
-- **After that:** S5 to S8.
+- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c and S4.
+- **Next:** S5 (Jellyfin).
+- **After that:** S6 to S9.
 
 ## Slices
 
-> **Renumbered on 2026-10-11.** By the owner's decision, drift moved after
-> requests, so that it is designed against every app and a hands-off stack comes
-> sooner. The slices after S3c are now:
+> **Renumbered twice, by the owner's decisions.** A plan uses the numbers of its day.
 >
-> - S4 indexers (was S5);
-> - S5 media servers (was S6);
-> - S6 requests (was S7);
-> - S7 drift (was S4).
->
-> Plans written before then use the old numbers.
+> - **2026-10-11:** drift moved after requests, so that it is designed against every
+>   app and a hands-off stack comes sooner. S4 indexers (was S5), S5 media servers (was
+>   S6), S6 requests (was S7), S7 drift (was S4); S8 release unchanged.
+> - **2026-10-15:** the media servers split, Jellyfin first. S5 Jellyfin and the arrs'
+>   links to it (from S5), S6 requests (unchanged), S7 Plex (from S5), S8 drift (was
+>   S7), S9 release (was S8).
 
 | # | Slice | Delivers | Spec sections | Proves |
 |---|---|---|---|---|
@@ -45,10 +44,11 @@ Where M1 stands (the README shows the same):
 | S2 | **Runtime and apply (containers)** | Key generation and persistence, `.env` rendering, the Compose driver, the lock, preflight checks (including the host helper and the same-filesystem check), the container diff, the apply stages (write, pull, start, record), change history, the `apply`, `status`, `history` and `init` commands, the Mediaplane image with `deploy/mediaplane.compose.yaml` and the socket proxy (`mediaplane-system`), and an end-to-end harness | §4.4, §5, §5.1, §7.2 (2–4) | Success criteria 3 (containers) and 6. Containers come up healthy on amd64 and arm64. A second apply reports no changes |
 | S3 | **Wiring framework and the download path** | The integration contract, a typed HTTP client with retries, `resources.json`, pre-start config files (`config.xml`, `qBittorrent.conf` with PBKDF2), the shared admin credential and `credentials`, the Servarr admin bootstrap, Sonarr/Radarr wired to qBittorrent (download clients, root folders, categories), the verify stage, and `vpn-check`. Also a real VPN kill-switch test against a local WireGuard server | §6.1, §6.2 (download rows), §6.4, §8.1 (4) | Success criterion 5. Partly criterion 1 |
 | S4 | **Indexers** | Prowlarr application links (fullSync), the Byparr/FlareSolverr indexer proxy and the `cloudflare` tag | §6.2 (Prowlarr rows) | Indexers added in Prowlarr reach both arrs, and proxied requests work |
-| S5 | **Media servers** | Jellyfin bootstrap-before-publish, its API key and libraries, the arr → media-server connections, Plex `plex-login` (PIN flow), the Plex claim and libraries, and a nightly Plex CI job | §6.1 (Jellyfin, Plex), §6.4, §8.1 (Plex) | Both media servers are wired headlessly, except for the single Plex sign-in |
-| S6 | **Requests** | The Seerr first sign-in (through the Jellyfin admin or the Plex token), libraries, the Sonarr/Radarr servers, initialize, and the full-stack end-to-end test | §6.1 (Seerr), §6.2 (Seerr row) | Success criteria 1 and 2 |
-| S7 | **Drift** | The three-way drift model, `drift`, `keep`, a comment-preserving override writer, `unmanaged`, externally managed mode, name-based re-adoption, key recovery from appdata, and shared-key propagation | §6.3, §6.1 (key recovery) | Success criterion 4 |
-| S8 | **Release and public readiness** | Trivy for the catalog images (Mediaplane's own image is scanned from S2c), SBOM and provenance, release-please, Renovate (a custom manager for catalog pins plus SHA-pinned Actions), a multi-arch release workflow and manifest (arm64 CI itself runs from S2c), the `--json` output shapes in the generated docs (the `stack.yaml`, JSON Schema and CLI references, with their freshness check, arrive in S2c), `migrate`, the full README, the add-an-app guide, the code of conduct, templates and CODEOWNERS | §8.2, §9 | Success criterion 7. Everything is green on both architectures |
+| S5 | **Jellyfin** | Jellyfin bootstrap-before-publish, its API key and libraries, and the arr → Jellyfin connections | §6.1 (Jellyfin), §6.2 (media-server rows), §6.4 | Jellyfin is wired headlessly |
+| S6 | **Requests** | The Seerr first sign-in through the Jellyfin admin, libraries, the Sonarr/Radarr servers, initialize, and the full-stack end-to-end test | §6.1 (Seerr), §6.2 (Seerr row) | Success criterion 1 |
+| S7 | **Plex** | `plex-login` (the plex.tv PIN flow), the Plex claim through a plex.tv helper, its libraries, the arr → Plex connections, Seerr's sign-in with the Plex token, and a nightly Plex CI job | §6.1 (Plex, Seerr), §6.2 (media-server rows), §8.1 (Plex) | Success criterion 2: Plex is wired headlessly, except for the single Plex sign-in |
+| S8 | **Drift** | The three-way drift model, `drift`, `keep`, a comment-preserving override writer, `unmanaged`, externally managed mode, name-based re-adoption, key recovery from appdata, and shared-key propagation | §6.3, §6.1 (key recovery) | Success criterion 4 |
+| S9 | **Release and public readiness** | Trivy for the catalog images (Mediaplane's own image is scanned from S2c), SBOM and provenance, release-please, Renovate (a custom manager for catalog pins plus SHA-pinned Actions), a multi-arch release workflow and manifest (arm64 CI itself runs from S2c), the `--json` output shapes in the generated docs (the `stack.yaml`, JSON Schema and CLI references, with their freshness check, arrive in S2c), `migrate`, the full README, the add-an-app guide, the code of conduct, templates and CODEOWNERS | §8.2, §9 | Success criterion 7. Everything is green on both architectures |
 
 ### S2 is delivered in three parts (decided 2026-10-09)
 
@@ -59,7 +59,7 @@ just like a full slice.
 |---|---|---|
 | S2a | **Plan against a real host.** The S2 items from the Slice 1 reviews, plus: cloud detection, the Docker runtime (versions, `config --hash`, `ps`), the secrets store (read-only), secret values, preflight checks, the container diff from Compose's own config hash (ADR 0010), the CLI showing containers and secrets, and the end-to-end harness with a CI job | `mediaplane plan` reports exactly what `apply` would do to files, containers and secrets, and still writes nothing |
 | S2b | **Apply.** Key generation and persistence, `.env` rendering, atomic writes and the lock, the appdata ownership helper (Seerr runs as uid 1000), the apply stages (write, pull, `up --wait`, verify, record), change history, the `apply`, `status`, `history` and `init` commands, verified health checks, and ADR 0004 | Containers come up healthy on amd64 and arm64. A second apply reports no changes |
-| S2c | **Packaging.** The Mediaplane image, `deploy/mediaplane.compose.yaml` with the socket proxy (`mediaplane-system`), host detection from inside the container (the host helper), the threat model and ADR 0008. Also, by the owner's decisions of 2026-10-09: Trivy for the Mediaplane image (moved here from S8); native arm64 CI (moved here from S8); and the docs so far, which are the generated `stack.yaml`, JSON Schema and CLI references with a CI freshness check (moved here from S8), `docs/architecture.md`, a README per app, the "app won't start" runbook and ADR 0006. And `pnpm audit` of the CLI's production dependencies in CI, which the image scan can't see because they are bundled (spec §7.2(7)) | Success criterion 6 |
+| S2c | **Packaging.** The Mediaplane image, `deploy/mediaplane.compose.yaml` with the socket proxy (`mediaplane-system`), host detection from inside the container (the host helper), the threat model and ADR 0008. Also, by the owner's decisions of 2026-10-09: Trivy for the Mediaplane image (moved here from S9); native arm64 CI (moved here from S9); and the docs so far, which are the generated `stack.yaml`, JSON Schema and CLI references with a CI freshness check (moved here from S9), `docs/architecture.md`, a README per app, the "app won't start" runbook and ADR 0006. And `pnpm audit` of the CLI's production dependencies in CI, which the image scan can't see because they are bundled (spec §7.2(7)) | Success criterion 6 |
 
 ### S3 is delivered in four parts (decided 2026-10-09)
 
@@ -99,13 +99,13 @@ Every slice writes its own docs as it goes:
 - **ADRs**, when a slice implements the decision:
   - 0001, 0002, 0005 and 0009 in S1;
   - 0010 in S2a, 0004 in S2b, and 0006 and 0008 in S2c;
-  - 0003 in S7.
+  - 0003 in S8.
   - 0007 (books) belongs to M4.
 - **Each app's `catalog/<app>/README.md`**, written in S2c, and updated when that
   app's integration lands.
 - **Runbooks**, written with the feature they cover:
   - "VPN down" in S3d, and "wiring failed" in S3b;
-  - "drift reported" in S7;
+  - "drift reported" in S8;
   - "app won't start" in S2c.
 - **A docs task in every slice plan,** from S2c on (owner, 2026-10-09). It covers the
   spec §9 artefacts the slice touches: it runs `pnpm docs:generate` for the generated
@@ -124,7 +124,7 @@ repositories, and the repo is public, so from S2c (owner, 2026-10-09):
   the image and deploy it behind the socket proxy;
 - a push that changes only docs skips both jobs. The last job, `All checks passed`,
   reports either way, so it is the one check branch protection should require;
-- a multi-arch image manifest waits for publishing, in S8.
+- a multi-arch image manifest waits for publishing, in S9.
 
 Each slice that adds end-to-end tests still runs them locally on the aarch64 dev box
 before merging.
@@ -157,18 +157,28 @@ Verified in S3c (2026-10-11):
   each arr's own test of its download client passes, from source and from the image. It
   runs in CI from Slice 3c.
 
+Verified in S4 (2026-10-15):
+
+- **Byparr answers Prowlarr as FlareSolverr does** (spec §10):
+  `test/e2e/indexers.e2e.test.ts` has Prowlarr make its proxy of type FlareSolverr at
+  Byparr, which passes Prowlarr's own test, then fetch a made-up indexer behind a
+  stand-in Cloudflare challenge through Byparr's browser, and get its items. Then the same
+  through FlareSolverr. Checked on the arm64 dev box; it runs in CI on both architectures
+  from Slice 4.
+
 ## Inputs for later slices from the reviews
 
 The Slice 1 final review (2026-10-08) approved the merge. It also raised the
 design gaps below, which only matter once Mediaplane writes files or deploys.
 The Slice 2a final review (2026-10-09) added the S2b list and two S3 items.
-The Slice 2b final review (2026-10-09) added the S2c list, two S7 items and an
-M2 item. Slice 2c (2026-10-09) added the last S3 item, the S5 list and the last
-four S8 items. Slice 3a (2026-10-10) added three S3 items, the S3d list, three
-S7 items, two S5 items, an S8 item and an M2 item. Slice 3d (2026-10-10) added the last
-S3 item, the unscheduled list and extended two S8 items. Slice 3b (2026-10-10) added the
-S3c list, two S7 items and one unscheduled item. Slice 3c (2026-10-11) added three S7
-items. Each slice plan must address the items for that slice.
+The Slice 2b final review (2026-10-09) added the S2c list, two S8 items and an
+M2 item. Slice 2c (2026-10-09) added the last S3 item, the S5 item, the first S7 item
+and the last four S9 items. Slice 3a (2026-10-10) added three S3 items, the S3d list,
+three S8 items, two S7 items, an S9 item and an M2 item. Slice 3d (2026-10-10) added the
+last S3 item, the unscheduled list and extended two S9 items. Slice 3b (2026-10-10) added
+the S3c list, two S8 items and one unscheduled item. Slice 3c (2026-10-11) added the S4
+item and five S8 items. Slice 4 (2026-10-15) added three S8 items. Each slice plan must
+address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -273,7 +283,7 @@ password, which are S3c's (and listed again below).
   - The apps keep their normal network for their own internet traffic.
   - Gluetun's firewall must accept wiring traffic to qBittorrent's port, and S3b's
     end-to-end test proves it.
-  - The plex.tv calls go through a short-lived helper in S5.
+  - The plex.tv calls go through a short-lived helper in S7.
   - This is defence in depth, not a wall, because the proxy still lets Mediaplane
     create containers.
   - S3b writes ADR 0011 on it.
@@ -347,26 +357,34 @@ password, which are S3c's (and listed again below).
   port and `useSsl`; and they save a new client without testing it, which the real
   arrs do. The end-to-end test shows the real behaviour. Make the fakes stricter when S4
   extends them.
+- **Done in S4:** `fakeStackApis`' arrs refuse a root folder whose folder no `mkdir` made,
+  fail a client's test at a port qBittorrent doesn't listen on, or over TLS, and test a
+  new client as they save it; its new Prowlarr is as strict, with its links and its
+  proxy.
 
 **S5:**
+
+- **Jellyfin's health check can pass early.** In its first seconds, Jellyfin's
+  `/health` answers 200 with `Degraded` while the server still answers 503 to
+  everything else (S2c). Look at a check that waits for the server itself.
+
+**S7:**
 
 - **The Plex claim and `plex-login` need plex.tv.** The Mediaplane container has no
   route out today (S2c), and stays offline under S3b's decision above (a private wiring
   network). So make the plex.tv calls from a short-lived helper, and record that in the
   threat model.
-- **Jellyfin's health check can pass early.** In its first seconds, Jellyfin's
-  `/health` answers 200 with `Degraded` while the server still answers 503 to
-  everything else (S2c). Look at a check that waits for the server itself.
 - **A login of your own for Plex, and for Seerr on Plex.** Plex's login is always
   your plex.tv account, never the shared admin (spec §6.1). With Plex, Seerr's
   first sign-in uses that account too. The catalog's `login` (S3a) is `'shared'`
   or the slice that brings it, so `credentials` says their login arrives in
-  Slice 5 (Plex) or Slice 6 (Seerr). Give `login` a value for your own account,
-  and use it for both.
+  Slice 7 (Plex) or Slice 6 (Seerr). Give `login` a value for your own account,
+  and use it for both. Seerr's `comingIn` says Slice 6 on a Plex stack too, where
+  Seerr's wiring comes in Slice 7 (S4): fix that with this item.
 - **Plex's web UI is at `/web`.** `credentials` prints `http://<address>:<port>`
   for every app, so give the catalog a per-app web path.
 
-**S7:**
+**S8:**
 
 - Override field names are case-sensitive, so the managed-field comparison must
   match them exactly.
@@ -418,8 +436,25 @@ password, which are S3c's (and listed again below).
 - **The `partial` outcome.** Spec §5 step 12 names `success`, `partial` and `failed`.
   Apply records `failed` when part of the wiring failed (S3b). Decide whether drift's
   re-apply needs `partial`.
+- **Links to an app that leaves the stack.** Remove Sonarr or Radarr from `stack.yaml`,
+  and Prowlarr keeps its link to it (S4), as the arrs keep their download client when
+  qBittorrent goes; so does Prowlarr's indexer proxy, when the stack drops its
+  Cloudflare solver, and indexers tagged `cloudflare` then fail. Spec §8.1(3) step 4
+  asks that an app's links go with it. Decide whether `apply` removes what it made, or
+  drift reports it.
+- **Settings Mediaplane manages in Prowlarr are put back.** A link's addresses, sync
+  level or categories, or the proxy's host, timeout or tags, changed in Prowlarr's web
+  UI, are undone by the next `apply` (S4). Keep mine must cover them.
+- **The indexer proxy is never checked once it is made.** It holds no secret, so `plan`
+  runs no test of it (S4): Prowlarr's would have the solver fetch a page of Prowlarr's
+  own service. Decide whether drift checks it, and how often.
+- **`plan`'s key checks can record a failing status in the app; drift runs them on a
+  schedule.** A failing test of a download client (S3c) or a Prowlarr link (S4) records
+  a failure in the app's status of it (`DownloadClientStatus`, `ApplicationStatus`),
+  as a test from its web UI does, and a later pass resets it (S4's probe). Decide
+  whether scheduled drift may do that.
 
-**S8 (before going public):**
+**S9 (before going public):**
 
 - **Repo setup (owner):** enable GitHub private vulnerability reporting, which
   `SECURITY.md` relies on. Choose GPL-3.0-only or GPL-3.0-or-later and add the

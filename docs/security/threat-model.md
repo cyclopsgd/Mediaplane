@@ -1,7 +1,6 @@
 # Threat model
 
-This is the threat model for Mediaplane as built today: M1, up to and including Slice 3a,
-and Slices 3d, 3b and 3c.
+This is the threat model for Mediaplane as built today: M1, up to and including Slice 4.
 It makes spec §7 concrete. To report a vulnerability, see [SECURITY.md](../../SECURITY.md).
 
 ## The one thing to know
@@ -17,6 +16,7 @@ that power. None of them removes it.
 | The host                                     | Everything                                                            | Docker access is root on the host                          |
 | Generated API keys                           | `state/secrets.json`, `generated/.env` (both 0600) and `appdata/`     | They open the apps' APIs                                   |
 | qBittorrent's key, in Sonarr and Radarr      | Their download client's settings, in `appdata/`                       | It opens qBittorrent's API                                 |
+| Sonarr's and Radarr's keys, in Prowlarr      | Its links' settings, in `appdata/`                                    | They open Sonarr's and Radarr's APIs                       |
 | The shared admin password                    | `state/secrets.json` (0600) or `admin.password`; a hash in `appdata/` | It opens qBittorrent, Sonarr, Radarr and Prowlarr          |
 | Your secrets: VPN key, Plex token, passwords | `secrets/` (0700), or environment variables                           | They are your accounts                                     |
 | App data                                     | `appdata/<app>/`                                                      | The apps' databases and settings, some holding credentials |
@@ -100,7 +100,16 @@ host network, read-only mounts
   `plan` checks a download client with the arr's own test, which also makes a missing
   post-import category in qBittorrent, a setting Mediaplane doesn't manage: one you set
   in the arr (`tvImportedCategory`, `movieImportedCategory`) and later deleted in
-  qBittorrent.
+  qBittorrent. It checks Prowlarr's links with Prowlarr's own test, which calls the arr
+  with its key, and has the arr call Prowlarr back. Either test, when it fails, records a
+  failure in that app's status of the client or link, as a test from the app's web UI
+  does; a later pass resets it.
+- **The Cloudflare solver.** Byparr, or FlareSolverr, runs a browser for Prowlarr on the
+  stack's own network. Its port is never published, it has no login, and it isn't on
+  the wiring network. Prowlarr sends it an indexer's request only for an indexer tagged
+  `cloudflare`, and only when the site answers with a Cloudflare challenge; when
+  Mediaplane adds the proxy, Prowlarr has it fetch a page of Prowlarr's own service, to
+  test it (see T15).
 - **vpn-check's probe.** `mediaplane vpn-check` runs
   `docker compose run --rm --no-deps -T --user 65534:65534 --entrypoint sh qbittorrent`
   with a short script: a throwaway container of qBittorrent's own image, as nobody, in
@@ -173,9 +182,9 @@ Controls today:
 What remains:
 
 - On a home network, `init` suggests `bind: lan`, which puts the web UIs on your LAN.
-- Until the wiring lands (Slices 5 and 6), Jellyfin's wizard and Seerr's setup are open
-  to whoever reaches them first. Complete them right after the first `apply`, or keep
-  `bind: localhost` until you have.
+- Until the wiring lands (Slices 5 and 6, and Slice 7 with Plex), Jellyfin's wizard and
+  Seerr's setup are open to whoever reaches them first. Complete them right after the
+  first `apply`, or keep `bind: localhost` until you have.
 - With `login_on_lan: false`, anyone on a local address gets into Sonarr, Radarr and
   Prowlarr without a login. For them, "local" means any private address, not just your
   LAN subnet.
@@ -235,6 +244,8 @@ What remains:
   setting that looks right but isn't.
 - Sonarr and Radarr hold qBittorrent's key, as their download client needs, so a
   compromised one can drive qBittorrent: add a torrent, or change its settings.
+- Prowlarr holds Sonarr's and Radarr's keys, as its links need, so a compromised Prowlarr
+  can drive both: change their settings, or read their password hash (see T10).
 - The apps' calls to each other, and Mediaplane's to them, are plain HTTP on Docker's own
   networks, with keys in them. An app with Docker's default capabilities could try to
   intercept another's traffic on a network they share.
@@ -262,9 +273,10 @@ Controls today:
   percent-encoded, form-encoded or HTML-escaped, and nested, such as a password
   JSON-escaped inside a form field (as qBittorrent's settings send it), or a JSON body
   quoted in an HTML page.
-- qBittorrent's key goes to Sonarr and Radarr in their download client's settings, a
-  request body: the one place one app's key goes to another. They show it masked
-  (`********`) afterwards, and Mediaplane tests the masked client, so the key isn't sent
+- qBittorrent's key goes to Sonarr and Radarr in their download client's settings, and
+  Sonarr's and Radarr's keys go to Prowlarr in its links' settings: request bodies, the
+  only places one app's key goes to another. They show it masked (`********`)
+  afterwards, and Mediaplane tests the masked client or link, so the key isn't sent
   again for the check.
 - The admin password goes to qBittorrent only in request bodies: its preferences, sent
   with its key, and the sign-in that checks it. The session cookie qBittorrent answers
@@ -328,9 +340,9 @@ What remains:
 - Neither scan sees Node itself, which is not an Alpine package, nor the Docker CLI's own
   code: they stay current only when their pinned images are bumped.
 - The audit needs the npm registry at CI time.
-- Nothing bumps pins or dependencies automatically yet (Renovate, Slice 8).
+- Nothing bumps pins or dependencies automatically yet (Renovate, Slice 9).
 - The catalog images are not scanned yet, and there is no SBOM or provenance yet. Both
-  arrive in Slice 8.
+  arrive in Slice 9.
 
 ### T8. The home is mounted at another path, so Docker mounts the wrong folders
 
@@ -371,7 +383,7 @@ What remains:
 - One password opens every app that uses it: qBittorrent, Sonarr, Radarr and Prowlarr
   today, and Jellyfin from Slice 5. A leak from one is a leak for all.
 - Sonarr, Radarr and Prowlarr give their password hash to anyone who holds their API
-  key. Prowlarr holds Sonarr's and Radarr's keys from Slice 4.
+  key. Prowlarr holds Sonarr's and Radarr's keys, for its links.
 - `apply` checks qBittorrent's password by signing in. qBittorrent bans an address from
   signing in for an hour after five failed sign-ins in a row. Mediaplane's sign-in fails
   only while qBittorrent's password differs from the stack's, such as after
@@ -380,7 +392,7 @@ What remains:
   four `plan`s, or declined `apply`s, before the `apply` ban Mediaplane's address, never
   your browser's. Its key still works. The [runbook](../runbooks/wiring-failed.md) says
   what to do.
-- There is no way yet to rotate the generated password (Slice 7).
+- There is no way yet to rotate the generated password (Slice 8).
 
 ### T11. Something on the stack's network uses Gluetun's control server
 
@@ -516,6 +528,30 @@ What remains:
 - Docker answers a name from every network a container is on. Only your
   `compose.override.yaml` could put a container called `socket-proxy` on the wiring
   network; it would then compete with the proxy for that name.
+
+### T15. The Cloudflare solver fetches for whoever asks
+
+Controls today:
+
+- Byparr's or FlareSolverr's port is never published, and they are on the stack's own
+  network only, not the wiring network.
+- Prowlarr sends a request through the solver only for an indexer you tagged
+  `cloudflare`, and only when the site answers with a Cloudflare challenge.
+- Mediaplane never calls the solver. Prowlarr tests the proxy when Mediaplane adds it,
+  by having the solver fetch `https://prowlarr.servarr.com/v1/ping`; `plan` runs no such
+  test.
+
+What remains:
+
+- The solver has no login: any container on the stack's network can have its browser
+  load any address, your LAN included. qBittorrent behind the VPN reaches the stack's
+  network too, so a compromised qBittorrent could load a page through the solver,
+  outside the tunnel.
+- An indexer's request goes to the solver whole, with the indexer's own API key in its
+  address, and Byparr logs the addresses it fetches. Treat the solver's log like the
+  indexer's key.
+- The solver needs the internet: Byparr's health check loads a web page, and Prowlarr's
+  test fetches one from Prowlarr's service.
 
 ## What the proxy does not stop
 

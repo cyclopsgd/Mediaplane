@@ -11,11 +11,11 @@ Mediaplane runs as two containers in their own Compose project, `mediaplane-syst
 The stack Mediaplane deploys is a separate Compose project, `mediaplane`, so `apply` can
 never touch Mediaplane itself.
 
-> Mediaplane is pre-alpha. Sonarr and Radarr are linked to qBittorrent, but the rest of
-> the apps are not wired to each other yet (Slices 4 to 6 do that). On a home network,
-> `init` suggests publishing their web UIs on your LAN. Until the wiring lands,
-> Jellyfin's setup wizard and Seerr's setup are open to anyone on your LAN until you
-> complete them, so complete them first.
+> Mediaplane is pre-alpha. Sonarr and Radarr are linked to qBittorrent, and Prowlarr to
+> them, but the media server and Seerr are not wired yet (Slices 5 to 7 do that). On a
+> home network, `init` suggests publishing their web UIs on your LAN. Until the wiring
+> lands, Jellyfin's setup wizard and Seerr's setup are open to anyone on your LAN until
+> you complete them, so complete them first.
 >
 > qBittorrent, Sonarr, Radarr and Prowlarr have the shared admin login:
 > `mediaplane credentials` shows it. To keep the web UIs on this machine only, answer
@@ -38,7 +38,7 @@ never touch Mediaplane itself.
 
 ## Install
 
-No image is published yet: releases arrive in Slice 8. Build one from a checkout:
+No image is published yet: releases arrive in Slice 9. Build one from a checkout:
 
 ```bash
 git clone https://github.com/cyclopsgd/Mediaplane.git
@@ -140,9 +140,9 @@ nothing. Without a terminal it asks nothing: pass the flags in the
   - With `lan`, it also asks whether your own network must sign in too
     (`security.login_on_lan`; `--no-login-on-lan` says no).
 
-  Until the wiring lands (Slices 5 and 6), Jellyfin's setup wizard and Seerr's setup
-  are open to anyone on your LAN until you complete them. Complete them right after the
-  first `apply`.
+  Until the wiring lands (Slices 5 and 6, and Slice 7 with Plex), Jellyfin's setup wizard
+  and Seerr's setup are open to anyone on your LAN until you complete them. Complete them
+  right after the first `apply`.
 
 - **The admin login.** `init` asks for its user name (`--admin-user`), and whether
   Mediaplane should generate its password or read yours from a file in the home
@@ -229,7 +229,7 @@ docker build --tag mediaplane:local .
 docker compose -f deploy/mediaplane.compose.yaml up -d
 ```
 
-Once images are published (Slice 8), `docker compose -f deploy/mediaplane.compose.yaml pull`
+Once images are published (Slice 9), `docker compose -f deploy/mediaplane.compose.yaml pull`
 replaces the build. Updating Mediaplane never restarts your stack.
 
 An update can bring a new version of Compose inside the image. Compose versions can
