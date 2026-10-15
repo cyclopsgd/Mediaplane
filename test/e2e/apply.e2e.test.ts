@@ -55,6 +55,9 @@ const WIRED = [
   'sonarr.download_client',
   'sonarr.root_folder',
   'prowlarr.admin',
+  'prowlarr.application_sonarr',
+  'prowlarr.application_radarr',
+  'prowlarr.indexer_proxy',
 ];
 
 /** Two documentation subnets (RFC 5737), to check Sonarr takes a comma-separated list. */
@@ -273,6 +276,9 @@ describe('apply against real Docker', () => {
         ['sonarr.download_client', 'created'],
         ['sonarr.root_folder', 'created'],
         ['prowlarr.admin', 'created'],
+        ['prowlarr.application_sonarr', 'created'],
+        ['prowlarr.application_radarr', 'created'],
+        ['prowlarr.indexer_proxy', 'created'],
       ]);
       expect(second.plan.wiring.map((w) => w.action)).toEqual(
         WIRED.map(() => 'unchanged'),

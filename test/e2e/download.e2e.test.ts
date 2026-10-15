@@ -20,7 +20,10 @@ import {
   parseRevealed,
   REPO,
   runTeardown,
+  servarrFailure,
+  wired,
   type DeployedMediaplane,
+  type WireActions,
 } from './helpers';
 import {
   envLines,
@@ -143,42 +146,6 @@ async function getJson<T>(
       `${what} answered ${String(response.status)} with ${String(body.length)} characters that aren't JSON`,
     );
   }
-}
-
-/**
- * Why an arr refused a request, safe for CI's public log: the status, and each validation
- * error's `propertyName: errorMessage`, with every one of `secrets` replaced. Never the
- * raw body, nor an error's `attemptedValue`, which can be the key under test. A body that
- * isn't such a list gives only its length.
- */
-async function servarrFailure(
-  response: Response,
-  secrets: readonly string[],
-): Promise<string> {
-  const status = `status ${String(response.status)}`;
-  const body = await response.text();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return `${status}, with ${String(body.length)} characters that aren't JSON`;
-  }
-  if (!Array.isArray(parsed)) {
-    return `${status}, with ${String(body.length)} characters of JSON that isn't a list`;
-  }
-  const text = (value: unknown) => (typeof value === 'string' ? value : '?');
-  const said = parsed.map((item: unknown) => {
-    const { propertyName, errorMessage } = (
-      typeof item === 'object' && item !== null ? item : {}
-    ) as Record<string, unknown>;
-    return `${text(propertyName)}: ${text(errorMessage)}`;
-  });
-  return secrets
-    .filter((secret) => secret !== '')
-    .reduce(
-      (message, secret) => message.replaceAll(secret, '***'),
-      `${status}: ${said.join('; ')}`,
-    );
 }
 
 interface Client {
@@ -382,18 +349,6 @@ async function wrongSonarrKey(home: string): Promise<void> {
     put.status,
     `Sonarr did not save the client: ${await servarrFailure(put, secrets)}`,
   ).toBe(202);
-}
-
-interface WireActions {
-  outcome: string;
-  actions: { step: string; resource?: string; detail?: string }[];
-}
-
-/** Each wired resource's detail, in order. */
-function wired(actions: WireActions['actions']): string[][] {
-  return actions
-    .filter((a) => a.resource !== undefined)
-    .map((a) => [a.resource ?? '', a.detail ?? '']);
 }
 
 describe('the download path, behind the VPN', () => {

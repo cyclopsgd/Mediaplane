@@ -30,10 +30,14 @@ export async function buildImage(tag: string): Promise<void> {
 }
 
 /**
- * The M1 video stack without the VPN (vpn.e2e.test.ts has its own, behind the VPN).
- * The apps run as the current user, who owns the temporary data folder.
+ * The M1 video stack without the VPN (vpn.e2e.test.ts has its own, behind the VPN), or
+ * without Seerr too. The apps run as the current user, who owns the temporary data
+ * folder.
  */
-export function stackFor(data: string): string {
+export function stackFor(
+  data: string,
+  { seerr = true }: { seerr?: boolean } = {},
+): string {
   return `version: 1
 user: { uid: ${process.getuid?.() ?? 1000}, gid: ${process.getgid?.() ?? 1000} }
 paths: { data: ${data} }
@@ -44,8 +48,7 @@ apps:
   radarr: {}
   prowlarr: {}
   qbittorrent: { vpn: false }
-  seerr: {}
-`;
+${seerr ? '  seerr: {}\n' : ''}`;
 }
 
 /**
@@ -149,6 +152,86 @@ export async function runTeardown(
     }
   }
   if (failures.length > 0) throw new AggregateError(failures, 'teardown failed');
+}
+
+/** `docker <args>`'s output, trimmed; a failure throws, with Docker's own words. */
+export async function docker(...args: string[]): Promise<string> {
+  const result = await nodeExec('docker', args, { cwd: '/', timeoutMs: 120_000 });
+  if (result.code !== 0) {
+    throw new Error(`docker ${args.slice(0, 2).join(' ')} failed:\n${result.stderr}`);
+  }
+  return result.stdout.trim();
+}
+
+/** The host port Docker chose for a container's `port` (such as "51820/udp"). */
+export async function publishedPort(container: string, port: string): Promise<number> {
+  const output = await docker('port', container, port);
+  const [first] = output.split('\n');
+  const published = Number(first?.split(':').at(-1));
+  if (!Number.isInteger(published) || published < 1 || published > 65535) {
+    throw new Error(`docker port ${container} ${port} gave no host port:\n${output}`);
+  }
+  return published;
+}
+
+/**
+ * A removal that must not fail silently: a non-zero exit is an error, unless stderr says
+ * the thing was already gone ("No such container", or "network … not found").
+ */
+export async function removeOrIgnoreMissing(...args: string[]): Promise<void> {
+  const result = await nodeExec('docker', args, { cwd: '/', timeoutMs: 120_000 });
+  if (result.code !== 0 && !/No such|not found/.test(result.stderr)) {
+    throw new Error(`docker ${args.slice(0, 2).join(' ')} failed:\n${result.stderr}`);
+  }
+}
+
+/**
+ * Why an arr refused a request, safe for CI's public log: the status, and each validation
+ * error's `propertyName: errorMessage`, with every one of `secrets` replaced. Never the
+ * raw body, nor an error's `attemptedValue`, which can be the key under test. A body that
+ * isn't such a list gives only its length.
+ */
+export async function servarrFailure(
+  response: Response,
+  secrets: readonly string[],
+): Promise<string> {
+  const status = `status ${String(response.status)}`;
+  const body = await response.text();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return `${status}, with ${String(body.length)} characters that aren't JSON`;
+  }
+  if (!Array.isArray(parsed)) {
+    return `${status}, with ${String(body.length)} characters of JSON that isn't a list`;
+  }
+  const text = (value: unknown) => (typeof value === 'string' ? value : '?');
+  const said = parsed.map((item: unknown) => {
+    const { propertyName, errorMessage } = (
+      typeof item === 'object' && item !== null ? item : {}
+    ) as Record<string, unknown>;
+    return `${text(propertyName)}: ${text(errorMessage)}`;
+  });
+  return secrets
+    .filter((secret) => secret !== '')
+    .reduce(
+      (message, secret) => message.replaceAll(secret, '***'),
+      `${status}: ${said.join('; ')}`,
+    );
+}
+
+/** What `apply --json` says, and `apply` returns: its outcome, and each action. */
+export interface WireActions {
+  outcome: string;
+  actions: { step: string; resource?: string; detail?: string }[];
+}
+
+/** Each wired resource's detail, in order. */
+export function wired(actions: WireActions['actions']): string[][] {
+  return actions
+    .filter((a) => a.resource !== undefined)
+    .map((a) => [a.resource ?? '', a.detail ?? '']);
 }
 
 /**

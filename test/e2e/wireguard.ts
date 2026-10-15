@@ -3,7 +3,13 @@ import { access, chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { nodeExec } from '@mediaplane/engine';
-import { BUSYBOX, removeAsRoot } from './helpers';
+import {
+  BUSYBOX,
+  docker,
+  publishedPort,
+  removeAsRoot,
+  removeOrIgnoreMissing,
+} from './helpers';
 
 /**
  * The WireGuard server that stands in for a VPN provider in the kill-switch test (spec
@@ -75,36 +81,6 @@ export function wireguardKeys(): { privateKey: string; publicKey: string } {
     privateKey: base64(privateKey.export({ format: 'jwk' }).d),
     publicKey: base64(publicKey.export({ format: 'jwk' }).x),
   };
-}
-
-async function docker(...args: string[]): Promise<string> {
-  const result = await nodeExec('docker', args, { cwd: '/', timeoutMs: 120_000 });
-  if (result.code !== 0) {
-    throw new Error(`docker ${args.slice(0, 2).join(' ')} failed:\n${result.stderr}`);
-  }
-  return result.stdout.trim();
-}
-
-/** The host port Docker chose for a container's `port` (such as "51820/udp"). */
-async function publishedPort(container: string, port: string): Promise<number> {
-  const output = await docker('port', container, port);
-  const [first] = output.split('\n');
-  const published = Number(first?.split(':').at(-1));
-  if (!Number.isInteger(published) || published < 1 || published > 65535) {
-    throw new Error(`docker port ${container} ${port} gave no host port:\n${output}`);
-  }
-  return published;
-}
-
-/**
- * A removal that must not fail silently: a non-zero exit is an error, unless stderr says
- * the thing was already gone ("No such container", or "network … not found").
- */
-async function removeOrIgnoreMissing(...args: string[]): Promise<void> {
-  const result = await nodeExec('docker', args, { cwd: '/', timeoutMs: 120_000 });
-  if (result.code !== 0 && !/No such|not found/.test(result.stderr)) {
-    throw new Error(`docker ${args.slice(0, 2).join(' ')} failed:\n${result.stderr}`);
-  }
 }
 
 async function addressOn(container: string, network: string): Promise<string> {
