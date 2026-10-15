@@ -202,10 +202,17 @@ beforeEach(async () => {
   apis = await fakeStackApis();
 });
 
-/** `runtime`, with the stack's containers on the wiring network, where `apis` are. */
+/**
+ * `runtime`, with the stack's containers on the wiring network, where `apis` are, and its
+ * one-off commands making their folders there: an arr's root folder needs its folder.
+ */
 function reachingFakeApis(runtime: Runtime): Runtime {
   return {
     ...runtime,
+    run: (service, command) => {
+      apis.mkdir(service, command);
+      return runtime.run(service, command);
+    },
     wiringAddresses: (ids) =>
       Promise.resolve(
         Object.fromEntries(

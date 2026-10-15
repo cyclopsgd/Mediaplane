@@ -200,12 +200,15 @@ describe('servarrDownloadClient', () => {
   });
 
   it("says the app's own words when its test fails for another reason", async () => {
-    const { api } = await sonarr();
+    const { api, state } = await sonarr();
     const desired = wanted();
-    await client.create(api, {
-      ...desired,
-      fields: { ...desired.fields, host: 'nohost' },
-    });
+    await client.create(api, desired);
+    // Aimed elsewhere by hand: the app tests a new client as it saves it.
+    const [held] = state.downloadClients;
+    if (held === undefined) throw new Error('no client made');
+    held.fields = held.fields.map((f) =>
+      f.name === 'host' ? { ...f, value: 'nohost' } : f,
+    );
     const observed = await client.observe(api, undefined);
     if (observed === undefined) throw new Error('no client observed');
     const failure = await client
@@ -330,6 +333,8 @@ describe('servarrRootFolder', () => {
     expect(await folder.observe(api, undefined)).toBeUndefined();
     const desired = folder.desired(contextOf());
     if (desired === undefined) throw new Error('the root folder is wanted');
+    // The wire step makes the folder first: the app refuses a root folder without one.
+    state.folders.push('/data/media/tv');
     expect(await folder.create(api, desired)).toEqual({ id: 1 });
     expect(state.rootFolders).toEqual([{ id: 1, path: '/data/media/tv' }]);
     // The app may give it back with a trailing "/".

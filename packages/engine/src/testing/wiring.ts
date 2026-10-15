@@ -4,9 +4,11 @@ import { networkOf } from '../host/facts';
 import type { WiringSeams } from '../integrations/wiring';
 import type { ResourceSpec } from '../integrations/types';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
+import type { OneOffCommand } from '../runtime/types';
 import { fakeContainer } from './fakes';
 import { FIXTURE_API, FIXTURE_HOST, fixtureCatalog, fixtureConfig } from './fixtures';
 import { fakeHttpApp, type FakeApp, type FakeReply, type FakeRequest } from './http';
+import { fakeProwlarr, type FakeProvider } from './prowlarr';
 
 /** The stack of the wiring tests: Sonarr, and qBittorrent behind Gluetun. */
 export const WIRING_STACK = `version: 1
@@ -98,8 +100,13 @@ export interface FakeAppState {
   preferences: Record<string, string | boolean>;
   /** qBittorrent's categories: each one's save path, by name. */
   categories: Record<string, string>;
-  /** qBittorrent's API key: the only Bearer token it takes, or any when empty. */
+  /**
+   * Its API key, or any when empty: qBittorrent takes only this one, as a Bearer token,
+   * and Prowlarr's test of its link to Sonarr or Radarr passes only with the arr's.
+   */
   key: string;
+  /** qBittorrent's web UI port: an arr's test of a client aimed at another fails. */
+  port: number;
   /**
    * qBittorrent's failed sign-ins in a row. From five on it refuses every sign-in (403,
    * a ban), until a test sets it back to 0, as a restart would; a success resets it.
@@ -110,11 +117,23 @@ export interface FakeAppState {
   /** Sonarr's or Radarr's root folders. */
   rootFolders: { id: number; path: string }[];
   /**
+   * The folders in Sonarr's or Radarr's container, as `mkdir` made them (fakeStackApis'
+   * `mkdir`): the arr refuses a root folder anywhere else, as it refuses one whose folder
+   * doesn't exist.
+   */
+  folders: string[];
+  /**
    * Sonarr's or Radarr's own test of a download client fails with this reason (`Host:
    * <reason>`), whatever the client holds; a test may make it repeat a key, as an app
    * may. Empty: it tests the client.
    */
   testFailure: string;
+  /** Prowlarr's links to Sonarr and Radarr (its applications), their keys in clear. */
+  applications: FakeProvider[];
+  /** Prowlarr's indexer proxies. */
+  proxies: FakeProvider[];
+  /** Prowlarr's tags. */
+  tags: { id: number; label: string }[];
 }
 
 /** A download client, as Sonarr and Radarr keep one. */
@@ -141,10 +160,15 @@ export function freshAppState(): FakeAppState {
     },
     categories: {},
     key: '',
+    port: 8080,
     signInFailures: 0,
     downloadClients: [],
     rootFolders: [],
+    folders: [],
     testFailure: '',
+    applications: [],
+    proxies: [],
+    tags: [],
   };
 }
 
@@ -182,11 +206,68 @@ function masked(held: FakeDownloadClient): FakeDownloadClient {
   };
 }
 
+/** A refusal of the arr's own test, as its validation list says it. */
+function refusedTest(
+  property: string,
+  message: string,
+  details?: string,
+): FakeReply & { status: 400 } {
+  return {
+    status: 400,
+    body: [
+      {
+        propertyName: property,
+        errorMessage: message,
+        ...(details === undefined ? {} : { detailedDescription: details }),
+        isWarning: false,
+      },
+    ],
+  };
+}
+
 /**
- * Sonarr's and Radarr's download clients and root folders, as fakeStackApis answers them.
- * A client's test passes when it names qBittorrent's service (gluetun or qbittorrent)
- * and holds qBittorrent's key; otherwise it fails as Sonarr's does. A `testFailure` set
- * on the app overrides both checks: the test then fails with it, whatever the client.
+ * Sonarr's or Radarr's test of the download client `sent`, holding `key` in clear: its
+ * refusal, or undefined when it passes. It passes when the client reaches qBittorrent as
+ * Sonarr's does: by its service (gluetun or qbittorrent), at its web UI port, without
+ * TLS, which qBittorrent doesn't serve, with its key. A `testFailure` set on the app
+ * overrides every check: the test then fails with it, whatever the client.
+ */
+function testClient(
+  sent: Pick<FakeDownloadClient, 'fields'>,
+  key: unknown,
+  state: FakeAppState,
+  qbittorrent: FakeAppState,
+): (FakeReply & { status: 400 }) | undefined {
+  const value = (name: string) => sent.fields.find((f) => f.name === name)?.value;
+  const at = `${String(value('host'))}:${String(value('port'))}`;
+  const unreachable = (details: string) =>
+    refusedTest('Host', 'Unable to connect to qBittorrent', details);
+  if (state.testFailure !== '') return refusedTest('Host', state.testFailure);
+  const host = value('host');
+  if (host !== 'gluetun' && host !== 'qbittorrent') {
+    return unreachable(`Name does not resolve (${at})`);
+  }
+  if (value('port') !== qbittorrent.port) {
+    return unreachable(`Connection refused (${at})`);
+  }
+  if (value('useSsl') === true) {
+    return unreachable(
+      'The SSL connection could not be established, see inner exception.',
+    );
+  }
+  const right =
+    typeof key === 'string' &&
+    key !== '' &&
+    (qbittorrent.key === '' || key === qbittorrent.key);
+  return right
+    ? undefined
+    : refusedTest('ApiKey', 'Authentication Failure', 'Please verify your credentials.');
+}
+
+/**
+ * Sonarr's and Radarr's download clients and root folders, as fakeStackApis answers them,
+ * as strictly as the arrs: a new client is tested as it is saved (`testClient`), unless
+ * it is off; an update with forceSave is not; and a root folder needs its folder made.
  */
 function fakeServarrDownloads(
   request: FakeRequest,
@@ -214,6 +295,10 @@ function fakeServarrDownloads(
         body: [{ propertyName: 'Name', errorMessage: 'Should be unique' }],
       };
     }
+    // forceSave skips only the test's warnings: a client that fails it isn't saved.
+    const key = sent.fields.find((f) => f.name === 'apiKey')?.value;
+    const refused = sent.enable ? testClient(sent, key, state, qbittorrent) : undefined;
+    if (refused !== undefined) return refused;
     const made = { ...sent, id: state.downloadClients.length + 1 };
     state.downloadClients.push(made);
     return { status: 201, body: masked(made) };
@@ -237,45 +322,7 @@ function fakeServarrDownloads(
       .find((c) => c.id === sent.id)
       ?.fields.find((f) => f.name === 'apiKey')?.value;
     const key = value('apiKey') === '********' ? stored : value('apiKey');
-    const host = value('host');
-    if (state.testFailure !== '') {
-      return {
-        status: 400,
-        body: [
-          { propertyName: 'Host', errorMessage: state.testFailure, isWarning: false },
-        ],
-      };
-    }
-    if (host !== 'gluetun' && host !== 'qbittorrent') {
-      return {
-        status: 400,
-        body: [
-          {
-            propertyName: 'Host',
-            errorMessage: 'Unable to connect to qBittorrent',
-            detailedDescription: `Name does not resolve (${String(host)}:${String(value('port'))})`,
-            isWarning: false,
-          },
-        ],
-      };
-    }
-    const right =
-      typeof key === 'string' &&
-      key !== '' &&
-      (qbittorrent.key === '' || key === qbittorrent.key);
-    return right
-      ? { status: 200, body: {} }
-      : {
-          status: 400,
-          body: [
-            {
-              propertyName: 'ApiKey',
-              errorMessage: 'Authentication Failure',
-              detailedDescription: 'Please verify your credentials.',
-              isWarning: false,
-            },
-          ],
-        };
+    return testClient(sent, key, state, qbittorrent) ?? { status: 200, body: {} };
   }
   const folders = '/api/v3/rootfolder';
   if (path === folders && method === 'GET') {
@@ -286,6 +333,18 @@ function fakeServarrDownloads(
   }
   if (path === folders && method === 'POST') {
     const { path: wanted } = JSON.parse(request.body) as { path: string };
+    if (!state.folders.includes(wanted.replace(/\/+$/, ''))) {
+      return {
+        status: 400,
+        body: [
+          {
+            propertyName: 'Path',
+            errorMessage: `Path '${wanted}' does not exist`,
+            attemptedValue: wanted,
+          },
+        ],
+      };
+    }
     if (state.rootFolders.some((f) => f.path === wanted)) {
       return {
         status: 400,
@@ -302,18 +361,22 @@ function fakeServarrDownloads(
 /**
  * The APIs of the real catalog's apps, as far as Mediaplane uses them, all on one port
  * of 127.0.0.1: told apart by their Host header ("sonarr:8989", "gluetun:8080"). Sonarr,
- * Radarr and Prowlarr have /ping, system/status, config/host and /login, and the arrs
- * their download clients and root folders; qBittorrent has /, app/version, its sign-in
+ * Radarr and Prowlarr have /ping, system/status, config/host and /login, the arrs their
+ * download clients and root folders, and Prowlarr its links to them, its indexer proxies
+ * and its tags (fakeProwlarr); qBittorrent has /, app/version, its sign-in
  * (with its ban), preferences and categories, answered as qBittorrent 5.2 answers them,
  * and is `apps`' "qbittorrent" also when reached through Gluetun. Any key is taken, but
  * qBittorrent takes only a Bearer token (X-Api-Key gets a 403): its `key` when that is
- * set. `seams` send every app's calls there.
+ * set. `seams` send every app's calls there. `mkdir` is what the wire step's folder
+ * helper does to them: pass it what a fake runtime's `run` is given.
  */
 export async function fakeStackApis(): Promise<{
   app: FakeApp;
   apps: Map<string, FakeAppState>;
   seams: WiringSeams;
   addresses: Record<string, string>;
+  /** A `mkdir -p -- <folders>` one-off command of `service` makes them in its container. */
+  mkdir: (service: string, command: OneOffCommand) => void;
 }> {
   const apps = new Map<string, FakeAppState>();
   const stateOf = (service: string) => {
@@ -356,11 +419,11 @@ export async function fakeStackApis(): Promise<{
       state.password = sent.password;
       return { status: 202, body: {} };
     }
-    return (
-      fakeServarrDownloads(request, service, state, stateOf('qbittorrent')) ?? {
-        status: 404,
-      }
-    );
+    const answered =
+      service === 'prowlarr'
+        ? fakeProwlarr(request, state, stateOf)
+        : fakeServarrDownloads(request, service, state, stateOf('qbittorrent'));
+    return answered ?? { status: 404 };
   });
   return {
     app,
@@ -370,6 +433,11 @@ export async function fakeStackApis(): Promise<{
       retry: { deadlineMs: 0 },
     },
     addresses: onWiring(['gluetun', 'prowlarr', 'qbittorrent', 'radarr', 'sonarr']),
+    mkdir: (service, command) => {
+      if (command.entrypoint !== 'mkdir') return;
+      const folders = command.args.slice(command.args.indexOf('--') + 1);
+      stateOf(service).folders.push(...folders.map((f) => f.replace(/\/+$/, '')));
+    },
   };
 }
 
