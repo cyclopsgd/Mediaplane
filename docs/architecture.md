@@ -115,7 +115,8 @@ Each part, and where its code is:
 - **first-run setup** (`plan/bootstrap.ts` and `apply/bootstrap.ts` in
   `packages/engine/src`, and each app's `bootstrap` in the catalog, such as
   `catalog/jellyfin/bootstrap.ts`): an app whose setup anyone could finish is set up
-  before its port is published (see [Bootstrap before publish](#bootstrap-before-publish)).
+  before its port is published, when `apply` runs the stack (see
+  [Bootstrap before publish](#bootstrap-before-publish)).
 - **history** (`packages/engine/src/history`): writes a change record for every apply
   that runs its steps, failed ones included.
 - **status** (`packages/engine/src/status.ts`): each app's container state and health,
@@ -305,7 +306,8 @@ Shows and Movies libraries.
 
 Jellyfin's startup wizard answers whoever reaches it, and whoever finishes it owns the
 server. So `apply` does not publish it while it is open (see
-[T16](security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup) for what voids that):
+[T16](security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)
+for what voids that):
 
 ```text
 plan

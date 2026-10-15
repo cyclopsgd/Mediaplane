@@ -185,8 +185,9 @@ Controls today:
 - Sonarr, Radarr and Prowlarr ask for the shared admin login, which `apply` sets through
   their API once they first start. They ask from the LAN too, by default
   (`security.login_on_lan`).
-- Jellyfin publishes no port while its startup wizard is open: Mediaplane finishes it as
-  the shared admin first (T16). Jellyfin asks for a login from everywhere.
+- When the stack runs through `apply`, Jellyfin publishes no port while its startup
+  wizard is open: Mediaplane finishes it as the shared admin first (T16 says what voids
+  that). Jellyfin asks for a login from everywhere.
 - With `login_on_lan: false`, qBittorrent lets only your LAN subnet skip its login, and
   only while the web UIs are on the LAN. That subnet is `network.lan_subnet`, or else the
   subnets of the host's private addresses. Sonarr, Radarr and Prowlarr let any local

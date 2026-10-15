@@ -264,7 +264,7 @@ differ, and a `reason` when it is `unknown`.
     (`docker stop mediaplane-jellyfin-1`), remove `appdata/jellyfin` (with `sudo` if it
     isn't yours), and run `apply`, which sets it up anew. That loses Jellyfin's database
     and settings, but not your media. Check which container reaches Jellyfin, since one
-    inside the stack did.
+    inside the stack may have.
 - **`its startup wizard has a first user that Mediaplane did not set, so Mediaplane left the wizard open`**
   (`apply.bootstrap-failed`). Someone set Jellyfin's first user before Mediaplane could,
   so Mediaplane didn't complete the wizard for them, and Jellyfin stays unpublished.
@@ -300,9 +300,10 @@ differ, and a `reason` when it is `unknown`.
   With Jellyfin's key stored, `plan` takes its setup as done, but it can't check: the
   user Mediaplane runs as can't read `appdata/jellyfin/system.xml`. That is
   `MEDIAPLANE_UID` in the image, or your own user from source, and it is the stack's
-  `user:` only when you set them alike (`init` does). Run Mediaplane as the user that
-  owns the file, which is usually the stack's `user:`: set `MEDIAPLANE_UID` to its uid.
-  Or make the file readable by Mediaplane's own user. Then run `plan` again. Until then,
+  `user:` only when you set them alike (`init` and the
+  [deploy guide](../../deploy/README.md) both use your own user). Run Mediaplane as the
+  user that owns the file, which is usually the stack's `user:`: set `MEDIAPLANE_UID` to
+  its uid. Or make the file readable by Mediaplane's own user. Then run `plan` again. Until then,
   an emptied `appdata/jellyfin` isn't noticed.
 - **`runs inside <app>'s network, which publishes its ports`** (`bootstrap.network-via`).
   Mediaplane can't keep an app unpublished while its setup is open when the app shares

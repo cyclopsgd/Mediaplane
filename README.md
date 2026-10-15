@@ -12,7 +12,9 @@ Compose and wires the apps together for you.**
 >   would do. `mediaplane apply` then starts the stack, confirms that every app is
 >   healthy, and sets one admin login in qBittorrent, Sonarr, Radarr, Prowlarr and
 >   Jellyfin (`mediaplane credentials` shows it). It sets Jellyfin up before its web UI
->   is published, with its Movies and Shows libraries. It links Sonarr and Radarr to
+>   is published, with its Movies and Shows libraries, when `apply` runs the stack (the
+>   [threat model](docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)
+>   says what voids that). It links Sonarr and Radarr to
 >   qBittorrent: download clients, categories and root folders, and to Jellyfin, which
 >   they tell of each import. It links Prowlarr to Sonarr and Radarr, so the indexers you
 >   add in Prowlarr reach both, with Byparr as Prowlarr's proxy for indexers behind
@@ -417,8 +419,8 @@ and keep. What it adds is everything around the file:
 - keys that are generated once and kept;
 - Sonarr and Radarr linked to qBittorrent, with its categories and their root folders;
 - Prowlarr linked to Sonarr and Radarr, with a Cloudflare solver as its indexer proxy;
-- Jellyfin set up before its web UI is published on your network, with its libraries,
-  and told of each import by Sonarr and Radarr;
+- Jellyfin set up by `apply` before its web UI is published on your network, with its
+  libraries, and told of each import by Sonarr and Radarr;
 - next, the rest of the wiring between the apps.
 
 ### How is this different from Buildarr or Recyclarr?

@@ -16,8 +16,8 @@ never touch Mediaplane itself.
 > a home network, `init` suggests publishing the web UIs on your LAN. Until then, Seerr's
 > setup is open to anyone on your LAN until you complete it, so complete it first.
 > When `apply` runs the stack, Jellyfin's startup wizard is not published while it is
-> open: Mediaplane finishes it first. The
-> [threat model](../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup) says what voids that.
+> open: Mediaplane finishes it first. The threat model says what voids that:
+> [T16](../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
 >
 > qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin have the shared admin login:
 > `mediaplane credentials` shows it. To keep the web UIs on this machine only, answer
