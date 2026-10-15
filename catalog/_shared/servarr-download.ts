@@ -1,40 +1,33 @@
-import {
-  AppApiError,
-  type AppApi,
-  type DesiredResource,
-  type ResourceSpec,
-} from '@mediaplane/engine';
+import type { DesiredResource, Fields, ResourceSpec } from '@mediaplane/engine';
 import { z } from 'zod';
+import {
+  createProvider,
+  findProvider,
+  settingOf,
+  testProvider,
+  textOf,
+  updateProvider,
+  type Provider,
+  type ProviderKind,
+} from './servarr-provider';
 
 /** The name of the download client Mediaplane makes in Sonarr and Radarr (spec §6.2). */
 export const DOWNLOAD_CLIENT_NAME = 'qBittorrent (Mediaplane)';
 
-const CLIENTS = '/api/v3/downloadclient';
+/** Sonarr's and Radarr's qBittorrent download clients. */
+const CLIENTS: ProviderKind = {
+  path: '/api/v3/downloadclient',
+  implementation: 'QBittorrent',
+  what: 'qBittorrent download client',
+  of: 'qBittorrent',
+};
 const ROOT_FOLDERS = '/api/v3/rootfolder';
 
 /**
  * The settings a refused sign-in names: the key the arr holds for qBittorrent, or a user
  * name or password, is wrong.
  */
-const CREDENTIALS = new Set(['ApiKey', 'Username', 'Password']);
-
-/** One setting of a Servarr provider; the rest of it goes back as it came. */
-const setting = z.looseObject({ name: z.string(), value: z.unknown().optional() });
-
-/**
- * A download client as Sonarr or Radarr gives it, its key masked as "********". The rest
- * of it goes back as it came, so a setting Mediaplane doesn't manage stays the user's.
- */
-const client = z.looseObject({
-  id: z.number(),
-  name: z.string(),
-  enable: z.boolean(),
-  implementation: z.string(),
-  fields: z.array(setting),
-});
-
-/** One of the app's templates for a new download client (`…/schema`). */
-const template = z.looseObject({ implementation: z.string(), fields: z.array(setting) });
+const CREDENTIALS = ['ApiKey', 'Username', 'Password'];
 
 const created = z.looseObject({ id: z.number() });
 
@@ -46,62 +39,40 @@ export interface DownloadLink {
   setting: 'tvCategory' | 'movieCategory';
 }
 
-function text(value: unknown): string {
-  return typeof value === 'string' ? value : '';
-}
-
 /** The managed fields of a download client, from the app's settings. */
-function fieldsOf(held: z.infer<typeof client>, link: DownloadLink) {
-  const value = (name: string) => held.fields.find((f) => f.name === name)?.value;
-  const port = value('port');
+function fieldsOf(held: Provider, link: DownloadLink): Fields {
+  const port = settingOf(held, 'port');
   return {
-    host: text(value('host')),
+    host: textOf(settingOf(held, 'host')),
     port: typeof port === 'number' ? port : 0,
-    useSsl: value('useSsl') === true,
-    category: text(value(link.setting)),
-    enable: held.enable,
+    useSsl: settingOf(held, 'useSsl') === true,
+    category: textOf(settingOf(held, link.setting)),
+    enable: held.enable === true,
   };
 }
 
 /**
- * `body`, as the app gave it at `read`, with the desired settings, and qBittorrent's key
- * in clear: the one place one app's key goes to another, in a request body. A setting
- * the app doesn't have means a version Mediaplane doesn't know: say so, rather than save
- * a client that can't work.
+ * The desired settings, with qBittorrent's key in clear: the one place one app's key goes
+ * to another, in a request body.
  */
-function withSettings<T extends { fields: z.infer<typeof setting>[] }>(
-  api: AppApi,
-  read: string,
-  body: T,
+function settingsOf(
   desired: DesiredResource,
   link: DownloadLink,
-): T & { name: string; enable: boolean } {
+): Record<string, unknown> {
   const key = desired.secrets.apiKey;
   if (key === undefined) throw new Error(`${desired.name} has no apiKey to send`);
-  const values: Record<string, unknown> = {
+  return {
     host: desired.fields.host,
     port: desired.fields.port,
     useSsl: desired.fields.useSsl,
     [link.setting]: desired.fields.category,
     apiKey: key,
   };
-  const missing = Object.keys(values).filter(
-    (name) => !body.fields.some((f) => f.name === name),
-  );
-  if (missing.length > 0) {
-    throw new AppApiError(
-      `${api.name} at ${api.where} has no ${missing.join(', ')} setting for qBittorrent, which Mediaplane needs (GET ${read})`,
-      { kind: 'protocol' },
-    );
-  }
-  return {
-    ...body,
-    name: desired.name,
-    enable: desired.fields.enable === true,
-    fields: body.fields.map((f) =>
-      Object.hasOwn(values, f.name) ? { ...f, value: values[f.name] } : f,
-    ),
-  };
+}
+
+/** The client's own properties Mediaplane sets: its name, and whether it is on. */
+function topOf(desired: DesiredResource): Record<string, unknown> {
+  return { name: desired.name, enable: desired.fields.enable === true };
 }
 
 /**
@@ -144,57 +115,23 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
       };
     },
     async observe(api, known) {
-      const clients = (await api.get(CLIENTS, z.array(client))).filter(
-        (c) => c.implementation === 'QBittorrent',
-      );
-      const held =
-        clients.find((c) => known !== undefined && c.id === known.id) ??
-        clients.find((c) => c.name === DOWNLOAD_CLIENT_NAME);
+      const held = await findProvider(api, CLIENTS, known, DOWNLOAD_CLIENT_NAME);
       return held === undefined
         ? undefined
         : { id: held.id, name: held.name, fields: fieldsOf(held, link) };
     },
-    async verify(api, _desired, observed) {
-      const held = await api.get(`${CLIENTS}/${String(observed.id)}`, client);
-      const result = await api.test(`${CLIENTS}/test`, held);
-      if (result.passed) return true;
-      if (result.failures.some((f) => CREDENTIALS.has(f.property))) return false;
-      const said = result.failures
-        .map((f) => (f.property === '' ? f.message : `${f.property}: ${f.message}`))
-        .join('; ');
-      throw new AppApiError(
-        `${api.name} at ${api.where} tested ${DOWNLOAD_CLIENT_NAME}, and it failed: ${said} (POST ${CLIENTS}/test)`,
-        { kind: 'rejected', status: 400 },
-      );
-    },
-    async create(api, desired) {
-      const schema = `${CLIENTS}/schema`;
-      const offered = (await api.get(schema, z.array(template))).find(
-        (t) => t.implementation === 'QBittorrent',
-      );
-      if (offered === undefined) {
-        throw new AppApiError(
-          `${api.name} at ${api.where} offers no qBittorrent download client (GET ${schema})`,
-          { kind: 'protocol' },
-        );
-      }
-      // Its presets are the UI's, not part of a client.
-      const { presets, ...body } = offered;
-      const made = await api.post(
-        `${CLIENTS}?forceSave=true`,
-        withSettings(api, schema, body, desired, link),
-        created,
-      );
-      return { id: made.id };
-    },
-    async update(api, desired, observed) {
-      const path = `${CLIENTS}/${String(observed.id)}`;
-      const held = await api.get(path, client);
-      await api.put(
-        `${path}?forceSave=true`,
-        withSettings(api, path, held, desired, link),
-      );
-    },
+    verify: (api, desired, observed) =>
+      testProvider(api, CLIENTS, observed.id, desired.name, CREDENTIALS),
+    create: (api, desired) =>
+      createProvider(api, CLIENTS, settingsOf(desired, link), topOf(desired)),
+    update: (api, desired, observed) =>
+      updateProvider(
+        api,
+        CLIENTS,
+        observed.id,
+        settingsOf(desired, link),
+        topOf(desired),
+      ),
   };
 }
 

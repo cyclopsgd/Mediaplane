@@ -62,6 +62,17 @@ describe('catalog', () => {
     for (const app of catalog) visit(app.id, []);
   });
 
+  it("gives each Cloudflare solver a health check, and its API on the port Prowlarr's proxy names", () => {
+    // Prowlarr tests a new indexer proxy as it saves it: up --wait must wait until the
+    // solver answers, or the wire step's create would race its start.
+    const solvers = catalog.filter((app) => app.provides.includes('cloudflare-solver'));
+    expect(solvers.map((app) => app.id)).toEqual(['byparr', 'flaresolverr']);
+    for (const solver of solvers) {
+      expect(typeof solver.health, `${solver.id}'s health check`).toBe('object');
+      expect(solver.ports).toEqual([{ name: 'api', container: 8191, publish: false }]);
+    }
+  });
+
   it('gives an integration to the apps Mediaplane wires so far', () => {
     expect(
       catalog.filter((app) => app.integration !== undefined).map((app) => app.id),

@@ -79,7 +79,9 @@ describe('renderFacts', () => {
 
   it('describes images with their own health check, or none', () => {
     expect(renderFacts(app('gluetun'))).toContain("- **Health check:** the image's own");
-    expect(renderFacts(app('flaresolverr'))).toContain('- **Health check:** none: ');
+    expect(renderFacts({ ...app('flaresolverr'), health: 'none' })).toContain(
+      '- **Health check:** none: ',
+    );
   });
 
   it('shows a longer start period when the app sets one', () => {

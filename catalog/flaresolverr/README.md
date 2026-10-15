@@ -14,7 +14,7 @@ Prowlarr's indexers. Mediaplane runs the upstream image, unmodified, when you li
 - **Ports:** 8191/tcp (api), inside the stack only
 - **Volumes:** none
 - **Runs as:** the image's own user
-- **Health check:** none: `up --wait` waits only for it to be running
+- **Health check:** `curl -fsS -o /dev/null http://127.0.0.1:8191/health`, every 30s (timeout 10s, 5 retries, 60s to start)
 - **Secrets:** none
 - **API:** none over the wiring network
 - **Managed in the app:** nothing yet

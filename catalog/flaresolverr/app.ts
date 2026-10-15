@@ -18,7 +18,11 @@ export default defineApp({
   exclusive: ['cloudflare-solver'],
   secrets: {},
   credentials: [],
-  health: 'none',
+  // The image has none. Prowlarr tests a new indexer proxy as it saves it, so `up --wait`
+  // waits until FlareSolverr answers, before the wire step makes the proxy.
+  health: {
+    test: ['CMD', 'curl', '-fsS', '-o', '/dev/null', 'http://127.0.0.1:8191/health'],
+  },
   env: () => ({ LOG_LEVEL: 'info' }),
   experimental: false,
 });
