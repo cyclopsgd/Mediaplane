@@ -304,7 +304,8 @@ Shows and Movies libraries.
 ## Bootstrap before publish
 
 Jellyfin's startup wizard answers whoever reaches it, and whoever finishes it owns the
-server. So it is never published while it is open:
+server. So `apply` does not publish it while it is open (see
+[T16](security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup) for what voids that):
 
 ```text
 plan
@@ -340,7 +341,10 @@ up --wait again
 - **No port at all.** The file Compose gets on its standard input, after
   `compose.override.yaml`, sets the app's `ports` to `!reset []`, so the override's ports
   go too. `compose.yaml` itself always has the ports, so the stack runs as written
-  without Mediaplane.
+  without Mediaplane, and then Jellyfin starts published with its wizard open. The
+  reset covers `ports` only: an override with `network_mode: host`, or a network shared
+  with a service that publishes, voids the guarantee (see
+  [T16](security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)).
 - **The setup** reaches the app on the wiring network without a key, finishes its
   wizard, and keeps the key it makes in `state/secrets.json` at once. Then Mediaplane
   steps off the wiring network, `up` runs again, without the extra file, and Compose

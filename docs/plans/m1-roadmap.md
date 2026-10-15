@@ -181,8 +181,8 @@ last S3 item, the unscheduled list and extended two S9 items. Slice 3b (2026-10-
 the S3c list, two S8 items and one unscheduled item. Slice 3c (2026-10-11) added the S4
 item, five S8 items, an S9 item and an M2 item. Slice 4 (2026-10-15) added four S8 items,
 and its final review an S5 item, two S8 items, a probe in two others, two S9 test gaps
-and an S9 docs item. Slice 5 (2026-10-15) added an S6 item and six S8 items, and
-extended one. Each slice plan must address the items for that slice.
+and an S9 docs item. Slice 5 (2026-10-15) added an S6 item, six S8 items and an S9
+item, and extended one. Each slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -513,8 +513,8 @@ password, which are S3c's (and listed again below).
   (S5): a connection whose triggers were all turned off by hand still passes its test,
   and tells Jellyfin of nothing. Decide whether drift reports it.
 - **A Jellyfin whose appdata Mediaplane can't read** (S5) is taken as set up when its key
-  is stored, so an emptied appdata there would start it published. Decide whether
-  `plan` should warn when it can't read `system.xml`.
+  is stored, so an emptied appdata there would start it published. `plan` already warns
+  (`bootstrap.unreadable`). Decide whether drift should also report it.
 - **A failed first-run setup stops all wiring** (S5): the bootstrap step's failure skips
   the wire step, as a failed start does. Let the wire step run past a failed first-run
   setup, with that app's resources failed so `requires` skips them (spec §5.1).

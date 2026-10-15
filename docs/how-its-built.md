@@ -34,14 +34,14 @@ design + roadmap
 plan: probe, build, replay
        |
        v
-conflict check, rulings
+conflict check, decisions
        |
        v
 each task:
   build -> review -> fix
        |
        v
-final review, one fix wave
+final review, one round of fixes
        |
        v
 CI on amd64 and arm64
@@ -66,7 +66,8 @@ memory. It builds the slice once for real:
   those commits, so the agents who build it later copy it instead of designing it again.
 - **The replay.** It then applies the plan from scratch, exactly as written. It runs
   every check after each task, then the full end-to-end suite against real Docker. It
-  runs that suite twice: on the Docker Compose version CI uses, and on a newer one. If anything in the plan is wrong, it fixes the plan and replays it again.
+  runs that suite twice: on the Docker Compose version CI uses, and on a newer one. If
+  anything in the plan is wrong, it fixes the plan and replays it.
 
 This is the slowest stage, often about half of a slice, because it amounts to building
 the slice twice. It is also where most mistakes are cheapest to find.
@@ -74,12 +75,13 @@ the slice twice. It is also where most mistakes are cheapest to find.
 ### 2. The conflict check
 
 Before any task starts, a second agent reads the whole plan looking for tasks that
-contradict each other, the design, or the project's rules. The lead agent rules on each
-finding, and the plan is corrected and replayed again.
+contradict each other, the design, or the project's rules. The lead agent, which
+coordinates the slice and writes none of its code, decides what to do about each finding,
+and the plan is corrected and replayed.
 
 ### 3. The tasks
 
-The lead agent coordinates and never writes the slice's code itself. For each task:
+The lead agent never writes the slice's code itself. For each task:
 
 1. **Build.** A fresh agent gets only that task's text and the names it needs from
    earlier tasks, not the whole history. It applies the task, runs the tests and
@@ -90,15 +92,15 @@ The lead agent coordinates and never writes the slice's code itself. For each ta
 3. **Fix.** If the review finds problems, the lead agent decides what must change and
    why, the builder fixes it, and a reviewer checks just the fix.
 
-A task is done only when its review passes. The lead agent keeps a written ledger of
-every task, ruling and commit, so the work can resume exactly where it was.
+A task is done only when its review passes. The lead agent keeps a written log of
+every task, decision and commit, so the work can resume exactly where it was.
 
 ### 4. The final review
 
 When every task is done, an agent on the most capable model reviews the whole branch at
 once. This catches what single tasks can't show: a pattern repeated across files,
 docs that no longer match the code, or a gap between tasks. Its findings are fixed in
-one wave and checked again. Anything that should wait goes on the roadmap's list for a
+one round and checked again. Anything that should wait goes on the roadmap's list for a
 later slice, with the reason.
 
 ### 5. CI and the merge
@@ -120,7 +122,7 @@ The agents work through the slices on their own, but they stop and ask for:
 - steps only a person can do, such as signing in to an outside account.
 
 The lead agent records the smaller calls it makes, with its reasons, in each plan's
-Decisions and in the ledger.
+Decisions and in the log.
 
 ## Rules every agent follows
 
@@ -140,7 +142,7 @@ Some of what the reviews found in Slice 4 (indexers), all fixed before the merge
 - two places where a failing test could have printed an app's whole reply into the
   public CI log, one of them including Sonarr's API key;
 - test fakes that accepted requests the real apps refuse;
-- docs that said `plan` changes nothing, without its two documented exceptions;
+- docs that said `plan` changes nothing, without the exceptions it had at the time;
 - a claim about how often an app tests a setting that no probe had checked.
 
 ## Where to see it

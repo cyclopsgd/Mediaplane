@@ -27,12 +27,12 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
 
 - **It runs Jellyfin** whenever `media_server` is `jellyfin`, listed under `apps` or not,
   with your data folder at `/data`.
-- **It sets Jellyfin up before anyone else can reach it.** Jellyfin's startup wizard
-  answers whoever reaches it first, and whoever finishes it owns the server. So on its
-  first start, Jellyfin has no published port. `apply` finishes the wizard over the
-  stack's private wiring network, as the shared admin (`mediaplane credentials` shows the
-  login), signs in, makes an API key named `Mediaplane`, keeps it in
-  `state/secrets.json` at once, and signs out. Only then does it start Jellyfin again,
+- **It sets Jellyfin up before its web UI is published on your network.** Jellyfin's
+  startup wizard answers whoever reaches it first, and whoever finishes it owns the
+  server. So on its first start, Jellyfin has no published port. `apply` finishes the
+  wizard over the stack's private wiring network, as the shared admin
+  (`mediaplane credentials` shows the login), signs in, makes an API key named
+  `Mediaplane`, keeps it in `state/secrets.json` at once, and signs out. Only then does it start Jellyfin again,
   with its web UI published as `network.bind` says.
 
   ```text
@@ -110,7 +110,11 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
         - /dev/dri:/dev/dri
   ```
 
-  A port you publish there is held back too while the wizard is open.
+  A port you publish there is held back too while the wizard is open, when the stack
+  runs through `apply`. But `!reset` covers only `ports`: a `network_mode: host`, or a
+  network shared with another service, publishes Jellyfin while its wizard is open. Keep
+  those out of the override. The
+  [threat model](../../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup) lists what voids the guarantee.
 
 ## Known issues
 

@@ -47,27 +47,27 @@ Mediaplane does that part for you:
 
 ## What works so far
 
-| Capability                                                                              | Status       |
-| --------------------------------------------------------------------------------------- | ------------ |
-| Validate `stack.yaml`, with errors that say what to change                              | Done         |
-| Render a readable Compose project with images pinned by tag and digest                  | Done         |
-| Check the host first: Docker versions, disk, data folder, ports, the VPN device         | Done         |
-| Refuse to publish web UIs on a cloud VM's private address by mistake                    | Done         |
-| Predict exactly which containers will change, using Compose's own config hashes         | Done         |
-| Generate keys and start the stack (`mediaplane apply`)                                  | Done         |
-| See each app's health and every past apply (`status`, `history`)                        | Done         |
-| Write a starter `stack.yaml` (`init`)                                                   | Done         |
-| One admin login for qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin                  | Done         |
-| Reach the apps' APIs over a private network with no route out                           | Done         |
-| A VPN kill switch, tested against a real WireGuard server, and `vpn-check`              | Done         |
-| Run in a hardened container, behind a Docker socket proxy                               | Done         |
-| Documentation generated from code: the `stack.yaml` and CLI references, app facts       | Done         |
-| Link Sonarr and Radarr to qBittorrent: download clients, categories, root folders       | Done         |
-| Link Prowlarr to Sonarr and Radarr, with Byparr or FlareSolverr as its proxy            | Done         |
-| Set Jellyfin up before it is published, with its libraries; the arrs tell it of imports | Done         |
-| Wire the rest together (requests, Plex)                                                 | Planned      |
-| Detect manual changes and offer Re-apply or "Keep mine"                                 | Planned      |
-| Web panel with a setup wizard                                                           | Planned (M2) |
+| Capability                                                                        | Status       |
+| --------------------------------------------------------------------------------- | ------------ |
+| Validate `stack.yaml`, with errors that say what to change                        | Done         |
+| Render a readable Compose project with images pinned by tag and digest            | Done         |
+| Check the host first: Docker versions, disk, data folder, ports, the VPN device   | Done         |
+| Refuse to publish web UIs on a cloud VM's private address by mistake              | Done         |
+| Predict exactly which containers will change, using Compose's own config hashes   | Done         |
+| Generate keys and start the stack (`mediaplane apply`)                            | Done         |
+| See each app's health and every past apply (`status`, `history`)                  | Done         |
+| Write a starter `stack.yaml` (`init`)                                             | Done         |
+| One admin login for qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin            | Done         |
+| Reach the apps' APIs over a private network with no route out                     | Done         |
+| A VPN kill switch, tested against a real WireGuard server, and `vpn-check`        | Done         |
+| Run in a hardened container, behind a Docker socket proxy                         | Done         |
+| Documentation generated from code: the `stack.yaml` and CLI references, app facts | Done         |
+| Link Sonarr and Radarr to qBittorrent: download clients, categories, root folders | Done         |
+| Link Prowlarr to Sonarr and Radarr, with Byparr or FlareSolverr as its proxy      | Done         |
+| Set up Jellyfin before it is published, with its libraries and links              | Done         |
+| Wire the rest together (requests, Plex)                                           | Planned      |
+| Detect manual changes and offer Re-apply or "Keep mine"                           | Planned      |
+| Web panel with a setup wizard                                                     | Planned (M2) |
 
 ## The stack
 
@@ -417,8 +417,8 @@ and keep. What it adds is everything around the file:
 - keys that are generated once and kept;
 - Sonarr and Radarr linked to qBittorrent, with its categories and their root folders;
 - Prowlarr linked to Sonarr and Radarr, with a Cloudflare solver as its indexer proxy;
-- Jellyfin set up before anyone else can reach it, with its libraries, and told of each
-  import by Sonarr and Radarr;
+- Jellyfin set up before its web UI is published on your network, with its libraries,
+  and told of each import by Sonarr and Radarr;
 - next, the rest of the wiring between the apps.
 
 ### How is this different from Buildarr or Recyclarr?

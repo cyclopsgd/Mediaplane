@@ -11,17 +11,17 @@ that power. None of them removes it.
 
 ## What it protects
 
-| Asset                                        | Where                                                                 | Why it matters                                              |
-| -------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------- |
-| The host                                     | Everything                                                            | Docker access is root on the host                           |
-| Generated API keys                           | `state/secrets.json`, `generated/.env` (both 0600) and `appdata/`     | They open the apps' APIs                                    |
-| qBittorrent's key, in Sonarr and Radarr      | Their download client's settings, in `appdata/`                       | It opens qBittorrent's API                                  |
-| Sonarr's and Radarr's keys, in Prowlarr      | Its links' settings, in `appdata/`                                    | They open Sonarr's and Radarr's APIs                        |
-| Jellyfin's key, which Jellyfin made          | `state/secrets.json` (0600), and Sonarr's and Radarr's connections    | It opens Jellyfin's API, as its admin                       |
-| The shared admin password                    | `state/secrets.json` (0600) or `admin.password`; a hash in `appdata/` | It opens qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin |
-| Your secrets: VPN key, Plex token, passwords | `secrets/` (0700), or environment variables                           | They are your accounts                                      |
-| App data                                     | `appdata/<app>/`                                                      | The apps' databases and settings, some holding credentials  |
-| Your media                                   | The data folder                                                       | Your library                                                |
+| Asset                                        | Where                                                                 | Why it matters                                             |
+| -------------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
+| The host                                     | Everything                                                            | Docker access is root on the host                          |
+| Generated API keys                           | `state/secrets.json`, `generated/.env` (both 0600) and `appdata/`     | They open the apps' APIs                                   |
+| qBittorrent's key, in Sonarr and Radarr      | Their download client's settings, in `appdata/`                       | It opens qBittorrent's API                                 |
+| Sonarr's and Radarr's keys, in Prowlarr      | Its links' settings, in `appdata/`                                    | They open Sonarr's and Radarr's APIs                       |
+| Jellyfin's key, which Jellyfin made          | `state/secrets.json` (0600), and Sonarr's and Radarr's connections    | It opens Jellyfin's API, as its admin                      |
+| The shared admin password                    | `state/secrets.json` (0600) or `admin.password`; a hash in `appdata/` | It opens qBittorrent, Sonarr, Radarr, Prowlarr, Jellyfin   |
+| Your secrets: VPN key, Plex token, passwords | `secrets/` (0700), or environment variables                           | They are your accounts                                     |
+| App data                                     | `appdata/<app>/`                                                      | The apps' databases and settings, some holding credentials |
+| Your media                                   | The data folder                                                       | Your library                                               |
 
 ## What runs, and who can reach it
 
@@ -90,9 +90,9 @@ host network, read-only mounts
   that adds a path. That is a container of the app's own image, with the app's own
   settings from `compose.yaml` and `compose.override.yaml`, running `mkdir` as the
   stack's `user:` to make the folder inside the data folder, where the app mounts it. It
-  is removed when `mkdir` exits. It uses the Docker API calls that the ownership helper and
-  Mediaplane's own join of the wiring network already make, so the proxy allows nothing
-  new for it. T5 says what its environment holds.
+  is removed when `mkdir` exits. It uses the Docker API calls that the ownership helper
+  and Mediaplane's own join of the wiring network already make, so the proxy allows
+  nothing new for it. T5 says what its environment holds.
 - **The first-run setup.** An app whose setup anyone who reaches it could finish, which
   is Jellyfin's startup wizard today, starts with no published port: `apply` gives
   Compose one more file, on its standard input, that takes every port off it, those of
@@ -310,8 +310,9 @@ Controls today:
   with is dropped. Its preferences hold its own key too: Mediaplane keeps only the
   fields it manages, and never shows them.
 - The folders a root folder or a library needs are made with a command that holds only
-  their paths. The throwaway container that runs it has the app's own environment, its
-  API key among it, which `docker inspect` shows while it runs, as it does for the arr's own container.
+  their paths. For Sonarr and Radarr, the throwaway container that runs it has the arr's
+  own environment, its API key among it, which `docker inspect` shows while it runs, as
+  it does for the arr's own container. Jellyfin's environment holds no key.
 - Given to Compose in its environment or in the 0600 `generated/.env`, never on its
   command line.
 - Gluetun's control key reaches vpn-check's probe on its standard input, and the probe
@@ -587,9 +588,10 @@ What remains:
 
 Controls today:
 
-- Jellyfin's startup wizard is never published while it is open. `apply` starts Jellyfin
-  with no published port, its override's ports included, finishes the wizard over the
-  wiring network, and only then publishes it.
+- When the stack runs through `apply`, Jellyfin's startup wizard is not published while it
+  is open. `apply` starts Jellyfin with no published port, its override's ports included,
+  finishes the wizard over the wiring network, and only then publishes it. What voids
+  this is under "What remains".
 - Before an app starts, Mediaplane reads its appdata (Jellyfin's `system.xml`) to see
   whether its setup is done. A Jellyfin whose appdata was emptied starts its wizard
   again: it starts unpublished again, even with its key stored.
@@ -607,7 +609,12 @@ What remains:
 
 - While the wizard is open, for the seconds Mediaplane takes, any container of the stack
   can reach Jellyfin on the stack's networks. A compromised app could claim it first:
-  Mediaplane's sign-in then fails, and `apply` stops, completing no wizard for it.
+  if it sets the first user and leaves the wizard open, Mediaplane's sign-in fails, and
+  `apply` stops, completing no wizard for it. If it also completes the wizard,
+  Mediaplane can't tell that from a wizard finished by hand: `apply` stops, but it
+  publishes Jellyfin, which belongs to whoever finished it. This needs a compromised
+  container already inside the stack, which T4 and the other threats here already treat
+  as serious.
 - An appdata Mediaplane can't read says nothing: with Jellyfin's key stored, Mediaplane
   takes the setup as done, and `plan` warns (`bootstrap.unreadable`) that it can't tell.
   Fix the file's ownership, or the user Mediaplane runs as.

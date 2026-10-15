@@ -1380,6 +1380,14 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     `compose.yaml` as written: nothing is rendered twice. An app whose setup failed while
     it is still open stays unpublished; one whose setup is done is published even when
     making its key failed.
+  - **The re-check, and two plan diagnostics.** Before publishing an app, the engine asks
+    the app once more whether its setup is still open (`Bootstrap.open`), and publishes
+    it only if it is not; if it still looks open, or can't be asked, the step fails and
+    that app stays unpublished, though it keeps the key it made. `plan` warns
+    `bootstrap.unreadable` when it can't read the file that says the setup is done while
+    a key is stored, since it can't tell whether the setup is open; and fails with
+    `bootstrap.network-via` for an app with a setup that runs inside another app's
+    network, which publishes its ports (no catalog app does).
   - **No new Docker API call:** `up`, and a recreate, are what `apply` already does, and
     the file goes on Compose's standard input (§7.2(2)).
 - **Jellyfin's setup** (§6.1), as Jellyfin 12.2 takes it: `GET /Startup/User` first,
