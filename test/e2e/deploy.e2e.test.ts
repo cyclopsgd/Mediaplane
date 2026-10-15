@@ -15,6 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   buildImage,
   composeDown,
+  docker,
   ejectArguments,
   expectWiringRemoved,
   parseRevealed,
@@ -345,6 +346,10 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     ]);
     // The chown helper ran through the proxy.
     expect((await stat(join(home, 'appdata', 'seerr'))).uid).toBe(1000);
+    // Jellyfin ended published, as Docker itself says, not only the engine's message.
+    expect(await docker('port', `${STACK}-jellyfin-1`, '8096/tcp')).toBe(
+      '127.0.0.1:8096',
+    );
 
     const second = await mediaplane('apply', '--yes', '--json');
     expect(second.code, second.stdout + second.stderr).toBe(0);
@@ -355,8 +360,9 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     expect(codesIn(again.stdout)).not.toContain('docker.no-proxy');
     expect(codesIn(again.stdout)).not.toContain('preflight.home-path');
     // Mediaplane in the image reads Jellyfin's system.xml: with Jellyfin's key out of the
-    // store, plan would set it up again, published, since its setup is done. One it
-    // couldn't read would say nothing, and plan would start it unpublished.
+    // store, plan lists its setup published, since the wizard is done (apply would only
+    // sign in and make a new key). One it couldn't read would say nothing, and plan would
+    // start it unpublished.
     const store = await readSecretStore(home);
     const { jellyfin: _kept, ...others } = store.apps;
     await writeSecretStore(home, { ...store, apps: others });

@@ -82,23 +82,34 @@ interface Library {
 }
 
 /**
- * Jellyfin's state now, as the stack's networks show it: whether its port is published
- * on the host, and whether its startup wizard is open, asked at its address on the wiring
- * network (from source, the host reaches it there).
+ * Jellyfin's container now, and its state as the stack's networks show it: whether its
+ * port is published on the host, and whether its startup wizard is open, asked at its
+ * address on the wiring network (from source, the host reaches it there). The wizard's
+ * flag is read strictly: an answer without a boolean `StartupWizardCompleted` (such as
+ * the camelCase one Jellyfin's minimal startup server gives) is an error, never "open".
  */
-async function jellyfinState(runtime: Runtime): Promise<string> {
+async function jellyfinState(runtime: Runtime): Promise<{ id: string; state: string }> {
   const container = (await runtime.containers()).find((c) => c.service === 'jellyfin');
-  if (container === undefined) return 'no container';
-  const ports = container.published.filter((p) => p.port !== 0);
+  if (container === undefined) return { id: '', state: 'no container' };
   const address = (await runtime.wiringAddresses([container.id]))[container.id] ?? '';
   const answer = await fetch(`http://${address}:${String(JELLYFIN)}/System/Info/Public`, {
     signal: AbortSignal.timeout(10_000),
   });
   const { StartupWizardCompleted: done } = await jsonBody<{
-    StartupWizardCompleted: boolean;
+    StartupWizardCompleted?: unknown;
   }>(answer, "Jellyfin's public info");
-  const shown = ports.map((p) => `${p.address}:${String(p.port)}`).join(' ');
-  return `ports ${shown === '' ? 'none' : shown}, wizard ${done ? 'done' : 'open'}`;
+  if (typeof done !== 'boolean') {
+    throw new Error(
+      `Jellyfin's public info answered ${String(answer.status)} without a boolean StartupWizardCompleted`,
+    );
+  }
+  const shown = container.published
+    .map((p) => `${p.address}:${String(p.port)}`)
+    .join(' ');
+  return {
+    id: container.id,
+    state: `ports ${shown === '' ? 'none' : shown}, wizard ${done ? 'done' : 'open'}`,
+  };
 }
 
 /**
@@ -134,18 +145,23 @@ describe('Jellyfin, set up before it is published', () => {
         stackFor(data, { seerr: false, prowlarr: false }),
       );
       const docker = createDockerRuntime({ home, project: PROJECT });
-      // Jellyfin as each up leaves it, and as the up that publishes it finds it.
+      // Jellyfin as each up leaves it, and as the up that publishes it finds it, with
+      // the container each reading saw.
       const seen: string[] = [];
+      const ids: string[] = [];
+      const record = async (when: string) => {
+        const { id, state } = await jellyfinState(docker);
+        seen.push(`${when}: ${state}`);
+        ids.push(id);
+      };
       const runtime: Runtime = {
         ...docker,
         up: async (seconds, values, unpublished = []) => {
-          if (unpublished.length === 0) {
-            seen.push(`before an up of every port: ${await jellyfinState(docker)}`);
-          }
+          if (unpublished.length === 0) await record('before an up of every port');
           const result = await docker.up(seconds, values, unpublished);
           const what =
             unpublished.length === 0 ? 'every port' : `no ${unpublished.join(' ')} port`;
-          seen.push(`after an up of ${what}: ${await jellyfinState(docker)}`);
+          await record(`after an up of ${what}`);
           return result;
         },
       };
@@ -174,6 +190,12 @@ describe('Jellyfin, set up before it is published', () => {
         'before an up of every port: ports none, wizard done',
         `after an up of every port: ports 127.0.0.1:${String(JELLYFIN)}, wizard done`,
       ]);
+      // The wizard was finished in the container that started unpublished, and the
+      // publishing up recreated it.
+      expect(
+        [ids[0] !== '' && ids[1] === ids[0], ids[2] !== ids[1]],
+        "Jellyfin's containers: set up in the unpublished one, published in a new one",
+      ).toEqual([true, true]);
       expect(first.actions.find((a) => a.step === 'bootstrap')?.detail).toBe(
         'set up jellyfin and saved jellyfin.apiKey; published jellyfin',
       );
@@ -281,7 +303,10 @@ describe('Jellyfin, set up before it is published', () => {
           ],
           `${arr.app}'s connection`,
         ).toEqual(['MediaBrowser', 'jellyfin', JELLYFIN, true]);
-        expect(setting('apiKey'), `${arr.app} shows the key masked`).toBe('********');
+        // Yes or no only: a failure must never print what the arr showed, the key itself.
+        expect(setting('apiKey') === '********', `${arr.app} shows the key masked`).toBe(
+          true,
+        );
         expect(await testConnection(arr), `${arr.app}'s test of it`).toBe('passes');
       }
 
@@ -353,9 +378,10 @@ describe('Jellyfin, set up before it is published', () => {
       ).toEqual(LIBRARIES);
       expect(await testConnection(sonarr), "Sonarr's test of it").toBe('passes');
 
-      // Jellyfin's own key, deleted in its dashboard: plan says Jellyfin refuses it. With
-      // it taken out of state/secrets.json, apply signs in as the admin, published, makes
-      // a new key, and gives it to both arrs' connections, whose own test refuses the old.
+      // Jellyfin's own key, deleted in its dashboard: plan says Jellyfin refuses it, and
+      // both arrs' own test refuses the old key their connections hold. With it taken out
+      // of state/secrets.json, apply signs in as the admin, published, makes a new key,
+      // and gives it to both arrs' connections, whose test then passes.
       const revoked = await api(JELLYFIN, `/Auth/Keys/${key}`, mediaBrowser(key), {
         method: 'DELETE',
       });
@@ -370,9 +396,16 @@ describe('Jellyfin, set up before it is published', () => {
           ) as string,
         })),
       );
+      // Both arrs' connections still hold the old key, and their own test refuses it.
+      for (const arr of ARRS) {
+        expect(await testConnection(arr), `${arr.app}'s test of the old key`).toContain(
+          'ApiKey:',
+        );
+      }
       const { jellyfin: _lost, ...others } = store.apps;
       await writeSecretStore(home, { ...store, apps: others });
       seen.length = 0;
+      ids.length = 0;
       const rekeyed = await apply(options);
       expect(rekeyed.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
       expect(rekeyed.outcome).toBe('success');
@@ -382,6 +415,10 @@ describe('Jellyfin, set up before it is published', () => {
         `before an up of every port: ports 127.0.0.1:${String(JELLYFIN)}, wizard done`,
         `after an up of every port: ports 127.0.0.1:${String(JELLYFIN)}, wizard done`,
       ]);
+      expect(
+        ids[0] !== '' && ids[1] === ids[0],
+        'Jellyfin was not recreated by the rekey',
+      ).toBe(true);
       const newKey = (await readSecretStore(home)).apps.jellyfin?.apiKey ?? '';
       expect(newKey !== '' && newKey !== key, 'a new key was made and saved').toBe(true);
       // Kept out of every message from here on, as the old one is.
