@@ -115,7 +115,8 @@ These are added or restated for this slice:
     (`knownSecrets` holds every key in the store).
   - The made-up indexer's key is `fake-indexer-key`, and no secret.
   - End-to-end failure messages show an app's refusal as its `propertyName:
-    errorMessage` list only, never a raw body.
+    errorMessage` list only, never a raw body, with every stored key replaced
+    (`servarrFailure`, S3c's, now shared).
 - **No new socket-proxy permission.** `deploy/mediaplane.compose.yaml` and
   `deploy/deploy.test.ts` don't change. Anything that would need a new Docker API call is
   a security-sensitive decision for the controller, not for an implementer.
@@ -200,7 +201,18 @@ below was checked on the pinned images (Prowlarr 2.6.5.5623, Sonarr 4.0.20, Rada
    - a new link is POSTed with `?forceSave=true`, and Prowlarr still tests it (a wrong
      key or host is refused with 400, as Sonarr's download client is: S3c's final review,
      M1), so a create fails while the arr is out of reach. An update is PUT with
-     `?forceSave=true`, which Prowlarr saves untested (202).
+     `?forceSave=true`, which Prowlarr saves untested (202);
+   - **what a test leaves in the app**, probed on the pinned Prowlarr and Sonarr. A test
+     by id that fails records the failure in Prowlarr's status of the link (a row in its
+     `ApplicationStatus` table, at escalation 1, whose last failure each failing test
+     moves on), as a test from Prowlarr's web UI does. A test that passes sets the
+     escalation back to 0 and keeps the row. Sonarr's test of S3c's download client does
+     the same, in `DownloadClientStatus`. Neither changes `GET /api/v1/health` or
+     `/api/v3/health`. So a `plan` that finds a key refused records that in the app, the
+     one thing it leaves there, as S3c's test leaves a post-import category. The app's
+     own test is the only way to check a masked key, so the code doesn't change: the
+     spec's §11 entries for Slices 3c and 4 and the threat model say so, and the
+     roadmap's S8 list asks drift, which would run these tests on a schedule.
 4. **(check) Each link `requires` its arr's admin** (Task 2; §5.1, §5.2). Found while
    writing this plan, on the real stack: with Sonarr stopped and `apply` about to start
    it, `plan` reached Prowlarr, ran its test of the link, and warned
@@ -265,9 +277,10 @@ below was checked on the pinned images (Prowlarr 2.6.5.5623, Sonarr 4.0.20, Rada
    and the proxy are all Servarr "providers", with the same list, `…/schema`, `…/{id}`
    and `…/test` endpoints and `forceSave` rules. `catalog/_shared/servarr-provider.ts`
    holds them once: `findProvider`, `createProvider`, `updateProvider`, `testProvider`,
-   `settingOf` and `textOf`. The download client moves onto it, with its messages as they
-   were, and its S3c tests pass untouched: they are the check of the move. The root
-   folder isn't a provider, and stays as it is.
+   `settingOf` and `textOf`, with the `ProviderKind` and `Provider` types; the schema a
+   provider is read with stays private to the file. The download client moves onto it,
+   with its messages as they were, and its S3c tests pass untouched: they are the check of
+   the move. The root folder isn't a provider, and stays as it is.
 9. **The fakes refuse what the apps refuse** (Task 1; the roadmap's S4 item, and the S3c
    final review's "can wait" until S4 extends these fakes). In `fakeStackApis`:
    - Sonarr and Radarr refuse a root folder whose folder no `mkdir` made, with the arrs'
@@ -327,11 +340,21 @@ below was checked on the pinned images (Prowlarr 2.6.5.5623, Sonarr 4.0.20, Rada
       S3b's, which the deploy and download tests prove on every run.
     - The apply e2e's lists of what is wired gain the three resources, which its
       lost-state re-adoption and its `login_on_lan: false` recreation now cover too.
+    - **The helpers are shared, not copied.** S3c's `servarrFailure` (with its
+      redaction of every secret it is given), `wired` and its `WireActions` shape, from
+      `download.e2e.test.ts`, and `docker`, `publishedPort` and `removeOrIgnoreMissing`,
+      from `wireguard.ts`, move unchanged into `test/e2e/helpers.ts`, and those files
+      import them, as the new ones do. `stackFor` takes `{ seerr: false }`, for the
+      video stack without Seerr. The indexers test's refusals go through
+      `servarrFailure` with every key the store holds, as CI's log is public. Since the
+      moves touch S3c's e2e files, Task 3 runs the whole e2e suite.
 11. **A link stays when its arr leaves the stack** (Tasks 2, 4). With an arr gone from
     the stack, the link to it isn't wanted, and Mediaplane removes nothing it made, as
     S3c's download client stays when qBittorrent goes. Prowlarr then reports the link
-    failing. Spec §8.1(3) step 4 asks an app's links to go with it: the roadmap's S8 list
-    carries it, and Prowlarr's README says how to delete the link by hand.
+    failing. So does the indexer proxy when the stack drops its Cloudflare solver, and
+    indexers tagged `cloudflare` then fail. Spec §8.1(3) step 4 asks an app's links to
+    go with it: the spec's §11 and the roadmap's S8 list carry both, and Prowlarr's README
+    says how to delete the link by hand.
 12. **No new Docker API call, and no proxy permission** (all tasks). The new calls are
     Prowlarr's API over the wiring network. `deploy/mediaplane.compose.yaml` and
     `deploy/deploy.test.ts` don't change.
@@ -341,15 +364,16 @@ below was checked on the pinned images (Prowlarr 2.6.5.5623, Sonarr 4.0.20, Rada
       the skipped link, and a real example; the app-won't-start runbook: a Byparr that
       never becomes healthy without the internet;
     - the architecture: the indexers, with a diagram;
-    - the threat model: Prowlarr holds the arrs' keys (an asset, T4, T5, T10), and the
-      Cloudflare solver (a new T15);
+    - the threat model: Prowlarr holds the arrs' keys (an asset, T4, T5, T10), what a
+      failing key test records in the app (decision 3), and the Cloudflare solver (a
+      new T15);
     - the README: status, capabilities, flow, and the example's wiring lines from a real
       run of the same stack with this slice;
     - the Prowlarr, Byparr, FlareSolverr, Sonarr and Radarr READMEs, with how to tag an
       indexer `cloudflare` (spec §6.2: "`catalog/prowlarr/README.md` explains how");
     - CONTRIBUTING: the new test, and the internet it needs;
-    - the spec: a "Slice 4" entry in §11;
-    - the roadmap: S4 done, and three S8 items.
+    - the spec: a "Slice 4" entry in §11, and a sentence in Slice 3c's (decision 3);
+    - the roadmap: S4 done, four S8 items, and a note in S7's (decision 14).
 
     Then the renumbering: S5 Jellyfin, S6 requests, S7 Plex, S8 drift, S9 release, mapped
     by meaning (Global Constraints). The roadmap's 2026-10-11 note becomes a short
@@ -361,7 +385,10 @@ below was checked on the pinned images (Prowlarr 2.6.5.5623, Sonarr 4.0.20, Rada
     2 ("the Plex path is identical except that the user supplies a Plex token") needs
     Seerr connected to Plex, so the roadmap's S7 row takes Seerr's Plex sign-in and its
     link to Plex, with criterion 2, and S6 proves criterion 1. Seerr's and Plex's READMEs
-    and ADR 0006 say so.
+    and ADR 0006 say so. Seerr's `login.comingIn` stays `Slice 6`, which is wrong on a
+    Plex stack: the roadmap's S7 item on logins says so, to fix with it. The three lines
+    that say until when Seerr's setup is open (Seerr's README, the threat model, the
+    deploy guide) add "Slice 7 with Plex".
 
 ## File structure (new and changed in this slice)
 
@@ -397,7 +424,8 @@ Elsewhere:
 - `packages/cli/src/init.ts`, `packages/engine/src/config/schema.ts`: renumbered words.
 - `scripts/docs/catalog-facts.test.ts`: the `none` health wording, on a copy.
 - `test/e2e/indexer.ts` and `test/e2e/indexers.e2e.test.ts`, new;
-  `test/e2e/apply.e2e.test.ts` (its wiring lists).
+  `test/e2e/apply.e2e.test.ts` (its wiring lists); `test/e2e/helpers.ts`, which gains
+  the helpers `download.e2e.test.ts` and `wireguard.ts` had, and `stackFor`'s option.
 - docs: the wiring-failed and app-won't-start runbooks, the architecture, the threat
   model, the README, CONTRIBUTING, the deploy guide, ADRs 0006 and 0011, the spec, the
   roadmap, the generated references (`stack-yaml.md`, `stack.schema.json`), and a
@@ -1355,8 +1383,8 @@ providers, as the arrs' download client is, so the way to find, make, update and
 moves into a shared file first, and the download client onto it.
 
 Decision: `servarr-provider.ts` holds `findProvider`, `createProvider`,
-`updateProvider`, `testProvider`, `settingOf` and `textOf`; the download client keeps its
-messages, and its S3c tests pass unchanged (decision 8).
+`updateProvider`, `testProvider`, `settingOf` and `textOf`, and keeps its schema private;
+the download client keeps its messages, and its S3c tests pass unchanged (decision 8).
 Decision: the links are `Sonarr (Mediaplane)` and `Radarr (Mediaplane)`, with the fields
 `prowlarrUrl`, `baseUrl`, `syncLevel` and `syncCategories`, and the secret `apiKey`,
 checked by Prowlarr's own test; each requires its arr's admin (decisions 1 to 4).
@@ -1864,7 +1892,7 @@ const setting = z.looseObject({ name: z.string(), value: z.unknown().optional() 
  * as "********", and the rest of it goes back as it came, so a setting Mediaplane doesn't
  * manage stays the user's.
  */
-export const provider = z.looseObject({
+const provider = z.looseObject({
   id: z.number(),
   name: z.string(),
   implementation: z.string(),
@@ -2231,10 +2259,10 @@ index b9c1e58..6c8f664 100644
 
 ```diff
 diff --git a/catalog/prowlarr/integration.ts b/catalog/prowlarr/integration.ts
-index f72bfed..afccaf0 100644
+index f72bfed..9d13abd 100644
 --- a/catalog/prowlarr/integration.ts
 +++ b/catalog/prowlarr/integration.ts
-@@ -1,7 +1,227 @@
+@@ -1,7 +1,228 @@
 +import {
 +  provides,
 +  type AppApi,
@@ -2312,7 +2340,8 @@ index f72bfed..afccaf0 100644
 + *   fails while it can't reach the arr. Prowlarr comes after the arrs, so they are up.
 + * - It requires the arr's admin, the first thing Mediaplane checks there: while the arr
 + *   is down, refuses its key or is yet to be started, `plan` leaves the link's key
-+ *   unchecked rather than blame the link, and the wire step skips the link.
++ *   unchecked rather than blame the link, and the wire step skips the link when the
++ *   arr's admin fails.
 + */
 +function application(link: (typeof LINKED)[number]): ResourceSpec {
 +  const kind: ProviderKind = {
@@ -2354,7 +2383,7 @@ index f72bfed..afccaf0 100644
 +          prowlarrUrl: `http://${app.def.id}:${String(own)}`,
 +          baseUrl: `http://${arr.networkVia ?? arr.def.id}:${String(port)}`,
 +          syncLevel: 'fullSync',
-+          syncCategories: link.categories.join(','),
++          syncCategories: categoriesOf(link.categories),
 +        },
 +        secrets: { apiKey: key },
 +      };
@@ -2521,16 +2550,29 @@ to both arrs, the protected one fetched through Byparr's browser, a wrong key se
 then the same through FlareSolverr after switching, and no changes after each round
 (decision 10).
 Decision: the apply e2e's wiring lists gain the three resources (decision 10).
+Decision: S3c's e2e helpers the new files need move into `helpers.ts`, unchanged, and
+`stackFor` can leave Seerr out; the new test's refusals redact every stored key
+(decision 10).
 
 **Files:**
 - Create: `test/e2e/indexer.ts`, `test/e2e/indexers.e2e.test.ts`
-- Modify: `test/e2e/apply.e2e.test.ts`
+- Modify: `test/e2e/helpers.ts`, `test/e2e/download.e2e.test.ts`,
+  `test/e2e/wireguard.ts`, `test/e2e/apply.e2e.test.ts`
 
 **Interfaces:**
 - **Consumes:** Task 2's resources, as `apply` makes them; `makeHome`, `composeDown`,
-  `expectWiringRemoved`, `runTeardown` and `BUSYBOX` from `test/e2e/helpers.ts`.
-- **Produces:** `startFakeIndexer(id: string): Promise<FakeIndexer>`, with
-  `interface FakeIndexer { url: string; open: string; protected: string; browserVisits(): Promise<number>; remove(): Promise<void> }`.
+  `expectWiringRemoved`, `runTeardown`, `stackFor` and `BUSYBOX` from
+  `test/e2e/helpers.ts`.
+- **Produces:**
+  - `test/e2e/indexer.ts`: `startFakeIndexer(id: string): Promise<FakeIndexer>`, with
+    `interface FakeIndexer { url: string; open: string; protected: string; browserVisits(): Promise<number>; remove(): Promise<void> }`;
+  - `test/e2e/helpers.ts`, moved from S3c's files as they were:
+    `docker(...args: string[]): Promise<string>`,
+    `publishedPort(container: string, port: string): Promise<number>`,
+    `removeOrIgnoreMissing(...args: string[]): Promise<void>`,
+    `servarrFailure(response: Response, secrets: readonly string[]): Promise<string>`,
+    `interface WireActions`, `wired(actions: WireActions['actions']): string[][]`; and
+    `stackFor(data: string, { seerr = true }: { seerr?: boolean } = {}): string`.
 
 - [ ] **Step 1: See the apply end-to-end test fail on the new resources**
 
@@ -2541,7 +2583,242 @@ plan's wiring now lists 14 resources, where the test expects 11
 The stack itself comes up healthy, and its first `apply` succeeds: Prowlarr makes its
 links, and its proxy at Byparr.
 
-- [ ] **Step 2: Write the made-up indexer and the test, and update the apply test**
+- [ ] **Step 2: Share the helpers, write the made-up indexer and the test, and update the apply test**
+
+**Change** `test/e2e/helpers.ts`:
+
+```diff
+diff --git a/test/e2e/helpers.ts b/test/e2e/helpers.ts
+index 1eb578c..a911fef 100644
+--- a/test/e2e/helpers.ts
++++ b/test/e2e/helpers.ts
+@@ -32,6 +32,10 @@ export async function buildImage(tag: string): Promise<void> {
+ /**
+- * The M1 video stack without the VPN (vpn.e2e.test.ts has its own, behind the VPN).
+- * The apps run as the current user, who owns the temporary data folder.
++ * The M1 video stack without the VPN (vpn.e2e.test.ts has its own, behind the VPN), or
++ * without Seerr too. The apps run as the current user, who owns the temporary data
++ * folder.
+  */
+-export function stackFor(data: string): string {
++export function stackFor(
++  data: string,
++  { seerr = true }: { seerr?: boolean } = {},
++): string {
+   return `version: 1
+@@ -46,4 +50,3 @@ apps:
+   qbittorrent: { vpn: false }
+-  seerr: {}
+-`;
++${seerr ? '  seerr: {}\n' : ''}`;
+ }
+@@ -153,2 +156,82 @@ export async function runTeardown(
+ 
++/** `docker <args>`'s output, trimmed; a failure throws, with Docker's own words. */
++export async function docker(...args: string[]): Promise<string> {
++  const result = await nodeExec('docker', args, { cwd: '/', timeoutMs: 120_000 });
++  if (result.code !== 0) {
++    throw new Error(`docker ${args.slice(0, 2).join(' ')} failed:\n${result.stderr}`);
++  }
++  return result.stdout.trim();
++}
++
++/** The host port Docker chose for a container's `port` (such as "51820/udp"). */
++export async function publishedPort(container: string, port: string): Promise<number> {
++  const output = await docker('port', container, port);
++  const [first] = output.split('\n');
++  const published = Number(first?.split(':').at(-1));
++  if (!Number.isInteger(published) || published < 1 || published > 65535) {
++    throw new Error(`docker port ${container} ${port} gave no host port:\n${output}`);
++  }
++  return published;
++}
++
++/**
++ * A removal that must not fail silently: a non-zero exit is an error, unless stderr says
++ * the thing was already gone ("No such container", or "network … not found").
++ */
++export async function removeOrIgnoreMissing(...args: string[]): Promise<void> {
++  const result = await nodeExec('docker', args, { cwd: '/', timeoutMs: 120_000 });
++  if (result.code !== 0 && !/No such|not found/.test(result.stderr)) {
++    throw new Error(`docker ${args.slice(0, 2).join(' ')} failed:\n${result.stderr}`);
++  }
++}
++
++/**
++ * Why an arr refused a request, safe for CI's public log: the status, and each validation
++ * error's `propertyName: errorMessage`, with every one of `secrets` replaced. Never the
++ * raw body, nor an error's `attemptedValue`, which can be the key under test. A body that
++ * isn't such a list gives only its length.
++ */
++export async function servarrFailure(
++  response: Response,
++  secrets: readonly string[],
++): Promise<string> {
++  const status = `status ${String(response.status)}`;
++  const body = await response.text();
++  let parsed: unknown;
++  try {
++    parsed = JSON.parse(body);
++  } catch {
++    return `${status}, with ${String(body.length)} characters that aren't JSON`;
++  }
++  if (!Array.isArray(parsed)) {
++    return `${status}, with ${String(body.length)} characters of JSON that isn't a list`;
++  }
++  const text = (value: unknown) => (typeof value === 'string' ? value : '?');
++  const said = parsed.map((item: unknown) => {
++    const { propertyName, errorMessage } = (
++      typeof item === 'object' && item !== null ? item : {}
++    ) as Record<string, unknown>;
++    return `${text(propertyName)}: ${text(errorMessage)}`;
++  });
++  return secrets
++    .filter((secret) => secret !== '')
++    .reduce(
++      (message, secret) => message.replaceAll(secret, '***'),
++      `${status}: ${said.join('; ')}`,
++    );
++}
++
++/** What `apply --json` says, and `apply` returns: its outcome, and each action. */
++export interface WireActions {
++  outcome: string;
++  actions: { step: string; resource?: string; detail?: string }[];
++}
++
++/** Each wired resource's detail, in order. */
++export function wired(actions: WireActions['actions']): string[][] {
++  return actions
++    .filter((a) => a.resource !== undefined)
++    .map((a) => [a.resource ?? '', a.detail ?? '']);
++}
++
+ /**
+```
+
+**Change** `test/e2e/download.e2e.test.ts`:
+
+```diff
+diff --git a/test/e2e/download.e2e.test.ts b/test/e2e/download.e2e.test.ts
+index 0ade576..e0ef3bc 100644
+--- a/test/e2e/download.e2e.test.ts
++++ b/test/e2e/download.e2e.test.ts
+@@ -22,3 +22,6 @@ import {
+   runTeardown,
++  servarrFailure,
++  wired,
+   type DeployedMediaplane,
++  type WireActions,
+ } from './helpers';
+@@ -147,38 +150,2 @@ async function getJson<T>(
+ 
+-/**
+- * Why an arr refused a request, safe for CI's public log: the status, and each validation
+- * error's `propertyName: errorMessage`, with every one of `secrets` replaced. Never the
+- * raw body, nor an error's `attemptedValue`, which can be the key under test. A body that
+- * isn't such a list gives only its length.
+- */
+-async function servarrFailure(
+-  response: Response,
+-  secrets: readonly string[],
+-): Promise<string> {
+-  const status = `status ${String(response.status)}`;
+-  const body = await response.text();
+-  let parsed: unknown;
+-  try {
+-    parsed = JSON.parse(body);
+-  } catch {
+-    return `${status}, with ${String(body.length)} characters that aren't JSON`;
+-  }
+-  if (!Array.isArray(parsed)) {
+-    return `${status}, with ${String(body.length)} characters of JSON that isn't a list`;
+-  }
+-  const text = (value: unknown) => (typeof value === 'string' ? value : '?');
+-  const said = parsed.map((item: unknown) => {
+-    const { propertyName, errorMessage } = (
+-      typeof item === 'object' && item !== null ? item : {}
+-    ) as Record<string, unknown>;
+-    return `${text(propertyName)}: ${text(errorMessage)}`;
+-  });
+-  return secrets
+-    .filter((secret) => secret !== '')
+-    .reduce(
+-      (message, secret) => message.replaceAll(secret, '***'),
+-      `${status}: ${said.join('; ')}`,
+-    );
+-}
+-
+ interface Client {
+@@ -386,14 +353,2 @@ async function wrongSonarrKey(home: string): Promise<void> {
+ 
+-interface WireActions {
+-  outcome: string;
+-  actions: { step: string; resource?: string; detail?: string }[];
+-}
+-
+-/** Each wired resource's detail, in order. */
+-function wired(actions: WireActions['actions']): string[][] {
+-  return actions
+-    .filter((a) => a.resource !== undefined)
+-    .map((a) => [a.resource ?? '', a.detail ?? '']);
+-}
+-
+ describe('the download path, behind the VPN', () => {
+```
+
+**Change** `test/e2e/wireguard.ts`:
+
+```diff
+diff --git a/test/e2e/wireguard.ts b/test/e2e/wireguard.ts
+index 460634f..4eb21e1 100644
+--- a/test/e2e/wireguard.ts
++++ b/test/e2e/wireguard.ts
+@@ -5,3 +5,9 @@ import { join } from 'node:path';
+ import { nodeExec } from '@mediaplane/engine';
+-import { BUSYBOX, removeAsRoot } from './helpers';
++import {
++  BUSYBOX,
++  docker,
++  publishedPort,
++  removeAsRoot,
++  removeOrIgnoreMissing,
++} from './helpers';
+ 
+@@ -79,32 +85,2 @@ export function wireguardKeys(): { privateKey: string; publicKey: string } {
+ 
+-async function docker(...args: string[]): Promise<string> {
+-  const result = await nodeExec('docker', args, { cwd: '/', timeoutMs: 120_000 });
+-  if (result.code !== 0) {
+-    throw new Error(`docker ${args.slice(0, 2).join(' ')} failed:\n${result.stderr}`);
+-  }
+-  return result.stdout.trim();
+-}
+-
+-/** The host port Docker chose for a container's `port` (such as "51820/udp"). */
+-async function publishedPort(container: string, port: string): Promise<number> {
+-  const output = await docker('port', container, port);
+-  const [first] = output.split('\n');
+-  const published = Number(first?.split(':').at(-1));
+-  if (!Number.isInteger(published) || published < 1 || published > 65535) {
+-    throw new Error(`docker port ${container} ${port} gave no host port:\n${output}`);
+-  }
+-  return published;
+-}
+-
+-/**
+- * A removal that must not fail silently: a non-zero exit is an error, unless stderr says
+- * the thing was already gone ("No such container", or "network … not found").
+- */
+-async function removeOrIgnoreMissing(...args: string[]): Promise<void> {
+-  const result = await nodeExec('docker', args, { cwd: '/', timeoutMs: 120_000 });
+-  if (result.code !== 0 && !/No such|not found/.test(result.stderr)) {
+-    throw new Error(`docker ${args.slice(0, 2).join(' ')} failed:\n${result.stderr}`);
+-  }
+-}
+-
+ async function addressOn(container: string, network: string): Promise<string> {
+```
 
 **Create** `test/e2e/indexer.ts`:
 
@@ -2550,7 +2827,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { nodeExec } from '@mediaplane/engine';
-import { BUSYBOX } from './helpers';
+import { BUSYBOX, docker, publishedPort, removeOrIgnoreMissing } from './helpers';
 
 /**
  * A made-up indexer for the indexer test, so that it never touches a real one: a minimal
@@ -2654,22 +2931,6 @@ const SCRIPT = [
   '',
 ].join('\n');
 
-async function docker(...args: string[]): Promise<string> {
-  const result = await nodeExec('docker', args, { cwd: '/', timeoutMs: 120_000 });
-  if (result.code !== 0) {
-    throw new Error(`docker ${args.slice(0, 2).join(' ')} failed:\n${result.stderr}`);
-  }
-  return result.stdout.trim();
-}
-
-/** A removal that must not fail silently, unless the thing was already gone. */
-async function removeOrIgnoreMissing(...args: string[]): Promise<void> {
-  const result = await nodeExec('docker', args, { cwd: '/', timeoutMs: 120_000 });
-  if (result.code !== 0 && !/No such|not found/.test(result.stderr)) {
-    throw new Error(`docker ${args.slice(0, 2).join(' ')} failed:\n${result.stderr}`);
-  }
-}
-
 /** Start the fake indexer, as `<id>-indexer` on `<id>-indexer-net`. */
 export async function startFakeIndexer(id: string): Promise<FakeIndexer> {
   const network = `${id}-indexer-net`;
@@ -2733,13 +2994,8 @@ export async function startFakeIndexer(id: string): Promise<FakeIndexer> {
       '-h',
       '/www',
     );
-    const published = await docker('port', container, '80/tcp');
-    const port = Number(published.split('\n')[0]?.split(':').at(-1));
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      throw new Error(`docker port ${container} 80/tcp gave no host port:\n${published}`);
-    }
     return {
-      url: `http://${gateway}:${String(port)}`,
+      url: `http://${gateway}:${String(await publishedPort(container, '80/tcp'))}`,
       open: '/cgi-bin/api',
       protected: '/cgi-bin/protected',
       browserVisits: async () => {
@@ -2782,7 +3038,15 @@ import {
   type ApplyOptions,
 } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
-import { composeDown, expectWiringRemoved, makeHome, runTeardown } from './helpers';
+import {
+  composeDown,
+  expectWiringRemoved,
+  makeHome,
+  runTeardown,
+  servarrFailure,
+  stackFor,
+  wired,
+} from './helpers';
 import { startFakeIndexer, type FakeIndexer } from './indexer';
 
 const PROJECT = `mediaplane-e2e-${String(process.pid)}-indexers`;
@@ -2813,19 +3077,13 @@ const ARRS = [
 /** The made-up items the fake indexer knows. */
 const ITEMS = ['Mediaplane Test Movie 2026', 'Mediaplane Test Show S01E01'];
 
-/** Sonarr, Radarr and Prowlarr, which brings Byparr, and `more`. */
-function indexersStack(data: string, more = ''): string {
-  return `version: 1
-user: { uid: ${String(process.getuid?.() ?? 1000)}, gid: ${String(process.getgid?.() ?? 1000)} }
-paths: { data: ${JSON.stringify(data)} }
-network: { bind: localhost }
-media_server: jellyfin
-apps:
-  sonarr: {}
-  radarr: {}
-  prowlarr: {}
-  qbittorrent: { vpn: false }
-${more}`;
+/**
+ * How the test calls an app: with this key, and every key the stack stores kept out of
+ * what a failure says, since CI's log is public.
+ */
+interface Access {
+  key: string;
+  secrets: readonly string[];
 }
 
 /** A call to an app's API on its published port, with its key, as JSON. */
@@ -2846,37 +3104,14 @@ function api(
   });
 }
 
-/**
- * Why an app refused a request, safe for CI's public log: the status, and each validation
- * error's `propertyName: errorMessage`, never the raw body, which can hold a key. A body
- * that isn't such a list gives only its length.
- */
-async function refusal(response: Response): Promise<string> {
-  const status = `status ${String(response.status)}`;
-  const body = await response.text();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return `${status}, with ${String(body.length)} characters that aren't JSON`;
-  }
-  if (!Array.isArray(parsed)) return `${status}, with ${String(body.length)} characters`;
-  const text = (value: unknown) => (typeof value === 'string' ? value : '?');
-  return `${status}: ${parsed
-    .map((item: unknown) => {
-      const { propertyName, errorMessage } = (
-        typeof item === 'object' && item !== null ? item : {}
-      ) as Record<string, unknown>;
-      return `${text(propertyName)}: ${text(errorMessage)}`;
-    })
-    .join('; ')}`;
-}
-
 /** A GET of an app's API, as JSON, after checking it answered 2xx. */
-async function getJson<T>(port: number, path: string, key: string): Promise<T> {
-  const response = await api(port, path, key);
+async function getJson<T>(port: number, path: string, access: Access): Promise<T> {
+  const response = await api(port, path, access.key);
   const what = `GET ${path} on port ${String(port)}`;
-  expect(response.ok, `${what}: ${await refusal(response.clone())}`).toBe(true);
+  expect(
+    response.ok,
+    `${what}: ${await servarrFailure(response.clone(), access.secrets)}`,
+  ).toBe(true);
   return (await response.json()) as T;
 }
 
@@ -2905,13 +3140,13 @@ async function eventually(check: () => Promise<boolean>, seconds = 60): Promise<
  * with `tags`. Prowlarr tests it as it saves it: it fetches the feed's caps and a search.
  */
 async function addIndexer(
-  key: string,
+  prowlarr: Access,
   indexer: FakeIndexer,
   name: string,
   feed: string,
   tags: number[],
 ): Promise<number> {
-  const added = await api(PROWLARR, '/api/v1/indexer', key, {
+  const added = await api(PROWLARR, '/api/v1/indexer', prowlarr.key, {
     method: 'POST',
     body: {
       name,
@@ -2931,17 +3166,17 @@ async function addIndexer(
   });
   expect(
     added.status,
-    `Prowlarr did not add ${name}: ${await refusal(added.clone())}`,
+    `Prowlarr did not add ${name}: ${await servarrFailure(added.clone(), prowlarr.secrets)}`,
   ).toBe(201);
   return ((await added.json()) as { id: number }).id;
 }
 
 /** The titles a search of Prowlarr's indexer `id` finds. */
-async function searched(key: string, id: number): Promise<string[]> {
+async function searched(prowlarr: Access, id: number): Promise<string[]> {
   const found = await getJson<{ title: string }[]>(
     PROWLARR,
     `/api/v1/search?query=Mediaplane&type=search&indexerIds=${String(id)}`,
-    key,
+    prowlarr,
   );
   return found.map((release) => release.title).sort();
 }
@@ -2952,12 +3187,12 @@ async function searched(key: string, id: number): Promise<string[]> {
  * syncing Prowlarr's own categories for that app; and the indexer proxy, tagged
  * cloudflare, aimed at the stack's solver. Returns the tag's id.
  */
-async function expectLinks(key: string, solver: string): Promise<number> {
-  const links = await getJson<Provider[]>(PROWLARR, '/api/v1/applications', key);
+async function expectLinks(prowlarr: Access, solver: string): Promise<number> {
+  const links = await getJson<Provider[]>(PROWLARR, '/api/v1/applications', prowlarr);
   const templates = await getJson<Provider[]>(
     PROWLARR,
     '/api/v1/applications/schema',
-    key,
+    prowlarr,
   );
   // Prowlarr lists them by name.
   expect(
@@ -2977,20 +3212,23 @@ async function expectLinks(key: string, solver: string): Promise<number> {
       settingOf(template, 'syncCategories'),
     );
     // Prowlarr's own test: it calls the arr with the arr's key, and the arr calls it back.
-    const tested = await api(PROWLARR, '/api/v1/applications/test', key, {
+    const tested = await api(PROWLARR, '/api/v1/applications/test', prowlarr.key, {
       method: 'POST',
       body: link,
     });
-    expect(tested.status, `${link.name}: ${await refusal(tested.clone())}`).toBe(200);
+    expect(
+      tested.status,
+      `${link.name}: ${await servarrFailure(tested.clone(), prowlarr.secrets)}`,
+    ).toBe(200);
   }
   const tags = await getJson<{ id: number; label: string }[]>(
     PROWLARR,
     '/api/v1/tag',
-    key,
+    prowlarr,
   );
   const cloudflare = tags.find((t) => t.label === 'cloudflare');
   if (cloudflare === undefined) throw new Error('Prowlarr has no cloudflare tag');
-  const proxies = await getJson<Provider[]>(PROWLARR, '/api/v1/indexerproxy', key);
+  const proxies = await getJson<Provider[]>(PROWLARR, '/api/v1/indexerproxy', prowlarr);
   expect(
     proxies.map((p) => [p.name, p.implementation, settingOf(p, 'host'), p.tags]),
   ).toEqual([
@@ -3008,40 +3246,29 @@ async function expectLinks(key: string, solver: string): Promise<number> {
  * Give Prowlarr's link to Sonarr a key that isn't Sonarr's, as a hand-made change would:
  * saved with forceSave, since Prowlarr's own test of it fails.
  */
-async function wrongSonarrKey(key: string): Promise<void> {
-  const links = await getJson<Provider[]>(PROWLARR, '/api/v1/applications', key);
+async function wrongSonarrKey(prowlarr: Access): Promise<void> {
+  const links = await getJson<Provider[]>(PROWLARR, '/api/v1/applications', prowlarr);
   const link = links.find((l) => l.name === 'Sonarr (Mediaplane)');
   if (link === undefined) throw new Error('Prowlarr has no link to Sonarr');
+  const wrong = '9'.repeat(32);
   const put = await api(
     PROWLARR,
     `/api/v1/applications/${String(link.id)}?forceSave=true`,
-    key,
+    prowlarr.key,
     {
       method: 'PUT',
       body: {
         ...link,
         fields: link.fields.map((f) =>
-          f.name === 'apiKey' ? { ...f, value: '9'.repeat(32) } : f,
+          f.name === 'apiKey' ? { ...f, value: wrong } : f,
         ),
       },
     },
   );
   expect(
     put.status,
-    `Prowlarr did not save the link: ${await refusal(put.clone())}`,
+    `Prowlarr did not save the link: ${await servarrFailure(put.clone(), [wrong, ...prowlarr.secrets])}`,
   ).toBe(202);
-}
-
-interface Applied {
-  outcome: string;
-  actions: { step: string; resource?: string; detail?: string }[];
-}
-
-/** Each wired resource's detail, in order. */
-function wired(actions: Applied['actions']): string[][] {
-  return actions
-    .filter((a) => a.resource !== undefined)
-    .map((a) => [a.resource ?? '', a.detail ?? '']);
 }
 
 describe('indexers, through Prowlarr', () => {
@@ -3062,8 +3289,9 @@ describe('indexers, through Prowlarr', () => {
         () => indexer.remove(),
       ]);
     try {
+      // The video stack without Seerr: Prowlarr brings Byparr.
       const data = join(home, 'data');
-      await writeFile(join(home, 'stack.yaml'), indexersStack(data));
+      await writeFile(join(home, 'stack.yaml'), stackFor(data, { seerr: false }));
       const runtime = createDockerRuntime({ home, project: PROJECT });
       const options: ApplyOptions = {
         home,
@@ -3091,37 +3319,46 @@ describe('indexers, through Prowlarr', () => {
         ['prowlarr.indexer_proxy', 'created'],
       ]);
       const store = await readSecretStore(home);
-      const key = store.apps.prowlarr?.apiKey ?? '';
-      expect(key !== '', 'no prowlarr key stored').toBe(true);
-      const cloudflare = await expectLinks(key, 'byparr');
+      const secrets = Object.values(store.apps).flatMap((keys) => Object.values(keys));
+      const access = (app: string): Access => {
+        const key = store.apps[app]?.apiKey ?? '';
+        expect(key !== '', `no ${app} key stored`).toBe(true);
+        return { key, secrets };
+      };
+      const prowlarr = access('prowlarr');
+      const cloudflare = await expectLinks(prowlarr, 'byparr');
       // resources.json names the links' secret, and never holds it.
       const resources = await readFile(join(home, 'state', 'resources.json'), 'utf8');
       for (const arr of ARRS) {
-        const arrKey = store.apps[arr.app]?.apiKey ?? '';
-        expect(arrKey !== '', `no ${arr.app} key stored`).toBe(true);
-        expect(resources.includes(arrKey), `resources.json holds ${arr.app}'s key`).toBe(
-          false,
-        );
+        expect(
+          resources.includes(access(arr.app).key),
+          `resources.json holds ${arr.app}'s key`,
+        ).toBe(false);
       }
 
       // Two indexers you add in Prowlarr: one open, and one behind a challenge, tagged
       // cloudflare. Prowlarr fetches the second through Byparr's browser, and both reach
       // the arrs, which Prowlarr adds them to.
-      await addIndexer(key, indexer, 'Open indexer', indexer.open, []);
+      await addIndexer(prowlarr, indexer, 'Open indexer', indexer.open, []);
       expect(await indexer.browserVisits()).toBe(0);
       const guarded = await addIndexer(
-        key,
+        prowlarr,
         indexer,
         'Protected indexer',
         indexer.protected,
         [cloudflare],
       );
       expect(await indexer.browserVisits()).toBeGreaterThan(0);
-      expect(await searched(key, guarded)).toEqual(ITEMS);
+      expect(await searched(prowlarr, guarded)).toEqual(ITEMS);
       for (const arr of ARRS) {
-        const arrKey = store.apps[arr.app]?.apiKey ?? '';
         const names = async () =>
-          (await getJson<{ name: string }[]>(arr.port, '/api/v3/indexer', arrKey))
+          (
+            await getJson<{ name: string }[]>(
+              arr.port,
+              '/api/v3/indexer',
+              access(arr.app),
+            )
+          )
             .map((i) => i.name)
             .sort();
         await eventually(async () => (await names()).length === 2);
@@ -3133,7 +3370,7 @@ describe('indexers, through Prowlarr', () => {
 
       // A key in Prowlarr's link to Sonarr that isn't Sonarr's, as a hand-made change
       // would leave it: Prowlarr's own test refuses it, naming it, so apply sets it again.
-      await wrongSonarrKey(key);
+      await wrongSonarrKey(prowlarr);
       const restored = await apply(options);
       expect(restored.outcome).toBe('success');
       expect(
@@ -3149,7 +3386,7 @@ describe('indexers, through Prowlarr', () => {
       // behind the challenge goes through FlareSolverr's browser.
       await writeFile(
         join(home, 'stack.yaml'),
-        indexersStack(data, '  flaresolverr: {}\n'),
+        `${stackFor(data, { seerr: false })}  flaresolverr: {}\n`,
       );
       const switched = await apply(options);
       expect(switched.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
@@ -3162,17 +3399,17 @@ describe('indexers, through Prowlarr', () => {
           .filter((c) => c.service === 'byparr' || c.service === 'flaresolverr')
           .map((c) => `${c.service} ${c.state} ${c.health}`),
       ).toEqual(['flaresolverr running healthy']);
-      expect(await expectLinks(key, 'flaresolverr')).toBe(cloudflare);
+      expect(await expectLinks(prowlarr, 'flaresolverr')).toBe(cloudflare);
       const visits = await indexer.browserVisits();
       const second = await addIndexer(
-        key,
+        prowlarr,
         indexer,
         'Protected again',
         indexer.protected,
         [cloudflare],
       );
       expect(await indexer.browserVisits()).toBeGreaterThan(visits);
-      expect(await searched(key, second)).toEqual(ITEMS);
+      expect(await searched(prowlarr, second)).toEqual(ITEMS);
       const settled = await apply({
         ...options,
         confirm: () => Promise.reject(new Error('nothing should need confirming')),
@@ -3214,7 +3451,8 @@ index 34bc83c..aa512ea 100644
 - [ ] **Step 3: Run the two to see them pass**
 
 Run: `pnpm vitest run --config vitest.e2e.config.ts test/e2e/apply.e2e.test.ts test/e2e/indexers.e2e.test.ts`
-Expected: PASS. On the dev box each takes about a minute and a half, warm.
+Expected: PASS. On the dev box each takes about a minute and a half, warm. The moved
+helpers are S3c's download and VPN tests' too: Step 4 runs them.
 
 - [ ] **Step 4: The whole suite, on both Composes, and nothing left behind**
 
@@ -3255,15 +3493,19 @@ proxy that can't be made (with a real run's lines), its link test failing for an
 reason than the key, and the names Prowlarr already has; the app-won't-start runbook, a
 Byparr that never becomes healthy without the internet (decisions 3, 4, 6).
 Decision: the architecture adds the indexers (a diagram and four points); the threat
-model adds the arrs' keys in Prowlarr (an asset, T4, T5, T10) and the Cloudflare solver
-(T15); "Not built yet" and "What comes next" use the new numbers (decisions 1 to 6, 13).
+model adds the arrs' keys in Prowlarr (an asset, T4, T5, T10), what a failing key test
+records in the app, and the Cloudflare solver (T15); "Not built yet" and "What comes
+next" use the new numbers (decisions 1 to 6, 13).
 Decision: the README's status, capabilities, flow and questions say what works now; its
 example's wiring lines are a real run of the same stack with this slice, and its change
 record stays the one its `status` shows (decision 13).
 Decision: Prowlarr's README says how to tag an indexer `cloudflare` (spec §6.2), what the
 proxy needs of the internet, and that a link stays when its arr leaves (decisions 6, 11).
-Decision: the spec gains a "Slice 4" entry in §11; the roadmap marks S4 done, splits the
-media servers, and adds three S8 items (decisions 11, 13, 14).
+Decision: the spec gains a "Slice 4" entry in §11, and a sentence in Slice 3c's on what
+the download client's test records; the roadmap marks S4 done, splits the media servers,
+adds four S8 items, and notes Seerr's `comingIn` in S7's (decisions 3, 11, 13, 14).
+Decision: Seerr's README, the threat model and the deploy guide say Seerr's setup stays
+open until Slice 7 with Plex (decision 14).
 Decision: the renumbering maps each reference by meaning (Global Constraints); Plex's
 `login.comingIn` is Slice 7, and a catalog test pins every app's (decision 13).
 
@@ -3591,7 +3833,7 @@ index 0834d31..9ef6cce 100644
 
 ```diff
 diff --git a/docs/security/threat-model.md b/docs/security/threat-model.md
-index eb54e96..2504d4c 100644
+index eb54e96..358b835 100644
 --- a/docs/security/threat-model.md
 +++ b/docs/security/threat-model.md
 @@ -2,4 +2,3 @@
@@ -3604,11 +3846,13 @@ index eb54e96..2504d4c 100644
  | qBittorrent's key, in Sonarr and Radarr      | Their download client's settings, in `appdata/`                       | It opens qBittorrent's API                                 |
 +| Sonarr's and Radarr's keys, in Prowlarr      | Its links' settings, in `appdata/`                                    | They open Sonarr's and Radarr's APIs                       |
  | The shared admin password                    | `state/secrets.json` (0600) or `admin.password`; a hash in `appdata/` | It opens qBittorrent, Sonarr, Radarr and Prowlarr          |
-@@ -102,3 +102,10 @@ host network, read-only mounts
+@@ -102,3 +102,12 @@ host network, read-only mounts
    in the arr (`tvImportedCategory`, `movieImportedCategory`) and later deleted in
 -  qBittorrent.
 +  qBittorrent. It checks Prowlarr's links with Prowlarr's own test, which calls the arr
-+  with its key, and has the arr call Prowlarr back.
++  with its key, and has the arr call Prowlarr back. Either test, when it fails, records a
++  failure in that app's status of the client or link, as a test from the app's web UI
++  does; a later pass resets it.
 +- **The Cloudflare solver.** Byparr, or FlareSolverr, runs a browser for Prowlarr on the
 +  stack's own network. Its port is never published, it has no login, and it isn't on
 +  the wiring network. Prowlarr sends it an indexer's request only for an indexer tagged
@@ -3616,12 +3860,21 @@ index eb54e96..2504d4c 100644
 +  Mediaplane adds the proxy, Prowlarr has it fetch a page of Prowlarr's own service, to
 +  test it (see T15).
  - **vpn-check's probe.** `mediaplane vpn-check` runs
-@@ -237,2 +244,4 @@ What remains:
+@@ -175,5 +184,5 @@ What remains:
+ - On a home network, `init` suggests `bind: lan`, which puts the web UIs on your LAN.
+-- Until the wiring lands (Slices 5 and 6), Jellyfin's wizard and Seerr's setup are open
+-  to whoever reaches them first. Complete them right after the first `apply`, or keep
+-  `bind: localhost` until you have.
++- Until the wiring lands (Slices 5 and 6, and Slice 7 with Plex), Jellyfin's wizard and
++  Seerr's setup are open to whoever reaches them first. Complete them right after the
++  first `apply`, or keep `bind: localhost` until you have.
+ - With `login_on_lan: false`, anyone on a local address gets into Sonarr, Radarr and
+@@ -237,2 +246,4 @@ What remains:
    compromised one can drive qBittorrent: add a torrent, or change its settings.
 +- Prowlarr holds Sonarr's and Radarr's keys, as its links need, so a compromised Prowlarr
 +  can drive both: change their settings, or read their password hash (see T10).
  - The apps' calls to each other, and Mediaplane's to them, are plain HTTP on Docker's own
-@@ -264,5 +273,6 @@ Controls today:
+@@ -264,5 +275,6 @@ Controls today:
    quoted in an HTML page.
 -- qBittorrent's key goes to Sonarr and Radarr in their download client's settings, a
 -  request body: the one place one app's key goes to another. They show it masked
@@ -3631,7 +3884,7 @@ index eb54e96..2504d4c 100644
 +  only places one app's key goes to another. They show it masked (`********`)
 +  afterwards, and Mediaplane tests the masked client or link, so the key isn't sent
    again for the check.
-@@ -330,5 +340,5 @@ What remains:
+@@ -330,5 +342,5 @@ What remains:
  - The audit needs the npm registry at CI time.
 -- Nothing bumps pins or dependencies automatically yet (Renovate, Slice 8).
 +- Nothing bumps pins or dependencies automatically yet (Renovate, Slice 9).
@@ -3639,17 +3892,17 @@ index eb54e96..2504d4c 100644
 -  arrive in Slice 8.
 +  arrive in Slice 9.
  
-@@ -373,3 +383,3 @@ What remains:
+@@ -373,3 +385,3 @@ What remains:
  - Sonarr, Radarr and Prowlarr give their password hash to anyone who holds their API
 -  key. Prowlarr holds Sonarr's and Radarr's keys from Slice 4.
 +  key. Prowlarr holds Sonarr's and Radarr's keys, for its links.
  - `apply` checks qBittorrent's password by signing in. qBittorrent bans an address from
-@@ -382,3 +392,3 @@ What remains:
+@@ -382,3 +394,3 @@ What remains:
    what to do.
 -- There is no way yet to rotate the generated password (Slice 7).
 +- There is no way yet to rotate the generated password (Slice 8).
  
-@@ -519,2 +529,26 @@ What remains:
+@@ -519,2 +531,26 @@ What remains:
  
 +### T15. The Cloudflare solver fetches for whoever asks
 +
@@ -4041,7 +4294,7 @@ index 4b3a5b4..0a44589 100644
 
 ```diff
 diff --git a/catalog/seerr/README.md b/catalog/seerr/README.md
-index 1d50036..8b77d63 100644
+index 1d50036..49c7528 100644
 --- a/catalog/seerr/README.md
 +++ b/catalog/seerr/README.md
 @@ -42,6 +42,7 @@ Radarr. Mediaplane runs the upstream image, unmodified (see
@@ -4054,13 +4307,22 @@ index 1d50036..8b77d63 100644
      it requests with.
 +- **Slice 7:** with Plex, its first sign-in with your Plex token, and its link to Plex.
  
+@@ -58,5 +59,5 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
+ 
+-- **Setup is open.** Until Slice 6, Seerr's setup page is open to whoever reaches it
+-  first. Finish it yourself as soon as `apply` is done, or keep `network.bind: localhost`
+-  until you have.
++- **Setup is open.** Until Slice 6 (Slice 7 with Plex), Seerr's setup page is open to
++  whoever reaches it first. Finish it yourself as soon as `apply` is done, or keep
++  `network.bind: localhost` until you have.
+ - **Removing it needs `sudo`.** `appdata/seerr` belongs to uid 1000, so unless you are
 ```
 
 **Change** `deploy/README.md`:
 
 ```diff
 diff --git a/deploy/README.md b/deploy/README.md
-index fffd1de..aaa4330 100644
+index fffd1de..00f5de7 100644
 --- a/deploy/README.md
 +++ b/deploy/README.md
 @@ -13,7 +13,7 @@ never touch Mediaplane itself.
@@ -4080,6 +4342,15 @@ index fffd1de..aaa4330 100644
  
 -No image is published yet: releases arrive in Slice 8. Build one from a checkout:
 +No image is published yet: releases arrive in Slice 9. Build one from a checkout:
+ 
+@@ -142,5 +142,5 @@ nothing. Without a terminal it asks nothing: pass the flags in the
+ 
+-  Until the wiring lands (Slices 5 and 6), Jellyfin's setup wizard and Seerr's setup
+-  are open to anyone on your LAN until you complete them. Complete them right after the
+-  first `apply`.
++  Until the wiring lands (Slices 5 and 6, and Slice 7 with Plex), Jellyfin's setup wizard
++  and Seerr's setup are open to anyone on your LAN until you complete them. Complete them
++  right after the first `apply`.
  
 @@ -231,3 +231,3 @@ docker compose -f deploy/mediaplane.compose.yaml up -d
  
@@ -4144,7 +4415,7 @@ index 9fb1c62..4bc4afc 100644
 
 ```diff
 diff --git a/docs/design/m1-engine-cli.md b/docs/design/m1-engine-cli.md
-index 98ac12e..4ef51ce 100644
+index 98ac12e..7d181e3 100644
 --- a/docs/design/m1-engine-cli.md
 +++ b/docs/design/m1-engine-cli.md
 @@ -942,3 +942,3 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
@@ -4173,7 +4444,14 @@ index 98ac12e..4ef51ce 100644
 -  counts as seeded, because there is no way to tell. Slice 7 automates the fix, with
 +  counts as seeded, because there is no way to tell. Slice 8 automates the fix, with
    the rest of "restore the key at the source" (§6.3).
-@@ -1297 +1297,52 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
+@@ -1273,3 +1273,5 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
+   manage, so a `plan` makes one again in qBittorrent when you set it in the arr and later
+-  delete it in qBittorrent.
++  delete it in qBittorrent. A test that fails also records a failure in the arr's status
++  of that client (`DownloadClientStatus`), as a test from the arr's web UI does, and a
++  later pass resets it (probed in Slice 4).
+ - **Sonarr's and Radarr's root folder** (§6.2): `<arr>.root_folder`, `/data/media/tv` or
+@@ -1297 +1299,55 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
    helper and vpn-check's probe are; the socket proxy allows nothing new (§7.2(2)).
 +
 +### Slice 4: indexers (2026-10-15)
@@ -4191,11 +4469,14 @@ index 98ac12e..4ef51ce 100644
 +    its id, which calls the arr with the key and has the arr call Prowlarr back: a
 +    failure that names `ApiKey` is an update; any other is Prowlarr's own message. A link
 +    is made from Prowlarr's template with `forceSave`, which still tests a new one, and
-+    updated with `forceSave`, which doesn't.
++    updated with `forceSave`, which doesn't. A test that fails records a failure in
++    Prowlarr's status of that link (`ApplicationStatus`), as a test from its web UI does,
++    and a later pass resets it, so a `plan` that finds a key refused leaves that record
++    (probed).
 +  - Each `requires` its arr's `admin`, the first thing Mediaplane checks in the arr. While
 +    the arr isn't up, refuses its key, or has its admin yet to be set, `plan` leaves the
 +    link's key unchecked, rather than report Prowlarr's test failing on the arr, and the
-+    wire step skips the link (§5.1).
++    wire step skips the link when the arr's admin fails (§5.1).
 +- **The indexer proxy** (§6.2): `prowlarr.indexer_proxy`, named `Cloudflare (Mediaplane)`
 +  whichever solver runs, so a change of solver is an update, and lost state finds it by
 +  name. Its type is FlareSolverr, which Byparr answers too. Its `host` is
@@ -4216,9 +4497,9 @@ index 98ac12e..4ef51ce 100644
 +  stand-in Cloudflare challenge, through Byparr's browser, then FlareSolverr's (§10,
 +  Byparr's risks). Byparr's health check and Prowlarr's test of the proxy need the
 +  internet.
-+- **A link stays when its arr leaves the stack**, as a download client stays when
-+  qBittorrent leaves: Mediaplane doesn't remove what it made yet. Slice 8 decides, with
-+  §8.1(3) step 4.
++- **A link stays when its arr leaves the stack**, and Prowlarr's indexer proxy, when the
++  stack drops its Cloudflare solver, as a download client stays when qBittorrent leaves:
++  Mediaplane doesn't remove what it made yet. Slice 8 decides, with §8.1(3) step 4.
 +- **One way to wire a Servarr provider.** The arrs' download client and Prowlarr's links
 +  and proxy share how they are found (by id, else by name, among the app's providers of
 +  that kind), made from the app's template, updated, and tested.
@@ -4232,7 +4513,7 @@ index 98ac12e..4ef51ce 100644
 
 ```diff
 diff --git a/docs/plans/m1-roadmap.md b/docs/plans/m1-roadmap.md
-index 2053595..fc34db6 100644
+index 2053595..7618f98 100644
 --- a/docs/plans/m1-roadmap.md
 +++ b/docs/plans/m1-roadmap.md
 @@ -4,4 +4,4 @@
@@ -4364,30 +4645,40 @@ index 2053595..fc34db6 100644
 -  `/health` answers 200 with `Degraded` while the server still answers 503 to
 -  everything else (S2c). Look at a check that waits for the server itself.
  - **A login of your own for Plex, and for Seerr on Plex.** Plex's login is always
-@@ -363,3 +380,3 @@ password, which are S3c's (and listed again below).
+@@ -363,4 +380,5 @@ password, which are S3c's (and listed again below).
    or the slice that brings it, so `credentials` says their login arrives in
 -  Slice 5 (Plex) or Slice 6 (Seerr). Give `login` a value for your own account,
+-  and use it for both.
 +  Slice 7 (Plex) or Slice 6 (Seerr). Give `login` a value for your own account,
-   and use it for both.
-@@ -368,3 +385,3 @@ password, which are S3c's (and listed again below).
++  and use it for both. Seerr's `comingIn` says Slice 6 on a Plex stack too, where
++  Seerr's wiring comes in Slice 7 (S4): fix that with this item.
+ - **Plex's web UI is at `/web`.** `credentials` prints `http://<address>:<port>`
+@@ -368,3 +386,3 @@ password, which are S3c's (and listed again below).
  
 -**S7:**
 +**S8:**
  
-@@ -420,4 +437,14 @@ password, which are S3c's (and listed again below).
+@@ -420,4 +438,21 @@ password, which are S3c's (and listed again below).
    re-apply needs `partial`.
 -
 -**S8 (before going public):**
 +- **Links to an app that leaves the stack.** Remove Sonarr or Radarr from `stack.yaml`,
 +  and Prowlarr keeps its link to it (S4), as the arrs keep their download client when
-+  qBittorrent goes. Spec §8.1(3) step 4 asks that an app's links go with it. Decide
-+  whether `apply` removes what it made, or drift reports it.
++  qBittorrent goes; so does Prowlarr's indexer proxy, when the stack drops its
++  Cloudflare solver, and indexers tagged `cloudflare` then fail. Spec §8.1(3) step 4
++  asks that an app's links go with it. Decide whether `apply` removes what it made, or
++  drift reports it.
 +- **Settings Mediaplane manages in Prowlarr are put back.** A link's addresses, sync
 +  level or categories, or the proxy's host, timeout or tags, changed in Prowlarr's web
 +  UI, are undone by the next `apply` (S4). Keep mine must cover them.
 +- **The indexer proxy is never checked once it is made.** It holds no secret, so `plan`
 +  runs no test of it (S4): Prowlarr's would have the solver fetch a page of Prowlarr's
 +  own service. Decide whether drift checks it, and how often.
++- **`plan`'s key checks can record a failing status in the app; drift runs them on a
++  schedule.** A failing test of a download client (S3c) or a Prowlarr link (S4) records
++  a failure in the app's status of it (`DownloadClientStatus`, `ApplicationStatus`),
++  as a test from its web UI does, and a later pass resets it (S4's probe). Decide
++  whether scheduled drift may do that.
 +
 +**S9 (before going public):**
  
@@ -4446,9 +4737,9 @@ git commit -m "docs: the indexers, and the slices after S4 renumbered (Jellyfin 
 - [ ] `pnpm test:e2e` passes with Compose 2.38.2 as the host plugin too (Task 3, Step 4),
   and leaves no `mediaplane-e2e-*` container or network, and no new volume or
   `mediaplane-e2e-*` folder. When this plan was replayed, alone on the dev box, warm:
-  - with Compose 5.5.1, 7 files and 21 tests in 405 s (Slice 3c's suite took 306 s; the
+  - with Compose 5.5.1, 7 files and 21 tests in 400 s (Slice 3c's suite took 306 s; the
     indexers file alone takes about 85 s);
-  - with Compose 2.38.2, the same in 444 s (Slice 3c's: 337 s).
+  - with Compose 2.38.2, the same in 439 s (Slice 3c's: 337 s).
 
   CI's e2e job allows 60 minutes, and took 8 on amd64 for Slice 3c, so `ci.yml` keeps its
   timeout.
@@ -4457,9 +4748,11 @@ git commit -m "docs: the indexers, and the slices after S4 renumbered (Jellyfin 
   `9f060e6` is `main` after S3c.
 - [ ] No secret shows: the tests that check it pass (the link tested masked, by its id;
   `state/resources.json` holding neither arr's key, which the indexers e2e checks).
-- [ ] `plan` changes nothing in the apps, and asks Prowlarr to test no link while its arr
-  is to be started (Task 2's test, decision 4). It never runs Prowlarr's test of the proxy
-  (decision 6).
+- [ ] `plan` changes nothing in the apps of its own, and asks Prowlarr to test no link
+  while its arr is to be started (Task 2's test, decision 4). It never runs Prowlarr's
+  test of the proxy (decision 6). A failing test of a link's key records that failure in
+  Prowlarr, as a test from its web UI does, and the spec, the threat model and the
+  roadmap say so (decision 3).
 - [ ] No committed file contains a real path, user name, host name or address from this
   machine: `git grep -n -i -e cyclopsgd -e '/home/' -- ':!docs/plans'` prints nothing
   outside the GitHub URLs (`https://github.com/cyclopsgd/Mediaplane/…`).
