@@ -540,7 +540,7 @@ in `compose.override.yaml` is therefore wired automatically.
 | Command | Purpose |
 |---|---|
 | `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt, including the format of `--vpn-addresses` (on a terminal, only the refusal of `--vpn-addresses` without `--vpn-provider`, and whether `--lan-subnet` fits this host, wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file. It also checks the home first, creates the data folder, adds a note before each question, and takes the WireGuard key on a hidden prompt (§11, Slice 3b) |
-| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key check can leave a mark in an app: §11, Slices 3c and 4); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
+| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key or password check can leave a mark in an app: §11, Slices 3c, 4 and 5); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
 | `apply` | Converge on `stack.yaml` (§5) |
 | `status [app]` | Container health, VPN state, and the last apply's outcome |
 | `drift` | Report drift only (§6.3) |
@@ -1353,3 +1353,87 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   (§7.2(2)).
 - **The slices after S4 are renumbered** (the owner's decision, 2026-10-15): S5 Jellyfin,
   S6 requests, S7 Plex, S8 drift and S9 release. The roadmap keeps the history.
+
+### Slice 5: Jellyfin (2026-10-15)
+
+- **Bootstrap before publish** (§5 steps 8 and 9, §6.4). An app whose first-run setup
+  anyone who reaches it could finish declares it in the catalog (`bootstrap`), with the
+  file in its appdata that says it is done.
+  - **Which apps, and when.** `plan` lists an app to set up when its key isn't stored, or
+    its appdata doesn't say its setup is done (Jellyfin's `system.xml`,
+    `IsStartupWizardCompleted`), under `First-run setup:` (`bootstrap` in `--json`). It
+    starts without its ports unless its appdata says the setup is done: then nobody can
+    claim it, and apply only signs in to make its key. A file Mediaplane can't read says
+    nothing, so the stored key decides. `plan` never runs a setup; it shows the app's
+    container recreated when it runs published, and checks its wiring after the start.
+  - **No published port.** The start step gives Compose one more file, on its standard
+    input, after `compose.override.yaml`, that sets the app's `ports` to `!reset []`
+    (Compose 2.24 and later, the floor preflight checks), so the override's ports go too.
+    `compose.yaml` itself always holds the ports, so the stack runs as written without
+    Mediaplane.
+  - **The bootstrap step** is a new step, after `start`, run only when `plan` lists a
+    setup. It reaches the app over the wiring network without a key, finishes its setup
+    as the shared admin, and keeps the key it makes in `state/secrets.json` at once (§5
+    step 4). Then it steps off the wiring network, as the start step does (Slice 3b, ADR
+    0011), and runs `up` again without that file, and Compose recreates the app with its
+    ports. §5 step 9's and §6.4's "re-render with ports" is this second `up` of
+    `compose.yaml` as written: nothing is rendered twice. An app whose setup failed while
+    it is still open stays unpublished; one whose setup is done is published even when
+    making its key failed.
+  - **No new Docker API call:** `up`, and a recreate, are what `apply` already does, and
+    the file goes on Compose's standard input (§7.2(2)).
+- **Jellyfin's setup** (§6.1), as Jellyfin 12.2 takes it: `GET /Startup/User` first,
+  which makes its first user (`POST /Startup/User` before it is refused, and a
+  `POST /Startup/Complete` without a user leaves a Jellyfin nobody can sign in to); then
+  `POST /Startup/User` with the shared admin (a 403 says a password is set already, from
+  a setup that stopped before it was done); then `AuthenticateByName`, which Jellyfin
+  takes before the wizard is completed, then `POST /Startup/Complete`. A first user the
+  shared admin can't sign in as isn't Mediaplane's: the wizard is left open, and the step
+  fails. The key is the newest named `Mediaplane` in `GET /Auth/Keys`, which lists keys
+  in full, else one made with `POST /Auth/Keys?app=Mediaplane`, which answers nothing,
+  read back from the list; then the session is signed out of. Every call carries
+  Jellyfin's client fields in `Authorization: MediaBrowser …`, with `Token="…"` once
+  there is a key: a sign-in without all four fields is refused (400).
+- **Jellyfin's health check** passes only once `/health` answers `Healthy`. At every
+  start, it answers 200 `Degraded` for a few seconds while the rest answers 503, then
+  Jellyfin restarts its server (probed).
+- **Jellyfin's resources** (§6.2):
+  - `jellyfin.admin`, the shared admin: known by the id `state/resources.json` records,
+    else by the admin's user name, so an integration's `observe` now sees what the stack
+    wants. Its password is checked by signing in and out again, which Jellyfin's
+    activity log records, as it does any sign-in: a third small mark `plan` can leave in
+    an app (§5.2). Jellyfin doesn't lock its admin out after failed sign-ins (none after
+    seven, probed). It is renamed, or given its password, with the key; Mediaplane makes
+    no other user.
+  - `jellyfin.library_movies` and `jellyfin.library_shows`: `Movies` (`movies`,
+    `/data/media/movies`) and `Shows` (`tvshows`, `/data/media/tv`), with §6.2's fields,
+    `paths` kept as one sorted list. They are named as §6.2 names them, without
+    "(Mediaplane)": they are what you browse. Each is known by its name: Jellyfin's id
+    for a library follows its folder, which a rename changes. Its folder is made first,
+    in a throwaway Jellyfin container. Jellyfin names a second library of one name
+    `<name>2`, so one is made only when none has the name, and it can't change what a
+    library holds, which an update refuses with what to do. A new library gets the
+    options Jellyfin's web UI gives one: its default metadata and image downloaders,
+    from `/Libraries/AvailableOptions`, internet metadata and real-time monitoring. A
+    library made without them still gets its metadata, but doesn't watch its folders.
+- **Sonarr's and Radarr's connection to Jellyfin** (§6.2): `<arr>.connection_jellyfin`,
+  an Emby / Jellyfin connection (`MediaBrowser`) named `Jellyfin (Mediaplane)`, with
+  host `jellyfin`, Jellyfin's container port and `updateLibrary`. `apiKey` is its secret,
+  checked with the arr's own `POST /notification/test`: a failure that names `ApiKey` is
+  an update. It is made with the triggers on that change a file: an import, an upgrade, a
+  rename, and the deletes; they stay the user's after that. The arr tests a new
+  connection with a trigger on as it saves it, `forceSave` or not; an update with
+  `forceSave` isn't tested. A test that fails records a failure in the arr's status of
+  the connection (`NotificationStatus`), and a later pass resets it, as for the download
+  client and Prowlarr's links (probed). Each requires `jellyfin.admin`, and the arrs come
+  `after` Jellyfin: while Jellyfin is to be set up, or refuses its key, `plan` leaves the
+  connection's key unchecked.
+- **The typed HTTP client** (§3.2) gains Jellyfin's ways: the `mediabrowser` key scheme,
+  a sign-in with a JSON body that takes 401 as its answer, a POST or DELETE whose answer
+  isn't read, and the same app with another key (a session's).
+- **One helper for an app's address** (`serviceAddress`): its service, or the service
+  whose network it runs in, and its container port. The download client, Prowlarr's
+  links and proxy, and the connection all use it.
+- **Jellyfin's key, deleted by hand,** shuts Mediaplane out of Jellyfin, and `plan` says
+  so. Removing it from `state/secrets.json` has the next `apply` sign in, make a new one,
+  and give it to the arrs' connections; Slice 8 automates that, with key recovery.

@@ -20,12 +20,13 @@ Detailed plans so far:
 - Slice 3b: [`m1-s3b-wiring.md`](m1-s3b-wiring.md) (done).
 - Slice 3c: [`m1-s3c-download-path.md`](m1-s3c-download-path.md) (done).
 - Slice 4: [`m1-s4-indexers.md`](m1-s4-indexers.md) (done).
+- Slice 5: [`m1-s5-jellyfin.md`](m1-s5-jellyfin.md) (done).
 
 Where M1 stands (the README shows the same):
 
-- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c and S4.
-- **Next:** S5 (Jellyfin).
-- **After that:** S6 to S9.
+- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4 and S5.
+- **Next:** S6 (requests).
+- **After that:** S7 to S9.
 
 ## Slices
 
@@ -142,6 +143,7 @@ each one, or corrects it in the catalog:
 | qBittorrent `WEBUI_PORT` behaviour inside Gluetun's namespace. **Verified on 2026-10-10** by `test/e2e/vpn.e2e.test.ts`: with `apps.qbittorrent.port: 8090` and `bind: localhost`, the web UI answers on `127.0.0.1:8090`. It runs in CI from Slice 3d | S3d (done) |
 | The value format of Servarr `SERVER__TRUSTEDNETWORKS` (comma-separated CIDRs). Verified in S3b: see below | S3b (done) |
 | Seerr running as uid 1000 with `init: true`. **Verified on 2026-10-09** by `test/e2e/apply.e2e.test.ts` and `test/e2e/deploy.e2e.test.ts`: Seerr, rendered with `init: true`, runs healthy after apply's ownership step gives its appdata to uid 1000 | S2b (done) |
+| Jellyfin's health check. **Corrected in S5 (2026-10-15):** `/health` answers 200 `Degraded` in the first seconds of every start, while the rest answers 503, so the check now passes only on `Healthy`. `test/e2e/jellyfin.e2e.test.ts` sets Jellyfin up once it is healthy, over the wiring network | S5 (done) |
 
 Verified in S3b (2026-10-10):
 
@@ -179,7 +181,8 @@ last S3 item, the unscheduled list and extended two S9 items. Slice 3b (2026-10-
 the S3c list, two S8 items and one unscheduled item. Slice 3c (2026-10-11) added the S4
 item, five S8 items, an S9 item and an M2 item. Slice 4 (2026-10-15) added four S8 items,
 and its final review an S5 item, two S8 items, a probe in two others, two S9 test gaps
-and an S9 docs item. Each slice plan must address the items for that slice.
+and an S9 docs item. Slice 5 (2026-10-15) added an S6 item and six S8 items, and
+extended one. Each slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -363,11 +366,12 @@ password, which are S3c's (and listed again below).
   new client as they save it; its new Prowlarr is as strict, with its links and its
   proxy.
 
-**S5:**
+**S5:** all of these are in the S5 plan.
 
 - **Jellyfin's health check can pass early.** In its first seconds, Jellyfin's
   `/health` answers 200 with `Degraded` while the server still answers 503 to
-  everything else (S2c). Look at a check that waits for the server itself.
+  everything else (S2c). Look at a check that waits for the server itself. **Done in
+  S5:** the check passes only on `Healthy`, at every start, not only the first.
 - **Small gaps from S4, as S5 extends the fakes and providers** for Jellyfin's
   connections:
   - the fakes test a new provider sent without `enable` (`testedOnCreate`), which an
@@ -381,6 +385,17 @@ password, which are S3c's (and listed again below).
   - a CLI-level `apply` test with Prowlarr in the stack, without Docker: the links' and
     the proxy's create, record and idempotent re-plan, and a link skipped when its
     arr's admin fails.
+  - **Done in S5:** all five. The fakes take a provider without `enable` as off, and their
+    tests of another app read it without adding it; `secretOf` and `numberOf` live in
+    `servarr-provider.ts`; `serviceAddress` gives every app's address; and
+    `packages/cli/src/run.test.ts` applies a stack with Prowlarr.
+
+**S6:**
+
+- **Seerr signs in as Jellyfin's admin** (spec §6.1), which Jellyfin's first-run setup
+  makes, and `jellyfin.admin` keeps as the shared admin (S5). Seerr's sign-in should
+  `require` `jellyfin.admin`, and Seerr come `after` Jellyfin, so that a Jellyfin still to
+  be set up, or one whose key is refused, skips it rather than fails it.
 
 **S7:**
 
@@ -466,10 +481,11 @@ password, which are S3c's (and listed again below).
   - First, check whether Prowlarr's own health check tests the proxy, and use it: drift
     could read `GET /api/v1/health` instead of running a test.
 - **`plan`'s key checks can record a failing status in the app; drift runs them on a
-  schedule.** A failing test of a download client (S3c) or a Prowlarr link (S4) records
-  a failure in the app's status of it (`DownloadClientStatus`, `ApplicationStatus`),
-  as a test from its web UI does, and a later pass resets it (S4's probe). Decide
-  whether scheduled drift may do that.
+  schedule.** A failing test of a download client (S3c), a Prowlarr link (S4) or an
+  arr's connection to Jellyfin (S5) records a failure in the app's status of it
+  (`DownloadClientStatus`, `ApplicationStatus`, `NotificationStatus`), as a test from
+  its web UI does, and a later pass resets it (S4's and S5's probes). Decide whether
+  scheduled drift may do that.
   - First, probe the row under repeated failing checks. The apps may escalate it, and
     disable the client or link for growing periods, which could block Prowlarr's sync
     to that arr and raise a health warning. S4's probe saw only escalation 1.
@@ -480,6 +496,27 @@ password, which are S3c's (and listed again below).
 - **Categories or tags in an unexpected shape read as empty** (S4, as S3c's code), so
   every `apply` plans an update, with no message. Decide how drift reports a value it
   can't read.
+- **Jellyfin's key, deleted by hand,** shuts Mediaplane out of Jellyfin (S5): `plan`
+  warns, and the runbook has the key removed from `state/secrets.json` so that `apply`
+  signs in as the admin and makes another. Automate it, with key recovery: a key
+  Jellyfin refuses, while its wizard is done, is made anew, and the arrs' connections
+  take it.
+- **Checking Jellyfin's admin password signs in** (S5), and Jellyfin's activity log keeps
+  three lines for each check. Drift every 15 minutes (M2) would add about 300 a day.
+  Decide whether drift checks it less often.
+- **Jellyfin's libraries are known by name** (S5). A library renamed by hand is left
+  as it is, and the next `apply` makes `Movies` or `Shows` again, on the same folder, so
+  the folder is in two libraries. Decide whether drift reports the renamed one. A folder
+  added to them by hand is put back: Keep mine must cover `paths`.
+- **The triggers of an arr's connection to Jellyfin are the user's** after it is made
+  (S5): a connection whose triggers were all turned off by hand still passes its test,
+  and tells Jellyfin of nothing. Decide whether drift reports it.
+- **A Jellyfin whose appdata Mediaplane can't read** (S5) is taken as set up when its key
+  is stored, so an emptied appdata there would start it published. Decide whether
+  `plan` should warn when it can't read `system.xml`.
+- **A failed first-run setup stops all wiring** (S5): the bootstrap step's failure skips
+  the wire step, as a failed start does. Let the wire step run past a failed first-run
+  setup, with that app's resources failed so `requires` skips them (spec §5.1).
 
 **S9 (before going public):**
 

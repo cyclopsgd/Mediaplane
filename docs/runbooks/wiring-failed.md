@@ -1,10 +1,12 @@
 # Runbook: wiring failed
 
 Wiring is what `apply` does through each app's API once the apps run: today, the shared
-admin login in Sonarr, Radarr, Prowlarr and qBittorrent, qBittorrent's settings and its
-`tv` and `movies` categories, in Sonarr and Radarr, qBittorrent as their download client
-and their root folders, and in Prowlarr, its links to Sonarr and Radarr and its indexer
-proxy. Later slices add the media server and the requests app.
+admin login in Sonarr, Radarr, Prowlarr, qBittorrent and Jellyfin, qBittorrent's settings
+and its `tv` and `movies` categories, in Sonarr and Radarr, qBittorrent as their download
+client, their root folders and their connection to Jellyfin, in Prowlarr, its links to
+Sonarr and Radarr and its indexer proxy, and in Jellyfin, its first-run setup, before its
+port is published, and the Movies and Shows libraries. Later slices add the requests app
+and Plex.
 
 ## Symptoms
 
@@ -67,6 +69,20 @@ proxy. Later slices add the media server and the requests app.
     skipped verify
   ```
 
+- **`mediaplane apply` stops at the first-run setup step,** before the wiring. Jellyfin's
+  startup wizard is finished there, before its port is published. A Jellyfin whose
+  wizard is still open stays unpublished; one whose wizard is done is published all the
+  same. The step's line, then its error (trimmed):
+
+  ```console
+  Finishing first-run setup before publishing the web UIs…
+    failed  first-run setup
+    skipped wiring
+    skipped verify
+  error: the first-run setup failed: Jellyfin at http://jellyfin:8096 (172.19.0.5) refused the shared admin's sign-in: its startup wizard was finished with another login (POST /Users/AuthenticateByName)
+    hint: fix what the error says, then run apply again: an app whose setup is still open keeps its ports unpublished until then. See https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md
+  ```
+
 - **`mediaplane plan`** warns with the same message, once for the app, and exits 2. It
   lists each of the app's resources under `Wiring:` as `? unknown` when the app refuses
   the key. When it refuses one resource only, the app's others are still checked. An app
@@ -115,6 +131,7 @@ In `--json` output, each `diagnostics` entry has a `code`:
 - `wire.folders`: a folder a resource needs, such as a root folder, couldn't be made.
 - `wire.network`: Mediaplane won't join the wiring network, or Docker refused the join.
 - `resources.invalid`: `state/resources.json` can't be read.
+- `apply.bootstrap-failed`: the first-run setup step failed.
 - `apply.wire-failed`: the wiring step itself failed.
 - `apply.start-failed`: the containers step failed. For this runbook, that is a failure
   to read or leave the wiring network, or Compose refusing to change it (see Fix).
@@ -150,7 +167,15 @@ differ, and a `reason` when it is `unknown`.
     either way: stop the app, set `<ApiKey>` in `appdata/<app>/config.xml` to
     `<app>.apiKey` from `state/secrets.json` (use `sudo` if the file isn't yours), and
     start it. If `plan` says `<app>.not-seeded`, follow the app's README.
-  - Slice 8 restores a key at its source for you.
+  - **Jellyfin** makes its own key, so no key can be put back: a new one is made. A key
+    deleted in Jellyfin's dashboard (API Keys) shuts Mediaplane out of every Jellyfin
+    resource, and `plan` shows them as `? unknown`, with this message. Edit
+    `state/secrets.json` and remove the `jellyfin` entry under `apps`, keeping the file
+    valid JSON (use `sudo` if the file isn't yours). Then run `apply`: Jellyfin is still
+    set up, so Mediaplane signs in as the shared admin, with its port published, makes a
+    new key named `Mediaplane`, keeps it, and gives it to Sonarr's and Radarr's
+    connections, whose own test refuses the old one (`updated apiKey`).
+  - Slice 8 restores a key at its source for you, and makes Jellyfin's anew.
 - **`refused the request (HTTP 403)`, with
   `banned after too many failed authentication attempts`** (`wire.auth`). qBittorrent
   stops an address from signing in for an hour after five failed sign-ins in a row.
@@ -179,9 +204,43 @@ differ, and a `reason` when it is `unknown`.
     `tested qBittorrent (Mediaplane), and it failed:`;
   - when `apply` makes the client, since the arr tests a new client before it saves
     it: `refused the request (HTTP 400): Host: Unable to connect to qBittorrent`.
+- **`refused the shared admin's sign-in: its startup wizard was finished with another login`**
+  (`apply.bootstrap-failed`). Jellyfin's startup wizard was finished by hand, with
+  another login, before Mediaplane set it up: from before Slice 5, say. Jellyfin stays
+  published, but Mediaplane can't make its key, and until then, `apply` wires no app.
+  Either set `admin.username`, and
+  `admin.password` to a file of your own, to Jellyfin's admin login, and run `apply`
+  again (the other apps take that login too), or start Jellyfin afresh: stop it
+  (`docker stop mediaplane-jellyfin-1`), remove `appdata/jellyfin` (with `sudo` if it
+  isn't yours), and run `apply`, which sets it up anew. That loses Jellyfin's database
+  and settings, but not your media. With the login fixed, a library of yours named
+  Movies or Shows becomes Mediaplane's: `plan` shows its folders changing, so rename it
+  first to keep it.
+- **`its startup wizard has a first user that Mediaplane did not set, so Mediaplane left the wizard open`**
+  (`apply.bootstrap-failed`). Someone set Jellyfin's first user before Mediaplane could,
+  so Mediaplane didn't complete the wizard for them, and Jellyfin stays unpublished.
+  Start Jellyfin afresh, as above, and run `apply`.
+- **`has no user admin`, for `jellyfin.admin`.** The shared admin's user isn't in
+  Jellyfin by that name: it was removed, or renamed while Mediaplane had no record of it.
+  Rename it back in Jellyfin, or set `admin.username` to its name, and run `apply`
+  again. Mediaplane makes Jellyfin's admin only in its startup wizard.
+- **`has a library named Shows that holds mixed content, not tvshows`** (or Movies).
+  Jellyfin has a library of that name, made by hand, which holds something else, and
+  Jellyfin can't change what a library holds. Rename it or remove it in Jellyfin's
+  dashboard, then run `apply`, which makes the library anew.
+- **`Host: Unable to send test message`, for `<arr>.connection_jellyfin`.** Sonarr or
+  Radarr can't reach Jellyfin at `jellyfin:8096`: check that Jellyfin runs and is
+  healthy (`mediaplane status jellyfin`). A `compose.override.yaml` that takes either off
+  the stack's network breaks it too. Fix that, then run `apply` again. A failure that
+  names `ApiKey` is never this one: Mediaplane gives the arr Jellyfin's key again itself.
+  From `plan`, verify, or `apply` checking a connection the arr holds, it follows
+  `tested Jellyfin (Mediaplane), and it failed:`; when `apply` makes the connection, the
+  arr tests it before it saves it, so it follows `refused the request (HTTP 400):`. While
+  Jellyfin is still to be set up, or refuses its key, `plan` doesn't run the test.
 - **`could not make /data/media/tv for sonarr.root_folder`** (`wire.folders`). Sonarr and
-  Radarr need their root folder to exist, so Mediaplane makes it first, as the stack's
-  `user:`, in a throwaway container of the app. mkdir's own message follows. Usually the
+  Radarr need their root folder to exist, and Jellyfin its libraries', so Mediaplane
+  makes it first, as the stack's `user:`, in a throwaway container of the app. mkdir's
+  own message follows. Usually the
   folder that holds it, such as `media/` in the data folder, belongs to another user:
   give it to the stack's user, such as
   `sudo chown <uid>:<gid> /srv/data/media` with the ids of `user:` in `stack.yaml`, then
@@ -216,7 +275,9 @@ differ, and a `reason` when it is `unknown`.
   has a download client called `qBittorrent (Mediaplane)` that isn't a qBittorrent one,
   or Prowlarr has an application called `Sonarr (Mediaplane)` or `Radarr (Mediaplane)`
   of another kind, or an indexer proxy called `Cloudflare (Mediaplane)` that isn't a
-  FlareSolverr one. Rename or remove it in the app's web UI, then run `apply` again.
+  FlareSolverr one, or Sonarr or Radarr has a connection called `Jellyfin (Mediaplane)`
+  that isn't an Emby / Jellyfin one. Rename or remove it in the app's web UI, then run
+  `apply` again.
 - **`could not be reached`, `cut the connection` or `did not answer within … s`.** The
   app isn't up, or Mediaplane can't get to it.
   - Wait until `mediaplane status` shows it healthy, then run `apply` again: `apply`
@@ -324,6 +385,7 @@ Then run `mediaplane apply`. It plans again and does only what is left
 - **Run `mediaplane plan` first.** It checks every app's key and each resource, and
   shows what `apply` would change.
 - **Leave the keys as Mediaplane set them,** and don't make one anew in an app's web UI.
+  In Jellyfin's dashboard, leave the API key named `Mediaplane`.
 - **Leave the wiring network out of `compose.override.yaml`**
   ([ADR 0011](../adr/0011-a-private-wiring-network.md)).
 - **Bring `mediaplane-system` down before the stack.** While Mediaplane is on the wiring

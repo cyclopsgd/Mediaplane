@@ -1341,13 +1341,13 @@ describe('--help', () => {
     }
   });
 
-  it('says plan changes nothing in the stack, apart from the wiring network it joins from the image and the mark a key check can leave', async () => {
+  it('says plan changes nothing in the stack, apart from the wiring network it joins from the image and the mark a key or password check can leave', async () => {
     const term = capture();
     expect(await run(['plan', '--help'], term.io)).toBe(0);
     // --help wraps long descriptions at 80 columns, so compare without the line breaks.
     const said = term.stdout().replaceAll(/\s+/g, ' ');
     expect(said).toContain(
-      "Show what apply would change; it changes nothing in the stack, but from the image it joins the stack's private wiring network, and checking a key can leave a small mark in an app (see docs/security/threat-model.md)",
+      "Show what apply would change; it changes nothing in the stack, but from the image it joins the stack's private wiring network, and checking a key or a password can leave a small mark in an app (see docs/security/threat-model.md)",
     );
     expect(said).not.toContain('without changing anything');
   });

@@ -68,14 +68,25 @@ LinuxServer.io image, unmodified.
   (`prowlarr.application_sonarr`, see [Prowlarr's README](../prowlarr/README.md)), with
   Sonarr's key. Prowlarr then adds the indexers you add in Prowlarr to Sonarr, as
   `<name> (Prowlarr)`, and keeps them in step: change them in Prowlarr, not here.
+- **Its connection to Jellyfin** (`sonarr.connection_jellyfin`), with Jellyfin as the
+  media server. Once Jellyfin's admin is in place, `apply` adds `Jellyfin (Mediaplane)`,
+  an Emby / Jellyfin connection, to Sonarr:
+  - its host is `jellyfin`, at Jellyfin's own port, and it has Jellyfin update its
+    library ("Update library");
+  - it is made with the events on that change a file: an episode imported, upgraded or
+    renamed, or a series or an episode's file deleted. Which events it has after that is yours;
+  - its key is Jellyfin's, which Sonarr shows masked. `plan` and `apply` check it with
+    Sonarr's own test of the connection: a refused key is set again, and any other
+    failure is Sonarr's own message, such as Jellyfin out of its reach. A test that
+    fails records a failure in Sonarr's status of the connection, as a test from its
+    web UI does, and a later pass resets it.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its
   address.
 
 ## Not built yet
 
-The rest of the wiring arrives in Slices 5 to 7 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
+The rest of the wiring arrives in Slices 6 and 7 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
 
-- **Slice 5:** the Jellyfin connection that refreshes your library on import.
 - **Slice 6:** Seerr's link to it.
 - **Slice 7:** the same connection for Plex.
 

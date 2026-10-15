@@ -1,6 +1,6 @@
 # Threat model
 
-This is the threat model for Mediaplane as built today: M1, up to and including Slice 4.
+This is the threat model for Mediaplane as built today: M1, up to and including Slice 5.
 It makes spec §7 concrete. To report a vulnerability, see [SECURITY.md](../../SECURITY.md).
 
 ## The one thing to know
@@ -11,16 +11,17 @@ that power. None of them removes it.
 
 ## What it protects
 
-| Asset                                        | Where                                                                 | Why it matters                                             |
-| -------------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
-| The host                                     | Everything                                                            | Docker access is root on the host                          |
-| Generated API keys                           | `state/secrets.json`, `generated/.env` (both 0600) and `appdata/`     | They open the apps' APIs                                   |
-| qBittorrent's key, in Sonarr and Radarr      | Their download client's settings, in `appdata/`                       | It opens qBittorrent's API                                 |
-| Sonarr's and Radarr's keys, in Prowlarr      | Its links' settings, in `appdata/`                                    | They open Sonarr's and Radarr's APIs                       |
-| The shared admin password                    | `state/secrets.json` (0600) or `admin.password`; a hash in `appdata/` | It opens qBittorrent, Sonarr, Radarr and Prowlarr          |
-| Your secrets: VPN key, Plex token, passwords | `secrets/` (0700), or environment variables                           | They are your accounts                                     |
-| App data                                     | `appdata/<app>/`                                                      | The apps' databases and settings, some holding credentials |
-| Your media                                   | The data folder                                                       | Your library                                               |
+| Asset                                        | Where                                                                 | Why it matters                                              |
+| -------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------- |
+| The host                                     | Everything                                                            | Docker access is root on the host                           |
+| Generated API keys                           | `state/secrets.json`, `generated/.env` (both 0600) and `appdata/`     | They open the apps' APIs                                    |
+| qBittorrent's key, in Sonarr and Radarr      | Their download client's settings, in `appdata/`                       | It opens qBittorrent's API                                  |
+| Sonarr's and Radarr's keys, in Prowlarr      | Its links' settings, in `appdata/`                                    | They open Sonarr's and Radarr's APIs                        |
+| Jellyfin's key, which Jellyfin made          | `state/secrets.json` (0600), and Sonarr's and Radarr's connections    | It opens Jellyfin's API, as its admin                       |
+| The shared admin password                    | `state/secrets.json` (0600) or `admin.password`; a hash in `appdata/` | It opens qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin |
+| Your secrets: VPN key, Plex token, passwords | `secrets/` (0700), or environment variables                           | They are your accounts                                      |
+| App data                                     | `appdata/<app>/`                                                      | The apps' databases and settings, some holding credentials  |
+| Your media                                   | The data folder                                                       | Your library                                                |
 
 ## What runs, and who can reach it
 
@@ -91,19 +92,31 @@ host network, read-only mounts
   when `mkdir` exits. It uses the Docker API calls that the ownership helper and
   Mediaplane's own join of the wiring network already make, so the proxy allows nothing
   new for it. T5 says what its environment holds.
+- **The first-run setup.** An app whose setup anyone who reaches it could finish, which
+  is Jellyfin's startup wizard today, starts with no published port: `apply` gives
+  Compose one more file, on its standard input, that takes every port off it, those of
+  `compose.override.yaml` too. Mediaplane finishes the wizard over the wiring network, as
+  the shared admin, makes Jellyfin's key and keeps it, and only then starts Jellyfin
+  again with its port published (see T16). That uses the Docker API calls an `apply`
+  that recreates an app already makes, so the proxy allows nothing new for it. `plan`
+  never runs it.
 - **The wiring.** `plan` and `apply` call the apps' APIs over the wiring network: from
   the Mediaplane container, or run from source, from the host. Each request goes
   straight to the app's container, through an HTTP agent of Mediaplane's own, so a proxy
   in the environment (`NODE_USE_ENV_PROXY`) never sees a key. It carries the app's key in
-  a header (`X-Api-Key`, or a Bearer token for qBittorrent), never in the URL. Mediaplane
-  signs in to qBittorrent, Sonarr, Radarr and Prowlarr with the shared login, to check it.
+  a header (`X-Api-Key`, a Bearer token for qBittorrent, or Jellyfin's
+  `Authorization: MediaBrowser Token="…"`), never in the URL. Mediaplane signs in to
+  qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin with the shared login, to check it;
+  Jellyfin's sign-in is signed out of again, and its activity log records both, as it
+  records any sign-in.
   `plan` checks a download client with the arr's own test, which also makes a missing
   post-import category in qBittorrent, a setting Mediaplane doesn't manage: one you set
   in the arr (`tvImportedCategory`, `movieImportedCategory`) and later deleted in
   qBittorrent. It checks Prowlarr's links with Prowlarr's own test, which calls the arr
-  with its key, and has the arr call Prowlarr back. Either test, when it fails, records a
-  failure in that app's status of the client or link, as a test from the app's web UI
-  does; a later pass resets it.
+  with its key, and has the arr call Prowlarr back, and an arr's connection to Jellyfin
+  with the arr's own test, which calls Jellyfin with its key. Each of those tests, when it
+  fails, records a failure in that app's status of the client, link or connection, as a
+  test from the app's web UI does; a later pass resets it.
 - **The Cloudflare solver.** Byparr, or FlareSolverr, runs a browser for Prowlarr on the
   stack's own network. Its port is never published, it has no login, and it isn't on
   the wiring network. Prowlarr sends it an indexer's request only for an indexer tagged
@@ -128,9 +141,9 @@ host network, read-only mounts
     socket.
   - Only their web UIs are published, bound as `network.bind` says. Everything else stays
     on the stack's own Docker network.
-  - The apps whose API Mediaplane calls (Sonarr, Radarr, Prowlarr, and qBittorrent,
-    through Gluetun with a VPN) are on the stack's wiring network too. It is internal:
-    it gives them no way out, which they have on their own network.
+  - The apps whose API Mediaplane calls (Sonarr, Radarr, Prowlarr, Jellyfin, and
+    qBittorrent, through Gluetun with a VPN) are on the stack's wiring network too. It is
+    internal: it gives them no way out, which they have on their own network.
   - Before an app's first start, Mediaplane writes the files it reads when it starts:
     Sonarr's, Radarr's and Prowlarr's `config.xml`, qBittorrent's `qBittorrent.conf` and
     Gluetun's `auth/config.toml`. Each is written 0600, and only if absent.
@@ -171,6 +184,8 @@ Controls today:
 - Sonarr, Radarr and Prowlarr ask for the shared admin login, which `apply` sets through
   their API once they first start. They ask from the LAN too, by default
   (`security.login_on_lan`).
+- Jellyfin publishes no port while its startup wizard is open: Mediaplane finishes it as
+  the shared admin first (T16). Jellyfin asks for a login from everywhere.
 - With `login_on_lan: false`, qBittorrent lets only your LAN subnet skip its login, and
   only while the web UIs are on the LAN. That subnet is `network.lan_subnet`, or else the
   subnets of the host's private addresses. Sonarr, Radarr and Prowlarr let any local
@@ -182,9 +197,8 @@ Controls today:
 What remains:
 
 - On a home network, `init` suggests `bind: lan`, which puts the web UIs on your LAN.
-- Until the wiring lands (Slices 5 and 6, and Slice 7 with Plex), Jellyfin's wizard and
-  Seerr's setup are open to whoever reaches them first. Complete them right after the
-  first `apply`, or keep `bind: localhost` until you have.
+- Until Slice 6 (Slice 7 with Plex), Seerr's setup is open to whoever reaches it first.
+  Complete it right after the first `apply`, or keep `bind: localhost` until you have.
 - With `login_on_lan: false`, anyone on a local address gets into Sonarr, Radarr and
   Prowlarr without a login. For them, "local" means any private address, not just your
   LAN subnet.
@@ -246,6 +260,9 @@ What remains:
   compromised one can drive qBittorrent: add a torrent, or change its settings.
 - Prowlarr holds Sonarr's and Radarr's keys, as its links need, so a compromised Prowlarr
   can drive both: change their settings, or read their password hash (see T10).
+- Sonarr and Radarr hold Jellyfin's key, as their connection to it needs. A key is
+  Jellyfin's admin, so a compromised arr can drive Jellyfin: change its settings, users
+  and libraries.
 - A link stays in Prowlarr when its arr leaves the stack, and keeps that arr's key,
   until it is removed by hand (in Prowlarr's web UI) or, if Slice 8 does that, by drift
   detection.
@@ -276,11 +293,17 @@ Controls today:
   percent-encoded, form-encoded or HTML-escaped, and nested, such as a password
   JSON-escaped inside a form field (as qBittorrent's settings send it), or a JSON body
   quoted in an HTML page.
-- qBittorrent's key goes to Sonarr and Radarr in their download client's settings, and
-  Sonarr's and Radarr's keys go to Prowlarr in its links' settings: request bodies, the
-  only places one app's key goes to another. They show it masked (`********`)
-  afterwards, and Mediaplane tests the masked client or link, so the key isn't sent
-  again for the check.
+- qBittorrent's key goes to Sonarr and Radarr in their download client's settings,
+  Sonarr's and Radarr's keys go to Prowlarr in its links' settings, and Jellyfin's key
+  goes to Sonarr and Radarr in their connection's: request bodies, the only places one
+  app's key goes to another. They show it masked (`********`) afterwards, and Mediaplane
+  tests the masked client, link or connection, so the key isn't sent again for the
+  check.
+- Jellyfin's key is the one Jellyfin makes: Mediaplane reads it once from Jellyfin's list
+  of keys, which shows them in full, and keeps it in `state/secrets.json` at once. The
+  session it signs in for that is signed out of right after. The admin password goes to
+  Jellyfin only in request bodies: its startup wizard, its sign-in, and a change of its
+  password, sent with its key.
 - The admin password goes to qBittorrent only in request bodies: its preferences, sent
   with its key, and the sign-in that checks it. The session cookie qBittorrent answers
   with is dropped. Its preferences hold its own key too: Mediaplane keeps only the
@@ -383,8 +406,11 @@ Controls today:
 
 What remains:
 
-- One password opens every app that uses it: qBittorrent, Sonarr, Radarr and Prowlarr
-  today, and Jellyfin from Slice 5. A leak from one is a leak for all.
+- One password opens every app that uses it: qBittorrent, Sonarr, Radarr, Prowlarr and
+  Jellyfin. A leak from one is a leak for all.
+- `plan` and `apply` check Jellyfin's password by signing in. Jellyfin doesn't lock its
+  admin out after failed sign-ins (none after seven in a row, on Jellyfin 12.2), but its
+  activity log records each one, right or wrong, so a `plan` adds three lines there.
 - Sonarr, Radarr and Prowlarr give their password hash to anyone who holds their API
   key. Prowlarr holds Sonarr's and Radarr's keys, for its links.
 - `apply` checks qBittorrent's password by signing in. qBittorrent bans an address from
@@ -555,6 +581,31 @@ What remains:
   indexer's key.
 - The solver needs the internet: Byparr's health check loads a web page, and Prowlarr's
   test fetches one from Prowlarr's service.
+
+### T16. Someone else finishes an app's first-run setup
+
+Controls today:
+
+- Jellyfin's startup wizard is never published while it is open. `apply` starts Jellyfin
+  with no published port, its override's ports included, finishes the wizard over the
+  wiring network, and only then publishes it.
+- Before an app starts, Mediaplane reads its appdata (Jellyfin's `system.xml`) to see
+  whether its setup is done. A Jellyfin whose appdata was emptied starts its wizard
+  again: it starts unpublished again, even with its key stored.
+- Mediaplane signs in as the shared admin before it completes the wizard. If the first
+  user isn't one the shared admin can sign in as, someone else set it, and Mediaplane
+  leaves the wizard open, Jellyfin unpublished, and stops with what it found.
+
+What remains:
+
+- While the wizard is open, for the seconds Mediaplane takes, any container of the stack
+  can reach Jellyfin on the stack's networks. A compromised app could claim it first:
+  Mediaplane's sign-in then fails, and `apply` stops, completing no wizard for it.
+- An appdata Mediaplane can't read says nothing: with Jellyfin's key stored, Mediaplane
+  takes the setup as done.
+- Run outside Mediaplane (the ejectable command, or a restart of a published Jellyfin
+  whose appdata was emptied), Jellyfin starts published with its wizard open: stop it
+  before emptying its appdata, and set it up with `apply`.
 
 ## What the proxy does not stop
 

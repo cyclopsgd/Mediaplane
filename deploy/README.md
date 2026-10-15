@@ -11,13 +11,14 @@ Mediaplane runs as two containers in their own Compose project, `mediaplane-syst
 The stack Mediaplane deploys is a separate Compose project, `mediaplane`, so `apply` can
 never touch Mediaplane itself.
 
-> Mediaplane is pre-alpha. Sonarr and Radarr are linked to qBittorrent, and Prowlarr to
-> them, but the media server and Seerr are not wired yet (Slices 5 to 7 do that). On a
-> home network, `init` suggests publishing their web UIs on your LAN. Until the wiring
-> lands, Jellyfin's setup wizard and Seerr's setup are open to anyone on your LAN until
-> you complete them, so complete them first.
+> Mediaplane is pre-alpha. Sonarr and Radarr are linked to qBittorrent and Jellyfin, and
+> Prowlarr to them, but Seerr is not wired yet (Slice 6 does that, Slice 7 with Plex). On
+> a home network, `init` suggests publishing the web UIs on your LAN. Until then, Seerr's
+> setup is open to anyone on your LAN until you complete it, so complete it first.
+> Jellyfin's startup wizard is never published while it is open: Mediaplane finishes it
+> first.
 >
-> qBittorrent, Sonarr, Radarr and Prowlarr have the shared admin login:
+> qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin have the shared admin login:
 > `mediaplane credentials` shows it. To keep the web UIs on this machine only, answer
 > `localhost` when `init` asks (see [First run](#first-run)).
 
@@ -140,18 +141,18 @@ nothing. Without a terminal it asks nothing: pass the flags in the
   - With `lan`, it also asks whether your own network must sign in too
     (`security.login_on_lan`; `--no-login-on-lan` says no).
 
-  Until the wiring lands (Slices 5 and 6, and Slice 7 with Plex), Jellyfin's setup wizard
-  and Seerr's setup are open to anyone on your LAN until you complete them. Complete them
-  right after the first `apply`.
+  Until Slice 6 (Slice 7 with Plex), Seerr's setup is open to anyone on your LAN until
+  you complete it. Complete it right after the first `apply`.
 
 - **The admin login.** `init` asks for its user name (`--admin-user`), and whether
   Mediaplane should generate its password or read yours from a file in the home
   (`--admin-password-file secrets/admin-password`, at least 12 characters). After
   `apply`, `mediaplane credentials` shows the login and each app's address. It shows a
   password of your own only with `--reveal`, and its `--json` output leaves out either
-  unless you add `--reveal`. qBittorrent, Sonarr, Radarr and Prowlarr use it.
-  qBittorrent gets it before its first start. `apply` sets it in all four through their
-  API once they run, and sets it again whenever it changes.
+  unless you add `--reveal`. qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin use it.
+  qBittorrent gets it before its first start, and Jellyfin in its first-run setup.
+  `apply` sets it in all five through their API once they run, and sets it again
+  whenever it changes.
   - Removing your own `admin.password` brings back the password Mediaplane generated
     before, if it generated one. It keeps it, and never generates another.
 - **The VPN address.** With a VPN provider, `init` asks for your WireGuard address

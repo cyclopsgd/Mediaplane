@@ -26,19 +26,60 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
 ## What Mediaplane does today
 
 - **It runs Jellyfin** whenever `media_server` is `jellyfin`, listed under `apps` or not,
-  with your data folder at `/data`. It publishes its web UI as `network.bind` says.
+  with your data folder at `/data`.
+- **It sets Jellyfin up before anyone else can reach it.** Jellyfin's startup wizard
+  answers whoever reaches it first, and whoever finishes it owns the server. So on its
+  first start, Jellyfin has no published port. `apply` finishes the wizard over the
+  stack's private wiring network, as the shared admin (`mediaplane credentials` shows the
+  login), signs in, makes an API key named `Mediaplane`, keeps it in
+  `state/secrets.json` at once, and signs out. Only then does it start Jellyfin again,
+  with its web UI published as `network.bind` says.
+
+  ```text
+  up: Jellyfin, no port
+    │
+    ▼
+  over the wiring network:
+  the wizard, as the shared
+  admin; sign in; the key,
+  kept at once; sign out
+    │
+    ▼
+  up again: Jellyfin
+  published
+  ```
+
+  `plan` lists it under `First-run setup:`, and never runs it. A Jellyfin whose wizard is
+  done, as its `system.xml` says, is never unpublished again.
+
+- **The shared admin** (`jellyfin.admin`) is the user the wizard made, named as
+  `admin.username`. A change of `admin.username` or `admin.password` reaches it through
+  Jellyfin's API. `plan` and `apply` check its password by signing in and out again,
+  which Jellyfin's activity log records, as it records any sign-in. Jellyfin doesn't
+  lock its admin out after failed sign-ins.
+- **Two libraries:** `Movies` (`jellyfin.library_movies`), of films, in
+  `/data/media/movies`, and `Shows` (`jellyfin.library_shows`), of shows, in
+  `/data/media/tv`: the folders Radarr and Sonarr file into. `apply` makes each folder
+  first, as the stack's `user:`, in a throwaway Jellyfin container. A new library gets
+  the options Jellyfin's own web UI gives one: the metadata and image downloaders that
+  Jellyfin turns on by default, and new files picked up as they come. Its other settings
+  are yours.
+- **Sonarr and Radarr tell it of imports.** With them in the stack, each gets a
+  connection to Jellyfin, `Jellyfin (Mediaplane)`, which has Jellyfin update its library
+  when a file is imported, upgraded, renamed or deleted (see
+  [Sonarr's](../sonarr/README.md) and [Radarr's](../radarr/README.md) READMEs).
+- **A health check that waits for the server.** In the first seconds of every start,
+  Jellyfin's `/health` answers `Degraded` while the server itself answers 503 to
+  everything else, so the check passes only on `Healthy`. Its start period is 120
+  seconds: failed checks don't count then, and the first that passes marks Jellyfin
+  healthy.
 - **Listing Plex as well** is an error, unless Plex says `enabled: false`.
-- **A longer start-up allowance.** Its health check has a start period of 120 seconds.
-  During it, failed checks don't count towards the retries, and the first check that
-  passes marks Jellyfin healthy.
 
 ## Not built yet
 
-- **Slice 5:**
-  - first-run setup through Jellyfin's own API, with no port published until it is done;
-  - its API key, stored in `state/secrets.json`;
-  - the Movies and Shows libraries;
-  - the connections from Sonarr and Radarr.
+- **Slice 6:** Seerr's link to Jellyfin, signing in as its admin.
+- **Slice 8:** drift: reporting a setting changed by hand, rather than putting it back,
+  and Keep mine.
 
 See the [roadmap](../../docs/plans/m1-roadmap.md).
 
@@ -49,6 +90,11 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   change `media_server` instead. A different `version` is an untested combination, and
   `plan` warns about it. See the
   [`stack.yaml` reference](../../docs/reference/stack-yaml.md).
+- **The `Movies` and `Shows` libraries' names, what they hold and their folders** are
+  Mediaplane's. A folder you add to one, or one of them you remove, is put back by the
+  next `apply` (Slice 8 adds Keep mine). Add a library of your own instead. A library you
+  rename is no longer Mediaplane's: the next `apply` makes `Movies` or `Shows` again.
+  Everything else in them, such as their metadata language, is yours.
 - **Anything else** goes in `compose.override.yaml` in the Mediaplane home. For example,
   hardware transcoding needs the GPU device:
 
@@ -59,8 +105,27 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
         - /dev/dri:/dev/dri
   ```
 
+  A port you publish there is held back too while the wizard is open.
+
 ## Known issues
 
-- **The setup wizard is open.** Until Slice 5, Jellyfin's first-run wizard is open to
-  whoever reaches its port first. Finish it yourself as soon as `apply` is done, or keep
-  `network.bind: localhost` until you have.
+- **A wizard finished by hand, before Slice 5.** `apply` can't sign in as the shared
+  admin, so it can't make a key, and stops with
+  `refused the shared admin's sign-in: its startup wizard was finished with another login`.
+  Jellyfin stays published, and until then, `apply` wires no app. Set `admin.username`,
+  and `admin.password` to a file of your own, to Jellyfin's admin login, and apply again:
+  the other apps take that login too. A library of yours named Movies or Shows then
+  becomes Mediaplane's: `plan` shows its folders changing, so rename it first to keep it.
+  Or start Jellyfin afresh: stop Jellyfin first (`docker stop mediaplane-jellyfin-1`),
+  then remove `appdata/jellyfin`, then run `apply`. That loses its database and settings,
+  but not your media.
+- **Its key deleted in Jellyfin's dashboard** (API Keys). `plan` warns that Jellyfin
+  refuses Mediaplane's API key. Remove the `jellyfin` entry under `apps` from
+  `state/secrets.json`, keeping the file valid JSON, and apply: Mediaplane signs in as the
+  admin, makes a new key, and gives it to Sonarr and Radarr. Slice 8 does this for you.
+  The [wiring failed runbook](../../docs/runbooks/wiring-failed.md) has the details.
+- **Its `appdata/` emptied by hand.** Jellyfin starts its wizard again. Stop Jellyfin
+  first (`docker stop mediaplane-jellyfin-1`), then remove `appdata/jellyfin`, then run
+  `apply`: it sees in `system.xml` that the wizard is open, starts Jellyfin unpublished,
+  and sets it up again, with a new key. A Jellyfin still running, or started again
+  outside `apply`, with its appdata emptied, comes up published with its wizard open.

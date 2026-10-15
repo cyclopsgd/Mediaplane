@@ -1,7 +1,7 @@
 # Architecture
 
 This page is a condensed version of the [M1 design](design/m1-engine-cli.md), §3 to §6,
-covering what is built so far (Slices 1 to 4). The design describes the whole of M1;
+covering what is built so far (Slices 1 to 5). The design describes the whole of M1;
 this page describes what exists.
 
 ## The idea
@@ -11,9 +11,11 @@ You describe the stack you want in one file, `stack.yaml`. Mediaplane then works
 
 - `plan` works out what would change, and changes nothing in your stack (in the image,
   it joins the stack's wiring network, to ask the apps: see [The wiring](#the-wiring)).
-  Checking a key can leave two small marks in an app: a post-import category made in
-  qBittorrent, and a failure recorded in an app's status of a client or link. The
-  [threat model](security/threat-model.md#what-runs-and-who-can-reach-it) says more;
+  Checking a key or a password can leave small marks in an app: a post-import category
+  made in qBittorrent, a failure recorded in an app's status of a client, link or
+  connection, and a sign-in in Jellyfin's activity log. It never runs an app's first-run
+  setup. The [threat model](security/threat-model.md#what-runs-and-who-can-reach-it) says
+  more;
 - `apply` makes those changes, then plans again to check that nothing is left.
 
 What it writes is an ordinary Docker Compose project, which runs without Mediaplane.
@@ -110,6 +112,10 @@ Each part, and where its code is:
 - **apply** (`packages/engine/src/apply`, and the lock in `packages/engine/src/state`):
   runs the steps below, converging forward
   ([ADR 0004](adr/0004-converge-forward-apply.md)).
+- **first-run setup** (`plan/bootstrap.ts` and `apply/bootstrap.ts` in
+  `packages/engine/src`, and each app's `bootstrap` in the catalog, such as
+  `catalog/jellyfin/bootstrap.ts`): an app whose setup anyone could finish is set up
+  before its port is published (see [Bootstrap before publish](#bootstrap-before-publish)).
 - **history** (`packages/engine/src/history`): writes a change record for every apply
   that runs its steps, failed ones included.
 - **status** (`packages/engine/src/status.ts`): each app's container state and health,
@@ -128,8 +134,7 @@ Each part, and where its code is:
 
 Not built yet:
 
-- the rest of the links between the apps: Jellyfin (Slice 5), the requests app
-  (Slice 6) and Plex (Slice 7);
+- the rest of the links between the apps: the requests app (Slice 6) and Plex (Slice 7);
 - drift detection, with Keep mine (Slice 8).
 
 ## `plan`
@@ -156,7 +161,8 @@ render
 diff
   │ files, containers,
   │ keys to generate,
-  │ apps not healthy yet
+  │ apps not healthy yet,
+  │ first-run setups
   ▼
 ask the apps
   each resource: create,
@@ -196,7 +202,11 @@ lock
  → step off the wiring
    network; stop a
    stranded qBittorrent
- → up --wait
+ → up --wait, an app
+   still to set up with
+   no published port
+ → set it up, keep its
+   key, up --wait again
  → wire each app
  → plan again, and
    vpn-check's checks
@@ -223,6 +233,8 @@ lock
   fail at once.
 - **`up --wait`** waits until every app is healthy. It fails as soon as an app is marked
   unhealthy, and gives up after 10 minutes.
+- **First-run setup** comes between `up` and the wiring, for an app that `plan` lists
+  under `First-run setup:`: see [Bootstrap before publish](#bootstrap-before-publish).
 - **A stranded qBittorrent is restarted.** qBittorrent joins Gluetun's network when it
   starts. When Gluetun starts again on its own, or `apply` starts a stopped one, Compose
   leaves qBittorrent with the old network, which is gone. So `plan` lists qBittorrent as
@@ -286,15 +298,62 @@ inside it, on one filesystem, so moving a finished download into the library is 
 instant hardlink. `plan` checks that `torrents/`, `usenet/` and `media/`, where they
 exist, are on the same filesystem as the folder itself. qBittorrent saves into
 `/data/torrents`, a folder per category, and Sonarr's and Radarr's libraries are
-`/data/media/tv` and `/data/media/movies`, which `apply` makes.
+`/data/media/tv` and `/data/media/movies`, which `apply` makes, and which are Jellyfin's
+Shows and Movies libraries.
+
+## Bootstrap before publish
+
+Jellyfin's startup wizard answers whoever reaches it, and whoever finishes it owns the
+server. So it is never published while it is open:
+
+```text
+plan
+  │ Jellyfin: no key stored,
+  │ or its system.xml says the
+  │ wizard isn't done
+  ▼
+up --wait
+  │ Jellyfin with no port
+  │ published: one more
+  │ Compose file, on stdin,
+  │ resets its ports
+  ▼
+first-run setup, over the
+wiring network
+  │ the wizard, as the shared
+  │ admin; sign in; make the
+  │ key, keep it; sign out
+  ▼
+up --wait again
+  Jellyfin published
+```
+
+- **Which apps.** An app with a `bootstrap` in its catalog entry, whose key isn't stored,
+  or whose appdata doesn't say its setup is done (Jellyfin's `system.xml`). It starts
+  unpublished unless its appdata says the setup is done: then only its key is to make.
+  `plan` lists it under `First-run setup:` (`bootstrap` in `--json`), shows its container
+  recreated when it runs published, and checks its wiring after the start. It never
+  runs the setup.
+- **No port at all.** The file Compose gets on its standard input, after
+  `compose.override.yaml`, sets the app's `ports` to `!reset []`, so the override's ports
+  go too. `compose.yaml` itself always has the ports, so the stack runs as written
+  without Mediaplane.
+- **The setup** reaches the app on the wiring network without a key, finishes its
+  wizard, and keeps the key it makes in `state/secrets.json` at once. Then Mediaplane
+  steps off the wiring network, `up` runs again, without the extra file, and Compose
+  recreates the app with its ports. An app
+  whose setup failed while it is still open stays unpublished; one whose setup is done
+  is published even when making its key failed.
+- **No new Docker call:** the proxy allows nothing new.
 
 ## The wiring
 
 Wiring is what Mediaplane does through each app's API once the apps run. Today that is
-the shared admin login in Sonarr, Radarr, Prowlarr and qBittorrent; the download path:
-qBittorrent's settings and categories, and Sonarr's and Radarr's download client and
-root folder; and the indexers: Prowlarr's links to Sonarr and Radarr, and its indexer
-proxy.
+the shared admin login in Sonarr, Radarr, Prowlarr, qBittorrent and Jellyfin; the
+download path: qBittorrent's settings and categories, and Sonarr's and Radarr's download
+client and root folder; the indexers: Prowlarr's links to Sonarr and Radarr, and its
+indexer proxy; and the media server: Jellyfin's libraries, and Sonarr's and Radarr's
+connection to it.
 
 ```text
 mediaplane-system
@@ -303,7 +362,8 @@ mediaplane-system
     │ internal, no way out
     ▼
 mediaplane (the stack)
-  sonarr, radarr, prowlarr
+  sonarr, radarr, prowlarr,
+  jellyfin
   gluetun ─ qbittorrent
   (each keeps its default
   network, for its own
@@ -385,6 +445,29 @@ mediaplane (the stack)
     sends those tagged `cloudflare` through the solver when their site answers with a
     challenge.
 
+- **The media server:**
+
+  ```text
+  sonarr, radarr
+    │ connection "Jellyfin
+    │ (Mediaplane)": update the
+    │ library on import, with
+    │ Jellyfin's key
+    ▼
+  jellyfin
+    Movies: /data/media/movies
+    Shows: /data/media/tv
+  ```
+
+  - Jellyfin comes first, once it is set up: its shared admin, and the Movies and Shows
+    libraries, each in the folder its arr files into. Each folder is made first, in a
+    throwaway Jellyfin container, as the arrs' root folders are.
+  - Sonarr and Radarr come after it. Each gets `Jellyfin (Mediaplane)`, an Emby / Jellyfin
+    connection that has Jellyfin update its library when a file is imported, upgraded,
+    renamed or deleted. Its key is checked with the arr's own test, which calls Jellyfin
+    with it. It needs Jellyfin's admin in place: while Jellyfin is still to be set up,
+    `plan` leaves the connection's key for `apply` to check.
+
 - **Each resource** is one of:
   - `create` or `update`: the app lacks it, or a managed field or a secret differs. A
     secret is checked by using it, never compared: signing in, or the app's own test, as
@@ -400,14 +483,17 @@ mediaplane (the stack)
     change its container.
   - `unknown`: Mediaplane couldn't ask the app, and a warning says why.
 - **The wire step** waits until each app is ready (`/ping` for Sonarr, Radarr and
-  Prowlarr), checks that its key still works, then makes each resource what the stack
+  Prowlarr, `/System/Info/Public` for Jellyfin), checks that its key still works, then
+  makes each resource what the stack
   wants, in order: an app comes after the apps its integration names. A resource that
   fails doesn't stop the others, and one that needs it is skipped. Each result is kept at
   once in `state/resources.json`: each resource's id, name and managed fields, and the
   names of its secrets, never their values.
 - **The client** (`http/client.ts`) goes straight to the container, through an HTTP
   agent of its own, never through a proxy from the environment. It sends the app's key in
-  a header, never in the URL. It tries a refused or cut connection, a timeout, or a 502,
+  a header, never in the URL: Jellyfin's in its `Authorization: MediaBrowser` header,
+  which names Mediaplane as its client on every call, as Jellyfin's sign-in needs. It
+  tries a refused or cut connection, a timeout, or a 502,
   503 or 504 again, waiting longer each time, for up to two minutes in `apply` and 15
   seconds in `plan`; a create, and qBittorrent's sign-in (each failed one counts towards
   its ban), only when nothing reached the app. It reads at most 5 MiB of an answer,
@@ -471,8 +557,7 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
-- the rest of the wiring, app by app: Jellyfin (Slice 5), the requests app (Slice 6)
-  and Plex (Slice 7);
+- the rest of the wiring, app by app: the requests app (Slice 6) and Plex (Slice 7);
 - drift detection (Slice 8);
 - releases (Slice 9);
 - the web panel (M2).

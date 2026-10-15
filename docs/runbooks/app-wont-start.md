@@ -59,6 +59,10 @@
     `MEDIAPLANE_UID`, or 1000 when run as root.
   - LinuxServer.io images fix their own `appdata` folder. Seerr's gets 1000:1000 from
     apply's ownership step.
+- **Jellyfin stays `starting`.** Its health check passes only once its `/health` answers
+  `Healthy`. In the first seconds of every start, it answers `Degraded`, then Jellyfin
+  restarts its server, which answers 503 for a few seconds more (seen on Jellyfin 12.2).
+  Read its log (check 3) for what it is doing.
 - **A slow start.** With the health checks Mediaplane sets, failed checks don't count
   during an app's start period: 60 seconds, or 120 for Jellyfin and Plex. After that,
   five failed checks in a row, 30 seconds apart, mark the app unhealthy, and `apply`

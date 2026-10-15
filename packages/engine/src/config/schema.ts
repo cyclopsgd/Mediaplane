@@ -221,7 +221,7 @@ const stackShape = {
     })
     .default({ username: 'admin' })
     .describe(
-      "The shared admin login for the apps' web UIs: qBittorrent, Sonarr, Radarr and Prowlarr use it, and Jellyfin will from Slice 5. qBittorrent gets it before its first start. Once the apps run, apply sets it in all four through their API, and again whenever it changes.",
+      "The shared admin login for the apps' web UIs: qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin use it. qBittorrent gets it before its first start, and Jellyfin in its first-run setup. Once the apps run, apply sets it in all five through their API, and again whenever it changes.",
     ),
   media_server: z
     .enum(['jellyfin', 'plex'])
