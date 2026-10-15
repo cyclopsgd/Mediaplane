@@ -203,6 +203,16 @@ describe("fakeStackApis' Sonarr and Radarr", () => {
     expect(apis.apps.get('sonarr')?.downloadClients).toHaveLength(1);
   });
 
+  it('saves a client sent without enable untested: the arrs take it as off', async () => {
+    const apis = await fakeStackApis();
+    const save = (sent: unknown) =>
+      json(apis.app.port, 'sonarr:8989', '/api/v3/downloadclient?forceSave=true', sent);
+    const { enable, ...unsaid } = client('gluetun', 8090);
+    expect(enable).toBe(true);
+    expect((await save(unsaid)).status).toBe(201);
+    expect(apis.apps.get('sonarr')?.downloadClients).toHaveLength(1);
+  });
+
   it('refuses to rename a client to the name of another, but not to its own', async () => {
     const apis = await fakeStackApis();
     const save = (sent: unknown) =>
@@ -502,6 +512,18 @@ describe("fakeStackApis' Prowlarr, as strictly as the app", () => {
     );
     expect(apis.apps.get('prowlarr')?.proxies).toEqual([]);
     expect((await save(proxyAt('http://byparr:8191/'))).status).toBe(201);
+  });
+
+  it('tests a link or a proxy without adding the app it tests to the fake apps', async () => {
+    const apis = await fakeStackApis();
+    await saveLink(apis, link());
+    await json(
+      apis.app.port,
+      'prowlarr:9696',
+      '/api/v1/indexerproxy?forceSave=true',
+      proxyAt('http://byparr:8191/'),
+    );
+    expect([...apis.apps.keys()]).toEqual(['prowlarr']);
   });
 
   it('refuses a proxy under a name taken, and a rename to one, but not a rename to its own', async () => {

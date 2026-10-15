@@ -8,6 +8,13 @@ import type { OneOffCommand } from '../runtime/types';
 import { fakeContainer } from './fakes';
 import { FIXTURE_API, FIXTURE_HOST, fixtureCatalog, fixtureConfig } from './fixtures';
 import { fakeHttpApp, type FakeApp, type FakeReply, type FakeRequest } from './http';
+import {
+  fakeJellyfin,
+  fakeServarrConnections,
+  type FakeApiKey,
+  type FakeConnection,
+  type FakeLibrary,
+} from './jellyfin';
 import { fakeProwlarr, type FakeProvider } from './prowlarr';
 import {
   fakeProviders,
@@ -140,6 +147,24 @@ export interface FakeAppState {
   proxies: FakeProvider[];
   /** Prowlarr's tags. */
   tags: { id: number; label: string }[];
+  /**
+   * Jellyfin's startup wizard: `new` until its first user is made (asking for it makes
+   * it), `open` with that user, `done` once completed. Its admin is `user` and `password`.
+   */
+  wizard: 'new' | 'open' | 'done';
+  /** Jellyfin's API keys, in full, oldest first. */
+  apiKeys: FakeApiKey[];
+  /** Jellyfin's sessions from signing in: each device's token. */
+  sessions: Record<string, string>;
+  /** Jellyfin's libraries. */
+  libraries: FakeLibrary[];
+  /**
+   * Where Jellyfin keeps system.xml (its appdata folder): the fake writes it there as
+   * Jellyfin does, saying whether its wizard is done. Unset: nowhere.
+   */
+  configDir?: string;
+  /** Sonarr's or Radarr's connections, such as to Jellyfin, their keys in clear. */
+  connections: FakeConnection[];
 }
 
 /** A download client, as Sonarr and Radarr keep one. */
@@ -171,6 +196,11 @@ export function freshAppState(): FakeAppState {
     applications: [],
     proxies: [],
     tags: [],
+    wizard: 'new',
+    apiKeys: [],
+    sessions: {},
+    libraries: [],
+    connections: [],
   };
 }
 
@@ -255,7 +285,8 @@ function fakeServarrDownloads(
     held: state.downloadClients,
     templates: () => [qbittorrentTemplate(service)],
     test: (sent, key) => testClient(sent, key, state, qbittorrent),
-    testedOnCreate: (sent) => sent.enable,
+    // A client sent without `enable` is off, to the arr: it isn't tested.
+    testedOnCreate: (sent: Partial<FakeDownloadClient>) => sent.enable === true,
   });
   if (clients !== undefined) return clients;
   const folders = '/api/v3/rootfolder';
@@ -296,13 +327,15 @@ function fakeServarrDownloads(
  * The APIs of the real catalog's apps, as far as Mediaplane uses them, all on one port
  * of 127.0.0.1: told apart by their Host header ("sonarr:8989", "gluetun:8080"). Sonarr,
  * Radarr and Prowlarr have /ping, system/status, config/host and /login, the arrs their
- * download clients and root folders, and Prowlarr its links to them, its indexer proxies
- * and its tags (fakeProwlarr); qBittorrent has /, app/version, its sign-in
- * (with its ban), preferences and categories, answered as qBittorrent 5.2 answers them,
- * and is `apps`' "qbittorrent" also when reached through Gluetun. Any key is taken, but
- * qBittorrent takes only a Bearer token (X-Api-Key gets a 403): its `key` when that is
- * set. `seams` send every app's calls there. `mkdir` is what the wire step's folder
- * helper does to them: pass it what a fake runtime's `run` is given.
+ * download clients, root folders and connections (fakeServarrConnections), and Prowlarr
+ * its links to them, its indexer proxies and its tags (fakeProwlarr); qBittorrent has /,
+ * app/version, its sign-in (with its ban), preferences and categories, answered as
+ * qBittorrent 5.2 answers them, and is `apps`' "qbittorrent" also when reached through
+ * Gluetun; Jellyfin has its startup wizard, sign-in, keys, user and libraries
+ * (fakeJellyfin). Any key is taken, but qBittorrent takes only a Bearer token (X-Api-Key
+ * gets a 403): its `key` when that is set; and Jellyfin only one of its own, in its
+ * MediaBrowser header. `seams` send every app's calls there. `mkdir` is what the wire
+ * step's folder helper does to them: pass it what a fake runtime's `run` is given.
  */
 export async function fakeStackApis(): Promise<{
   app: FakeApp;
@@ -325,12 +358,15 @@ export async function fakeStackApis(): Promise<{
     apps.set(service, fresh);
     return fresh;
   };
+  // What an app's test reads of another app, without adding it to `apps`.
+  const peek = (service: string) => apps.get(service) ?? freshAppState();
   const app = await fakeHttpApp((request) => {
     const { method, path, headers } = request;
     const host = (headers.host ?? '').split(':')[0] ?? '';
     const service = host === 'gluetun' ? 'qbittorrent' : host;
     const state = stateOf(service);
     if (service === 'qbittorrent') return fakeQbittorrent(request, state);
+    if (service === 'jellyfin') return fakeJellyfin(request, state);
     const keyed =
       headers['x-api-key'] !== undefined || headers.authorization !== undefined;
     if (path === '/ping') return { status: state.up ? 200 : 503, body: { status: 'OK' } };
@@ -360,8 +396,9 @@ export async function fakeStackApis(): Promise<{
     }
     const answered =
       service === 'prowlarr'
-        ? fakeProwlarr(request, state, stateOf)
-        : fakeServarrDownloads(request, service, state, stateOf('qbittorrent'));
+        ? fakeProwlarr(request, state, peek)
+        : (fakeServarrDownloads(request, service, state, stateOf('qbittorrent')) ??
+          fakeServarrConnections(request, service, state, peek('jellyfin')));
     return answered ?? { status: 404 };
   });
   return {
@@ -371,7 +408,14 @@ export async function fakeStackApis(): Promise<{
       endpoint: () => ({ host: '127.0.0.1', port: app.port }),
       retry: { deadlineMs: 0 },
     },
-    addresses: onWiring(['gluetun', 'prowlarr', 'qbittorrent', 'radarr', 'sonarr']),
+    addresses: onWiring([
+      'gluetun',
+      'jellyfin',
+      'prowlarr',
+      'qbittorrent',
+      'radarr',
+      'sonarr',
+    ]),
     mkdir: (service, command) => {
       if (command.entrypoint !== 'mkdir') return;
       const divider = command.args.indexOf('--');

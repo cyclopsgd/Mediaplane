@@ -115,14 +115,14 @@ function hostOf(url: unknown): { host: string; port: number; at: string; tls: bo
 function testApplication(
   sent: Pick<FakeProvider, 'implementation' | 'fields'>,
   key: unknown,
-  stateOf: (service: string) => FakeAppState,
+  peek: (service: string) => FakeAppState,
 ): FakeRefusal | undefined {
   const value = (name: string) => sent.fields.find((f) => f.name === name)?.value;
   const arr = sent.implementation.toLowerCase();
   const base = hostOf(value('baseUrl'));
   const named = base.host === arr && base.port === PORTS[arr] && !base.tls;
   // A stopped arr is nowhere to be found, as a host that isn't one.
-  if (!named || !stateOf(arr).up) {
+  if (!named || !peek(arr).up) {
     const why =
       base.host === arr && !named
         ? 'Connection refused'
@@ -132,7 +132,7 @@ function testApplication(
       `Unable to complete application test, cannot connect to ${sent.implementation}. ${why} (${base.at})`,
     );
   }
-  const expected = stateOf(arr).key;
+  const expected = peek(arr).key;
   if (typeof key !== 'string' || key === '' || (expected !== '' && key !== expected)) {
     return refusal('ApiKey', 'API Key is invalid');
   }
@@ -154,11 +154,11 @@ function testApplication(
  */
 function testProxy(
   sent: Pick<FakeProvider, 'fields'>,
-  stateOf: (service: string) => FakeAppState,
+  peek: (service: string) => FakeAppState,
 ): FakeRefusal | undefined {
   const host = hostOf(sent.fields.find((f) => f.name === 'host')?.value);
   const reached = SOLVERS.includes(host.host) && host.port === SOLVER_PORT && !host.tls;
-  return reached && stateOf(host.host).up
+  return reached && peek(host.host).up
     ? undefined
     : refusal(
         'Host',
@@ -168,26 +168,27 @@ function testProxy(
 /**
  * Prowlarr's links to Sonarr and Radarr, its indexer proxies and its tags, as
  * fakeStackApis answers them, as Prowlarr 2.6 does. A tag's label is kept lower-case,
- * and asking for one it has gives that one back.
+ * and asking for one it has gives that one back. Its tests read the other apps through
+ * `peek`, which gives an app it doesn't hold as it first starts, and holds it nowhere.
  */
 export function fakeProwlarr(
   request: FakeRequest,
   state: FakeAppState,
-  stateOf: (service: string) => FakeAppState,
+  peek: (service: string) => FakeAppState,
 ): FakeReply | undefined {
   const answered =
     fakeProviders(request, {
       path: '/api/v1/applications',
       held: state.applications,
       templates: applicationTemplates,
-      test: (sent, key) => testApplication(sent, key, stateOf),
+      test: (sent, key) => testApplication(sent, key, peek),
       defaults: { tags: [] },
     }) ??
     fakeProviders(request, {
       path: '/api/v1/indexerproxy',
       held: state.proxies,
       templates: proxyTemplates,
-      test: (sent) => testProxy(sent, stateOf),
+      test: (sent) => testProxy(sent, peek),
       defaults: { tags: [] },
     });
   if (answered !== undefined) return answered;
