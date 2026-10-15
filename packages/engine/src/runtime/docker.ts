@@ -364,11 +364,14 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
       return commandResult(result, values);
     },
 
-    async up(waitSeconds, values) {
+    async up(waitSeconds, values, unpublished = []) {
+      const reset = unpublishedPorts(unpublished);
       const result = await docker(
         'compose up',
         [
           ...(await projectArgs()),
+          // Read after the user's override: its ports for these services go too.
+          ...(reset === undefined ? [] : ['-f', '-']),
           'up',
           '--detach',
           '--wait',
@@ -377,7 +380,10 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
           '--remove-orphans',
           '--quiet-pull',
         ],
-        { timeoutMs: (waitSeconds + 120) * 1000 },
+        {
+          timeoutMs: (waitSeconds + 120) * 1000,
+          ...(reset === undefined ? {} : { input: reset }),
+        },
       );
       return commandResult(result, values);
     },
@@ -634,6 +640,21 @@ function serviceName(service: string): string {
     throw new RuntimeError(`not a service name: ${JSON.stringify(service)}`);
   }
   return service;
+}
+
+/**
+ * A Compose file that takes every published port off `services`, or undefined for none:
+ * `!reset` (Compose 2.24 and later, the floor preflight checks) empties what the files
+ * before it set.
+ */
+function unpublishedPorts(services: readonly string[]): string | undefined {
+  if (services.length === 0) return undefined;
+  const names = services.map((service) => serviceName(service));
+  return [
+    'services:',
+    ...names.map((name) => `  ${name}:\n    ports: !reset []`),
+    '',
+  ].join('\n');
 }
 
 /**

@@ -585,6 +585,42 @@ describe('createDockerRuntime', () => {
     );
   });
 
+  it('starts services without any published port through one more file, on its standard input', async () => {
+    const dir = await tempDir('mediaplane-runtime-');
+    await writeFile(join(dir, 'compose.override.yaml'), 'services: {}\n');
+    const { exec, calls } = recorder(() => ok(''));
+    const runtime = createDockerRuntime({ home: dir, project: 'mediaplane-test', exec });
+    expect(await runtime.up(600, {}, ['jellyfin'])).toEqual({ ok: true });
+    // After the user's override, so that its ports for the service go too.
+    expect(calls[0]?.args).toEqual([
+      'compose',
+      '-p',
+      'mediaplane-test',
+      '--project-directory',
+      dir,
+      '-f',
+      join(dir, 'generated/compose.yaml'),
+      '-f',
+      join(dir, 'compose.override.yaml'),
+      '--env-file',
+      join(dir, 'generated/.env'),
+      '-f',
+      '-',
+      'up',
+      '--detach',
+      '--wait',
+      '--wait-timeout',
+      '600',
+      '--remove-orphans',
+      '--quiet-pull',
+    ]);
+    expect(calls[0]?.options?.input).toBe(
+      'services:\n  jellyfin:\n    ports: !reset []\n',
+    );
+    await expect(runtime.up(600, {}, ['-f'])).rejects.toThrow('not a service name: "-f"');
+    expect(calls).toHaveLength(1);
+  });
+
   it("reports a failed command with Compose's last lines, secrets replaced", async () => {
     const { exec } = recorder(() => ({
       code: 1,

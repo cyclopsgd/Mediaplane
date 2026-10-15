@@ -187,7 +187,8 @@ export async function reachApps(
           host: address,
           port,
         },
-        ...(key === undefined ? {} : { key: { scheme: spec.key.scheme, value: key } }),
+        // Without a key, as Jellyfin is before its first-run setup, still its own way.
+        key: { scheme: spec.key.scheme, ...(key === undefined ? {} : { value: key }) },
         secrets: options.secrets,
         ...(options.seams?.timeoutMs === undefined
           ? {}
@@ -272,7 +273,7 @@ export async function examine(
 ): Promise<Examined | undefined> {
   const desired = spec.desired(ctx);
   if (desired === undefined) return undefined;
-  const observed = await spec.observe(api, known);
+  const observed = await spec.observe(api, known, desired);
   if (observed === undefined) {
     return { desired, observed, action: 'create', changes: [] };
   }

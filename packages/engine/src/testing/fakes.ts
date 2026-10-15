@@ -150,8 +150,8 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
         results[Math.min(pulls++, results.length - 1)] ?? { ok: true },
       );
     },
-    up: () => {
-      record('up');
+    up: (_seconds, _values, unpublished = []) => {
+      record(unpublished.length === 0 ? 'up' : `up unpublished ${unpublished.join(' ')}`);
       return Promise.resolve(options.up ?? { ok: true });
     },
     // async: a throwing callback rejects like a failed docker call.
@@ -217,8 +217,9 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
  * A Docker whose `up` starts what is written in `home`. Afterwards containers() reports a
  * running, healthy `fake-<service>` per service, labelled with the fakeHash of the written
  * compose.yaml and .env. Like Compose, it hashes a guest (`network_mode: service:<host>`)
- * as `container:<host's id>`, and inspect says it is in its host's network. A vpn-check
- * probe in qBittorrent's network finds a healthy tunnel, unless `run` says otherwise.
+ * as `container:<host's id>`, and inspect says it is in its host's network, and it hashes
+ * a service `up` starts unpublished without its ports. A vpn-check probe in qBittorrent's
+ * network finds a healthy tunnel, unless `run` says otherwise.
  */
 export function fakeDocker(
   home: string,
@@ -251,12 +252,14 @@ export function fakeDocker(
           ? details
           : { ...details, networkMode: `container:${host}` };
       }),
-    up: async (waitSeconds, values) => {
-      const result = await base.up(waitSeconds, values);
+    up: async (waitSeconds, values, unpublished = []) => {
+      const result = await base.up(waitSeconds, values, unpublished);
       if (!result.ok || options.upChangesNothing === true) return result;
       const compose = parse(await readFile(join(home, COMPOSE_PATH), 'utf8')) as {
         services: Record<string, Record<string, unknown>>;
       };
+      // As `ports: !reset []` leaves them: with no ports at all.
+      for (const service of unpublished) delete compose.services[service]?.ports;
       for (const config of Object.values(compose.services)) {
         const mode = config.network_mode;
         const host =

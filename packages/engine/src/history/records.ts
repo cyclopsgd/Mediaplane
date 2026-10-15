@@ -14,7 +14,17 @@ export const CHANGE_SCHEMA = 'mediaplane.change/v1';
 const RECORD_ID = /^\d{8}T\d{6}Z-[0-9a-f]{8}$/;
 
 const actionSchema = z.strictObject({
-  step: z.enum(['keys', 'files', 'pull', 'ownership', 'start', 'wire', 'verify']),
+  /** `bootstrap` was added in Slice 5. */
+  step: z.enum([
+    'keys',
+    'files',
+    'pull',
+    'ownership',
+    'start',
+    'bootstrap',
+    'wire',
+    'verify',
+  ]),
   /** The wire step's actions name the resource ("sonarr.admin"). Added in Slice 3b. */
   resource: z.string().optional(),
   result: z.enum(['done', 'failed', 'skipped']),
@@ -63,6 +73,10 @@ export const changeRecordSchema = z.strictObject({
           reason: z.string().optional(),
         }),
       )
+      .optional(),
+    /** The apps whose first-run setup the plan said apply would finish. Added in Slice 5. */
+    bootstrap: z
+      .array(z.strictObject({ app: z.string(), unpublished: z.boolean() }))
       .optional(),
   }),
   actions: z.array(actionSchema),

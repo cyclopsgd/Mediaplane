@@ -63,11 +63,13 @@ export interface ResourceSpec {
   desired(ctx: WiringContext): DesiredResource | undefined;
   /**
    * What the app holds: by the id resources.json recorded (`known`), else by the exact
-   * name Mediaplane gives it (spec §6.3). Undefined when it holds none.
+   * name Mediaplane gives it (spec §6.3), which `desired` holds where it comes from the
+   * stack (Jellyfin's admin is the shared admin's user name). Undefined when it holds none.
    */
   observe(
     api: AppApi,
     known: KnownResource | undefined,
+    desired?: DesiredResource,
   ): Promise<ObservedResource | undefined>;
   /**
    * Whether the app takes the desired secrets: a sign-in, or the app's own test of what it

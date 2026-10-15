@@ -34,6 +34,31 @@ describe('fakeDocker', () => {
     expect(docker.calls).toEqual(['containers', 'up', 'containers']);
   });
 
+  it('hashes a service up starts unpublished as having no ports, and says so in its calls', async () => {
+    const home = await tempDir('mediaplane-fakes-');
+    await mkdir(join(home, 'generated'));
+    const published = `services:
+  web:
+    image: registry.test/web:1
+    ports:
+      - 127.0.0.1:8096:8096
+`;
+    await writeFile(join(home, COMPOSE_PATH), published);
+    await writeFile(join(home, ENV_PATH), '');
+    const docker = fakeDocker(home);
+    await docker.up(600, {}, ['web']);
+    const hash = async () => (await docker.containers())[0]?.configHash;
+    expect(await hash()).toBe(
+      fakeHash('services:\n  web:\n    image: registry.test/web:1\n', {}).web,
+    );
+    await docker.up(600, {});
+    expect(await hash()).toBe(fakeHash(published, {}).web);
+    expect(docker.calls.filter((call) => call.startsWith('up'))).toEqual([
+      'up unpublished web',
+      'up',
+    ]);
+  });
+
   it('can fail a step or leave the containers as they were', async () => {
     const home = await tempDir('mediaplane-fakes-');
     const failing = fakeDocker(home, {

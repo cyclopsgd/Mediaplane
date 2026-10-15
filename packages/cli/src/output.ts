@@ -113,6 +113,15 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
   if (generate.length > 0) io.stdout(`Secrets to generate: ${generate.join(', ')}\n`);
   const unhealthy = result.unhealthy;
   if (unhealthy.length > 0) io.stdout(`Not healthy yet: ${unhealthy.join(', ')}\n`);
+  if (result.bootstrap.length > 0) {
+    io.stdout('First-run setup:\n');
+    for (const { app, unpublished } of result.bootstrap) {
+      const how = unpublished
+        ? 'with no port published until it is done'
+        : 'signing in as the admin, to make its key';
+      io.stdout(`  + ${app} (${how})\n`);
+    }
+  }
   const wiring = result.wiring.filter((change) => change.action !== 'unchanged');
   if (wiring.length > 0) {
     io.stdout('Wiring:\n');
@@ -127,6 +136,7 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
     count(containers.length, 'container', 'to change'),
     count(generate.length, 'secret', 'to generate'),
     count(unhealthy.length, 'app', 'to wait for'),
+    count(result.bootstrap.length, 'app', 'to set up'),
     count(tally('create', 'update', 'adopt'), 'resource', 'to wire'),
     count(tally('after-start'), 'wiring check', 'after the start'),
     count(tally('unknown'), 'wiring check', 'that could not be made'),
@@ -144,6 +154,7 @@ const STEP_LABELS: Record<ApplyStep, string> = {
   pull: 'images',
   ownership: 'appdata ownership',
   start: 'containers',
+  bootstrap: 'first-run setup',
   wire: 'wiring',
   verify: 'verify',
 };
@@ -151,6 +162,7 @@ const STEP_LABELS: Record<ApplyStep, string> = {
 const SLOW_STEPS: Partial<Record<ApplyStep, string>> = {
   pull: 'Pulling images (the first time can take several minutes)…',
   start: 'Starting containers and waiting until every app is healthy…',
+  bootstrap: 'Finishing first-run setup before publishing the web UIs…',
   wire: 'Wiring the apps…',
 };
 
@@ -218,7 +230,7 @@ export function printApply(
   io: Io,
 ): void {
   if (options.json) {
-    const { files, containers, secrets, unhealthy, wiring } = result.plan;
+    const { files, containers, secrets, unhealthy, wiring, bootstrap } = result.plan;
     io.stdout(
       `${JSON.stringify(
         {
@@ -232,6 +244,7 @@ export function printApply(
             secrets,
             unhealthy,
             wiring,
+            bootstrap,
           },
           actions: result.actions,
           recordId: result.recordId ?? null,

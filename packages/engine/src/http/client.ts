@@ -62,6 +62,20 @@ export interface TestFailure {
   message: string;
 }
 
+/**
+ * How a request carries the key: the X-Api-Key header (Servarr), a Bearer token
+ * (qBittorrent), or Jellyfin's `Authorization: MediaBrowser …` header, whose client
+ * fields go with every request, a token or not.
+ */
+export type KeyScheme = 'x-api-key' | 'bearer' | 'mediabrowser';
+
+/**
+ * The client fields Jellyfin asks of every request in its MediaBrowser header: a sign-in
+ * is refused without them. One device id, so a new sign-in ends the last one's session.
+ */
+const MEDIA_BROWSER =
+  'MediaBrowser Client="Mediaplane", Device="Mediaplane", DeviceId="mediaplane", Version="1"';
+
 /** Where to connect: the container's address, and its port. */
 export interface Endpoint {
   host: string;
@@ -85,7 +99,11 @@ export interface AppApiOptions {
   /** Its container port: the Host header's port, which qBittorrent checks. */
   port: number;
   endpoint: Endpoint;
-  key?: { scheme: 'x-api-key' | 'bearer'; value: string };
+  /**
+   * How requests carry the key, and the key itself, once Mediaplane has one: before its
+   * first-run setup, Jellyfin has none, and is still called its own way.
+   */
+  key?: { scheme: KeyScheme; value?: string };
   /**
    * Every secret value an answer could hold, replaced with *** in every message, in the
    * forms an app may echo it in (as it is, JSON-escaped, percent-encoded, form-encoded,
@@ -109,6 +127,12 @@ export interface AppApi {
   check(path: string): Promise<void>;
   /** PUT a JSON body with the key; any 2xx answer is success. */
   put(path: string, body: unknown): Promise<void>;
+  /**
+   * POST or DELETE with the key, and a JSON body if given; any 2xx answer is success, and
+   * its body isn't read (Jellyfin answers 204). A POST is sent again only when nothing
+   * reached the app; a DELETE, like a GET.
+   */
+  submit(method: 'POST' | 'DELETE', path: string, body?: unknown): Promise<void>;
   /** POST a JSON body with the key, and the JSON answer, checked with `schema`. */
   post<T>(path: string, body: unknown, schema: z.ZodType<T>): Promise<T>;
   /**
@@ -145,12 +169,29 @@ export interface AppApi {
     fields: Readonly<Record<string, string>>,
     options?: { answers?: readonly number[] },
   ): Promise<{ status: number; location: string | undefined }>;
+  /**
+   * POST `fields` as JSON, without the key, to an app's own sign-in that answers JSON
+   * (Jellyfin's): its answer, checked with `schema`, or undefined when the app refuses
+   * the sign-in (401). Like `post`, it is sent again only when nothing reached the app.
+   * `secrets` are values it sends, kept out of every message, listed or not.
+   */
+  signIn<T>(
+    path: string,
+    fields: Readonly<Record<string, string>>,
+    schema: z.ZodType<T>,
+    secrets: readonly string[],
+  ): Promise<T | undefined>;
   /** Wait, until the deadline, for `path` to answer 200 without the key. */
   ready(path: string): Promise<void>;
+  /**
+   * The same app's API, carrying `value` as its key, the way this one carries its own: a
+   * session's token, say. It keeps `value` out of its messages.
+   */
+  withKey(value: string): AppApi;
 }
 
 interface Call {
-  method: 'GET' | 'PUT' | 'POST';
+  method: 'GET' | 'PUT' | 'POST' | 'DELETE';
   path: string;
   body?: { type: string; text: string };
   /** Without the API key. */
@@ -211,7 +252,7 @@ export function createAppApi(options: AppApiOptions): AppApi {
   const host = `${options.service}:${String(options.port)}`;
   const where = `http://${host} (${options.endpoint.host})`;
   // What the client sends is redacted whether or not the caller listed it.
-  const sent = options.key === undefined ? [] : [options.key.value];
+  const sent = options.key?.value === undefined ? [] : [options.key.value];
   const cleanAlways = redactor([...options.secrets, ...sent]);
 
   /** Redacts `call`'s messages: the options' secrets, and the ones this call sends. */
@@ -229,12 +270,13 @@ export function createAppApi(options: AppApiOptions): AppApi {
         'User-Agent': 'Mediaplane',
         Accept: 'application/json',
       };
-      if (!call.anonymous && options.key !== undefined) {
-        if (options.key.scheme === 'bearer') {
-          headers.Authorization = `Bearer ${options.key.value}`;
-        } else {
-          headers['X-Api-Key'] = options.key.value;
-        }
+      const key = call.anonymous ? undefined : options.key?.value;
+      if (options.key?.scheme === 'mediabrowser') {
+        headers.Authorization =
+          key === undefined ? MEDIA_BROWSER : `${MEDIA_BROWSER}, Token="${key}"`;
+      } else if (key !== undefined) {
+        if (options.key?.scheme === 'bearer') headers.Authorization = `Bearer ${key}`;
+        else headers['X-Api-Key'] = key;
       }
       if (call.body !== undefined) {
         headers['Content-Type'] = call.body.type;
@@ -467,6 +509,12 @@ export function createAppApi(options: AppApiOptions): AppApi {
     async put(path, body) {
       await send({ method: 'PUT', path, body: json(body) }, true);
     },
+    async submit(method, path, body) {
+      await send(
+        { method, path, ...(body === undefined ? {} : { body: json(body) }) },
+        method === 'DELETE',
+      );
+    },
     async post(path, body, schema) {
       const call: Call = { method: 'POST', path, body: json(body) };
       return parsed(call, await send(call, false), schema);
@@ -522,6 +570,21 @@ export function createAppApi(options: AppApiOptions): AppApi {
           answer.location === undefined ? undefined : cleanFor(call)(answer.location),
       };
     },
+    async signIn(path, fields, schema, secrets) {
+      const call: Call = {
+        method: 'POST',
+        path,
+        anonymous: true,
+        secrets,
+        body: json(fields),
+      };
+      const answer = await send(
+        call,
+        false,
+        (a) => (a.status >= 200 && a.status < 300) || a.status === 401,
+      );
+      return answer.status === 401 ? undefined : parsed(call, answer, schema);
+    },
     async ready(path) {
       // A starting app answers 503, or nothing: both are tried again until the deadline.
       await send(
@@ -530,6 +593,11 @@ export function createAppApi(options: AppApiOptions): AppApi {
         (answer) => answer.status === 200,
       );
     },
+    withKey: (value) =>
+      createAppApi({
+        ...options,
+        key: { scheme: options.key?.scheme ?? 'x-api-key', value },
+      }),
   };
 }
 

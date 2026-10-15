@@ -35,6 +35,7 @@ import { withGeneratedSecrets } from '../secrets/generate';
 import { readSecretStore, type SecretStore } from '../secrets/store';
 import { secretsToGenerate, secretValues } from '../secrets/values';
 import { planAppdata } from './appdata';
+import { planBootstrap, type BootstrapChange } from './bootstrap';
 import { notYetHealthy, otherHomes, ownPorts, type ContainerChange } from './containers';
 import { diffFiles, type FileChange } from './files';
 import { predictContainers, type PredictResult } from './predict';
@@ -72,6 +73,8 @@ export interface PlanResult {
   unhealthy: string[];
   /** What apply would do to each managed resource in the apps (spec §5 step 5). */
   wiring: WiringChange[];
+  /** The apps whose first-run setup apply would finish before publishing them. */
+  bootstrap: BootstrapChange[];
   diagnostics: Diagnostic[];
 }
 
@@ -185,6 +188,15 @@ export async function planStack(
     ]);
   }
   let containers = predicted.changes;
+  // An app whose setup is open starts again without its ports, whatever it runs now: up
+  // recreates it, and again once it is set up.
+  const bootstrap = await planBootstrap(stack, store);
+  const unpublished = new Set(bootstrap.filter((b) => b.unpublished).map((b) => b.app));
+  containers = containers.map((change) =>
+    unpublished.has(change.service) && change.action !== 'create'
+      ? { ...change, action: 'recreate' }
+      : change,
+  );
   try {
     // A guest whose host apply starts again, or that holds a host's old network.
     const stranded = await strandedGuests(stack, current, containers, options.runtime);
@@ -211,9 +223,11 @@ export async function planStack(
     // read the admin login doesn't come after the join (wiringAddresses can still fail
     // after it).
     const admin = await adminLogin(stack.config, home, preview, options.env);
-    const changing = new Set(
-      containers.filter((c) => c.action !== 'unchanged').map((c) => c.service),
-    );
+    // An app to set up is asked once it is: without its key, it can't be asked now.
+    const changing = new Set([
+      ...containers.filter((c) => c.action !== 'unchanged').map((c) => c.service),
+      ...bootstrap.map((b) => b.app),
+    ]);
     // The join is plan's one change to Docker, and only an app that is settled is asked:
     // with none, every resource is checked after the start, and nothing joins.
     let onNetwork = false;
@@ -253,12 +267,14 @@ export async function planStack(
         containers.some((change) => change.action !== 'unchanged') ||
         generate.length > 0 ||
         unhealthy.length > 0 ||
-        wiring.some((change) => change.action !== 'unchanged'),
+        wiring.some((change) => change.action !== 'unchanged') ||
+        bootstrap.length > 0,
       files,
       containers,
       secrets: { generate },
       unhealthy,
       wiring,
+      bootstrap,
       diagnostics,
     },
     context: { stack, compose, store, current },
@@ -275,6 +291,7 @@ function failed(diagnostics: Diagnostic[]): { result: PlanResult; context: undef
       secrets: { generate: [] },
       unhealthy: [],
       wiring: [],
+      bootstrap: [],
       diagnostics,
     },
     context: undefined,

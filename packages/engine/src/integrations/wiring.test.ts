@@ -137,6 +137,30 @@ describe('planWiring', () => {
     expect(seen).toContainEqual({ id: null, name: 'login', fields: { user: 'admin' } });
   });
 
+  it('looks a resource up with what the stack wants of it: a name that comes from the stack', async () => {
+    // Jellyfin's admin is the user named as the shared admin, before resources.json
+    // records its id.
+    const seen: unknown[] = [];
+    const named: ResourceSpec = {
+      ...FAKE_LOGIN,
+      observe: (api, known, desired) => {
+        seen.push(desired);
+        return FAKE_LOGIN.observe(api, known);
+      },
+    };
+    const stack = stackOf(
+      WIRED_CATALOG.map((def) =>
+        def.id === 'sonarr'
+          ? { ...def, integration: { after: [], resources: [named] } }
+          : def,
+      ),
+    );
+    await planWiring(options(await fakeSonarr({ key: KEY }), { stack }));
+    expect(seen).toEqual([
+      { name: 'login', fields: { user: 'admin' }, secrets: { password: PASSWORD } },
+    ]);
+  });
+
   /** WIRED_CATALOG, with Sonarr's resources replaced by `resources`. */
   function sonarrWith(resources: ResourceSpec[]) {
     return stackOf(

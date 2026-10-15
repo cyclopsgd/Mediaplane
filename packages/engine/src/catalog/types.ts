@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type { AppSettings, StackConfig } from '../config/schema';
 import type { Diagnostic } from '../diagnostics';
+import type { AppApi, KeyScheme } from '../http/client';
 import type { Integration } from '../integrations/types';
 
 export type Arch = 'amd64' | 'arm64';
@@ -110,9 +111,32 @@ export interface ApiSpec {
   /** A path that answers 200 without a key once the app is ready: /ping for the arrs. */
   ready: string;
   /** Which of the app's secrets is its API key, and how a request carries it. */
-  key: { secret: string; scheme: 'x-api-key' | 'bearer' };
+  key: { secret: string; scheme: KeyScheme };
   /** A path that answers 200 only with the key: it shows the key still works. */
   check: string;
+}
+
+/**
+ * First-run setup that an app opens to anyone who reaches it, which Mediaplane finishes
+ * before it publishes the app's ports (spec §5 step 9, §6.4: bootstrap before publish),
+ * over the wiring network, without a key: Jellyfin's startup wizard, then the API key that
+ * only the app can make.
+ */
+export interface Bootstrap {
+  /** The secret the setup makes, which the app creates (`createdBy: 'app'`): its key. */
+  secret: string;
+  /**
+   * A file in the app's appdata folder that says the setup is done, such as Jellyfin's
+   * system.xml: until it exists and matches `pattern`, the app starts unpublished.
+   */
+  done: { path: string; pattern: RegExp };
+  /** Whether anyone who reaches the app can still claim it. Throws AppApiError. */
+  open(api: AppApi): Promise<boolean>;
+  /**
+   * Finish what is left of the setup as the shared admin, and give the secret it made, or
+   * the one the app already holds for Mediaplane. Throws AppApiError.
+   */
+  run(api: AppApi, admin: { username: string; password: string }): Promise<string>;
 }
 
 export interface ServiceExtras {
@@ -144,6 +168,8 @@ export interface AppDefinition<Options = Record<string, unknown>> {
   api?: ApiSpec;
   /** What Mediaplane wires in it, through `api` (catalog/<app>/integration.ts). */
   integration?: Integration;
+  /** First-run setup to finish through `api` before its ports are published. */
+  bootstrap?: Bootstrap;
   /** App-specific settings under apps.<id> in stack.yaml. */
   options?: z.ZodType<Options>;
   /** Apps this one needs, given its options (e.g. qBittorrent with a VPN needs Gluetun). */

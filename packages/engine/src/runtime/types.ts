@@ -90,8 +90,17 @@ export interface Runtime {
    * user's override, .env). `values` are secret values to redact from errors.
    */
   pull(values: Record<string, string>): Promise<CommandResult>;
-  /** `up --detach --wait --remove-orphans` on the written project. */
-  up(waitSeconds: number, values: Record<string, string>): Promise<CommandResult>;
+  /**
+   * `up --detach --wait --remove-orphans` on the written project, with the services
+   * `unpublished` started without any published port, the override's too (bootstrap
+   * before publish, spec §6.4): Compose gets one more file, on its standard input, that
+   * resets their `ports`. An `up` without them recreates them with their ports.
+   */
+  up(
+    waitSeconds: number,
+    values: Record<string, string>,
+    unpublished?: readonly string[],
+  ): Promise<CommandResult>;
   /**
    * Run `command` in a throwaway container of `service` (`compose run --rm --no-deps -T`),
    * with the service's own image, mounts and network: for a service with `network_mode:

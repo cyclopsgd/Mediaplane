@@ -1124,3 +1124,118 @@ describe('createAppApi', () => {
     expect(app.requests.map((r) => r.path)).toEqual(['/status']);
   });
 });
+
+/** The client fields Mediaplane sends Jellyfin on every call. */
+const CLIENT_FIELDS =
+  'MediaBrowser Client="Mediaplane", Device="Mediaplane", DeviceId="mediaplane", Version="1"';
+
+describe("createAppApi: Jellyfin's ways", () => {
+  const jellyfin = { name: 'Jellyfin', service: 'jellyfin', port: 8096 };
+
+  it('carries its key in the MediaBrowser header, with its client fields on every call', async () => {
+    const { api, app } = await sonarr(
+      () => ({ status: 200, body: { version: '12.2.0' } }),
+      {
+        ...jellyfin,
+        key: { scheme: 'mediabrowser', value: KEY },
+      },
+    );
+    await api.get('/System/Info', STATUS);
+    await api.ready('/System/Info/Public');
+    expect(app.requests.map((r) => r.headers.authorization)).toEqual([
+      `${CLIENT_FIELDS}, Token="${KEY}"`,
+      CLIENT_FIELDS,
+    ]);
+    expect(app.requests[0]?.headers['x-api-key']).toBeUndefined();
+  });
+
+  it('calls an app its own way before it has a key, and a Servarr app with no key header', async () => {
+    const { api, app } = await sonarr(
+      () => ({ status: 200, body: { version: '12.2.0' } }),
+      {
+        ...jellyfin,
+        key: { scheme: 'mediabrowser' },
+      },
+    );
+    await api.get('/System/Info/Public', STATUS);
+    expect(app.requests[0]?.headers.authorization).toBe(CLIENT_FIELDS);
+    const keyless = await sonarr(() => ({ status: 200, body: { version: '4.0.20' } }), {
+      key: { scheme: 'x-api-key' },
+    });
+    await keyless.api.get('/api/v3/system/status', STATUS);
+    expect(keyless.app.requests[0]?.headers).not.toHaveProperty('x-api-key');
+    expect(keyless.app.requests[0]?.headers).not.toHaveProperty('authorization');
+  });
+
+  it('POSTs and DELETEs, taking any 2xx as done without reading it, and sends a POST again only when nothing reached the app', async () => {
+    const statuses = [204, 503, 503, 204];
+    const { api, app, slept } = await sonarr(
+      () => ({ status: statuses.shift() ?? 500 }),
+      {
+        ...jellyfin,
+        key: { scheme: 'mediabrowser', value: KEY },
+      },
+    );
+    await api.submit('POST', '/Startup/User', { Name: 'admin' });
+    expect(app.requests[0]).toMatchObject({
+      method: 'POST',
+      path: '/Startup/User',
+      body: '{"Name":"admin"}',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(await failure(api.submit('POST', '/Startup/Complete'))).toMatchObject({
+      kind: 'server',
+      status: 503,
+    });
+    expect(app.requests[1]?.body).toBe('');
+    // A DELETE is tried again, as a GET is.
+    await api.submit('DELETE', '/Library/VirtualFolders/Paths?name=Movies');
+    expect(app.requests.map((r) => r.method)).toEqual([
+      'POST',
+      'POST',
+      'DELETE',
+      'DELETE',
+    ]);
+    expect(slept).toHaveLength(1);
+  });
+
+  it('signs in with JSON and without the key: the answer, or nothing when refused, never the password', async () => {
+    const { api, app } = await sonarr(
+      (request) => {
+        const { Pw } = JSON.parse(request.body) as { Pw: string };
+        if (Pw === PASSWORD)
+          return { status: 200, body: { AccessToken: 'e'.repeat(32) } };
+        if (Pw === 'fake-odd-password') return { status: 400, body: `bad ${Pw}` };
+        return { status: 401, body: 'Error processing request.' };
+      },
+      { ...jellyfin, key: { scheme: 'mediabrowser', value: KEY } },
+    );
+    const token = z.looseObject({ AccessToken: z.string() });
+    const signIn = (pw: string) =>
+      api.signIn('/Users/AuthenticateByName', { Username: 'admin', Pw: pw }, token, [pw]);
+    expect(await signIn(PASSWORD)).toEqual({ AccessToken: 'e'.repeat(32) });
+    expect(await signIn('fake-wrong-password')).toBeUndefined();
+    const refused = await failure(signIn('fake-odd-password'));
+    expect(refused.message).toBe(
+      'Jellyfin at http://jellyfin:8096 (127.0.0.1) refused the request (HTTP 400): bad *** (POST /Users/AuthenticateByName)',
+    );
+    expect(app.requests[0]?.headers.authorization).toBe(CLIENT_FIELDS);
+    expect(app.requests[0]?.headers['content-type']).toBe('application/json');
+    expect(app.requests).toHaveLength(3);
+  });
+
+  it('gives the same app with another key, which it keeps out of what it says', async () => {
+    const session = 'd'.repeat(32);
+    const { api, app } = await sonarr(
+      (request) => ({ status: 401, body: `no ${String(request.headers.authorization)}` }),
+      { ...jellyfin, key: { scheme: 'mediabrowser', value: KEY }, secrets: [] },
+    );
+    const refused = await failure(api.withKey(session).check('/System/Info'));
+    expect(app.requests[0]?.headers.authorization).toBe(
+      `${CLIENT_FIELDS}, Token="${session}"`,
+    );
+    expect(refused.message).toBe(
+      `Jellyfin at http://jellyfin:8096 (127.0.0.1) refused Mediaplane's API key (HTTP 401): no ${CLIENT_FIELDS}, Token="***" (GET /System/Info)`,
+    );
+  });
+});

@@ -33,6 +33,7 @@ import { codeOf } from '../util/error-code';
 import { readIfExists } from '../util/fs';
 import { compare } from '../util/sort';
 import { vpnCheck, VPN_RUNBOOK } from '../vpn/check';
+import { bootstrapApps, BootstrapFailed } from './bootstrap';
 import {
   AppdataNotPrivateError,
   ensureAppdataDirs,
@@ -88,6 +89,7 @@ const STEP_HINTS: Record<ApplyStep, string> = {
   pull: 'check the network connection and that the image registries are reachable, then run apply again',
   ownership: "the error comes from the app's own image; run apply again to retry",
   start: `run "mediaplane status" to see each app, fix the cause, then run apply again; see ${runbookUrl('app-wont-start')}`,
+  bootstrap: `fix what the error says, then run apply again; see ${runbookUrl('wiring-failed')}`,
   wire: `fix what the error says, then run apply again; see ${runbookUrl('wiring-failed')}`,
   verify: 'run "mediaplane plan" to see what is still different',
 };
@@ -142,6 +144,12 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
   const steps = new Steps(options.onStep);
   let store = context.store;
   let values: Record<string, string> = {};
+  /** `up`, with `unpublished` started without their ports; a failure names the apps. */
+  const up = async (unpublished: readonly string[]) => {
+    const wait = options.waitSeconds ?? DEFAULT_WAIT_SECONDS;
+    const result = await runtime.up(wait, values, unpublished);
+    if (!result.ok) throw new Error(await startFailure(runtime, result.error));
+  };
 
   await steps.run('keys', async () => {
     const result = withGeneratedSecrets(stack, store, options.random);
@@ -198,12 +206,35 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       .filter((change) => change.action === 'restart')
       .map((change) => change.service);
     if (restart.length > 0) succeeded(await runtime.stop(restart, values));
-    const result = await runtime.up(options.waitSeconds ?? DEFAULT_WAIT_SECONDS, values);
-    if (!result.ok) throw new Error(await startFailure(runtime, result.error));
-    return restart.length === 0
-      ? 'every app is running and healthy'
-      : `every app is running and healthy; restarted ${restart.join(', ')}`;
+    // An app whose first-run setup is open to anyone starts with no published port: the
+    // bootstrap step publishes it once it is set up (spec §6.4).
+    const unpublished = shown.bootstrap.filter((b) => b.unpublished).map((b) => b.app);
+    await up(unpublished);
+    return [
+      'every app is running and healthy',
+      ...(restart.length === 0 ? [] : [`restarted ${restart.join(', ')}`]),
+      ...(unpublished.length === 0
+        ? []
+        : [`started ${unpublished.join(', ')} without its ports, to set it up first`]),
+    ].join('; ');
   });
+  if (shown.bootstrap.length > 0) {
+    await steps.run('bootstrap', async () => {
+      const set = await bootstrapApps({
+        home,
+        stack,
+        store,
+        values,
+        env: options.env,
+        runtime,
+        pending: shown.bootstrap,
+        publish: up,
+        ...(options.wiring === undefined ? {} : { seams: options.wiring }),
+      });
+      store = set.store;
+      return set.detail;
+    });
+  }
   await steps.run('wire', async () => {
     try {
       const done = await wire({
@@ -299,6 +330,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       containers: shown.containers,
       secrets: shown.secrets,
       wiring: shown.wiring,
+      bootstrap: shown.bootstrap,
     },
     actions: steps.actions,
   };
@@ -394,7 +426,8 @@ function ownHint(cause: unknown): string | undefined {
   if (
     cause instanceof AppdataNotPrivateError ||
     cause instanceof LeaveFailed ||
-    cause instanceof StepError
+    cause instanceof StepError ||
+    cause instanceof BootstrapFailed
   ) {
     return cause.hint;
   }
@@ -511,6 +544,7 @@ function emptyPlan(): PlanResult {
     secrets: { generate: [] },
     unhealthy: [],
     wiring: [],
+    bootstrap: [],
     diagnostics: [],
   };
 }

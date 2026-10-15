@@ -32,6 +32,7 @@ const PLAN: PlanResult = {
   secrets: { generate: [] },
   unhealthy: [],
   wiring: [],
+  bootstrap: [],
   diagnostics: [],
 };
 
@@ -108,6 +109,57 @@ describe('printPlan', () => {
         },
       ],
     });
+  });
+});
+
+describe('printPlan: first-run setup', () => {
+  it('lists each app to set up, and how, and counts them', () => {
+    const term = capture();
+    printPlan(
+      {
+        ...PLAN,
+        files: [],
+        bootstrap: [
+          { app: 'jellyfin', unpublished: true },
+          { app: 'other', unpublished: false },
+        ],
+      },
+      { json: false },
+      term.io,
+    );
+    expect(term.stdout()).toBe(
+      'First-run setup:\n  + jellyfin (with no port published until it is done)\n  + other (signing in as the admin, to make its key)\nPlan: 2 apps to set up.\n',
+    );
+  });
+
+  it('shows the step by its name as apply runs it', () => {
+    const term = capture();
+    printStep(
+      {
+        step: 'bootstrap',
+        phase: 'end',
+        action: { step: 'bootstrap', result: 'done', detail: 'set up jellyfin' },
+      },
+      term.io,
+    );
+    expect(term.stdout()).toBe('  done    first-run setup: set up jellyfin\n');
+  });
+
+  it("gives apply's plan of it in JSON", () => {
+    const term = capture();
+    const bootstrap = [{ app: 'jellyfin', unpublished: true }];
+    printApply(
+      {
+        outcome: 'success',
+        plan: { ...PLAN, bootstrap },
+        actions: [],
+        recordId: 'fake-record',
+        diagnostics: [],
+      },
+      { json: true },
+      term.io,
+    );
+    expect(JSON.parse(term.stdout())).toMatchObject({ plan: { bootstrap } });
   });
 });
 

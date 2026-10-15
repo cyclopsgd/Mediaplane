@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppDefinition, Catalog } from '../catalog/types';
 import { listRecords } from '../history/records';
 import { readResources } from '../integrations/resources';
+import { plan } from '../plan/plan';
 import { runbookUrl } from '../runbooks';
 import {
   COMPOSE_PATH,
@@ -26,7 +27,15 @@ import {
 } from '../paths';
 import { WiringRefused } from '../runtime/docker';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
-import { fakeDocker, fakeProbe, HEALTHY_PROBE, probeOutput } from '../testing/fakes';
+import { readSecretStore, writeSecretStore } from '../secrets/store';
+import { fakeSetUpApp, SET_UP_CATALOG, SET_UP_KEY } from '../testing/bootstrap';
+import {
+  fakeDocker,
+  fakeProbe,
+  HEALTHY_PROBE,
+  probeOutput,
+  type FakeRuntimeOptions,
+} from '../testing/fakes';
 import { FIXTURE_HOST, fixtureApp, fixtureCatalog } from '../testing/fixtures';
 import { FAKE_LOGIN, fakeSonarr, WIRED_CATALOG } from '../testing/wiring';
 import { apply, unhealthyServices, type ApplyOptions, type StepEvent } from './apply';
@@ -1564,5 +1573,187 @@ describe('apply: what a failed wiring says to do', () => {
       hint: `Mediaplane steps off the stack's wiring network before Compose starts the apps, and couldn't, so nothing was started; fix what the error says, then run apply again. See ${RUNBOOK}`,
     });
     expect(docker.calls).not.toContain('up');
+  });
+});
+
+describe('apply: first-run setup before the ports are published', () => {
+  /**
+   * The fake setup's stack, and a Docker that notes, at each up, which apps it starts
+   * without their ports and whether the setup is done then.
+   */
+  async function setUpStack(more: FakeRuntimeOptions = {}) {
+    const home = await makeHome();
+    const setup = await fakeSetUpApp(home);
+    const docker = fakeDocker(home, { addresses: setup.addresses, ...more });
+    const ups: string[] = [];
+    const runtime: Runtime = {
+      ...docker,
+      up: (seconds, values, unpublished = []) => {
+        const shown =
+          unpublished.length === 0
+            ? 'all published'
+            : `${unpublished.join(' ')} unpublished`;
+        ups.push(`${shown}, setup ${setup.state.done ? 'done' : 'open'}`);
+        return docker.up(seconds, values, unpublished);
+      },
+    };
+    const extra = { catalog: SET_UP_CATALOG, wiring: setup.seams };
+    const run = (more: Partial<ApplyOptions> = {}) =>
+      apply(options(home, runtime, { ...extra, ...more }));
+    return { home, setup, docker, runtime, ups, run, extra };
+  }
+
+  it('names the setup in plan, and never runs it there', async () => {
+    const { home, setup, runtime, extra } = await setUpStack();
+    const shown = await plan(options(home, runtime, extra));
+    expect(shown.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
+    expect(shown.changed).toBe(true);
+    expect(setup.app.requests).toEqual([]);
+  });
+
+  it('starts an app whose setup is open without its ports, sets it up, saves its key at once, then publishes it', async () => {
+    const { home, setup, docker, ups, run } = await setUpStack();
+    const onStep = (event: StepEvent) => {
+      if (event.phase === 'start') docker.calls.push(`step ${event.step}`);
+    };
+    const first = await run({ onStep });
+    expect(first.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(first.outcome).toBe('success');
+    expect(first.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
+    expect(first.plan.wiring).toEqual([{ resource: 'jellyfin', action: 'after-start' }]);
+    expect(first.actions.map((a) => a.step)).toEqual([
+      'keys',
+      'files',
+      'pull',
+      'ownership',
+      'start',
+      'bootstrap',
+      'wire',
+      'verify',
+    ]);
+    expect(first.actions.find((a) => a.step === 'start')?.detail).toBe(
+      'every app is running and healthy; started jellyfin without its ports, to set it up first',
+    );
+    expect(first.actions.find((a) => a.step === 'bootstrap')?.detail).toBe(
+      'set up jellyfin and saved jellyfin.apiKey; published jellyfin',
+    );
+    // Its ports were published only once its setup was done, as the shared admin.
+    expect(ups).toEqual([
+      'jellyfin unpublished, setup open',
+      'all published, setup done',
+    ]);
+    expect(setup.state.admin).toBe('admin');
+    const during = docker.calls.slice(
+      docker.calls.indexOf('step bootstrap') + 1,
+      docker.calls.indexOf('step wire'),
+    );
+    expect(during).toEqual([
+      'join-wiring',
+      'containers',
+      'wiring-addresses fake-jellyfin',
+      // Off the wiring network before up, as the start step steps off (ADR 0011).
+      'leave-wiring',
+      'up',
+    ]);
+    expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
+    const [record] = (await listRecords(home)).records;
+    expect(record?.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
+    expect(JSON.stringify([first, record])).not.toContain(SET_UP_KEY);
+    expect((await run()).outcome).toBe('no-changes');
+  });
+
+  it("keeps an app whose setup fails while it is open unpublished, and fails with the app's words", async () => {
+    const { home, setup, ups, run } = await setUpStack();
+    setup.state.refuse = 'fake refusal';
+    const result = await run();
+    expect(result.outcome).toBe('failed');
+    expect(result.actions.slice(-3).map((a) => [a.step, a.result])).toEqual([
+      ['bootstrap', 'failed'],
+      ['wire', 'skipped'],
+      ['verify', 'skipped'],
+    ]);
+    expect(ups).toEqual([
+      'jellyfin unpublished, setup open',
+      'jellyfin unpublished, setup open',
+    ]);
+    expect(result.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message:
+        'the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the request (HTTP 400): fake refusal (POST /setup)',
+      hint: `fix what the error says, then run apply again: an app whose setup is still open keeps its ports unpublished until then. See ${RUNBOOK}`,
+    });
+    expect((await readSecretStore(home)).apps.jellyfin).toBeUndefined();
+  });
+
+  it('publishes nothing when the setup fails before it reaches the app', async () => {
+    // No wiring network after the start: the setup can't reach the app, so it stays open.
+    const { home, setup, ups, run } = await setUpStack({ join: 'no-network' });
+    const result = await run();
+    expect(result.outcome).toBe('failed');
+    expect(result.actions.slice(-3).map((a) => [a.step, a.result])).toEqual([
+      ['bootstrap', 'failed'],
+      ['wire', 'skipped'],
+      ['verify', 'skipped'],
+    ]);
+    expect(result.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message: 'the stack has no wiring network, though apply has just started it',
+    });
+    // Only the start step's up, which left it unpublished.
+    expect(ups).toEqual(['jellyfin unpublished, setup open']);
+    expect(setup.app.requests).toEqual([]);
+    expect((await readSecretStore(home)).apps.jellyfin).toBeUndefined();
+  });
+
+  it('publishes an app whose setup is done though making its key failed, then only makes the key', async () => {
+    const { home, setup, ups, run } = await setUpStack();
+    setup.state.keyFails = true;
+    const failed = await run();
+    expect(failed.outcome).toBe('failed');
+    expect(failed.diagnostics.at(-1)?.message).toBe(
+      'the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) failed (HTTP 500): fake failure (GET /key)',
+    );
+    // Nobody can claim it any more: it is published all the same.
+    expect(ups).toEqual([
+      'jellyfin unpublished, setup open',
+      'all published, setup done',
+    ]);
+    setup.state.keyFails = false;
+    const again = await run();
+    expect(again.outcome).toBe('success');
+    expect(again.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: false }]);
+    expect(again.plan.containers.find((c) => c.service === 'jellyfin')?.action).toBe(
+      'unchanged',
+    );
+    expect(again.actions.find((a) => a.step === 'bootstrap')?.detail).toBe(
+      'set up jellyfin and saved jellyfin.apiKey',
+    );
+    // Only the start step's up: the bootstrap step had nothing to publish.
+    expect(ups.slice(2)).toEqual(['all published, setup done']);
+    expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
+  });
+
+  it('sets up again, without its ports, an app whose appdata lost its setup, and keeps its new key', async () => {
+    const { home, setup, ups, run } = await setUpStack();
+    expect((await run()).outcome).toBe('success');
+    // Its appdata emptied by hand: it starts its setup again, with the old key stored.
+    await rm(join(home, 'appdata', 'jellyfin', 'setup.txt'));
+    Object.assign(setup.state, { done: false, key: '' });
+    const store = await readSecretStore(home);
+    await writeSecretStore(home, {
+      ...store,
+      apps: { ...store.apps, jellyfin: { apiKey: '8'.repeat(32) } },
+    });
+    const again = await run();
+    expect(again.outcome).toBe('success');
+    expect(again.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
+    expect(again.plan.containers.find((c) => c.service === 'jellyfin')?.action).toBe(
+      'recreate',
+    );
+    expect(ups.slice(2)).toEqual([
+      'jellyfin unpublished, setup open',
+      'all published, setup done',
+    ]);
+    expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
   });
 });
