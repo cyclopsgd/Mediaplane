@@ -22,6 +22,7 @@ import {
   knownSecrets,
   PLAN_DEADLINE_MS,
   planWiring,
+  reachApps,
   settled,
   WIRING_RUNBOOK,
   wiringOrder,
@@ -654,6 +655,22 @@ describe('planWiring', () => {
         ) as string,
       },
     ]);
+  });
+});
+
+describe('reachApps', () => {
+  it('says so, rather than reach an app on port 0, when its API names a port it lacks', async () => {
+    const [sonarr] = stackOf().apps.filter((a) => a.def.id === 'sonarr');
+    if (sonarr === undefined) throw new Error('no Sonarr in the stack');
+    await expect(
+      reachApps([{ ...sonarr, containerPorts: {} }], {
+        runtime: fakeRuntime({ addresses: { 'fake-sonarr': '172.18.0.2' } }),
+        current: RUNNING,
+        keys: {},
+        secrets: [],
+        deadlineMs: 0,
+      }),
+    ).rejects.toThrow('sonarr has no web port for its API');
   });
 });
 

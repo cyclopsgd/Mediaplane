@@ -35,6 +35,7 @@ export * from './integrations/address';
 export * from './integrations/types';
 export * from './integrations/resources';
 export * from './integrations/wiring';
+export * from './integrations/wire';
 export * from './runtime/types';
 export * from './runtime/exec';
 export * from './runtime/docker';

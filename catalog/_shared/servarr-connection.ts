@@ -4,14 +4,11 @@ import {
   type ResourceSpec,
 } from '@mediaplane/engine';
 import {
-  createProvider,
-  findProvider,
   numberOf,
   secretOf,
+  servarrProvider,
   settingOf,
-  testProvider,
   textOf,
-  updateProvider,
   type ProviderKind,
 } from './servarr-provider';
 
@@ -45,7 +42,8 @@ function settingsOf(desired: DesiredResource): Record<string, unknown> {
  * - Its host is Jellyfin's service on the stack's network, at its container port, and it
  *   updates the library; Jellyfin's key is its secret, which the arr shows masked.
  * - It is made from the arr's own template, with `triggers` on: what makes the arr tell
- *   Jellyfin, as files come, are upgraded, renamed or deleted. They stay yours after.
+ *   Jellyfin, as files come, are upgraded, renamed or deleted. They stay yours after. A
+ *   template without one of them is refused, as the arr would drop it unsaid.
  * - Its key is checked with the arr's own test of the connection it holds: a refused key
  *   (`ApiKey`) means an update, which sets it; any other failure the arr explains. The
  *   arr tests a new connection with a trigger on as it saves it, forceSave or not, so a
@@ -76,30 +74,18 @@ export function servarrJellyfin(triggers: readonly string[]): ResourceSpec {
         secrets,
       };
     },
-    async observe(api, known) {
-      const held = await findProvider(api, CONNECTIONS, known, JELLYFIN_CONNECTION_NAME);
-      return held === undefined
-        ? undefined
-        : {
-            id: held.id,
-            name: held.name,
-            fields: {
-              host: textOf(settingOf(held, 'host')),
-              port: numberOf(settingOf(held, 'port')),
-              updateLibrary: settingOf(held, 'updateLibrary') === true,
-            },
-          };
-    },
-    verify: (api, desired, observed) =>
-      testProvider(api, CONNECTIONS, observed.id, desired.name, CREDENTIALS),
-    create: (api, desired) =>
-      createProvider(api, CONNECTIONS, settingsOf(desired), {
-        name: desired.name,
-        ...Object.fromEntries(triggers.map((trigger) => [trigger, true])),
+    ...servarrProvider({
+      kind: CONNECTIONS,
+      name: JELLYFIN_CONNECTION_NAME,
+      credentials: CREDENTIALS,
+      fieldsOf: (held) => ({
+        host: textOf(settingOf(held, 'host')),
+        port: numberOf(settingOf(held, 'port')),
+        updateLibrary: settingOf(held, 'updateLibrary') === true,
       }),
-    update: (api, desired, observed) =>
-      updateProvider(api, CONNECTIONS, observed.id, settingsOf(desired), {
-        name: desired.name,
-      }),
+      settingsOf,
+      topOf: (desired) => ({ name: desired.name }),
+      onCreate: triggers,
+    }),
   };
 }

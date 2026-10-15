@@ -5,6 +5,7 @@ import {
   type ResourceSpec,
 } from '@mediaplane/engine';
 import { z } from 'zod';
+import { secretOf } from '../_shared/secret';
 
 /** Where qBittorrent saves a torrent without a category (spec §6.2). */
 export const DEFAULT_SAVE_PATH = '/data/torrents';
@@ -51,13 +52,6 @@ function subnetList(list: string): string {
     .split(/[\s,]+/)
     .filter((subnet) => subnet !== '')
     .join(',');
-}
-
-/** The secret `name` that `desired` holds; desired() always gives it. */
-function secretOf(desired: DesiredResource, name: string): string {
-  const value = desired.secrets[name];
-  if (value === undefined) throw new Error(`${desired.name} has no ${name} to send`);
-  return value;
 }
 
 /** Set qBittorrent's preferences: a JSON object in a form's `json` field, with the key. */

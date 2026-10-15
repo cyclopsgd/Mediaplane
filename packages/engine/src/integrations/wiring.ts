@@ -9,7 +9,7 @@ import {
 } from '../http/client';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { runbookUrl } from '../runbooks';
-import { serviceOf } from './address';
+import { serviceAddress, serviceOf } from './address';
 import { JoinFailed, OwnContainerUnknown, WiringRefused } from '../runtime/docker';
 import type { ContainerState, RuntimeError, Runtime } from '../runtime/types';
 import type { SecretStore } from '../secrets/store';
@@ -171,13 +171,17 @@ export async function reachApps(
     const container = containerOf(app);
     const address = container === undefined ? undefined : addresses[container.id];
     if (spec === undefined || address === undefined) continue;
-    const port = app.containerPorts[spec.port] ?? 0;
+    const at = serviceAddress(app, spec.port);
+    if (at === undefined) {
+      throw new Error(`${app.def.name} has no ${spec.port} port for its API`);
+    }
+    const { port } = at;
     const key = options.keys[app.def.id]?.[spec.key.secret];
     reached.set(app.def.id, {
       app,
       api: createAppApi({
         name: app.def.name,
-        service: serviceOf(app),
+        service: at.host,
         port,
         endpoint: options.seams?.endpoint?.(app, address, port) ?? {
           host: address,

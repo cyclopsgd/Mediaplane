@@ -6,14 +6,11 @@ import {
 } from '@mediaplane/engine';
 import { z } from 'zod';
 import {
-  createProvider,
-  findProvider,
   numberOf,
   secretOf,
+  servarrProvider,
   settingOf,
-  testProvider,
   textOf,
-  updateProvider,
   type Provider,
   type ProviderKind,
 } from './servarr-provider';
@@ -118,24 +115,14 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
         secrets: { apiKey: key },
       };
     },
-    async observe(api, known) {
-      const held = await findProvider(api, CLIENTS, known, DOWNLOAD_CLIENT_NAME);
-      return held === undefined
-        ? undefined
-        : { id: held.id, name: held.name, fields: fieldsOf(held, link) };
-    },
-    verify: (api, desired, observed) =>
-      testProvider(api, CLIENTS, observed.id, desired.name, CREDENTIALS),
-    create: (api, desired) =>
-      createProvider(api, CLIENTS, settingsOf(desired, link), topOf(desired)),
-    update: (api, desired, observed) =>
-      updateProvider(
-        api,
-        CLIENTS,
-        observed.id,
-        settingsOf(desired, link),
-        topOf(desired),
-      ),
+    ...servarrProvider({
+      kind: CLIENTS,
+      name: DOWNLOAD_CLIENT_NAME,
+      credentials: CREDENTIALS,
+      fieldsOf: (held) => fieldsOf(held, link),
+      settingsOf: (desired) => settingsOf(desired, link),
+      topOf,
+    }),
   };
 }
 

@@ -1,6 +1,9 @@
 import {
   createAppApi,
   planWiring,
+  wire,
+  WiringFailed,
+  type ActionResult,
   type ResolvedStack,
   type WiringContext,
 } from '@mediaplane/engine';
@@ -9,11 +12,13 @@ import {
   fakeRuntime,
   fakeStackApis,
   freshAppState,
+  tempDir,
   wiringStack,
   type FakeAppState,
 } from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { catalog } from '../index';
+import { JELLYFIN_TRIGGERS as RADARR_TRIGGERS } from '../radarr/integration';
 import { JELLYFIN_TRIGGERS } from '../sonarr/integration';
 import { JELLYFIN_CONNECTION_NAME, servarrJellyfin } from './servarr-connection';
 
@@ -68,22 +73,60 @@ function jellyfin(more: Partial<FakeAppState> = {}, key = JELLYFIN_KEY): FakeApp
   };
 }
 
-/** Sonarr, faked as fakeStackApis fakes it, Jellyfin taking JELLYFIN_KEY, and a client. */
-async function sonarr() {
+/** `arr`, faked as fakeStackApis fakes it, Jellyfin taking JELLYFIN_KEY, and a client. */
+async function arrWith(arr: 'sonarr' | 'radarr') {
   const apis = await fakeStackApis();
   const state = freshAppState();
-  apis.apps.set('sonarr', state);
+  apis.apps.set(arr, state);
   apis.apps.set('jellyfin', jellyfin());
   const api = createAppApi({
-    name: 'Sonarr',
-    service: 'sonarr',
-    port: 8989,
+    name: arr === 'sonarr' ? 'Sonarr' : 'Radarr',
+    service: arr,
+    port: arr === 'sonarr' ? 8989 : 7878,
     endpoint: { host: '127.0.0.1', port: apis.app.port },
     key: { scheme: 'x-api-key', value: SONARR_KEY },
     secrets: [SONARR_KEY, JELLYFIN_KEY],
     retry: { deadlineMs: 0 },
   });
   return { api, apis, state };
+}
+
+const sonarr = () => arrWith('sonarr');
+
+/** A client of the fake Sonarr, as Mediaplane holds it. */
+function clientOf(apis: Awaited<ReturnType<typeof sonarr>>['apis']) {
+  return createAppApi({
+    name: 'Sonarr',
+    service: 'sonarr',
+    port: 8989,
+    endpoint: { host: '127.0.0.1', port: apis.app.port },
+    key: { scheme: 'x-api-key', value: SONARR_KEY },
+    secrets: [],
+    retry: { deadlineMs: 0 },
+  });
+}
+
+/** plan's wiring check of the stack against `apis`, and the count of Sonarr's own tests. */
+function planner(apis: Awaited<ReturnType<typeof sonarr>>['apis']) {
+  return {
+    tests: () =>
+      apis.app.requests.filter((r) => r.path === '/api/v3/notification/test').length,
+    plan: (changing: string[], keys: WiringContext['keys']) =>
+      planWiring({
+        stack: stack(),
+        current: ['jellyfin', 'qbittorrent', 'sonarr'].map((s) =>
+          fakeContainer(s, `fake-${s}`),
+        ),
+        changing: new Set(changing),
+        onNetwork: true,
+        runtime: fakeRuntime({ addresses: apis.addresses }),
+        keys: { sonarr: { apiKey: SONARR_KEY }, ...keys },
+        admin: { username: 'admin', password: 'fake-admin-password' },
+        secrets: [SONARR_KEY, JELLYFIN_KEY],
+        known: {},
+        seams: apis.seams,
+      }),
+  };
 }
 
 /** The key the connection Sonarr holds has, in clear. */
@@ -140,6 +183,19 @@ describe("an arr's connection to Jellyfin", () => {
     });
   });
 
+  it("refuses a trigger the arr's template lacks, saying which, before it sends anything", async () => {
+    const { api, state } = await sonarr();
+    const odd = servarrJellyfin([...JELLYFIN_TRIGGERS, 'onFictional']);
+    const failure = await odd.create(api, wanted()).catch((cause: unknown) => cause);
+    expect(failure).toBeInstanceOf(Error);
+    const said = (failure as Error).message;
+    expect(said).toBe(
+      'Sonarr at http://sonarr:8989 (127.0.0.1) has no onFictional property for Jellyfin, which Mediaplane turns on (GET /api/v3/notification/schema)',
+    );
+    expect(said).not.toContain(JELLYFIN_KEY);
+    expect(state.connections).toEqual([]);
+  });
+
   it("checks its key with the arr's own test: a refused key is an update, which keeps the user's triggers", async () => {
     const { api, state } = await sonarr();
     const desired = wanted();
@@ -176,34 +232,8 @@ describe("an arr's connection to Jellyfin", () => {
     const { apis, state } = await sonarr();
     state.user = 'admin';
     state.password = 'fake-admin-password';
-    const tests = () =>
-      apis.app.requests.filter((r) => r.path === '/api/v3/notification/test').length;
-    const plan = (changing: string[], keys: WiringContext['keys']) =>
-      planWiring({
-        stack: stack(),
-        current: ['jellyfin', 'qbittorrent', 'sonarr'].map((s) =>
-          fakeContainer(s, `fake-${s}`),
-        ),
-        changing: new Set(changing),
-        onNetwork: true,
-        runtime: fakeRuntime({ addresses: apis.addresses }),
-        keys: { sonarr: { apiKey: SONARR_KEY }, ...keys },
-        admin: { username: 'admin', password: 'fake-admin-password' },
-        secrets: [SONARR_KEY, JELLYFIN_KEY],
-        known: {},
-        seams: apis.seams,
-      });
-    // A connection Sonarr holds, its key Jellyfin's.
-    const sonarrApi = createAppApi({
-      name: 'Sonarr',
-      service: 'sonarr',
-      port: 8989,
-      endpoint: { host: '127.0.0.1', port: apis.app.port },
-      key: { scheme: 'x-api-key', value: SONARR_KEY },
-      secrets: [],
-      retry: { deadlineMs: 0 },
-    });
-    await connection.create(sonarrApi, wanted());
+    const { plan, tests } = planner(apis);
+    await connection.create(clientOf(apis), wanted());
     const before = tests();
     const pending = await plan(['jellyfin'], {});
     expect(pending.changes).toContainEqual({
@@ -218,5 +248,100 @@ describe("an arr's connection to Jellyfin", () => {
     );
     await plan([], { jellyfin: { apiKey: JELLYFIN_KEY } });
     expect(tests()).toBe(before + 1);
+  });
+
+  it('is never tested by plan while Jellyfin refuses its key, and its admin can not be asked', async () => {
+    const { apis, state } = await sonarr();
+    state.user = 'admin';
+    state.password = 'fake-admin-password';
+    const { plan, tests } = planner(apis);
+    await connection.create(clientOf(apis), wanted());
+    const before = tests();
+    // Jellyfin is set up, and holds none of the keys that plan has.
+    apis.apps.set('jellyfin', { ...freshAppState(), wizard: 'done' });
+    const planned = await plan([], { jellyfin: { apiKey: JELLYFIN_KEY } });
+    expect(planned.changes).toContainEqual(
+      expect.objectContaining({ resource: 'jellyfin.admin', action: 'unknown' }),
+    );
+    expect(planned.changes).toContainEqual({
+      resource: 'sonarr.connection_jellyfin',
+      action: 'adopt',
+    });
+    expect(tests()).toBe(before);
+  });
+
+  it("is skipped by the wire step when Jellyfin's admin fails, with nothing sent to the arr", async () => {
+    const apis = await fakeStackApis();
+    apis.apps.set('sonarr', freshAppState());
+    // Jellyfin is set up, and holds none of the keys that the store has.
+    apis.apps.set('jellyfin', { ...freshAppState(), wizard: 'done' });
+    const actions: ActionResult[] = [];
+    const run = wire({
+      home: await tempDir('mediaplane-connection-'),
+      stack: stack(),
+      store: {
+        version: 1,
+        apps: { sonarr: { apiKey: SONARR_KEY }, jellyfin: { apiKey: JELLYFIN_KEY } },
+        shared: { adminPassword: 'fake-admin-password' },
+      },
+      values: {},
+      env: {},
+      runtime: fakeRuntime({
+        containers: ['jellyfin', 'qbittorrent', 'sonarr'].map((s) =>
+          fakeContainer(s, `fake-${s}`),
+        ),
+        addresses: apis.addresses,
+        run: (service, command) => {
+          apis.mkdir(service, command);
+          return { code: 0, stdout: '', stderr: '' };
+        },
+      }),
+      now: () => new Date('2026-10-15T12:00:00.000Z'),
+      record: (action) => actions.push(action),
+      seams: apis.seams,
+    });
+    await expect(run).rejects.toBeInstanceOf(WiringFailed);
+    expect(actions).toContainEqual({
+      step: 'wire',
+      resource: 'jellyfin.admin',
+      result: 'failed',
+      error: expect.any(String) as string,
+    });
+    expect(actions).toContainEqual({
+      step: 'wire',
+      resource: 'sonarr.connection_jellyfin',
+      result: 'skipped',
+      detail: 'jellyfin.admin failed',
+    });
+    expect(apis.app.requests.filter((r) => r.path.includes('notification'))).toEqual([]);
+  });
+});
+
+describe("Radarr's connection to Jellyfin", () => {
+  it("is made with Radarr's triggers on, and none of Sonarr's", async () => {
+    const { api, state } = await arrWith('radarr');
+    const radarr = servarrJellyfin(RADARR_TRIGGERS);
+    const resolved = stack('jellyfin', '  radarr: {}\n');
+    const app = resolved.apps.find((a) => a.def.id === 'radarr');
+    if (app === undefined) throw new Error('no Radarr in the stack');
+    const desired = radarr.desired({ ...contextOf(resolved), app });
+    if (desired === undefined) throw new Error('the connection is wanted');
+    expect(await radarr.create(api, desired)).toEqual({ id: 1 });
+    expect(state.connections[0]).toMatchObject({
+      name: JELLYFIN_CONNECTION_NAME,
+      onDownload: true,
+      onUpgrade: true,
+      onRename: true,
+      onMovieDelete: true,
+      onMovieFileDelete: true,
+      onMovieFileDeleteForUpgrade: true,
+      onGrab: false,
+    });
+    expect(state.connections[0]).not.toHaveProperty('onSeriesDelete');
+    expect(await radarr.observe(api, undefined)).toEqual({
+      id: 1,
+      name: JELLYFIN_CONNECTION_NAME,
+      fields: { host: 'jellyfin', port: 8096, updateLibrary: true },
+    });
   });
 });

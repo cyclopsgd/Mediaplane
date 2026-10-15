@@ -1,3 +1,4 @@
+import { serviceOf } from '../integrations/address';
 import type { PublishedPort, ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { compare } from '../util/sort';
 
@@ -62,7 +63,7 @@ export function renderCompose(stack: ResolvedStack): ComposeFile {
   // Ports of an app that shares another app's network namespace are published there.
   const portsByService = new Map<string, string[]>();
   for (const app of stack.apps) {
-    const target = app.networkVia ?? app.def.id;
+    const target = serviceOf(app);
     const ports = portsByService.get(target) ?? [];
     for (const port of app.ports) {
       for (const address of stack.bindAddresses) ports.push(portMapping(address, port));
@@ -92,9 +93,7 @@ export function renderCompose(stack: ResolvedStack): ComposeFile {
  */
 export function wiredServices(stack: ResolvedStack): Set<string> {
   return new Set(
-    stack.apps.flatMap((app) =>
-      app.def.api === undefined ? [] : [app.networkVia ?? app.def.id],
-    ),
+    stack.apps.flatMap((app) => (app.def.api === undefined ? [] : [serviceOf(app)])),
   );
 }
 

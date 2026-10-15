@@ -12,8 +12,8 @@ import {
   findProvider,
   numberOf,
   secretOf,
+  servarrProvider,
   settingOf,
-  testProvider,
   textOf,
   updateProvider,
   type ProviderKind,
@@ -120,26 +120,19 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
         secrets: { apiKey: key },
       };
     },
-    async observe(api, known) {
-      const held = await findProvider(api, kind, known, name);
-      if (held === undefined) return undefined;
-      return {
-        id: held.id,
-        name: held.name,
-        fields: {
-          prowlarrUrl: textOf(settingOf(held, 'prowlarrUrl')),
-          baseUrl: textOf(settingOf(held, 'baseUrl')),
-          syncLevel: textOf(held.syncLevel),
-          syncCategories: categoriesOf(settingOf(held, 'syncCategories')),
-        },
-      };
-    },
-    verify: (api, desired, observed) =>
-      testProvider(api, kind, observed.id, desired.name, ['ApiKey']),
-    create: (api, desired) =>
-      createProvider(api, kind, settingsOf(desired), topOf(desired)),
-    update: (api, desired, observed) =>
-      updateProvider(api, kind, observed.id, settingsOf(desired), topOf(desired)),
+    ...servarrProvider({
+      kind,
+      name,
+      credentials: ['ApiKey'],
+      fieldsOf: (held) => ({
+        prowlarrUrl: textOf(settingOf(held, 'prowlarrUrl')),
+        baseUrl: textOf(settingOf(held, 'baseUrl')),
+        syncLevel: textOf(held.syncLevel),
+        syncCategories: categoriesOf(settingOf(held, 'syncCategories')),
+      }),
+      settingsOf,
+      topOf,
+    }),
   };
 }
 

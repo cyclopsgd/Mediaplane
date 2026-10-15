@@ -2,8 +2,10 @@ import {
   AppApiError,
   type AppApi,
   type DesiredResource,
+  type Fields,
   type KnownResource,
   type ObservedResource,
+  type ResourceSpec,
 } from '@mediaplane/engine';
 import { z } from 'zod';
 
@@ -57,15 +59,7 @@ export function numberOf(value: unknown): number {
   return typeof value === 'number' ? value : 0;
 }
 
-/**
- * The secret `name` that `desired` holds, to send in clear in a request body: one app's
- * key, given to another. desired() gives it whenever it wants the provider.
- */
-export function secretOf(desired: DesiredResource, name: string): string {
-  const value = desired.secrets[name];
-  if (value === undefined) throw new Error(`${desired.name} has no ${name} to send`);
-  return value;
-}
+export { secretOf } from './secret';
 
 /**
  * The provider Mediaplane made, among the app's of `kind`: by the id resources.json
@@ -119,13 +113,15 @@ function withSettings<T extends { fields: z.infer<typeof setting>[] }>(
  * Make one from the app's own template (without its UI presets), with `settings` and the
  * provider's own properties `top` (its name, enable, tags…), saved with forceSave. The
  * app still tests a new provider as it saves it, skipping only the warnings, so a create
- * fails while the test does: while the arr can't reach qBittorrent, say.
+ * fails while the test does: while the arr can't reach qBittorrent, say. `offering` names
+ * properties of `top` the template must have, or the app would drop them unsaid.
  */
 export async function createProvider(
   api: AppApi,
   kind: ProviderKind,
   settings: Readonly<Record<string, unknown>>,
   top: Readonly<Record<string, unknown>>,
+  offering: readonly string[] = [],
 ): Promise<{ id: number }> {
   const schema = `${kind.path}/schema`;
   const offered = (await api.get(schema, z.array(template))).find(
@@ -134,6 +130,13 @@ export async function createProvider(
   if (offered === undefined) {
     throw new AppApiError(
       `${api.name} at ${api.where} offers no ${kind.what} (GET ${schema})`,
+      { kind: 'protocol' },
+    );
+  }
+  const lacking = offering.filter((name) => !Object.hasOwn(offered, name));
+  if (lacking.length > 0) {
+    throw new AppApiError(
+      `${api.name} at ${api.where} has no ${lacking.join(', ')} property for ${kind.of}, which Mediaplane turns on (GET ${schema})`,
       { kind: 'protocol' },
     );
   }
@@ -191,4 +194,57 @@ export async function testProvider(
     `${api.name} at ${api.where} tested ${name}, and it failed: ${said} (POST ${kind.path}/test)`,
     { kind: 'rejected', status: 400 },
   );
+}
+
+/** What one kind of provider is, to make its observe, verify, create and update from. */
+export interface ProviderOptions {
+  kind: ProviderKind;
+  /** The name Mediaplane gives it, which observe looks for after the recorded id. */
+  name: string;
+  /** The settings a refused sign-in names: `testProvider`'s `credentials`. */
+  credentials: readonly string[];
+  /** Its managed fields, from what the app holds. */
+  fieldsOf: (held: Provider) => Fields;
+  /** The settings to set, secrets in clear (this request body only). */
+  settingsOf: (desired: DesiredResource) => Record<string, unknown>;
+  /** The provider's own properties to set: its name, enable, tags…, at create and update. */
+  topOf: (desired: DesiredResource) => Record<string, unknown>;
+  /**
+   * Properties switched on when it is made, and left as they are after, so they stay the
+   * user's (a connection's triggers). The app's template must have each.
+   */
+  onCreate?: readonly string[];
+}
+
+/**
+ * The parts of a resource spec that a Servarr provider has in common, found, tested, made
+ * and updated through the functions above: the spec adds its name, fields, secrets,
+ * requirements and what it wants.
+ */
+export function servarrProvider(
+  options: ProviderOptions,
+): Pick<ResourceSpec, 'observe' | 'create' | 'update'> &
+  Required<Pick<ResourceSpec, 'verify'>> {
+  const { kind, name, credentials, fieldsOf, settingsOf, topOf } = options;
+  const onCreate = options.onCreate ?? [];
+  return {
+    async observe(api, known) {
+      const held = await findProvider(api, kind, known, name);
+      return held === undefined
+        ? undefined
+        : { id: held.id, name: held.name, fields: fieldsOf(held) };
+    },
+    verify: (api, desired, observed) =>
+      testProvider(api, kind, observed.id, desired.name, credentials),
+    create: (api, desired) =>
+      createProvider(
+        api,
+        kind,
+        settingsOf(desired),
+        { ...topOf(desired), ...Object.fromEntries(onCreate.map((on) => [on, true])) },
+        onCreate,
+      ),
+    update: (api, desired, observed) =>
+      updateProvider(api, kind, observed.id, settingsOf(desired), topOf(desired)),
+  };
 }
