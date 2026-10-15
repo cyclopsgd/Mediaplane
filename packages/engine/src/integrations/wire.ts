@@ -200,12 +200,17 @@ export async function wire(options: WireOptions): Promise<string[]> {
           continue;
         }
         id = result.observed?.id ?? null;
-        if (result.action === 'create') {
+        // Its folders first, for an update as for a create: an update may point the
+        // resource at a folder that isn't there yet (a Jellyfin library's). An adopted
+        // resource is already there.
+        if (result.action === 'create' || result.action === 'update') {
           const unmade = await makeFolders(options, app, address, result.desired, values);
           if (unmade !== undefined) {
             fail(address, unmade, 'wire.folders');
             continue;
           }
+        }
+        if (result.action === 'create') {
           ({ id } = await spec.create(client.api, result.desired));
         } else if (result.action === 'update' && result.observed !== undefined) {
           await spec.update(client.api, result.desired, result.observed);

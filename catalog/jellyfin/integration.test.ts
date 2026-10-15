@@ -1,3 +1,4 @@
+import { request as httpRequest } from 'node:http';
 import {
   AppApiError,
   createAppApi,
@@ -6,10 +7,13 @@ import {
 } from '@mediaplane/engine';
 import {
   FAKE_JELLYFIN_USER_ID,
+  fakeHttpApp,
   fakeStackApis,
   freshAppState,
   wiringStack,
   type FakeAppState,
+  type FakeReply,
+  type FakeRequest,
 } from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { catalog } from '../index';
@@ -35,6 +39,62 @@ async function jellyfin(state: FakeAppState = freshAppState(), keyed = false) {
   });
   return { api, apis, state, app: apis.app };
 }
+
+/**
+ * Like `jellyfin()`, but through a proxy that answers some calls itself: `reply` gives the
+ * answer to a request, or undefined to let the fake Jellyfin have it. `seen` has every
+ * body Jellyfin answered, such as a sign-in's token.
+ */
+async function throughProxy(
+  state: FakeAppState,
+  reply: (request: FakeRequest) => FakeReply | undefined,
+) {
+  const apis = await fakeStackApis();
+  apis.apps.set('jellyfin', state);
+  const seen: string[] = [];
+  const proxy = await fakeHttpApp(
+    (request) =>
+      reply(request) ??
+      new Promise<FakeReply>((answered) => {
+        const forwarded = httpRequest(
+          {
+            host: '127.0.0.1',
+            port: apis.app.port,
+            method: request.method,
+            path: request.path,
+            headers: request.headers,
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (chunk: Buffer) => chunks.push(chunk));
+            res.on('end', () => {
+              const text = Buffer.concat(chunks).toString('utf8');
+              seen.push(text);
+              answered({
+                status: res.statusCode ?? 502,
+                ...(text === '' ? {} : { body: text }),
+                headers: { 'Content-Type': 'application/json' },
+              });
+            });
+          },
+        );
+        forwarded.end(request.body);
+      }),
+  );
+  const api = createAppApi({
+    name: 'Jellyfin',
+    service: 'jellyfin',
+    port: 8096,
+    endpoint: { host: '127.0.0.1', port: proxy.port },
+    key: { scheme: 'mediabrowser' },
+    secrets: [PASSWORD, KEY],
+    retry: { deadlineMs: 0 },
+  });
+  return { api, state, seen };
+}
+
+/** "METHOD /path" of a request, without its query. */
+const callOf = ({ method, path }: FakeRequest) => `${method} ${path.split('?')[0] ?? ''}`;
 
 /** A Jellyfin set up by Mediaplane: its wizard done, its admin, and KEY. */
 function setUp(more: Partial<FakeAppState> = {}): FakeAppState {
@@ -161,6 +221,91 @@ describe("Jellyfin's first-run setup", () => {
     expect((await failure(jellyfinBootstrap.run(api, ADMIN))).message).toContain(
       "refused the shared admin's sign-in: its startup wizard was finished with another login",
     );
+  });
+
+  it('signs out when a step after the sign-in fails, and shows that failure, not the sign-out', async () => {
+    const { api, state } = await throughProxy(freshAppState(), (request) =>
+      callOf(request) === 'POST /Auth/Keys' ? { status: 502 } : undefined,
+    );
+    const failed = await failure(jellyfinBootstrap.run(api, ADMIN));
+    expect(failed.status).toBe(502);
+    expect(state.sessions).toEqual({});
+
+    // A sign-out that fails after a failure doesn't hide it.
+    const both = await throughProxy(freshAppState(), (request) => {
+      const call = callOf(request);
+      if (call === 'POST /Auth/Keys') return { status: 502 };
+      return call === 'POST /Sessions/Logout' ? { status: 503 } : undefined;
+    });
+    expect((await failure(jellyfinBootstrap.run(both.api, ADMIN))).status).toBe(502);
+  });
+
+  it('ignores the keys of other apps, and takes the newest of its own by date', async () => {
+    const key = (n: number, AppName: string, DateCreated: string) => ({
+      AccessToken: String(n).repeat(32),
+      AppName,
+      DateCreated,
+    });
+    // As strings, "…:05Z" sorts after "…:05.5Z": .NET drops a fraction's trailing zeros.
+    const { api, state } = await jellyfin(
+      setUp({
+        apiKeys: [
+          key(1, KEY_NAME, '2026-10-15T12:00:05Z'),
+          key(2, KEY_NAME, '2026-10-15T12:00:05.5Z'),
+          key(3, 'Other app', '2026-10-16T12:00:00Z'),
+          key(4, KEY_NAME, '2026-10-15T12:00:05.25Z'),
+        ],
+      }),
+    );
+    expect(await jellyfinBootstrap.run(api, ADMIN)).toBe('2'.repeat(32));
+    expect(state.apiKeys).toHaveLength(4);
+  });
+
+  it('takes the first of two keys made at the same moment', async () => {
+    const at = '2026-10-15T12:00:05Z';
+    const { api } = await jellyfin(
+      setUp({
+        apiKeys: [
+          { AccessToken: '8'.repeat(32), AppName: KEY_NAME, DateCreated: at },
+          { AccessToken: '9'.repeat(32), AppName: KEY_NAME, DateCreated: at },
+        ],
+      }),
+    );
+    expect(await jellyfinBootstrap.run(api, ADMIN)).toBe('8'.repeat(32));
+  });
+
+  it('makes a key when only other apps have one', async () => {
+    const { api, state } = await jellyfin(
+      setUp({
+        apiKeys: [
+          { AccessToken: KEY, AppName: 'Other app', DateCreated: '2026-10-15T12:00:00Z' },
+        ],
+      }),
+    );
+    const made = await jellyfinBootstrap.run(api, ADMIN);
+    expect(made).not.toBe(KEY);
+    expect(state.apiKeys.map((k) => k.AppName)).toEqual(['Other app', KEY_NAME]);
+  });
+
+  it('says it when Jellyfin lists no key after it made one, with no secret in that, and signs out', async () => {
+    const { api, state, seen } = await throughProxy(freshAppState(), (request) =>
+      callOf(request) === 'POST /Auth/Keys' ? { status: 204 } : undefined,
+    );
+    const failed = await failure(jellyfinBootstrap.run(api, ADMIN));
+    expect(failed.message).toBe(
+      'Jellyfin at http://jellyfin:8096 (127.0.0.1) made no key named Mediaplane (GET /Auth/Keys)',
+    );
+    expect(failed.kind).toBe('protocol');
+    expect(state.sessions).toEqual({});
+    // The sign-in's token is among what Jellyfin answered.
+    const session = seen
+      .map((text) => /"AccessToken":"([0-9a-f]+)"/.exec(text)?.[1])
+      .find((found) => found !== undefined);
+    expect(session).toMatch(/^[0-9a-f]{32}$/);
+    for (const secret of [PASSWORD, KEY, session ?? '']) {
+      expect(JSON.stringify(failed)).not.toContain(secret);
+      expect(failed.message).not.toContain(secret);
+    }
   });
 
   it('is done once system.xml says its wizard is', () => {

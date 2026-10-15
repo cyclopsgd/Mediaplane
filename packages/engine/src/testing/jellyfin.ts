@@ -411,7 +411,9 @@ function fakeJellyfinLibrary(
   if (path === '/Library/VirtualFolders/Paths' && method === 'DELETE') {
     const library = named(query('name'));
     const at = library?.Locations.indexOf(withoutSlash(query('path'))) ?? -1;
-    if (library !== undefined && at >= 0) library.Locations.splice(at, 1);
+    // A path the library doesn't hold is 404 (probed), as a path added is.
+    if (library === undefined || at < 0) return { status: 404, body: UNEXPLAINED };
+    library.Locations.splice(at, 1);
     return { status: 204 };
   }
   return undefined;

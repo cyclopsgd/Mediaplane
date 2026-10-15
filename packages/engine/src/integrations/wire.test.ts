@@ -478,6 +478,28 @@ describe('wire', () => {
     expect(sonarr.state.user).toBe('admin');
   });
 
+  it('makes the folders a resource needs before it updates it, and none for one unchanged', async () => {
+    const wrong = await fakeSonarr({ key: KEY, user: 'someone', password: 'other' });
+    const commands: OneOffCommand[] = [];
+    const runtime = () =>
+      fakeRuntime({
+        containers: RUNNING,
+        addresses: wrong.addresses,
+        run: (_service, command) => {
+          commands.push(command);
+          return { code: 0, stdout: '', stderr: '' };
+        },
+      });
+    const stack = needingFolders(['/data/media/tv']);
+    const updated = await wireWith(wrong, { stack, known: RECORDED, runtime: runtime() });
+    expect(await updated.run).toEqual(['sonarr.login updated user']);
+    expect(commands.map((c) => c.args)).toEqual([['-p', '--', '/data/media/tv']]);
+    const right = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const same = await wireWith(right, { stack, known: RECORDED, runtime: runtime() });
+    expect(await same.run).toEqual([]);
+    expect(commands).toHaveLength(1);
+  });
+
   it("fails a resource whose folders can't be made, saying why, and sends nothing for it", async () => {
     const sonarr = await fakeSonarr({ key: KEY });
     const { run, actions, home } = await wireWith(sonarr, {

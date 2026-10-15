@@ -42,10 +42,15 @@ export async function signIn(
 /** The newest key named KEY_NAME that Jellyfin holds, listed in full, or undefined. */
 async function heldKey(api: AppApi): Promise<string | undefined> {
   const { Items } = await api.get('/Auth/Keys', apiKeys);
-  let newest: { AccessToken: string; DateCreated: string } | undefined;
+  let newest: { AccessToken: string; at: number } | undefined;
   for (const key of Items) {
     if (key.AppName !== KEY_NAME) continue;
-    if (newest === undefined || key.DateCreated > newest.DateCreated) newest = key;
+    // As dates: .NET writes fractions of a second without their trailing zeros, so the
+    // strings don't sort. On a tie, or a date that doesn't parse, the earlier one stays.
+    const parsed = Date.parse(key.DateCreated);
+    const at = Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+    if (newest === undefined || at > newest.at)
+      newest = { AccessToken: key.AccessToken, at };
   }
   return newest?.AccessToken;
 }
@@ -94,14 +99,26 @@ export const jellyfinBootstrap: Bootstrap = {
         { kind: 'auth', status: 401 },
       );
     }
-    if (wizard) await api.submit('POST', '/Startup/Complete');
     const signedIn = api.withKey(token);
-    let key = await heldKey(signedIn);
-    if (key === undefined) {
-      await signedIn.submit('POST', `/Auth/Keys?app=${KEY_NAME}`);
+    let key: string | undefined;
+    let failed = false;
+    try {
+      if (wizard) await api.submit('POST', '/Startup/Complete');
       key = await heldKey(signedIn);
+      if (key === undefined) {
+        await signedIn.submit('POST', `/Auth/Keys?app=${KEY_NAME}`);
+        key = await heldKey(signedIn);
+      }
+    } catch (cause) {
+      failed = true;
+      throw cause;
+    } finally {
+      // Whatever failed, the session ends; a sign-out that fails after a failure can't
+      // hide it.
+      await signedIn.submit('POST', '/Sessions/Logout').catch((cause: unknown) => {
+        if (!failed) throw cause;
+      });
     }
-    await signedIn.submit('POST', '/Sessions/Logout');
     if (key === undefined) {
       throw new AppApiError(
         `${api.name} at ${api.where} made no key named ${KEY_NAME} (GET /Auth/Keys)`,

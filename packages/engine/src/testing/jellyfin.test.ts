@@ -287,6 +287,21 @@ describe("fakeStackApis' Jellyfin", () => {
       ).status,
     ).toBe(204);
     expect((await names())[0]).toEqual(['Movies', ['/data/media/other']]);
+    // A path the library no longer holds, or a library there is none of, is 404.
+    for (const query of [
+      { name: 'Movies', path: '/data/media/movies' },
+      { name: 'Nothing', path: '/data/media/other' },
+    ]) {
+      expect(
+        (
+          await call(port, `${paths}?${new URLSearchParams(query).toString()}`, {
+            method: 'DELETE',
+            headers: keyed,
+          })
+        ).status,
+      ).toBe(404);
+    }
+    expect((await names())[0]).toEqual(['Movies', ['/data/media/other']]);
     const { body } = await call(port, '/Library/VirtualFolders', { headers: keyed });
     expect((body as Record<string, unknown>[])[0]).toMatchObject({
       CollectionType: 'movies',
