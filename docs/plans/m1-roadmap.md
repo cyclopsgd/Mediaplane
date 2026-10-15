@@ -178,8 +178,8 @@ three S8 items, two S7 items, an S9 item and an M2 item. Slice 3d (2026-10-10) a
 last S3 item, the unscheduled list and extended two S9 items. Slice 3b (2026-10-10) added
 the S3c list, two S8 items and one unscheduled item. Slice 3c (2026-10-11) added the S4
 item, five S8 items, an S9 item and an M2 item. Slice 4 (2026-10-15) added four S8 items,
-and its final review an S5 item, two S8 items, a probe in two others, and two S9 test
-gaps. Each slice plan must address the items for that slice.
+and its final review an S5 item, two S8 items, a probe in two others, two S9 test gaps
+and an S9 docs item. Each slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -488,6 +488,8 @@ password, which are S3c's (and listed again below).
   SPDX `license` field.
 - **Docs:** make the `--json` contract explicit (pin its fields and document
   `mediaplane.plan/v1`). Drop the internal "Slice 1" wording from the README.
+- **`plan --help` names `docs/security/threat-model.md` by its repo path** (S4). Someone
+  running the published image can't open that. Point it at the published docs instead.
 - **`credentials --json` has no `ok` field.** `init`, `plan`, `apply` and the error
   envelope all carry one, and the success output of `mediaplane.credentials/v1` doesn't.
   Align it in the `--json` pass: adding `ok: true` is additive within v1.
