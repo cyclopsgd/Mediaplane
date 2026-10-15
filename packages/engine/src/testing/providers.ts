@@ -12,6 +12,38 @@ export interface FakeProviderBase {
   fields: { name: string; value?: unknown }[];
 }
 
+/** The value of the field `name` in a provider's settings, if it has one. */
+export function fieldValue(
+  sent: Pick<FakeProviderBase, 'fields'>,
+  name: string,
+): unknown {
+  return sent.fields.find((f) => f.name === name)?.value;
+}
+
+/** A path as the fake apps list it: without a trailing "/" (the root stays "/"). */
+export function withoutSlash(path: string): string {
+  return path.length > 1 ? path.replace(/\/+$/, '') : path;
+}
+
+/** What the arrs say when their test can't open a TLS connection to an app. */
+const SSL_FAILURE = 'The SSL connection could not be established, see inner exception.';
+
+/**
+ * Why an arr's test of the app at `at` ("host:port") can't reach it, or undefined when it
+ * can: the host isn't found (`unresolved` is the arr's words for that), the port is
+ * refused, or the app serves no TLS. The checks run in that order. Each arr words the rest
+ * of its refusal, around this reason.
+ */
+export function unreachable(
+  at: string,
+  reach: { resolves: boolean; portOpen: boolean; tls: boolean },
+  unresolved: string,
+): string | undefined {
+  if (!reach.resolves) return `${unresolved} (${at})`;
+  if (!reach.portOpen) return `Connection refused (${at})`;
+  return reach.tls ? SSL_FAILURE : undefined;
+}
+
 /** An app's refusal of a save or a test: 400, and its validation list. */
 export type FakeRefusal = FakeReply & { status: 400 };
 

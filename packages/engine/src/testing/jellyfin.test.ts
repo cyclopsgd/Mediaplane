@@ -328,6 +328,137 @@ describe("fakeStackApis' Jellyfin", () => {
     await call(apis.app.port, '/Startup/Complete', { method: 'POST' });
     expect(await done()).toBe('true');
   });
+
+  it('refuses a user name Jellyfin does not take, in its wizard and on a rename', async () => {
+    const apis = await fakeStackApis();
+    const { port } = apis.app;
+    await call(port, '/Startup/User');
+    expect(
+      await call(port, '/Startup/User', {
+        body: { Name: 'bad name', Password: 'fake-admin-password' },
+      }),
+    ).toEqual({ status: 400, body: 'Error processing request.' });
+    expect(jellyfinOf(apis).password).toBe('');
+    // Asking again while the wizard is open gives the same first user.
+    expect(await call(port, '/Startup/User')).toEqual({
+      status: 200,
+      body: { Name: 'abc' },
+    });
+    apis.apps.set('jellyfin', setUp(KEY));
+    const keyed = { authorization: withToken(KEY) };
+    const [held] = (await call(port, '/Users', { headers: keyed })).body as Record<
+      string,
+      unknown
+    >[];
+    expect(
+      (
+        await call(port, `/Users/${FAKE_JELLYFIN_USER_ID}`, {
+          body: { ...held, Name: '' },
+          headers: keyed,
+        })
+      ).status,
+    ).toBe(400);
+    expect(jellyfinOf(apis).user).toBe('admin');
+  });
+
+  it('reads its user by id, and has none to read before the wizard names one', async () => {
+    const apis = await fakeStackApis();
+    apis.apps.set('jellyfin', setUp(KEY));
+    const { port } = apis.app;
+    const keyed = { authorization: withToken(KEY) };
+    const path = `/Users/${FAKE_JELLYFIN_USER_ID}`;
+    expect(await call(port, path, { headers: keyed })).toMatchObject({
+      status: 200,
+      body: { Name: 'admin', Id: FAKE_JELLYFIN_USER_ID },
+    });
+    apis.apps.set('jellyfin', { ...setUp(KEY), user: '', password: '' });
+    expect((await call(port, path, { headers: keyed })).status).toBe(404);
+    expect((await call(port, '/Users', { headers: keyed })).body).toEqual([]);
+  });
+
+  it('refuses a key made without a name, and gives each Jellyfin tokens of its own', async () => {
+    const apis = await fakeStackApis();
+    apis.apps.set('jellyfin', setUp(KEY));
+    const { port } = apis.app;
+    const keyed = { authorization: withToken(KEY) };
+    const make = (query: string) =>
+      call(port, `/Auth/Keys${query}`, { method: 'POST', headers: keyed });
+    expect((await make('')).status).toBe(400);
+    expect((await make('?app=')).status).toBe(400);
+    expect(jellyfinOf(apis).apiKeys).toHaveLength(1);
+    await make('?app=Mediaplane');
+    const other = await fakeStackApis();
+    other.apps.set('jellyfin', setUp(KEY));
+    await call(other.app.port, '/Auth/Keys?app=Mediaplane', {
+      method: 'POST',
+      headers: keyed,
+    });
+    // The counter is the Jellyfin's, so the first key made is the same in each.
+    expect(jellyfinOf(other).apiKeys[1]).toEqual(jellyfinOf(apis).apiKeys[1]);
+  });
+
+  it('removes a library by name, and refuses to remove one it does not have', async () => {
+    const apis = await fakeStackApis();
+    apis.apps.set('jellyfin', setUp(KEY));
+    const { port } = apis.app;
+    const keyed = { authorization: withToken(KEY) };
+    apis.mkdir('jellyfin', {
+      user: { uid: 1000, gid: 1000 },
+      entrypoint: 'mkdir',
+      args: ['-p', '--', '/data/media/movies'],
+      values: {},
+    });
+    await call(
+      port,
+      `/Library/VirtualFolders?${new URLSearchParams({ name: 'Movies', collectionType: 'movies', paths: '/data/media/movies' }).toString()}`,
+      { body: { LibraryOptions: {} }, headers: keyed },
+    );
+    const remove = (name: string) =>
+      call(port, `/Library/VirtualFolders?${new URLSearchParams({ name }).toString()}`, {
+        method: 'DELETE',
+        headers: keyed,
+      });
+    expect((await remove('Shows')).status).toBe(404);
+    expect(jellyfinOf(apis).libraries).toHaveLength(1);
+    expect((await remove('Movies')).status).toBe(204);
+    expect(jellyfinOf(apis).libraries).toEqual([]);
+  });
+
+  it('answers /System/Info/Public with 503 while it is not up', async () => {
+    const apis = await fakeStackApis();
+    apis.apps.set('jellyfin', { ...setUp(KEY), up: false });
+    expect(await call(apis.app.port, '/System/Info/Public')).toEqual({
+      status: 503,
+      body: 'Jellyfin Server is loading. Please try again shortly.',
+    });
+  });
+
+  it('needs each of the four client fields to sign in', async () => {
+    const apis = await fakeStackApis();
+    apis.apps.set('jellyfin', setUp(KEY));
+    const fields = {
+      Client: 'Mediaplane',
+      Device: 'Mediaplane',
+      DeviceId: 'mediaplane',
+      Version: '1',
+    };
+    const signIn = (sent: Record<string, string>) =>
+      call(apis.app.port, '/Users/AuthenticateByName', {
+        body: { Username: 'admin', Pw: 'fake-admin-password' },
+        headers: {
+          authorization: `MediaBrowser ${Object.entries(sent)
+            .map(([name, value]) => `${name}="${value}"`)
+            .join(', ')}`,
+        },
+      });
+    expect((await signIn(fields)).status).toBe(200);
+    for (const missing of Object.keys(fields)) {
+      const rest = Object.fromEntries(
+        Object.entries(fields).filter(([name]) => name !== missing),
+      );
+      expect((await signIn(rest)).status, `without ${missing}`).toBe(400);
+    }
+  });
 });
 
 /** A connection to Jellyfin as Sonarr's template makes it, with these settings. */
@@ -393,6 +524,20 @@ describe("fakeStackApis' Sonarr and Radarr connections to Jellyfin", () => {
       headers: { 'x-api-key': '0'.repeat(32) },
     });
     expect(JSON.stringify(held.body)).not.toContain(KEY);
+  });
+
+  it("fails with the arr's own words when a testFailure is set on it, whatever the connection holds", async () => {
+    const apis = await fakeStackApis();
+    apis.apps.set('jellyfin', setUp(KEY));
+    await save(apis, connection({ apiKey: '9'.repeat(32) }, { onDownload: false }));
+    apis.apps.set('sonarr', {
+      ...freshAppState(),
+      connections: apis.apps.get('sonarr')?.connections ?? [],
+      testFailure: 'Something else went wrong',
+    });
+    expect(await save(apis, { ...connection(), name: 'Another' })).toMatchObject(
+      refused('Host', 'Something else went wrong'),
+    );
   });
 
   it('refuses every key while Jellyfin has made none', async () => {

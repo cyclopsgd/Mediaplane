@@ -18,7 +18,10 @@ import {
 import { fakeProwlarr, type FakeProvider } from './prowlarr';
 import {
   fakeProviders,
+  fieldValue,
   refusal,
+  unreachable,
+  withoutSlash,
   type FakeProviderBase,
   type FakeRefusal,
 } from './providers';
@@ -130,15 +133,15 @@ export interface FakeAppState {
   /** Sonarr's or Radarr's root folders. */
   rootFolders: { id: number; path: string }[];
   /**
-   * The folders in Sonarr's or Radarr's container, as `mkdir` made them (fakeStackApis'
-   * `mkdir`): the arr refuses a root folder anywhere else, as it refuses one whose folder
-   * doesn't exist.
+   * The folders in the container of Sonarr, Radarr or Jellyfin, as `mkdir` made them
+   * (fakeStackApis' `mkdir`): the arrs refuse a root folder anywhere else, as they refuse
+   * one whose folder doesn't exist, and Jellyfin refuses a library at one.
    */
   folders: string[];
   /**
-   * Sonarr's or Radarr's own test of a download client fails with this reason (`Host:
-   * <reason>`), whatever the client holds; a test may make it repeat a key, as an app
-   * may. Empty: it tests the client.
+   * Sonarr's or Radarr's own test of a download client or of a connection fails with this
+   * reason (`Host: <reason>`), whatever it holds; a test may make it repeat a key, as an
+   * app may. Empty: it tests them.
    */
   testFailure: string;
   /** Prowlarr's links to Sonarr and Radarr (its applications), their keys in clear. */
@@ -160,7 +163,9 @@ export interface FakeAppState {
   libraries: FakeLibrary[];
   /**
    * Where Jellyfin keeps system.xml (its appdata folder): the fake writes it there as
-   * Jellyfin does, saying whether its wizard is done. Unset: nowhere.
+   * Jellyfin does, saying whether its wizard is done. It does so on the first request the
+   * fake Jellyfin answers, not when the app is added: a test that reads the file before
+   * any call finds none. Unset: nowhere.
    */
   configDir?: string;
   /** Sonarr's or Radarr's connections, such as to Jellyfin, their keys in clear. */
@@ -241,23 +246,19 @@ function testClient(
   state: FakeAppState,
   qbittorrent: FakeAppState,
 ): FakeRefusal | undefined {
-  const value = (name: string) => sent.fields.find((f) => f.name === name)?.value;
-  const at = `${String(value('host'))}:${String(value('port'))}`;
-  const unreachable = (details: string) =>
-    refusal('Host', 'Unable to connect to qBittorrent', details);
+  const value = (name: string) => fieldValue(sent, name);
   if (state.testFailure !== '') return refusal('Host', state.testFailure);
   const host = value('host');
-  if (host !== 'gluetun' && host !== 'qbittorrent') {
-    return unreachable(`Name does not resolve (${at})`);
-  }
-  if (value('port') !== qbittorrent.port) {
-    return unreachable(`Connection refused (${at})`);
-  }
-  if (value('useSsl') === true) {
-    return unreachable(
-      'The SSL connection could not be established, see inner exception.',
-    );
-  }
+  const why = unreachable(
+    `${String(host)}:${String(value('port'))}`,
+    {
+      resolves: host === 'gluetun' || host === 'qbittorrent',
+      portOpen: value('port') === qbittorrent.port,
+      tls: value('useSsl') === true,
+    },
+    'Name does not resolve',
+  );
+  if (why !== undefined) return refusal('Host', 'Unable to connect to qBittorrent', why);
   const right =
     typeof key === 'string' &&
     key !== '' &&
@@ -298,7 +299,7 @@ function fakeServarrDownloads(
   }
   if (path === folders && method === 'POST') {
     const { path: wanted } = JSON.parse(request.body) as { path: string };
-    if (!state.folders.includes(wanted.replace(/\/+$/, ''))) {
+    if (!state.folders.includes(withoutSlash(wanted))) {
       return {
         status: 400,
         body: [
@@ -397,7 +398,7 @@ export async function fakeStackApis(): Promise<{
     const answered =
       service === 'prowlarr'
         ? fakeProwlarr(request, state, peek)
-        : (fakeServarrDownloads(request, service, state, stateOf('qbittorrent')) ??
+        : (fakeServarrDownloads(request, service, state, peek('qbittorrent')) ??
           fakeServarrConnections(request, service, state, peek('jellyfin')));
     return answered ?? { status: 404 };
   });
@@ -425,7 +426,7 @@ export async function fakeStackApis(): Promise<{
         );
       }
       const folders = command.args.slice(divider + 1);
-      stateOf(service).folders.push(...folders.map((f) => f.replace(/\/+$/, '')));
+      stateOf(service).folders.push(...folders.map(withoutSlash));
     },
   };
 }
@@ -433,11 +434,6 @@ export async function fakeStackApis(): Promise<{
 /** The subnets of qBittorrent's whitelist, which takes them separated by commas or lines. */
 function subnetsOf(list: string): string[] {
   return list.split(/[\s,]+/).filter((subnet) => subnet !== '');
-}
-
-/** A path as qBittorrent gives it back: without a trailing "/". */
-function kept(path: string): string {
-  return path.length > 1 ? path.replace(/\/+$/, '') : path;
 }
 
 /**
@@ -478,7 +474,7 @@ function fakeQbittorrent(request: FakeRequest, state: FakeAppState): FakeReply {
       status: 200,
       body: {
         ...state.preferences,
-        save_path: kept(String(savePath)),
+        save_path: withoutSlash(String(savePath)),
         bypass_auth_subnet_whitelist: subnetsOf(String(whitelist)).join('\n'),
         web_ui_username: state.user,
         web_ui_api_key: state.key,
@@ -505,7 +501,7 @@ function fakeQbittorrent(request: FakeRequest, state: FakeAppState): FakeReply {
       body: Object.fromEntries(
         Object.entries(state.categories).map(([name, savePath]) => [
           name,
-          { name, savePath: kept(savePath) },
+          { name, savePath: withoutSlash(savePath) },
         ]),
       ),
     };

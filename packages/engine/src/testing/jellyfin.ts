@@ -3,9 +3,12 @@ import { join } from 'node:path';
 import type { FakeReply, FakeRequest } from './http';
 import {
   fakeProviders,
+  fieldValue,
   refusal,
   type FakeProviderBase,
   type FakeRefusal,
+  unreachable,
+  withoutSlash,
 } from './providers';
 import type { FakeAppState } from './wiring';
 
@@ -42,11 +45,17 @@ const FIRST_USER = 'abc';
 /** What Jellyfin answers a request it refuses without saying why. */
 const UNEXPLAINED = 'Error processing request.';
 
-/** A token or key of the fake's, from a counter: 32 hex characters, as Jellyfin's. */
-let made = 0;
-function token(): string {
-  made += 1;
-  return made.toString(16).padStart(32, 'e');
+/** How many tokens and keys each fake Jellyfin has made, so no test depends on another. */
+const made = new WeakMap<FakeAppState, number>();
+
+/**
+ * The next token or key of the Jellyfin `state`, from its own counter: 32 hex characters,
+ * as Jellyfin's, and the number it was made as.
+ */
+function token(state: FakeAppState): { value: string; count: number } {
+  const count = (made.get(state) ?? 0) + 1;
+  made.set(state, count);
+  return { value: count.toString(16).padStart(32, 'e'), count };
 }
 
 /**
@@ -187,11 +196,6 @@ function shown(library: FakeLibrary) {
   };
 }
 
-/** A path as Jellyfin lists it among a library's Locations: without a trailing "/". */
-function trimmed(path: string): string {
-  return path.length > 1 ? path.replace(/\/+$/, '') : path;
-}
-
 /**
  * Jellyfin's API, as fakeStackApis answers it, as Jellyfin 12 does, from `state`:
  * - its startup wizard: the first user is made by asking for it (GET /Startup/User), then
@@ -285,7 +289,7 @@ export function fakeJellyfin(request: FakeRequest, state: FakeAppState): FakeRep
       sent.Pw === state.password;
     if (!right) return { status: 401, body: UNEXPLAINED };
     // A sign-in from a device ends that device's last session.
-    const session = token();
+    const session = token(state).value;
     state.sessions[device] = session;
     return {
       status: 200,
@@ -313,10 +317,11 @@ export function fakeJellyfin(request: FakeRequest, state: FakeAppState): FakeRep
   if (path === '/Auth/Keys' && method === 'POST') {
     const app = url.searchParams.get('app');
     if (app === null || app === '') return { status: 400, body: UNEXPLAINED };
+    const key = token(state);
     state.apiKeys.push({
-      AccessToken: token(),
+      AccessToken: key.value,
       AppName: app,
-      DateCreated: new Date(Date.UTC(2026, 9, 15, 12, 0, made)).toISOString(),
+      DateCreated: new Date(Date.UTC(2026, 9, 15, 12, 0, key.count)).toISOString(),
     });
     return { status: 204 };
   }
@@ -368,7 +373,7 @@ function fakeJellyfinLibrary(
     return { status: 200, body: availableOptions(query('libraryContentType')) };
   }
   const named = (name: string) => state.libraries.find((l) => l.Name === name);
-  const seen = (folder: string) => state.folders.includes(trimmed(folder));
+  const seen = (folder: string) => state.folders.includes(withoutSlash(folder));
   if (path === '/Library/VirtualFolders' && method === 'GET') {
     return { status: 200, body: state.libraries.map(shown) };
   }
@@ -383,7 +388,7 @@ function fakeJellyfinLibrary(
     state.libraries.push({
       Name: name,
       ...(type === '' ? {} : { CollectionType: type }),
-      Locations: paths.map(trimmed),
+      Locations: paths.map(withoutSlash),
       LibraryOptions: sent.LibraryOptions ?? {},
     });
     return { status: 204 };
@@ -400,12 +405,12 @@ function fakeJellyfinLibrary(
     if (library === undefined || typeof sent.Path !== 'string' || !seen(sent.Path)) {
       return { status: 404, body: UNEXPLAINED };
     }
-    library.Locations.push(trimmed(sent.Path));
+    library.Locations.push(withoutSlash(sent.Path));
     return { status: 204 };
   }
   if (path === '/Library/VirtualFolders/Paths' && method === 'DELETE') {
     const library = named(query('name'));
-    const at = library?.Locations.indexOf(trimmed(query('path'))) ?? -1;
+    const at = library?.Locations.indexOf(withoutSlash(query('path'))) ?? -1;
     if (library !== undefined && at >= 0) library.Locations.splice(at, 1);
     return { status: 204 };
   }
@@ -471,23 +476,27 @@ function mediaBrowserTemplate(service: string) {
  * Sonarr's or Radarr's test of a connection to Jellyfin, `sent` holding `key` in clear: its
  * refusal, or undefined when it passes. As theirs does, it reaches Jellyfin by its service
  * (jellyfin), while it runs, at 8096, without TLS, with one of Jellyfin's keys: none, until
- * Jellyfin has made one.
+ * Jellyfin has made one. A `testFailure` set on the arr overrides every check, as it does
+ * for a download client.
  */
 function testConnection(
   sent: Pick<FakeConnection, 'fields'>,
   key: unknown,
+  state: FakeAppState,
   jellyfin: FakeAppState,
 ): FakeRefusal | undefined {
-  const value = (name: string) => sent.fields.find((f) => f.name === name)?.value;
-  const at = `${String(value('host'))}:${String(value('port'))}`;
-  const unsent = (why: string) => refusal('Host', `Unable to send test message: ${why}`);
-  if (value('host') !== 'jellyfin' || !jellyfin.up) {
-    return unsent(`Resource temporarily unavailable (${at})`);
-  }
-  if (value('port') !== 8096) return unsent(`Connection refused (${at})`);
-  if (value('useSsl') === true) {
-    return unsent('The SSL connection could not be established, see inner exception.');
-  }
+  const value = (name: string) => fieldValue(sent, name);
+  if (state.testFailure !== '') return refusal('Host', state.testFailure);
+  const why = unreachable(
+    `${String(value('host'))}:${String(value('port'))}`,
+    {
+      resolves: value('host') === 'jellyfin' && jellyfin.up,
+      portOpen: value('port') === 8096,
+      tls: value('useSsl') === true,
+    },
+    'Resource temporarily unavailable',
+  );
+  if (why !== undefined) return refusal('Host', `Unable to send test message: ${why}`);
   if (typeof key !== 'string' || key === '') {
     return refusal('ApiKey', "'Api Key' must not be empty.");
   }
@@ -511,7 +520,7 @@ export function fakeServarrConnections(
     path: '/api/v3/notification',
     held: state.connections,
     templates: () => [mediaBrowserTemplate(service)],
-    test: (sent, key) => testConnection(sent, key, jellyfin),
+    test: (sent, key) => testConnection(sent, key, state, jellyfin),
     testedOnCreate: (sent) =>
       Object.entries(sent).some(([name, on]) => name.startsWith('on') && on === true),
   });

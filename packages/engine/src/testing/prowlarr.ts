@@ -1,6 +1,7 @@
 import type { FakeReply, FakeRequest } from './http';
 import {
   fakeProviders,
+  fieldValue,
   refusal,
   type FakeProviderBase,
   type FakeRefusal,
@@ -117,7 +118,7 @@ function testApplication(
   key: unknown,
   peek: (service: string) => FakeAppState,
 ): FakeRefusal | undefined {
-  const value = (name: string) => sent.fields.find((f) => f.name === name)?.value;
+  const value = (name: string) => fieldValue(sent, name);
   const arr = sent.implementation.toLowerCase();
   const base = hostOf(value('baseUrl'));
   const named = base.host === arr && base.port === PORTS[arr] && !base.tls;
@@ -156,7 +157,7 @@ function testProxy(
   sent: Pick<FakeProvider, 'fields'>,
   peek: (service: string) => FakeAppState,
 ): FakeRefusal | undefined {
-  const host = hostOf(sent.fields.find((f) => f.name === 'host')?.value);
+  const host = hostOf(fieldValue(sent, 'host'));
   const reached = SOLVERS.includes(host.host) && host.port === SOLVER_PORT && !host.tls;
   return reached && peek(host.host).up
     ? undefined
