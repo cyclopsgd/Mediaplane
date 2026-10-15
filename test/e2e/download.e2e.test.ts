@@ -41,8 +41,11 @@ const QBT_PORT = 8090;
 /** Verify's detail when it ran vpn-check's checks and found the VPN up. */
 const VPN_UP =
   "no changes remain, and qBittorrent's network is Gluetun's, with the VPN up";
-/** What the stack wires, in the order apply wires it: qBittorrent before the arrs. */
+/** What the stack wires, in the order apply wires it: Jellyfin and qBittorrent first. */
 const WIRED = [
+  'jellyfin.admin',
+  'jellyfin.library_movies',
+  'jellyfin.library_shows',
   'qbittorrent.admin',
   'qbittorrent.preferences',
   'qbittorrent.category_tv',
@@ -50,9 +53,11 @@ const WIRED = [
   'radarr.admin',
   'radarr.download_client',
   'radarr.root_folder',
+  'radarr.connection_jellyfin',
   'sonarr.admin',
   'sonarr.download_client',
   'sonarr.root_folder',
+  'sonarr.connection_jellyfin',
 ];
 /** Each arr: its port, its category, the setting that holds it, and its root folder. */
 const ARRS = [
@@ -357,8 +362,12 @@ describe('the download path, behind the VPN', () => {
       expect(first.plan.wiring).toEqual(
         WIRED.map((resource) => ({ resource, action: 'after-start' })),
       );
-      // qBittorrent's login and settings came with its pre-start file: they are adopted.
+      // qBittorrent's login and settings came with its pre-start file, and Jellyfin's
+      // admin with its first-run setup: they are adopted.
       expect(wired(first.actions)).toEqual([
+        ['jellyfin.admin', 'adopted'],
+        ['jellyfin.library_movies', 'created'],
+        ['jellyfin.library_shows', 'created'],
         ['qbittorrent.admin', 'adopted'],
         ['qbittorrent.preferences', 'adopted'],
         ['qbittorrent.category_tv', 'created'],
@@ -366,9 +375,11 @@ describe('the download path, behind the VPN', () => {
         ['radarr.admin', 'created'],
         ['radarr.download_client', 'created'],
         ['radarr.root_folder', 'created'],
+        ['radarr.connection_jellyfin', 'created'],
         ['sonarr.admin', 'created'],
         ['sonarr.download_client', 'created'],
         ['sonarr.root_folder', 'created'],
+        ['sonarr.connection_jellyfin', 'created'],
       ]);
       // Verify tested both download clients through Gluetun, and ran vpn-check's checks.
       expect(first.actions.find((a) => a.step === 'verify')?.detail).toBe(VPN_UP);
@@ -404,6 +415,9 @@ describe('the download path, behind the VPN', () => {
       const appliedInImage = JSON.parse(inImage.stdout) as WireActions;
       expect(appliedInImage.outcome).toBe('success');
       expect(wired(appliedInImage.actions)).toEqual([
+        ['jellyfin.admin', 'unchanged'],
+        ['jellyfin.library_movies', 'unchanged'],
+        ['jellyfin.library_shows', 'unchanged'],
         ['qbittorrent.admin', 'updated password'],
         ['qbittorrent.preferences', 'unchanged'],
         ['qbittorrent.category_tv', 'unchanged'],
@@ -411,9 +425,11 @@ describe('the download path, behind the VPN', () => {
         ['radarr.admin', 'unchanged'],
         ['radarr.download_client', 'created'],
         ['radarr.root_folder', 'created'],
+        ['radarr.connection_jellyfin', 'unchanged'],
         ['sonarr.admin', 'unchanged'],
         ['sonarr.download_client', 'updated apiKey'],
         ['sonarr.root_folder', 'unchanged'],
+        ['sonarr.connection_jellyfin', 'unchanged'],
       ]);
       expect(appliedInImage.actions.find((a) => a.step === 'verify')?.detail).toBe(
         VPN_UP,

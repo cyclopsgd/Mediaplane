@@ -41,10 +41,13 @@ function mediaplane(...args: string[]): Promise<ExecResult> {
 }
 
 /**
- * What the video stack wires, in the order apply wires it: qBittorrent, then the arrs,
- * then Prowlarr.
+ * What the video stack wires, in the order apply wires it: Jellyfin and qBittorrent, then
+ * the arrs, then Prowlarr.
  */
 const WIRED = [
+  'jellyfin.admin',
+  'jellyfin.library_movies',
+  'jellyfin.library_shows',
   'qbittorrent.admin',
   'qbittorrent.preferences',
   'qbittorrent.category_tv',
@@ -52,9 +55,11 @@ const WIRED = [
   'radarr.admin',
   'radarr.download_client',
   'radarr.root_folder',
+  'radarr.connection_jellyfin',
   'sonarr.admin',
   'sonarr.download_client',
   'sonarr.root_folder',
+  'sonarr.connection_jellyfin',
   'prowlarr.admin',
   'prowlarr.application_sonarr',
   'prowlarr.application_radarr',
@@ -80,7 +85,7 @@ interface Resources {
  * Run from source, Mediaplane itself is not on it: the host reaches it.
  */
 async function expectWiringNetwork(containers: readonly { service: string }[]) {
-  const wired = ['prowlarr', 'qbittorrent', 'radarr', 'sonarr'];
+  const wired = ['jellyfin', 'prowlarr', 'qbittorrent', 'radarr', 'sonarr'];
   expect(await wiringMembers(PROJECT)).toEqual({
     internal: true,
     members: wired.map((service) => `${PROJECT}-${service}-1`),
@@ -266,6 +271,9 @@ describe('apply against real Docker', () => {
           .filter((a) => a.resource !== undefined)
           .map((a) => [a.resource, a.detail]),
       ).toEqual([
+        ['jellyfin.admin', 'adopted'],
+        ['jellyfin.library_movies', 'created'],
+        ['jellyfin.library_shows', 'created'],
         ['qbittorrent.admin', 'adopted'],
         ['qbittorrent.preferences', 'adopted'],
         ['qbittorrent.category_tv', 'created'],
@@ -273,9 +281,11 @@ describe('apply against real Docker', () => {
         ['radarr.admin', 'created'],
         ['radarr.download_client', 'created'],
         ['radarr.root_folder', 'created'],
+        ['radarr.connection_jellyfin', 'created'],
         ['sonarr.admin', 'created'],
         ['sonarr.download_client', 'created'],
         ['sonarr.root_folder', 'created'],
+        ['sonarr.connection_jellyfin', 'created'],
         ['prowlarr.admin', 'created'],
         ['prowlarr.application_sonarr', 'created'],
         ['prowlarr.application_radarr', 'created'],

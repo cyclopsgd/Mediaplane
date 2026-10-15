@@ -251,7 +251,7 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       expect(applied.actions.find((a) => a.step === 'verify')?.detail).toBe(VPN_UP);
       expect(await wiringMembers(PROJECT)).toEqual({
         internal: true,
-        members: [`${PROJECT}-gluetun-1`],
+        members: [`${PROJECT}-gluetun-1`, `${PROJECT}-jellyfin-1`],
       });
 
       // Gluetun's own health check gates qBittorrent (depends_on: service_healthy).
@@ -405,7 +405,11 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       );
       expect(await wiringMembers(PROJECT)).toEqual({
         internal: true,
-        members: [`${PROJECT}-gluetun-1`, `${PROJECT}-mediaplane`],
+        members: [
+          `${PROJECT}-gluetun-1`,
+          `${PROJECT}-jellyfin-1`,
+          `${PROJECT}-mediaplane`,
+        ],
       });
       const current = await runtime.containers();
       gluetun = idOf(current, 'gluetun');
@@ -427,6 +431,9 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       expect(JSON.parse(planned.stdout)).toMatchObject({
         changed: false,
         wiring: [
+          { resource: 'jellyfin.admin', action: 'unchanged' },
+          { resource: 'jellyfin.library_movies', action: 'unchanged' },
+          { resource: 'jellyfin.library_shows', action: 'unchanged' },
           { resource: 'qbittorrent.admin', action: 'unchanged' },
           { resource: 'qbittorrent.preferences', action: 'unchanged' },
         ],

@@ -31,12 +31,12 @@ export async function buildImage(tag: string): Promise<void> {
 
 /**
  * The M1 video stack without the VPN (vpn.e2e.test.ts has its own, behind the VPN), or
- * without Seerr too. The apps run as the current user, who owns the temporary data
- * folder.
+ * without Seerr, or Prowlarr (and the Byparr it brings), too. The apps run as the current
+ * user, who owns the temporary data folder.
  */
 export function stackFor(
   data: string,
-  { seerr = true }: { seerr?: boolean } = {},
+  { seerr = true, prowlarr = true }: { seerr?: boolean; prowlarr?: boolean } = {},
 ): string {
   return `version: 1
 user: { uid: ${process.getuid?.() ?? 1000}, gid: ${process.getgid?.() ?? 1000} }
@@ -46,8 +46,7 @@ media_server: jellyfin
 apps:
   sonarr: {}
   radarr: {}
-  prowlarr: {}
-  qbittorrent: { vpn: false }
+${prowlarr ? '  prowlarr: {}\n' : ''}  qbittorrent: { vpn: false }
 ${seerr ? '  seerr: {}\n' : ''}`;
 }
 

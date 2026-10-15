@@ -7,6 +7,8 @@ import {
   createDockerRuntime,
   LOCK_PATH,
   nodeExec,
+  readSecretStore,
+  writeSecretStore,
   type ExecResult,
 } from '@mediaplane/engine';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -352,25 +354,48 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     expect(codesIn(again.stdout)).not.toContain('project.other-home');
     expect(codesIn(again.stdout)).not.toContain('docker.no-proxy');
     expect(codesIn(again.stdout)).not.toContain('preflight.home-path');
+    // Mediaplane in the image reads Jellyfin's system.xml: with Jellyfin's key out of the
+    // store, plan would set it up again, published, since its setup is done. One it
+    // couldn't read would say nothing, and plan would start it unpublished.
+    const store = await readSecretStore(home);
+    const { jellyfin: _kept, ...others } = store.apps;
+    await writeSecretStore(home, { ...store, apps: others });
+    const keyless = await mediaplane('plan', '--json');
+    await writeSecretStore(home, store);
+    expect(keyless.code, keyless.stderr).toBe(2);
+    expect((JSON.parse(keyless.stdout) as { bootstrap: unknown }).bootstrap).toEqual([
+      { app: 'jellyfin', unpublished: false },
+    ]);
 
     // Slice 3b, through the proxy: Mediaplane joined the stack's wiring network to set
     // the shared login in Sonarr, and checked qBittorrent's key there. Its container is
     // on two networks, both internal, so it still has no route out. Slice 3c: it linked
     // Sonarr to qBittorrent, and made Sonarr's root folder in a throwaway Sonarr
-    // container, through the proxy.
+    // container, through the proxy. Slice 5: it started Jellyfin without its port, set it
+    // up, then published it, all through the proxy, and Sonarr tells it of imports.
+    const applied = JSON.parse(first.stdout) as {
+      plan: { bootstrap: { app: string; unpublished: boolean }[] };
+      actions: { step: string; resource?: string; detail?: string }[];
+    };
+    expect(applied.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
+    expect(applied.actions.find((a) => a.step === 'bootstrap')?.detail).toBe(
+      'set up jellyfin and saved jellyfin.apiKey; published jellyfin',
+    );
     expect(
-      (
-        JSON.parse(first.stdout) as { actions: { resource?: string; detail?: string }[] }
-      ).actions
+      applied.actions
         .filter((a) => a.resource !== undefined)
         .map((a) => [a.resource, a.detail]),
     ).toEqual([
+      ['jellyfin.admin', 'adopted'],
+      ['jellyfin.library_movies', 'created'],
+      ['jellyfin.library_shows', 'created'],
       ['qbittorrent.admin', 'adopted'],
       ['qbittorrent.preferences', 'adopted'],
       ['qbittorrent.category_tv', 'created'],
       ['sonarr.admin', 'created'],
       ['sonarr.download_client', 'created'],
       ['sonarr.root_folder', 'created'],
+      ['sonarr.connection_jellyfin', 'created'],
     ]);
     expect((await stat(join(data, 'media', 'tv'))).isDirectory()).toBe(true);
     const shown = await mediaplane('credentials', '--json', '--reveal');

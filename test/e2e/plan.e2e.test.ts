@@ -82,6 +82,8 @@ describe('plan against real Docker', () => {
       ['appdata/radarr/config.xml', 'create'],
       ['appdata/sonarr/config.xml', 'create'],
     ]);
+    // Jellyfin's startup wizard: apply finishes it before it publishes Jellyfin.
+    expect(result.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
   });
 
   it("includes the user's compose.override.yaml in the hashes", async () => {

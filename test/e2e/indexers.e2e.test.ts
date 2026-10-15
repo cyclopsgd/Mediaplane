@@ -29,6 +29,9 @@ const PROJECT = `mediaplane-e2e-${String(process.pid)}-indexers`;
 const PROWLARR = 9696;
 /** What the stack wires, in the order apply wires it: Prowlarr after the arrs. */
 const WIRED = [
+  'jellyfin.admin',
+  'jellyfin.library_movies',
+  'jellyfin.library_shows',
   'qbittorrent.admin',
   'qbittorrent.preferences',
   'qbittorrent.category_tv',
@@ -36,9 +39,11 @@ const WIRED = [
   'radarr.admin',
   'radarr.download_client',
   'radarr.root_folder',
+  'radarr.connection_jellyfin',
   'sonarr.admin',
   'sonarr.download_client',
   'sonarr.root_folder',
+  'sonarr.connection_jellyfin',
   'prowlarr.admin',
   'prowlarr.application_sonarr',
   'prowlarr.application_radarr',
