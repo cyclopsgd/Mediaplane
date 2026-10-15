@@ -33,6 +33,7 @@ describe('catalog', () => {
 
   it('gives an API to the apps Mediaplane wires', () => {
     expect(catalog.filter((app) => app.api !== undefined).map((app) => app.id)).toEqual([
+      'jellyfin',
       'prowlarr',
       'qbittorrent',
       'radarr',
@@ -49,7 +50,29 @@ describe('catalog', () => {
       expect(app.ports.map((port) => port.name)).toContain(api.port);
       expect(Object.keys(app.secrets)).toContain(api.key.secret);
       expect(api.ready).toMatch(/^\//);
-      expect(api.check).toMatch(/^\/api\//);
+      expect(api.check).toMatch(/^\//);
+      // The check needs the key; the ready path mustn't.
+      expect(api.check).not.toBe(api.ready);
+    });
+  });
+
+  it('gives a first-run setup only to an app whose key it makes, and that its API carries', () => {
+    const set = catalog.filter((app) => app.bootstrap !== undefined);
+    expect(set.map((app) => app.id)).toEqual(['jellyfin']);
+    for (const app of set) {
+      const secret = app.bootstrap?.secret ?? '';
+      expect(app.secrets[secret]).toEqual({ createdBy: 'app' });
+      expect(app.api?.key.secret).toBe(secret);
+      expect(app.bootstrap?.done.path).not.toMatch(/^\/|\.\./);
+    }
+  });
+
+  it("waits for Jellyfin's server itself: its /health says 200 Degraded at every start", () => {
+    // In its first seconds the server answers 503 to everything else (probed on 12.2).
+    const jellyfin = catalog.find((app) => app.id === 'jellyfin');
+    expect(jellyfin?.health).toEqual({
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:8096/health | grep -qx Healthy'],
+      startPeriod: '120s',
     });
   });
 
@@ -71,7 +94,7 @@ describe('catalog', () => {
             : [[app.id, app.login.comingIn]],
         ),
       ),
-    ).toEqual({ jellyfin: 'Slice 5', plex: 'Slice 7', seerr: 'Slice 6' });
+    ).toEqual({ plex: 'Slice 7', seerr: 'Slice 6' });
   });
 
   it("gives each Cloudflare solver a health check, and its API on the port Prowlarr's proxy names", () => {
@@ -88,7 +111,7 @@ describe('catalog', () => {
   it('gives an integration to the apps Mediaplane wires so far', () => {
     expect(
       catalog.filter((app) => app.integration !== undefined).map((app) => app.id),
-    ).toEqual(['prowlarr', 'qbittorrent', 'radarr', 'sonarr']);
+    ).toEqual(['jellyfin', 'prowlarr', 'qbittorrent', 'radarr', 'sonarr']);
   });
 
   describe.each(

@@ -169,6 +169,7 @@ describe('the real catalog', () => {
       .map(([id, service]) => `${id} ${String(service.networks)}`);
     expect(wired).toEqual([
       'gluetun default,wiring',
+      'jellyfin default,wiring',
       'prowlarr default,wiring',
       'radarr default,wiring',
       'sonarr default,wiring',

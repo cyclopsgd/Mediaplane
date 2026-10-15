@@ -251,17 +251,12 @@ apps:
       const from = app.requests.length;
       const planned = await planWiring({
         stack: stack(),
-        current: [
-          'byparr',
-          'jellyfin',
-          'prowlarr',
-          'qbittorrent',
-          'radarr',
-          'sonarr',
-        ].map((service) =>
-          fakeContainer(service, `fake-${service}`, {
-            ...(service === 'sonarr' ? { state: sonarr } : {}),
-          }),
+        // Jellyfin isn't running yet: it is checked after the start.
+        current: ['byparr', 'prowlarr', 'qbittorrent', 'radarr', 'sonarr'].map(
+          (service) =>
+            fakeContainer(service, `fake-${service}`, {
+              ...(service === 'sonarr' ? { state: sonarr } : {}),
+            }),
         ),
         changing: new Set(sonarr === 'exited' ? ['sonarr'] : []),
         onNetwork: true,

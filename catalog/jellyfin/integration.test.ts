@@ -1,0 +1,338 @@
+import {
+  AppApiError,
+  createAppApi,
+  type ResourceSpec,
+  type WiringContext,
+} from '@mediaplane/engine';
+import {
+  FAKE_JELLYFIN_USER_ID,
+  fakeStackApis,
+  freshAppState,
+  wiringStack,
+  type FakeAppState,
+} from '@mediaplane/engine/testing';
+import { describe, expect, it } from 'vitest';
+import { catalog } from '../index';
+import { jellyfinBootstrap, KEY_NAME } from './bootstrap';
+import integration, { LIBRARIES } from './integration';
+
+const PASSWORD = 'fake-admin-password';
+const ADMIN = { username: 'admin', password: PASSWORD };
+const KEY = '7'.repeat(32);
+
+/** Jellyfin, faked as fakeStackApis fakes it, and a client: keyed with KEY, or not. */
+async function jellyfin(state: FakeAppState = freshAppState(), keyed = false) {
+  const apis = await fakeStackApis();
+  apis.apps.set('jellyfin', state);
+  const api = createAppApi({
+    name: 'Jellyfin',
+    service: 'jellyfin',
+    port: 8096,
+    endpoint: { host: '127.0.0.1', port: apis.app.port },
+    key: { scheme: 'mediabrowser', ...(keyed ? { value: KEY } : {}) },
+    secrets: [PASSWORD, KEY],
+    retry: { deadlineMs: 0 },
+  });
+  return { api, apis, state, app: apis.app };
+}
+
+/** A Jellyfin set up by Mediaplane: its wizard done, its admin, and KEY. */
+function setUp(more: Partial<FakeAppState> = {}): FakeAppState {
+  return {
+    ...freshAppState(),
+    wizard: 'done',
+    user: 'admin',
+    password: PASSWORD,
+    apiKeys: [
+      { AccessToken: KEY, AppName: KEY_NAME, DateCreated: '2026-10-15T12:00:00.000Z' },
+    ],
+    ...more,
+  };
+}
+
+/** What `api` failed with, as an AppApiError. */
+async function failure(call: Promise<unknown>): Promise<AppApiError> {
+  const thrown = await call.then(
+    () => undefined,
+    (cause: unknown) => cause,
+  );
+  if (!(thrown instanceof AppApiError)) throw new Error(`expected an AppApiError`);
+  return thrown;
+}
+
+/** Each call `app` received, as "METHOD /path". */
+function calls(app: { requests: { method: string; path: string }[] }): string[] {
+  return app.requests.map((r) => `${r.method} ${r.path.split('?')[0] ?? ''}`);
+}
+
+function resource(name: string): ResourceSpec {
+  const spec = integration.resources.find((r) => r.name === name);
+  if (spec === undefined) throw new Error(`Jellyfin has no resource ${name}`);
+  return spec;
+}
+
+function contextOf(): WiringContext {
+  const stack = wiringStack(
+    catalog,
+    `version: 1
+paths: { data: /srv/data }
+network: { bind: localhost }
+media_server: jellyfin
+apps:
+  sonarr: {}
+  qbittorrent: { vpn: false }
+`,
+  );
+  const app = stack.apps.find((a) => a.def.id === 'jellyfin');
+  if (app === undefined) throw new Error('no Jellyfin in the stack');
+  return { stack, app, admin: ADMIN, keys: {} };
+}
+
+function wanted(spec: ResourceSpec) {
+  const desired = spec.desired(contextOf());
+  if (desired === undefined) throw new Error(`${spec.name} is wanted`);
+  return desired;
+}
+
+describe("Jellyfin's first-run setup", () => {
+  it('runs its startup wizard as the shared admin, makes its key, reads it back, and signs out', async () => {
+    const { api, state, app } = await jellyfin();
+    expect(await jellyfinBootstrap.open(api)).toBe(true);
+    const key = await jellyfinBootstrap.run(api, ADMIN);
+    expect(key).toMatch(/^[0-9a-f]{32}$/);
+    expect(state).toMatchObject({ wizard: 'done', user: 'admin', password: PASSWORD });
+    expect(state.apiKeys.map((k) => [k.AccessToken, k.AppName])).toEqual([
+      [key, 'Mediaplane'],
+    ]);
+    expect(state.sessions).toEqual({});
+    expect(await jellyfinBootstrap.open(api)).toBe(false);
+    // Signed in before it completes the wizard: a first user it can't sign in as isn't
+    // Mediaplane's.
+    expect(calls(app)).toEqual([
+      'GET /System/Info/Public',
+      'GET /System/Info/Public',
+      'GET /Startup/User',
+      'POST /Startup/User',
+      'POST /Users/AuthenticateByName',
+      'POST /Startup/Complete',
+      'GET /Auth/Keys',
+      'POST /Auth/Keys',
+      'GET /Auth/Keys',
+      'POST /Sessions/Logout',
+      'GET /System/Info/Public',
+    ]);
+  });
+
+  it('keeps the key it made before rather than make another', async () => {
+    const { api, state, app } = await jellyfin(setUp());
+    expect(await jellyfinBootstrap.run(api, ADMIN)).toBe(KEY);
+    expect(state.apiKeys).toHaveLength(1);
+    expect(calls(app)).not.toContain('POST /Auth/Keys');
+  });
+
+  it('finishes a setup that stopped once the first user had its password', async () => {
+    const { api, state } = await jellyfin({
+      ...freshAppState(),
+      wizard: 'open',
+      user: 'admin',
+      password: PASSWORD,
+    });
+    expect(await jellyfinBootstrap.run(api, ADMIN)).toMatch(/^[0-9a-f]{32}$/);
+    expect(state.wizard).toBe('done');
+  });
+
+  it('leaves the wizard open, and says so, when its first user is not the shared admin', async () => {
+    const { api, state, app } = await jellyfin({
+      ...freshAppState(),
+      wizard: 'open',
+      user: 'abc',
+      password: 'fake-someone-else',
+    });
+    const refused = await failure(jellyfinBootstrap.run(api, ADMIN));
+    expect(refused.message).toBe(
+      "Jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in: its startup wizard has a first user that Mediaplane did not set, so Mediaplane left the wizard open (POST /Users/AuthenticateByName)",
+    );
+    expect(state.wizard).toBe('open');
+    expect(calls(app)).not.toContain('POST /Startup/Complete');
+  });
+
+  it('says when its wizard was finished with another login', async () => {
+    const { api } = await jellyfin(setUp({ password: 'fake-someone-else' }));
+    expect((await failure(jellyfinBootstrap.run(api, ADMIN))).message).toContain(
+      "refused the shared admin's sign-in: its startup wizard was finished with another login",
+    );
+  });
+
+  it('is done once system.xml says its wizard is', () => {
+    const { done } = jellyfinBootstrap;
+    expect(done.path).toBe('system.xml');
+    expect(
+      done.pattern.test('  <IsStartupWizardCompleted>true</IsStartupWizardCompleted>'),
+    ).toBe(true);
+    expect(
+      done.pattern.test('<IsStartupWizardCompleted>false</IsStartupWizardCompleted>'),
+    ).toBe(false);
+  });
+});
+
+describe("Jellyfin's integration", () => {
+  it('has the shared admin, then the Movies and Shows libraries, after nothing', () => {
+    expect(integration.after).toEqual([]);
+    expect(
+      integration.resources.map((r) => [r.name, r.fields, r.secrets, r.requires]),
+    ).toEqual([
+      ['admin', ['username'], ['password'], undefined],
+      ['library_movies', ['name', 'collectionType', 'paths'], [], undefined],
+      ['library_shows', ['name', 'collectionType', 'paths'], [], undefined],
+    ]);
+  });
+});
+
+describe("Jellyfin's admin", () => {
+  const admin = resource('admin');
+
+  it('is the user named as the shared admin, then the one of the id it was found by', async () => {
+    const { api, state } = await jellyfin(setUp(), true);
+    const desired = wanted(admin);
+    const found = await admin.observe(api, undefined, desired);
+    expect(found).toEqual({
+      id: FAKE_JELLYFIN_USER_ID,
+      name: 'admin',
+      fields: { username: 'admin' },
+    });
+    state.user = 'renamed';
+    expect(await admin.observe(api, undefined, desired)).toBeUndefined();
+    const known = {
+      id: FAKE_JELLYFIN_USER_ID,
+      name: 'admin',
+      fields: { username: 'admin' },
+      secrets: ['password'],
+      appliedAt: '2026-10-15T12:00:00.000Z',
+    };
+    expect(await admin.observe(api, known, desired)).toMatchObject({
+      fields: { username: 'renamed' },
+    });
+  });
+
+  it('checks its password by signing in, then out', async () => {
+    const { api, state } = await jellyfin(setUp(), true);
+    const desired = wanted(admin);
+    const held = await admin.observe(api, undefined, desired);
+    if (held === undefined) throw new Error('the admin is there');
+    expect(await admin.verify?.(api, desired, held)).toBe(true);
+    expect(state.sessions).toEqual({});
+    state.password = 'fake-changed-by-hand';
+    expect(await admin.verify?.(api, desired, held)).toBe(false);
+  });
+
+  it('renames it and sets its password with the key, and makes no other user', async () => {
+    const { api, state } = await jellyfin(
+      setUp({ user: 'renamed', password: 'x' }),
+      true,
+    );
+    const desired = wanted(admin);
+    const held = {
+      id: FAKE_JELLYFIN_USER_ID,
+      name: 'admin',
+      fields: { username: 'renamed' },
+    };
+    await admin.update(api, desired, held);
+    expect(state).toMatchObject({ user: 'admin', password: PASSWORD });
+    expect((await failure(admin.create(api, desired))).message).toBe(
+      "Jellyfin at http://jellyfin:8096 (127.0.0.1) has no user admin: Mediaplane makes Jellyfin's admin in its startup wizard, and no other user (GET /Users)",
+    );
+  });
+});
+
+describe("Jellyfin's libraries", () => {
+  const movies = resource('library_movies');
+  const shows = resource('library_shows');
+
+  it('are Movies and Shows, in their folders under /data/media, which are made first', () => {
+    expect(wanted(movies)).toEqual({
+      name: 'Movies',
+      fields: { name: 'Movies', collectionType: 'movies', paths: '/data/media/movies' },
+      secrets: {},
+      folders: ['/data/media/movies'],
+    });
+    expect(wanted(shows).fields).toEqual({
+      name: 'Shows',
+      collectionType: 'tvshows',
+      paths: '/data/media/tv',
+    });
+    expect(LIBRARIES.map((l) => l.name)).toEqual(['Movies', 'Shows']);
+  });
+
+  it("makes one as Jellyfin's web UI makes a new library, with its default downloaders, and finds it by name", async () => {
+    const { api, apis, state } = await jellyfin(setUp(), true);
+    state.folders.push('/data/media/movies');
+    expect(await movies.observe(api, undefined)).toBeUndefined();
+    expect(await movies.create(api, wanted(movies))).toEqual({ id: 'Movies' });
+    const [made] = state.libraries;
+    expect(made).toMatchObject({
+      Name: 'Movies',
+      CollectionType: 'movies',
+      Locations: ['/data/media/movies'],
+      LibraryOptions: {
+        Enabled: true,
+        EnableInternetProviders: true,
+        EnableRealtimeMonitor: true,
+        TypeOptions: [
+          {
+            Type: 'Movie',
+            MetadataFetchers: ['TheMovieDb'],
+            MetadataFetcherOrder: ['TheMovieDb', 'The Open Movie Database'],
+            ImageFetchers: ['TheMovieDb', 'Screen Grabber'],
+          },
+        ],
+      },
+    });
+    expect(await movies.observe(api, undefined)).toEqual({
+      id: 'Movies',
+      name: 'Movies',
+      fields: { name: 'Movies', collectionType: 'movies', paths: '/data/media/movies' },
+    });
+    expect(apis.app.requests.at(-2)?.path).toBe(
+      '/Library/VirtualFolders?name=Movies&collectionType=movies&paths=%2Fdata%2Fmedia%2Fmovies&refreshLibrary=true',
+    );
+  });
+
+  it('puts back its folder, and takes out one added by hand, each once', async () => {
+    const { api, state } = await jellyfin(setUp(), true);
+    state.folders.push('/data/media/tv', '/data/media/other');
+    state.libraries.push({
+      Name: 'Shows',
+      CollectionType: 'tvshows',
+      Locations: ['/data/media/other', '/data/media/other'],
+      LibraryOptions: {},
+    });
+    const held = await shows.observe(api, undefined);
+    expect(held?.fields.paths).toBe('/data/media/other');
+    if (held === undefined) throw new Error('Shows is there');
+    await shows.update(api, wanted(shows), held);
+    expect(state.libraries[0]?.Locations).toEqual([
+      '/data/media/other',
+      '/data/media/tv',
+    ]);
+    // Jellyfin keeps a path given twice twice, and takes one out at a time.
+    const again = await shows.observe(api, undefined);
+    if (again === undefined) throw new Error('Shows is there');
+    await shows.update(api, wanted(shows), again);
+    expect(state.libraries[0]?.Locations).toEqual(['/data/media/tv']);
+  });
+
+  it("says Jellyfin can't change what a library of that name holds", async () => {
+    const { api, state } = await jellyfin(setUp(), true);
+    state.libraries.push({
+      Name: 'Shows',
+      Locations: ['/data/media/tv'],
+      LibraryOptions: {},
+    });
+    const held = await shows.observe(api, undefined);
+    if (held === undefined) throw new Error('Shows is there');
+    expect(held.fields.collectionType).toBe('');
+    expect((await failure(shows.update(api, wanted(shows), held))).message).toBe(
+      "Jellyfin at http://jellyfin:8096 (127.0.0.1) has a library named Shows that holds mixed content, not tvshows, and Jellyfin can't change what a library holds: rename or remove it in Jellyfin, and the next apply makes Shows (GET /Library/VirtualFolders)",
+    );
+  });
+});

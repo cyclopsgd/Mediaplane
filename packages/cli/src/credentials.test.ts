@@ -18,6 +18,7 @@ vpn: { provider: mullvad, private_key: { file: secrets/wg.key } }
 apps:
   sonarr: {}
   qbittorrent: {}
+  seerr: {}
 `;
 const PASSWORD = 'fake-admin-password-0001';
 
@@ -81,8 +82,9 @@ describe('mediaplane credentials', () => {
         '  user name  admin',
         `  password   ${PASSWORD}`,
         '',
-        'Jellyfin     http://127.0.0.1:8096  (its login arrives in Slice 5)',
+        'Jellyfin     http://127.0.0.1:8096',
         'qBittorrent  http://127.0.0.1:8080',
+        'Seerr        http://127.0.0.1:5055  (its login arrives in Slice 6)',
         'Sonarr       http://127.0.0.1:8989',
         '',
       ].join('\n'),
@@ -104,14 +106,20 @@ describe('mediaplane credentials', () => {
           app: 'jellyfin',
           name: 'Jellyfin',
           urls: ['http://127.0.0.1:8096'],
-          login: 'not-yet',
-          comingIn: 'Slice 5',
+          login: 'shared',
         },
         {
           app: 'qbittorrent',
           name: 'qBittorrent',
           urls: ['http://127.0.0.1:8080'],
           login: 'shared',
+        },
+        {
+          app: 'seerr',
+          name: 'Seerr',
+          urls: ['http://127.0.0.1:5055'],
+          login: 'not-yet',
+          comingIn: 'Slice 6',
         },
         {
           app: 'sonarr',

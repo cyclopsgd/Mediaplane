@@ -70,7 +70,11 @@ function api(def: AppDefinition): string {
   if (def.api === undefined) return 'none over the wiring network';
   const { port, key } = def.api;
   const carried =
-    key.scheme === 'bearer' ? 'as a Bearer token' : 'in the `X-Api-Key` header';
+    key.scheme === 'bearer'
+      ? 'as a Bearer token'
+      : key.scheme === 'mediabrowser'
+        ? "in Jellyfin's `Authorization: MediaBrowser` header"
+        : 'in the `X-Api-Key` header';
   return `on its ${code(port)} port, which Mediaplane reaches over the stack's wiring network, with ${code(key.secret)} ${carried}`;
 }
 

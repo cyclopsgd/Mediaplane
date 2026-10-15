@@ -1,4 +1,6 @@
 import { defineApp } from '@mediaplane/engine';
+import { jellyfinBootstrap } from './bootstrap';
+import integration from './integration';
 
 export default defineApp({
   id: 'jellyfin',
@@ -21,10 +23,21 @@ export default defineApp({
     { step: 'bootstrap-api', action: 'startup-wizard' },
     { step: 'bootstrap-api', action: 'create-api-key' },
   ],
+  // /health answers 200 with "Degraded" for the first seconds of every start, while the
+  // server itself answers 503: only "Healthy" means it is up.
   health: {
-    test: ['CMD', 'curl', '-fsS', 'http://localhost:8096/health'],
+    test: ['CMD-SHELL', 'curl -fsS http://localhost:8096/health | grep -qx Healthy'],
     startPeriod: '120s',
   },
-  login: { comingIn: 'Slice 5' },
+  // Its key goes in its MediaBrowser header: Jellyfin 12 turns the legacy ones off.
+  api: {
+    port: 'web',
+    ready: '/System/Info/Public',
+    key: { secret: 'apiKey', scheme: 'mediabrowser' },
+    check: '/System/Info',
+  },
+  integration,
+  bootstrap: jellyfinBootstrap,
+  login: 'shared',
   experimental: false,
 });

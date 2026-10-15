@@ -53,6 +53,9 @@ describe('renderFacts', () => {
       'with `apiKey` as a Bearer token\n',
     );
     expect(renderFacts(app('jellyfin'))).toContain(
+      "with `apiKey` in Jellyfin's `Authorization: MediaBrowser` header\n",
+    );
+    expect(renderFacts(app('plex'))).toContain(
       '- **API:** none over the wiring network\n',
     );
     // vpn-check calls Gluetun's control server, from inside qBittorrent's network.
@@ -67,9 +70,7 @@ describe('renderFacts', () => {
     expect(renderFacts(wired)).toContain(
       '- **Managed in the app:** `prowlarr.admin`: fields `prowlarr.admin.username`; the secret `password`, checked and never shown\n',
     );
-    expect(renderFacts(app('jellyfin'))).toContain(
-      '- **Managed in the app:** nothing yet\n',
-    );
+    expect(renderFacts(app('plex'))).toContain('- **Managed in the app:** nothing yet\n');
   });
 
   it('shows what an app turns on with its default settings', () => {

@@ -21,8 +21,10 @@ import {
   type HostRequest,
   type KnownResources,
   type Runtime,
+  type SecretStore,
 } from '@mediaplane/engine';
 import {
+  FAKE_JELLYFIN_USER_ID,
   FIXTURE_HOST,
   fakeDocker,
   fakeProbe,
@@ -50,18 +52,51 @@ apps:
 const SERVICES = ['gluetun', 'jellyfin', 'qbittorrent', 'sonarr'];
 const HASHES = Object.fromEntries(SERVICES.map((s, i) => [s, String(i).repeat(64)]));
 
+/** Where the home's Jellyfin keeps system.xml, as the image does. */
+const jellyfinConfig = (home: string) => join(home, 'appdata', 'jellyfin');
+
+/** A home of the test stack, whose fake Jellyfin, as it first starts, keeps its files. */
 async function makeHome(stack = STACK): Promise<string> {
   const home = await tempDir('mediaplane-cli-');
   await mkdir(join(home, 'secrets'));
   await writeFile(join(home, 'secrets', 'wg.key'), 'fake-wireguard-key-for-tests\n');
   await writeFile(join(home, 'stack.yaml'), stack);
+  apis.apps.set('jellyfin', { ...freshAppState(), configDir: jellyfinConfig(home) });
   return home;
 }
 
 const AT = '2026-10-10T12:00:00.000Z';
 
+/** The key Jellyfin made for Mediaplane, in a home of the test stack set up already. */
+const JELLYFIN_KEY = '5'.repeat(32);
+
+/** Jellyfin's libraries, as resources.json records them and Jellyfin holds them. */
+const LIBRARIES = [
+  ['library_movies', 'Movies', 'movies', '/data/media/movies'],
+  ['library_shows', 'Shows', 'tvshows', '/data/media/tv'],
+] as const;
+
 /** What resources.json records once the test stack is wired, as the fake apps hold it. */
 const WIRED: KnownResources = {
+  'jellyfin.admin': {
+    id: FAKE_JELLYFIN_USER_ID,
+    name: 'admin',
+    fields: { username: 'admin' },
+    secrets: ['password'],
+    appliedAt: AT,
+  },
+  ...Object.fromEntries(
+    LIBRARIES.map(([resource, name, collectionType, paths]) => [
+      `jellyfin.${resource}`,
+      {
+        id: name,
+        name,
+        fields: { name, collectionType, paths },
+        secrets: [],
+        appliedAt: AT,
+      },
+    ]),
+  ),
   'qbittorrent.admin': {
     id: null,
     name: 'admin',
@@ -130,7 +165,12 @@ async function currentHome(
     wiring: apis.seams,
   });
   if (context === undefined) throw new Error('the test stack must plan');
-  const { store } = withGeneratedSecrets(context.stack, context.store, zeros);
+  const generated = withGeneratedSecrets(context.stack, context.store, zeros).store;
+  // Jellyfin's key, which it made in its first-run setup.
+  const store: SecretStore = {
+    ...generated,
+    apps: { ...generated.apps, jellyfin: { apiKey: JELLYFIN_KEY } },
+  };
   await writeSecretStore(home, store);
   await mkdir(join(home, 'generated'));
   await writeFile(join(home, COMPOSE_PATH), composeToYaml(context.compose, home));
@@ -141,9 +181,30 @@ async function currentHome(
   if (prestart) {
     const files = await prestartFilesFor(context.stack, store, {}, zeros);
     await writePrestartFiles(home, files);
+    // Jellyfin finished its startup wizard, and says so in its system.xml.
+    await mkdir(jellyfinConfig(home), { recursive: true });
+    await writeFile(
+      join(jellyfinConfig(home), 'system.xml'),
+      '<ServerConfiguration>\n  <IsStartupWizardCompleted>true</IsStartupWizardCompleted>\n</ServerConfiguration>\n',
+    );
   }
-  // Sonarr and qBittorrent hold what the stack wants, as resources.json records.
+  // The apps hold what the stack wants, as resources.json records.
   const password = store.shared?.adminPassword ?? '';
+  apis.apps.set('jellyfin', {
+    ...freshAppState(),
+    wizard: 'done',
+    user: 'admin',
+    password,
+    apiKeys: [{ AccessToken: JELLYFIN_KEY, AppName: 'Mediaplane', DateCreated: AT }],
+    libraries: LIBRARIES.map(([, name, collectionType, path]) => ({
+      Name: name,
+      CollectionType: collectionType,
+      Locations: [path],
+      LibraryOptions: {},
+    })),
+    folders: LIBRARIES.map(([, , , path]) => path),
+    ...(prestart ? { configDir: jellyfinConfig(home) } : {}),
+  });
   // qBittorrent takes only the stack's key, and gives it back among its preferences.
   const key = store.apps.qbittorrent?.apiKey;
   if (key === undefined) throw new Error('the test stack must store a qBittorrent key');
@@ -305,7 +366,7 @@ describe('mediaplane plan', () => {
       'Secrets to generate: admin.password, gluetun.controlApiKey, qbittorrent.apiKey, sonarr.apiKey\n',
     );
     expect(term.stdout()).toContain(
-      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 6 wiring checks after the start.',
+      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 1 app to set up, 9 wiring checks after the start.',
     );
     expect(term.stdout()).toContain('+ generated/.env (secret values, not shown)\n');
   });
@@ -608,7 +669,7 @@ describe('mediaplane apply', () => {
     const first = capture();
     expect(await run(['apply', '--home', home, '--yes'], first.io, deps(docker))).toBe(0);
     expect(first.stdout()).toContain(
-      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 6 wiring checks after the start.',
+      'Plan: 5 files to write, 4 containers to change, 4 secrets to generate, 1 app to set up, 9 wiring checks after the start.',
     );
     expect(first.stdout()).toContain('  done    images: images present\n');
     expect(first.stdout()).toMatch(
@@ -843,6 +904,10 @@ describe('mediaplane apply', () => {
       ['pull', '', 'done'],
       ['ownership', '', 'done'],
       ['start', '', 'done'],
+      ['bootstrap', '', 'done'],
+      ['wire', 'jellyfin.admin', 'done'],
+      ['wire', 'jellyfin.library_movies', 'done'],
+      ['wire', 'jellyfin.library_shows', 'done'],
       ['wire', 'qbittorrent.admin', 'done'],
       ['wire', 'qbittorrent.preferences', 'done'],
       ['wire', 'qbittorrent.category_tv', 'done'],
@@ -901,7 +966,7 @@ describe('mediaplane apply', () => {
     expect(term.stderr()).toContain('error: fake registry unreachable');
     expect(term.stderr()).toContain('hint: check the network connection');
     expect(term.stderr()).toContain(
-      'Apply failed: 2 done, 1 failed, 4 skipped. Run apply again to retry.',
+      'Apply failed: 2 done, 1 failed, 5 skipped. Run apply again to retry.',
     );
   });
 
@@ -947,7 +1012,7 @@ describe('mediaplane apply', () => {
     expect(term.stderr()).toContain('error: fake registry unreachable');
     expect(term.stderr()).toContain('error: the change record could not be saved:');
     expect(term.stderr()).toMatch(
-      /\nApply failed: 2 done, 1 failed, 4 skipped\. Run apply again to retry\.\n$/,
+      /\nApply failed: 2 done, 1 failed, 5 skipped\. Run apply again to retry\.\n$/,
     );
   });
 
@@ -1111,13 +1176,13 @@ describe('mediaplane history', () => {
     const list = capture();
     expect(await run(['history', '--home', home], list.io, deps(docker))).toBe(0);
     expect(list.stdout()).toBe(
-      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 6 resources wired\n`,
+      `${id}  success  5 files written, 4 containers changed, 4 secrets generated, 9 resources wired\n`,
     );
     const one = capture();
     expect(await run(['history', id, '--home', home], one.io, deps(docker))).toBe(0);
     expect(one.stdout()).toContain(`Change ${id}\n`);
     expect(one.stdout()).toContain(
-      '  done    containers: every app is running and healthy\n',
+      '  done    containers: every app is running and healthy; started jellyfin without its ports, to set it up first\n',
     );
     expect(one.stdout()).toContain('  done    wiring sonarr.admin: created\n');
     expect(one.stdout()).toContain('  done    wiring qbittorrent.category_tv: created\n');
