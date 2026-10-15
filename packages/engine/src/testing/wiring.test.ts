@@ -194,6 +194,63 @@ describe("fakeStackApis' Sonarr and Radarr", () => {
     );
     expect((await test(client('qbittorrent', 8090))).status).toBe(200);
   });
+
+  it('saves a client that is off untested, as it saves one the app would refuse', async () => {
+    const apis = await fakeStackApis();
+    const save = (sent: unknown) =>
+      json(apis.app.port, 'sonarr:8989', '/api/v3/downloadclient?forceSave=true', sent);
+    expect((await save({ ...client('gluetun', 8090), enable: false })).status).toBe(201);
+    expect(apis.apps.get('sonarr')?.downloadClients).toHaveLength(1);
+  });
+
+  it('refuses to rename a client to the name of another, but not to its own', async () => {
+    const apis = await fakeStackApis();
+    const save = (sent: unknown) =>
+      json(apis.app.port, 'sonarr:8989', '/api/v3/downloadclient?forceSave=true', sent);
+    const rename = (id: number, name: string) =>
+      json(
+        apis.app.port,
+        'sonarr:8989',
+        `/api/v3/downloadclient/${String(id)}?forceSave=true`,
+        { ...client('gluetun', 8080), id, name },
+        'PUT',
+      );
+    await save(client('gluetun', 8080));
+    await save({ ...client('gluetun', 8080), name: 'Other' });
+    expect(await rename(2, 'qBittorrent (Mediaplane)')).toMatchObject({
+      status: 400,
+      body: [{ propertyName: 'Name', errorMessage: 'Should be unique' }],
+    });
+    expect(apis.apps.get('sonarr')?.downloadClients[1]?.name).toBe('Other');
+    expect((await rename(2, 'Other')).status).toBe(202);
+    expect((await rename(2, 'Renamed')).status).toBe(202);
+    expect(apis.apps.get('sonarr')?.downloadClients[1]?.name).toBe('Renamed');
+  });
+
+  it('makes the folders of a mkdir with its --, trailing slash or not, and only of a mkdir', async () => {
+    const apis = await fakeStackApis();
+    const command = (entrypoint: string, args: string[]) => ({
+      user: { uid: 1000, gid: 1000 },
+      entrypoint,
+      args,
+      values: {},
+    });
+    apis.mkdir('radarr', command('mkdir', ['-p', '--', '/data/media/movies/']));
+    apis.mkdir('radarr', command('chown', ['--', '/data/media/other']));
+    expect(apis.apps.get('radarr')?.folders).toEqual(['/data/media/movies']);
+    expect(
+      (
+        await json(apis.app.port, 'radarr:7878', '/api/v3/rootfolder', {
+          path: '/data/media/movies/',
+        })
+      ).status,
+    ).toBe(201);
+    // Not the wire step's command: refused, and nothing made of its "-p".
+    expect(() => {
+      apis.mkdir('radarr', command('mkdir', ['-p', '/data/media/other']));
+    }).toThrow('the fake mkdir takes the wire step');
+    expect(apis.apps.get('radarr')?.folders).toEqual(['/data/media/movies']);
+  });
 });
 
 const SONARR_KEY = '1'.repeat(32);
@@ -330,5 +387,142 @@ describe("fakeStackApis' Prowlarr", () => {
     });
     expect(await tag('not a label')).toMatchObject({ status: 400 });
     expect(apis.apps.get('prowlarr')?.tags).toEqual([{ id: 1, label: 'cloudflare' }]);
+  });
+});
+
+/** The 400 of Prowlarr's test, for `property`. */
+function validation(property: string, message: string) {
+  return { status: 400, body: [{ propertyName: property, errorMessage: message }] };
+}
+
+/** An indexer proxy as Prowlarr's template makes it, aimed at `host`. */
+function proxyAt(host: string, name = 'Cloudflare (Mediaplane)') {
+  return {
+    name,
+    implementation: 'FlareSolverr',
+    tags: [1],
+    fields: [
+      { name: 'host', value: host },
+      { name: 'requestTimeout', value: 60 },
+    ],
+  };
+}
+
+describe("fakeStackApis' Prowlarr, as strictly as the app", () => {
+  const saveLink = (apis: Awaited<ReturnType<typeof fakeStackApis>>, sent: unknown) =>
+    json(apis.app.port, 'prowlarr:9696', '/api/v1/applications?forceSave=true', sent);
+
+  it("refuses a link to an arr at another port than the arr's, or over TLS", async () => {
+    const apis = await fakeStackApis();
+    expect(await saveLink(apis, link({ baseUrl: 'http://sonarr:8990' }))).toMatchObject(
+      validation(
+        'BaseUrl',
+        'Unable to complete application test, cannot connect to Sonarr. Connection refused (sonarr:8990)',
+      ),
+    );
+    expect(await saveLink(apis, link({ baseUrl: 'https://sonarr:8989' }))).toMatchObject(
+      validation(
+        'BaseUrl',
+        'Unable to complete application test, cannot connect to Sonarr. Connection refused (sonarr:8989)',
+      ),
+    );
+    expect(
+      await saveLink(apis, link({ prowlarrUrl: 'https://prowlarr:9696' })),
+    ).toMatchObject(
+      validation(
+        'ProwlarrUrl',
+        'Prowlarr URL is invalid, Sonarr cannot connect to Prowlarr',
+      ),
+    );
+    expect(apis.apps.get('prowlarr')?.applications).toEqual([]);
+  });
+
+  it('refuses a link to an arr that is not up, until it is', async () => {
+    const apis = await fakeStackApis();
+    apis.apps.set('sonarr', { ...freshAppState(), key: SONARR_KEY, up: false });
+    expect(await saveLink(apis, link())).toMatchObject(
+      validation(
+        'BaseUrl',
+        'Unable to complete application test, cannot connect to Sonarr. Resource temporarily unavailable (sonarr:8989)',
+      ),
+    );
+    const sonarr = apis.apps.get('sonarr');
+    if (sonarr === undefined) throw new Error('no Sonarr faked');
+    sonarr.up = true;
+    expect((await saveLink(apis, link())).status).toBe(201);
+  });
+
+  it('takes any key for an arr that sets none, but never an empty one', async () => {
+    const apis = await fakeStackApis();
+    expect((await saveLink(apis, link({ apiKey: '9'.repeat(32) }))).status).toBe(201);
+    const empty = await saveLink(apis, { ...link({ apiKey: '' }), name: 'Another' });
+    expect(empty).toMatchObject(validation('ApiKey', 'API Key is invalid'));
+  });
+
+  it("fails a held link's test once the key it holds is no longer the arr's", async () => {
+    const apis = await fakeStackApis();
+    apis.apps.set('sonarr', { ...freshAppState(), key: SONARR_KEY });
+    await saveLink(apis, link());
+    const sonarr = apis.apps.get('sonarr');
+    if (sonarr === undefined) throw new Error('no Sonarr faked');
+    sonarr.key = '8'.repeat(32);
+    const held = await send(apis.app.port, 'prowlarr:9696', '/api/v1/applications/1', {
+      'x-api-key': '0'.repeat(32),
+    });
+    // Masked in the link it is sent, tested with the key it holds.
+    expect(
+      await json(
+        apis.app.port,
+        'prowlarr:9696',
+        '/api/v1/applications/test',
+        JSON.parse(held.body),
+      ),
+    ).toMatchObject(validation('ApiKey', 'API Key is invalid'));
+  });
+
+  it('refuses a proxy at a solver port that is not 8191, over TLS, or that the stack does not run', async () => {
+    const apis = await fakeStackApis();
+    const save = (sent: unknown) =>
+      json(apis.app.port, 'prowlarr:9696', '/api/v1/indexerproxy?forceSave=true', sent);
+    const unreachable = (at: string) =>
+      validation(
+        'Host',
+        `Unable to connect to proxy: Resource temporarily unavailable (${at}). Check the log surrounding this error for details`,
+      );
+    expect(await save(proxyAt('http://byparr:8192/'))).toMatchObject(
+      unreachable('byparr:8192'),
+    );
+    expect(await save(proxyAt('https://byparr:8191/'))).toMatchObject(
+      unreachable('byparr:8191'),
+    );
+    // The stack runs Byparr and not FlareSolverr: that one is not up.
+    apis.apps.set('flaresolverr', { ...freshAppState(), up: false });
+    expect(await save(proxyAt('http://flaresolverr:8191/'))).toMatchObject(
+      unreachable('flaresolverr:8191'),
+    );
+    expect(apis.apps.get('prowlarr')?.proxies).toEqual([]);
+    expect((await save(proxyAt('http://byparr:8191/'))).status).toBe(201);
+  });
+
+  it('refuses a proxy under a name taken, and a rename to one, but not a rename to its own', async () => {
+    const apis = await fakeStackApis();
+    const save = (sent: unknown) =>
+      json(apis.app.port, 'prowlarr:9696', '/api/v1/indexerproxy?forceSave=true', sent);
+    const rename = (id: number, name: string) =>
+      json(
+        apis.app.port,
+        'prowlarr:9696',
+        `/api/v1/indexerproxy/${String(id)}?forceSave=true`,
+        { ...proxyAt('http://byparr:8191/', name), id },
+        'PUT',
+      );
+    const taken = validation('Name', 'Should be unique');
+    await save(proxyAt('http://byparr:8191/'));
+    expect(await save(proxyAt('http://byparr:8191/'))).toMatchObject(taken);
+    await save(proxyAt('http://byparr:8191/', 'Other'));
+    expect(await rename(2, 'Cloudflare (Mediaplane)')).toMatchObject(taken);
+    expect(apis.apps.get('prowlarr')?.proxies[1]?.name).toBe('Other');
+    expect((await rename(2, 'Other')).status).toBe(202);
+    expect((await rename(2, 'Renamed')).status).toBe(202);
   });
 });

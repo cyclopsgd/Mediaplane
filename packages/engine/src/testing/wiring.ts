@@ -9,6 +9,12 @@ import { fakeContainer } from './fakes';
 import { FIXTURE_API, FIXTURE_HOST, fixtureCatalog, fixtureConfig } from './fixtures';
 import { fakeHttpApp, type FakeApp, type FakeReply, type FakeRequest } from './http';
 import { fakeProwlarr, type FakeProvider } from './prowlarr';
+import {
+  fakeProviders,
+  refusal,
+  type FakeProviderBase,
+  type FakeRefusal,
+} from './providers';
 
 /** The stack of the wiring tests: Sonarr, and qBittorrent behind Gluetun. */
 export const WIRING_STACK = `version: 1
@@ -137,13 +143,9 @@ export interface FakeAppState {
 }
 
 /** A download client, as Sonarr and Radarr keep one. */
-export interface FakeDownloadClient {
-  id: number;
-  name: string;
+export interface FakeDownloadClient extends FakeProviderBase {
   enable: boolean;
-  implementation: string;
   priority: number;
-  fields: { name: string; value?: unknown }[];
 }
 
 /** A fake app as it first starts: qBittorrent's settings as its pre-start file sets them. */
@@ -196,35 +198,6 @@ function qbittorrentTemplate(service: string): Omit<FakeDownloadClient, 'id'> & 
   };
 }
 
-/** A download client as the app shows it: its key masked. */
-function masked(held: FakeDownloadClient): FakeDownloadClient {
-  return {
-    ...held,
-    fields: held.fields.map((f) =>
-      f.name === 'apiKey' && f.value !== undefined ? { ...f, value: '********' } : f,
-    ),
-  };
-}
-
-/** A refusal of the arr's own test, as its validation list says it. */
-function refusedTest(
-  property: string,
-  message: string,
-  details?: string,
-): FakeReply & { status: 400 } {
-  return {
-    status: 400,
-    body: [
-      {
-        propertyName: property,
-        errorMessage: message,
-        ...(details === undefined ? {} : { detailedDescription: details }),
-        isWarning: false,
-      },
-    ],
-  };
-}
-
 /**
  * Sonarr's or Radarr's test of the download client `sent`, holding `key` in clear: its
  * refusal, or undefined when it passes. It passes when the client reaches qBittorrent as
@@ -237,12 +210,12 @@ function testClient(
   key: unknown,
   state: FakeAppState,
   qbittorrent: FakeAppState,
-): (FakeReply & { status: 400 }) | undefined {
+): FakeRefusal | undefined {
   const value = (name: string) => sent.fields.find((f) => f.name === name)?.value;
   const at = `${String(value('host'))}:${String(value('port'))}`;
   const unreachable = (details: string) =>
-    refusedTest('Host', 'Unable to connect to qBittorrent', details);
-  if (state.testFailure !== '') return refusedTest('Host', state.testFailure);
+    refusal('Host', 'Unable to connect to qBittorrent', details);
+  if (state.testFailure !== '') return refusal('Host', state.testFailure);
   const host = value('host');
   if (host !== 'gluetun' && host !== 'qbittorrent') {
     return unreachable(`Name does not resolve (${at})`);
@@ -261,13 +234,14 @@ function testClient(
     (qbittorrent.key === '' || key === qbittorrent.key);
   return right
     ? undefined
-    : refusedTest('ApiKey', 'Authentication Failure', 'Please verify your credentials.');
+    : refusal('ApiKey', 'Authentication Failure', 'Please verify your credentials.');
 }
 
 /**
  * Sonarr's and Radarr's download clients and root folders, as fakeStackApis answers them,
- * as strictly as the arrs: a new client is tested as it is saved (`testClient`), unless
- * it is off; an update with forceSave is not; and a root folder needs its folder made.
+ * as strictly as the arrs: the clients are served as Prowlarr's providers are
+ * (`fakeProviders`), a new one tested as it is saved (`testClient`) unless it is off; and
+ * a root folder needs its folder made.
  */
 function fakeServarrDownloads(
   request: FakeRequest,
@@ -276,54 +250,14 @@ function fakeServarrDownloads(
   qbittorrent: FakeAppState,
 ): FakeReply | undefined {
   const { method, path } = request;
-  const clients = '/api/v3/downloadclient';
-  if (path === `${clients}/schema`)
-    return { status: 200, body: [qbittorrentTemplate(service)] };
-  if (path === clients && method === 'GET') {
-    return { status: 200, body: state.downloadClients.map(masked) };
-  }
-  const one = new RegExp(`^${clients}/(\\d+)(\\?forceSave=true)?$`).exec(path);
-  const held = state.downloadClients.find((c) => c.id === Number(one?.[1]));
-  if (one !== null && method === 'GET') {
-    return held === undefined ? { status: 404 } : { status: 200, body: masked(held) };
-  }
-  if (path === `${clients}?forceSave=true` && method === 'POST') {
-    const sent = JSON.parse(request.body) as Omit<FakeDownloadClient, 'id'>;
-    if (state.downloadClients.some((c) => c.name === sent.name)) {
-      return {
-        status: 400,
-        body: [{ propertyName: 'Name', errorMessage: 'Should be unique' }],
-      };
-    }
-    // forceSave skips only the test's warnings: a client that fails it isn't saved.
-    const key = sent.fields.find((f) => f.name === 'apiKey')?.value;
-    const refused = sent.enable ? testClient(sent, key, state, qbittorrent) : undefined;
-    if (refused !== undefined) return refused;
-    const made = { ...sent, id: state.downloadClients.length + 1 };
-    state.downloadClients.push(made);
-    return { status: 201, body: masked(made) };
-  }
-  if (one?.[2] !== undefined && method === 'PUT' && held !== undefined) {
-    const sent = JSON.parse(request.body) as FakeDownloadClient;
-    // "********" keeps the key it holds.
-    const key = held.fields.find((f) => f.name === 'apiKey')?.value;
-    Object.assign(held, {
-      ...sent,
-      fields: sent.fields.map((f) =>
-        f.name === 'apiKey' && f.value === '********' ? { ...f, value: key } : f,
-      ),
-    });
-    return { status: 202, body: masked(held) };
-  }
-  if (path === `${clients}/test` && method === 'POST') {
-    const sent = JSON.parse(request.body) as FakeDownloadClient;
-    const value = (name: string) => sent.fields.find((f) => f.name === name)?.value;
-    const stored = state.downloadClients
-      .find((c) => c.id === sent.id)
-      ?.fields.find((f) => f.name === 'apiKey')?.value;
-    const key = value('apiKey') === '********' ? stored : value('apiKey');
-    return testClient(sent, key, state, qbittorrent) ?? { status: 200, body: {} };
-  }
+  const clients = fakeProviders<FakeDownloadClient>(request, {
+    path: '/api/v3/downloadclient',
+    held: state.downloadClients,
+    templates: () => [qbittorrentTemplate(service)],
+    test: (sent, key) => testClient(sent, key, state, qbittorrent),
+    testedOnCreate: (sent) => sent.enable,
+  });
+  if (clients !== undefined) return clients;
   const folders = '/api/v3/rootfolder';
   if (path === folders && method === 'GET') {
     return {
@@ -375,7 +309,12 @@ export async function fakeStackApis(): Promise<{
   apps: Map<string, FakeAppState>;
   seams: WiringSeams;
   addresses: Record<string, string>;
-  /** A `mkdir -p -- <folders>` one-off command of `service` makes them in its container. */
+  /**
+   * A `mkdir -p -- <folders>` one-off command of `service` makes them in its container; any
+   * other command is none of its business, and a `mkdir` without the `--` is refused. Call
+   * it once the command has succeeded: a fake runtime's `run` that exits non-zero made
+   * nothing.
+   */
   mkdir: (service: string, command: OneOffCommand) => void;
 }> {
   const apps = new Map<string, FakeAppState>();
@@ -435,7 +374,13 @@ export async function fakeStackApis(): Promise<{
     addresses: onWiring(['gluetun', 'prowlarr', 'qbittorrent', 'radarr', 'sonarr']),
     mkdir: (service, command) => {
       if (command.entrypoint !== 'mkdir') return;
-      const folders = command.args.slice(command.args.indexOf('--') + 1);
+      const divider = command.args.indexOf('--');
+      if (divider < 0) {
+        throw new Error(
+          `the fake mkdir takes the wire step's "mkdir -p -- <folders>", not: ${command.args.join(' ')}`,
+        );
+      }
+      const folders = command.args.slice(divider + 1);
       stateOf(service).folders.push(...folders.map((f) => f.replace(/\/+$/, '')));
     },
   };

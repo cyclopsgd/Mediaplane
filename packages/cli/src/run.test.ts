@@ -209,9 +209,11 @@ beforeEach(async () => {
 function reachingFakeApis(runtime: Runtime): Runtime {
   return {
     ...runtime,
-    run: (service, command) => {
-      apis.mkdir(service, command);
-      return runtime.run(service, command);
+    run: async (service, command) => {
+      const result = await runtime.run(service, command);
+      // As in a container: a folder is there only if the command succeeded.
+      if (result.code === 0) apis.mkdir(service, command);
+      return result;
     },
     wiringAddresses: (ids) =>
       Promise.resolve(
@@ -618,6 +620,30 @@ describe('mediaplane apply', () => {
       0,
     );
     expect(second.stdout()).toBe('No changes.\n');
+  });
+
+  it("makes no folder in an arr's container when the one-off mkdir exits non-zero", async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    const failing: Runtime = {
+      ...docker,
+      run: (service, command) =>
+        command.entrypoint === 'mkdir'
+          ? Promise.resolve({
+              code: 1,
+              stdout: '',
+              stderr: 'mkdir: cannot create directory: Permission denied',
+            })
+          : docker.run(service, command),
+    };
+    const term = capture();
+    expect(await run(['apply', '--home', home, '--yes'], term.io, deps(failing))).toBe(1);
+    expect(term.stderr()).toContain(
+      'could not make /data/media/tv for sonarr.root_folder',
+    );
+    // The fake arr holds no folder the command did not make, so it holds no root folder.
+    expect(apis.apps.get('sonarr')?.folders).toEqual([]);
+    expect(apis.apps.get('sonarr')?.rootFolders).toEqual([]);
   });
 
   it('gives Sonarr the qBittorrent key the stack stores, and sets it again when Sonarr holds another', async () => {
