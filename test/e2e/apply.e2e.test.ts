@@ -20,6 +20,7 @@ import {
   BUSYBOX,
   composeDown,
   ejectArguments,
+  getJson,
   makeHome,
   parseRevealed,
   REPO,
@@ -311,13 +312,15 @@ describe('apply against real Docker', () => {
       await expectSharedLogin(login);
       // Things S1 encodes: Sonarr reads the list as given. Its settings hold
       // apps.sonarr.env's TRUSTEDNETWORKS as the same comma list; this doesn't show that
-      // Sonarr splits it into two subnets.
+      // Sonarr splits it into two subnets. Its host config holds its key, and CI's log is
+      // public, so it is read with getJson, which never quotes a body.
       const sonarrKey = store.apps.sonarr?.apiKey ?? '';
-      const host = await fetch('http://127.0.0.1:8989/api/v3/config/host', {
-        headers: { 'X-Api-Key': sonarrKey },
-        signal: AbortSignal.timeout(10_000),
-      });
-      const { trustedNetworks } = (await host.json()) as { trustedNetworks: string };
+      const { trustedNetworks } = await getJson<{ trustedNetworks: string }>(
+        8989,
+        '/api/v3/config/host',
+        { 'X-Api-Key': sonarrKey },
+        { timeoutMs: 10_000 },
+      );
       expect(trustedNetworks).toBe(TRUSTED.join(','));
 
       // Ejectable: the command printed in compose.yaml's header recreates nothing. An

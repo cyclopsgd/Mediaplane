@@ -229,7 +229,7 @@ apps:
     );
   });
 
-  it('is tested by plan only once the arr is up and takes its key', async () => {
+  it('is tested by plan only once the arr is up and takes its key, and plan never tests the proxy or writes to Prowlarr', async () => {
     // Sonarr is stopped, and apply will start it: Prowlarr's test of the link would fail
     // on Sonarr, not on the link. plan leaves its key unchecked, and warns of nothing.
     const { api, app, apps, state } = await prowlarr();
@@ -245,8 +245,11 @@ apps:
         '127.0.0.1',
       ]),
     );
-    const plan = (sonarr: 'running' | 'exited') =>
-      planWiring({
+    // plan changes nothing in Prowlarr: it only reads there, and asks its test of a link.
+    // So it makes no tag, and tests no proxy.
+    const plan = async (sonarr: 'running' | 'exited') => {
+      const from = app.requests.length;
+      const planned = await planWiring({
         stack: stack(),
         current: [
           'byparr',
@@ -272,6 +275,19 @@ apps:
           retry: { deadlineMs: 0 },
         },
       });
+      const sent = app.requests
+        .slice(from)
+        .filter((r) => r.headers.host === 'prowlarr:9696')
+        .map((r) => `${r.method} ${r.path}`);
+      // Checked first: a wrong Host here would make the check below pass on nothing.
+      expect(sent.length, 'plan sent Prowlarr nothing').toBeGreaterThan(0);
+      expect(
+        sent.filter(
+          (r) => !r.startsWith('GET ') && r !== 'POST /api/v1/applications/test',
+        ),
+      ).toEqual([]);
+      return planned;
+    };
     const stopped = await plan('exited');
     expect(
       stopped.changes.find((c) => c.resource === 'prowlarr.application_sonarr'),
