@@ -232,10 +232,13 @@ apps:
   it('is tested by plan only once the arr is up and takes its key', async () => {
     // Sonarr is stopped, and apply will start it: Prowlarr's test of the link would fail
     // on Sonarr, not on the link. plan leaves its key unchecked, and warns of nothing.
-    const { api, app, apps } = await prowlarr();
+    const { api, app, apps, state } = await prowlarr();
     await toSonarr.create(api, wanted(toSonarr));
     const tests = () =>
       app.requests.filter((r) => r.path === '/api/v1/applications/test').length;
+    // Prowlarr tests a proxy as it makes it, which plan never does: it needs no internet.
+    const proxyTests = () =>
+      app.requests.filter((r) => r.path === '/api/v1/indexerproxy/test').length;
     const addresses = Object.fromEntries(
       ['prowlarr', 'qbittorrent', 'radarr', 'sonarr'].map((s) => [
         `fake-${s}`,
@@ -275,6 +278,11 @@ apps:
     ).toEqual({ resource: 'prowlarr.application_sonarr', action: 'adopt' });
     expect(stopped.diagnostics).toEqual([]);
     expect(tests()).toBe(0);
+    expect(stopped.changes).toContainEqual({
+      resource: 'prowlarr.indexer_proxy',
+      action: 'create',
+    });
+    expect(proxyTests()).toBe(0);
     // With Sonarr up and its admin in place, plan asks Prowlarr's own test.
     const sonarr = apps.get('sonarr');
     if (sonarr === undefined) throw new Error('no Sonarr faked');
@@ -285,6 +293,20 @@ apps:
       action: 'adopt',
     });
     expect(tests()).toBe(1);
+    expect(proxyTests()).toBe(0);
+    // A proxy that exists and differs is planned as an update, and no more tested.
+    await proxy.create(api, wanted(proxy));
+    const [held] = state.proxies;
+    if (held === undefined) throw new Error('no proxy made');
+    held.fields = held.fields.map((f) =>
+      f.name === 'host' ? { ...f, value: 'http://flaresolverr:8191/' } : f,
+    );
+    expect((await plan('running')).changes).toContainEqual({
+      resource: 'prowlarr.indexer_proxy',
+      action: 'update',
+      changes: ['host'],
+    });
+    expect(proxyTests()).toBe(0);
   });
 
   it("updates what differs, keeping the settings it doesn't manage", async () => {
