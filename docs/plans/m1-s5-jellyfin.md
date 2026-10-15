@@ -218,11 +218,16 @@ writing this plan, unless it says otherwise.
 3. **The bootstrap step** (Task 2; §5 step 9). A new apply step, `bootstrap`, after
    `start`, run only when `plan` lists a setup. It joins the wiring network, reaches each
    app without a key, waits until it is ready, and runs its setup as the shared admin.
-   The key goes into `state/secrets.json` at once (§5 step 4). Then it runs `up` again
-   with only the apps whose setup is still open unpublished: an app whose setup failed
-   while open stays unpublished, and one whose setup is done is published even when
-   making its key failed. It throws `BootstrapFailed` with a hint, and the wire and verify
-   steps are skipped. Change records gain the step `bootstrap` and the plan's
+   The key goes into `state/secrets.json` at once (§5 step 4). Then it steps off the
+   wiring network, as the start step does (spec §11 Slice 3b, ADR 0011: "apply steps off
+   it before `up`"), and runs `up` again with only the apps whose setup is still open
+   unpublished: an app whose setup failed while open stays unpublished, and one whose
+   setup is done is published even when making its key failed. A failure before the setup
+   reaches its app (no wiring network, a join that fails, an app not on the network)
+   publishes nothing. It throws `BootstrapFailed` with a hint, and the wire and verify
+   steps are skipped, as after a failed start: until the setup works, `apply` wires no
+   app. Letting the wire step run past it, with that app's resources failed so that
+   `requires` skips them (§5.1), is on the roadmap's S8 list. Change records gain the step `bootstrap` and the plan's
    `bootstrap`, additive within `mediaplane.change/v1`.
 4. **What `plan` shows** (Task 2). `PlanResult.bootstrap` lists `{ app, unpublished }`,
    under `First-run setup:` in human output and as `bootstrap` in `--json` (additive
@@ -405,11 +410,14 @@ writing this plan, unless it says otherwise.
     - Jellyfin's own key deleted in its dashboard: `plan` reports Jellyfin refusing it;
       with it removed from `state/secrets.json`, `apply` signs in while Jellyfin stays
       published, makes a new key, and gives it to both arrs, whose test then passes; then
-      no changes.
+      no changes. The new key joins the secrets kept out of every failure message.
 
     Every other e2e stack runs Jellyfin too, so their lists gain Jellyfin's resources and
     the arrs' connections, and the deploy test checks the setup from the image, behind the
-    proxy.
+    proxy. It also shows that Mediaplane in the image reads Jellyfin's `system.xml`: with
+    Jellyfin's key taken out of the store, `plan --json` gives
+    `bootstrap: [{ app: 'jellyfin', unpublished: false }]` (one it couldn't read would give
+    `true`), and the store is put back.
 14. **No new Docker API call, and no proxy permission** (all tasks): see decision 1. The
     other new calls are Jellyfin's and the arrs' APIs over the wiring network.
     `deploy/mediaplane.compose.yaml` and `deploy/deploy.test.ts` don't change.
@@ -426,7 +434,7 @@ writing this plan, unless it says otherwise.
     - `plan --help`, and `admin`'s description in the schema, with the generated
       references;
     - the spec: a "Slice 5" entry in §11, and §5.2's `plan` row;
-    - the roadmap: S5 done, its inputs marked done, an S6 item and five S8 items, and one
+    - the roadmap: S5 done, its inputs marked done, an S6 item and six S8 items, and one
       S8 item extended; and Jellyfin's health check among what S1 encodes.
 
 ## File structure (new and changed in this slice)
@@ -2278,19 +2286,27 @@ index 85a2e7c..758f3a2 100644
 
 ```diff
 diff --git a/packages/engine/src/apply/apply.test.ts b/packages/engine/src/apply/apply.test.ts
-index 88cfa39..6177cf8 100644
+index 88cfa39..5748aad 100644
 --- a/packages/engine/src/apply/apply.test.ts
 +++ b/packages/engine/src/apply/apply.test.ts
 @@ -17,2 +17,3 @@ import { listRecords } from '../history/records';
  import { readResources } from '../integrations/resources';
 +import { plan } from '../plan/plan';
  import { runbookUrl } from '../runbooks';
-@@ -28,2 +29,4 @@ import { WiringRefused } from '../runtime/docker';
+@@ -28,3 +29,11 @@ import { WiringRefused } from '../runtime/docker';
  import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
+-import { fakeDocker, fakeProbe, HEALTHY_PROBE, probeOutput } from '../testing/fakes';
 +import { readSecretStore, writeSecretStore } from '../secrets/store';
 +import { fakeSetUpApp, SET_UP_CATALOG, SET_UP_KEY } from '../testing/bootstrap';
- import { fakeDocker, fakeProbe, HEALTHY_PROBE, probeOutput } from '../testing/fakes';
-@@ -1568 +1571,161 @@ describe('apply: what a failed wiring says to do', () => {
++import {
++  fakeDocker,
++  fakeProbe,
++  HEALTHY_PROBE,
++  probeOutput,
++  type FakeRuntimeOptions,
++} from '../testing/fakes';
+ import { FIXTURE_HOST, fixtureApp, fixtureCatalog } from '../testing/fixtures';
+@@ -1568 +1577,183 @@ describe('apply: what a failed wiring says to do', () => {
  });
 +
 +describe('apply: first-run setup before the ports are published', () => {
@@ -2298,10 +2314,10 @@ index 88cfa39..6177cf8 100644
 +   * The fake setup's stack, and a Docker that notes, at each up, which apps it starts
 +   * without their ports and whether the setup is done then.
 +   */
-+  async function setUpStack() {
++  async function setUpStack(more: FakeRuntimeOptions = {}) {
 +    const home = await makeHome();
 +    const setup = await fakeSetUpApp(home);
-+    const docker = fakeDocker(home, { addresses: setup.addresses });
++    const docker = fakeDocker(home, { addresses: setup.addresses, ...more });
 +    const ups: string[] = [];
 +    const runtime: Runtime = {
 +      ...docker,
@@ -2368,6 +2384,8 @@ index 88cfa39..6177cf8 100644
 +      'join-wiring',
 +      'containers',
 +      'wiring-addresses fake-jellyfin',
++      // Off the wiring network before up, as the start step steps off (ADR 0011).
++      'leave-wiring',
 +      'up',
 +    ]);
 +    expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
@@ -2397,6 +2415,26 @@ index 88cfa39..6177cf8 100644
 +        'the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the request (HTTP 400): fake refusal (POST /setup)',
 +      hint: `fix what the error says, then run apply again: an app whose setup is still open keeps its ports unpublished until then. See ${RUNBOOK}`,
 +    });
++    expect((await readSecretStore(home)).apps.jellyfin).toBeUndefined();
++  });
++
++  it('publishes nothing when the setup fails before it reaches the app', async () => {
++    // No wiring network after the start: the setup can't reach the app, so it stays open.
++    const { home, setup, ups, run } = await setUpStack({ join: 'no-network' });
++    const result = await run();
++    expect(result.outcome).toBe('failed');
++    expect(result.actions.slice(-3).map((a) => [a.step, a.result])).toEqual([
++      ['bootstrap', 'failed'],
++      ['wire', 'skipped'],
++      ['verify', 'skipped'],
++    ]);
++    expect(result.diagnostics.at(-1)).toMatchObject({
++      code: 'apply.bootstrap-failed',
++      message: 'the stack has no wiring network, though apply has just started it',
++    });
++    // Only the start step's up, which left it unpublished.
++    expect(ups).toEqual(['jellyfin unpublished, setup open']);
++    expect(setup.app.requests).toEqual([]);
 +    expect((await readSecretStore(home)).apps.jellyfin).toBeUndefined();
 +  });
 +
@@ -2525,15 +2563,20 @@ index cf5a0e6..4ec2b23 100644
 
 Run: `pnpm vitest run packages/engine/src/http packages/engine/src/runtime/docker.test.ts packages/engine/src/testing/fakes.test.ts packages/engine/src/integrations packages/engine/src/plan/bootstrap.test.ts packages/engine/src/apply packages/cli/src/output.test.ts`
 Expected: FAIL. `plan/bootstrap.test.ts` doesn't load
-(`Cannot find module './bootstrap'`), and 16 tests fail in 6 files:
+(`Cannot find module './bootstrap'`), and 17 tests fail in 6 files:
 - `client.test.ts`, 5: no MediaBrowser header (`expected [ undefined, undefined ]`), and
   `api.submit`, `api.signIn` and `api.withKey` are not functions;
 - `docker.test.ts`, 1: `up` sends no `-f -` (16 arguments where 18 are expected);
 - `fakes.test.ts`, 1: the unpublished service is hashed with its ports;
 - `wiring.test.ts`, 1: `observe` is given no desired resource
   (`expected [ undefined ] to deeply equal [ { name: 'login', … } ]`);
-- `apply.test.ts`, 5: the plan has no `bootstrap`, and apply runs no bootstrap step, so the
-  fixture's setup is never run and its wiring fails;
+- `apply.test.ts`, 6: the plan has no `bootstrap`, and apply runs no bootstrap step, so the
+  fixture's setup is never run and its wiring fails. One of them, "publishes nothing when
+  the setup fails before it reaches the app", fails here only because there is no step
+  yet: it needs no code of its own. Written after Step 3, it passes at once, since it
+  pins what the step does anyway (no `up` but the start step's when the setup can't reach
+  its app). Without Step 3's `leaveWiring` call, "starts an app whose setup is open…"
+  fails on its order of calls (`'leave-wiring'` before the publishing `up`);
 - `output.test.ts`, 3: no `First-run setup:` lines, no step label (`undefined: set up
   jellyfin`), and no `bootstrap` in `apply --json`'s plan.
 
@@ -3055,6 +3098,8 @@ export class BootstrapFailed extends Error {
 
 const HINT = `fix what the error says, then run apply again: an app whose setup is still open keeps its ports unpublished until then. See ${WIRING_RUNBOOK}`;
 
+const LEAVE_HINT = `Mediaplane steps off the stack's wiring network before Compose publishes the apps, and couldn't, so nothing was published; fix what the error says, then run apply again. See ${WIRING_RUNBOOK}`;
+
 /** `store`, with the secret `name` of `app` set to `value`. */
 function withSecret(
   store: SecretStore,
@@ -3126,7 +3171,18 @@ export async function bootstrapApps(
     if (result.open) stillOpen.push(app.def.id);
   }
   const unpublished = options.pending.filter((p) => p.unpublished).map((p) => p.app);
-  if (unpublished.length > 0) await options.publish(stillOpen);
+  if (unpublished.length > 0) {
+    // Compose can't recreate the wiring network while another project's container is on
+    // it, so Mediaplane steps off before up, as the start step does, and back on in the
+    // wire step (ADR 0011).
+    try {
+      await runtime.leaveWiring();
+    } catch (cause) {
+      if (!(cause instanceof RuntimeError)) throw cause;
+      throw new BootstrapFailed(cause.message, LEAVE_HINT);
+    }
+    await options.publish(stillOpen);
+  }
   if (failed.length > 0) {
     throw new BootstrapFailed(`the first-run setup failed: ${failed.join('; ')}`, HINT);
   }
@@ -3316,7 +3372,7 @@ git add packages/engine/src packages/cli/src/output.ts packages/cli/src/output.t
 git commit -m "feat(engine): finish an app's first-run setup before its ports are published" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1547 tests pass in 77 files.
+Expected: 1548 tests pass in 77 files.
 
 ---
 
@@ -4425,7 +4481,7 @@ git add catalog packages/cli/src scripts
 git commit -m "feat(catalog): Jellyfin set up before its port is published, with its admin and libraries" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1566 tests pass in 78 files.
+Expected: 1567 tests pass in 78 files.
 
 ---
 
@@ -5336,7 +5392,7 @@ git add catalog packages/engine/src packages/cli/src/run.test.ts
 git commit -m "feat(catalog): Sonarr and Radarr have Jellyfin update its library on import" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1577 tests pass in 80 files.
+Expected: 1578 tests pass in 80 files.
 
 ---
 
@@ -5351,8 +5407,8 @@ at each `up`, then checks the login, the libraries, both connections, an empty s
 `apply`, three changes by hand, and Jellyfin's own key deleted and made again
 (decision 13).
 Decision: every other e2e stack has Jellyfin, so their lists gain its resources and the
-arrs' connections; the deploy test checks the setup from the image, behind the proxy
-(decisions 1, 13).
+arrs' connections; the deploy test checks the setup from the image, behind the proxy,
+and that the image reads Jellyfin's `system.xml` (decisions 1, 2, 13).
 
 **Files:**
 - Create: `test/e2e/jellyfin.e2e.test.ts`
@@ -5793,6 +5849,8 @@ describe('Jellyfin, set up before it is published', () => {
       ]);
       const newKey = (await readSecretStore(home)).apps.jellyfin?.apiKey ?? '';
       expect(newKey !== '' && newKey !== key, 'a new key was made and saved').toBe(true);
+      // Kept out of every message from here on, as the old one is.
+      secrets.push(newKey);
       expect(
         wired(rekeyed.actions).filter(([, detail]) => detail !== 'unchanged'),
       ).toEqual([
@@ -5981,10 +6039,30 @@ index e79033e..3161a88 100644
 
 ```diff
 diff --git a/test/e2e/deploy.e2e.test.ts b/test/e2e/deploy.e2e.test.ts
-index b099bbf..ed9f94f 100644
+index b099bbf..c88d63b 100644
 --- a/test/e2e/deploy.e2e.test.ts
 +++ b/test/e2e/deploy.e2e.test.ts
-@@ -359,7 +359,14 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
+@@ -9,2 +9,4 @@ import {
+   nodeExec,
++  readSecretStore,
++  writeSecretStore,
+   type ExecResult,
+@@ -354,2 +356,14 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
+     expect(codesIn(again.stdout)).not.toContain('preflight.home-path');
++    // Mediaplane in the image reads Jellyfin's system.xml: with Jellyfin's key out of the
++    // store, plan would set it up again, published, since its setup is done. One it
++    // couldn't read would say nothing, and plan would start it unpublished.
++    const store = await readSecretStore(home);
++    const { jellyfin: _kept, ...others } = store.apps;
++    await writeSecretStore(home, { ...store, apps: others });
++    const keyless = await mediaplane('plan', '--json');
++    await writeSecretStore(home, store);
++    expect(keyless.code, keyless.stderr).toBe(2);
++    expect((JSON.parse(keyless.stdout) as { bootstrap: unknown }).bootstrap).toEqual([
++      { app: 'jellyfin', unpublished: false },
++    ]);
+ 
+@@ -359,7 +373,14 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
      // Sonarr to qBittorrent, and made Sonarr's root folder in a throwaway Sonarr
 -    // container, through the proxy.
 +    // container, through the proxy. Slice 5: it started Jellyfin without its port, set it
@@ -6003,13 +6081,13 @@ index b099bbf..ed9f94f 100644
 -      ).actions
 +      applied.actions
          .filter((a) => a.resource !== undefined)
-@@ -367,2 +374,5 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
+@@ -367,2 +388,5 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
      ).toEqual([
 +      ['jellyfin.admin', 'adopted'],
 +      ['jellyfin.library_movies', 'created'],
 +      ['jellyfin.library_shows', 'created'],
        ['qbittorrent.admin', 'adopted'],
-@@ -373,2 +383,3 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
+@@ -373,2 +397,3 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
        ['sonarr.root_folder', 'created'],
 +      ['sonarr.connection_jellyfin', 'created'],
      ]);
@@ -6058,7 +6136,7 @@ git add test/e2e
 git commit -m "test(e2e): Jellyfin set up before its port is published, its libraries, and the arrs telling it of imports" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1577 tests pass in 80 files (the e2e files aren't among them).
+Expected: 1578 tests pass in 80 files (the e2e files aren't among them).
 
 ---
 
@@ -6152,7 +6230,7 @@ Expected: PASS, and it rewrites `docs/reference/cli.md`, `docs/reference/stack-y
 
 ```diff
 diff --git a/docs/runbooks/wiring-failed.md b/docs/runbooks/wiring-failed.md
-index 4032b0a..a3082ec 100644
+index 4032b0a..7cfee53 100644
 --- a/docs/runbooks/wiring-failed.md
 +++ b/docs/runbooks/wiring-failed.md
 @@ -3,6 +3,8 @@
@@ -6202,17 +6280,20 @@ index 4032b0a..a3082ec 100644
 +    connections, whose own test refuses the old one (`updated apiKey`).
 +  - Slice 8 restores a key at its source for you, and makes Jellyfin's anew.
  - **`refused the request (HTTP 403)`, with
-@@ -181,5 +206,36 @@ differ, and a `reason` when it is `unknown`.
+@@ -181,5 +206,39 @@ differ, and a `reason` when it is `unknown`.
      it: `refused the request (HTTP 400): Host: Unable to connect to qBittorrent`.
 +- **`refused the shared admin's sign-in: its startup wizard was finished with another login`**
 +  (`apply.bootstrap-failed`). Jellyfin's startup wizard was finished by hand, with
 +  another login, before Mediaplane set it up: from before Slice 5, say. Jellyfin stays
-+  published, but Mediaplane can't make its key. Either set `admin.username`, and
++  published, but Mediaplane can't make its key, and until then, `apply` wires no app.
++  Either set `admin.username`, and
 +  `admin.password` to a file of your own, to Jellyfin's admin login, and run `apply`
 +  again (the other apps take that login too), or start Jellyfin afresh: stop it
 +  (`docker stop mediaplane-jellyfin-1`), remove `appdata/jellyfin` (with `sudo` if it
 +  isn't yours), and run `apply`, which sets it up anew. That loses Jellyfin's database
-+  and settings, but not your media.
++  and settings, but not your media. With the login fixed, a library of yours named
++  Movies or Shows becomes Mediaplane's: `plan` shows its folders changing, so rename it
++  first to keep it.
 +- **`its startup wizard has a first user that Mediaplane did not set, so Mediaplane left the wizard open`**
 +  (`apply.bootstrap-failed`). Someone set Jellyfin's first user before Mediaplane could,
 +  so Mediaplane didn't complete the wizard for them, and Jellyfin stays unpublished.
@@ -6241,14 +6322,14 @@ index 4032b0a..a3082ec 100644
 +  makes it first, as the stack's `user:`, in a throwaway container of the app. mkdir's
 +  own message follows. Usually the
    folder that holds it, such as `media/` in the data folder, belongs to another user:
-@@ -218,3 +274,5 @@ differ, and a `reason` when it is `unknown`.
+@@ -218,3 +277,5 @@ differ, and a `reason` when it is `unknown`.
    of another kind, or an indexer proxy called `Cloudflare (Mediaplane)` that isn't a
 -  FlareSolverr one. Rename or remove it in the app's web UI, then run `apply` again.
 +  FlareSolverr one, or Sonarr or Radarr has a connection called `Jellyfin (Mediaplane)`
 +  that isn't an Emby / Jellyfin one. Rename or remove it in the app's web UI, then run
 +  `apply` again.
  - **`could not be reached`, `cut the connection` or `did not answer within … s`.** The
-@@ -326,2 +384,3 @@ Then run `mediaplane apply`. It plans again and does only what is left
+@@ -326,2 +387,3 @@ Then run `mediaplane apply`. It plans again and does only what is left
  - **Leave the keys as Mediaplane set them,** and don't make one anew in an app's web UI.
 +  In Jellyfin's dashboard, leave the API key named `Mediaplane`.
  - **Leave the wiring network out of `compose.override.yaml`**
@@ -6276,7 +6357,7 @@ index 53881a5..77922eb 100644
 
 ```diff
 diff --git a/docs/architecture.md b/docs/architecture.md
-index 184e60f..6161c31 100644
+index 184e60f..2788290 100644
 --- a/docs/architecture.md
 +++ b/docs/architecture.md
 @@ -3,3 +3,3 @@
@@ -6328,7 +6409,7 @@ index 184e60f..6161c31 100644
 +- **First-run setup** comes between `up` and the wiring, for an app that `plan` lists
 +  under `First-run setup:`: see [Bootstrap before publish](#bootstrap-before-publish).
  - **A stranded qBittorrent is restarted.** qBittorrent joins Gluetun's network when it
-@@ -288,3 +300,48 @@ exist, are on the same filesystem as the folder itself. qBittorrent saves into
+@@ -288,3 +300,49 @@ exist, are on the same filesystem as the folder itself. qBittorrent saves into
  `/data/torrents`, a folder per category, and Sonarr's and Radarr's libraries are
 -`/data/media/tv` and `/data/media/movies`, which `apply` makes.
 +`/data/media/tv` and `/data/media/movies`, which `apply` makes, and which are Jellyfin's
@@ -6372,13 +6453,14 @@ index 184e60f..6161c31 100644
 +  go too. `compose.yaml` itself always has the ports, so the stack runs as written
 +  without Mediaplane.
 +- **The setup** reaches the app on the wiring network without a key, finishes its
-+  wizard, and keeps the key it makes in `state/secrets.json` at once. Then `up` runs
-+  again, without the extra file, and Compose recreates the app with its ports. An app
++  wizard, and keeps the key it makes in `state/secrets.json` at once. Then Mediaplane
++  steps off the wiring network, `up` runs again, without the extra file, and Compose
++  recreates the app with its ports. An app
 +  whose setup failed while it is still open stays unpublished; one whose setup is done
 +  is published even when making its key failed.
 +- **No new Docker call:** the proxy allows nothing new.
  
-@@ -293,6 +350,7 @@ exist, are on the same filesystem as the folder itself. qBittorrent saves into
+@@ -293,6 +351,7 @@ exist, are on the same filesystem as the folder itself. qBittorrent saves into
  Wiring is what Mediaplane does through each app's API once the apps run. Today that is
 -the shared admin login in Sonarr, Radarr, Prowlarr and qBittorrent; the download path:
 -qBittorrent's settings and categories, and Sonarr's and Radarr's download client and
@@ -6390,13 +6472,13 @@ index 184e60f..6161c31 100644
 +indexer proxy; and the media server: Jellyfin's libraries, and Sonarr's and Radarr's
 +connection to it.
  
-@@ -305,3 +363,4 @@ mediaplane-system
+@@ -305,3 +364,4 @@ mediaplane-system
  mediaplane (the stack)
 -  sonarr, radarr, prowlarr
 +  sonarr, radarr, prowlarr,
 +  jellyfin
    gluetun ─ qbittorrent
-@@ -387,2 +446,25 @@ mediaplane (the stack)
+@@ -387,2 +447,25 @@ mediaplane (the stack)
  
 +- **The media server:**
 +
@@ -6422,20 +6504,20 @@ index 184e60f..6161c31 100644
 +    `plan` leaves the connection's key for `apply` to check.
 +
  - **Each resource** is one of:
-@@ -402,3 +484,4 @@ mediaplane (the stack)
+@@ -402,3 +485,4 @@ mediaplane (the stack)
  - **The wire step** waits until each app is ready (`/ping` for Sonarr, Radarr and
 -  Prowlarr), checks that its key still works, then makes each resource what the stack
 +  Prowlarr, `/System/Info/Public` for Jellyfin), checks that its key still works, then
 +  makes each resource what the stack
    wants, in order: an app comes after the apps its integration names. A resource that
-@@ -409,3 +492,5 @@ mediaplane (the stack)
+@@ -409,3 +493,5 @@ mediaplane (the stack)
    agent of its own, never through a proxy from the environment. It sends the app's key in
 -  a header, never in the URL. It tries a refused or cut connection, a timeout, or a 502,
 +  a header, never in the URL: Jellyfin's in its `Authorization: MediaBrowser` header,
 +  which names Mediaplane as its client on every call, as Jellyfin's sign-in needs. It
 +  tries a refused or cut connection, a timeout, or a 502,
    503 or 504 again, waiting longer each time, for up to two minutes in `apply` and 15
-@@ -473,4 +558,3 @@ The [roadmap](plans/m1-roadmap.md) has the order:
+@@ -473,4 +559,3 @@ The [roadmap](plans/m1-roadmap.md) has the order:
  
 -- the rest of the wiring, app by app: Jellyfin (Slice 5), the requests app (Slice 6)
 -  and Plex (Slice 7);
@@ -6447,7 +6529,7 @@ index 184e60f..6161c31 100644
 
 ```diff
 diff --git a/docs/security/threat-model.md b/docs/security/threat-model.md
-index 8ec7706..62d2b75 100644
+index 8ec7706..e3ba269 100644
 --- a/docs/security/threat-model.md
 +++ b/docs/security/threat-model.md
 @@ -2,3 +2,3 @@
@@ -6567,7 +6649,7 @@ index 8ec7706..62d2b75 100644
 +  admin out after failed sign-ins (none after seven in a row, on Jellyfin 12.2), but its
 +  activity log records each one, right or wrong, so a `plan` adds three lines there.
  - Sonarr, Radarr and Prowlarr give their password hash to anyone who holds their API
-@@ -558,2 +584,24 @@ What remains:
+@@ -558,2 +584,27 @@ What remains:
  
 +### T16. Someone else finishes an app's first-run setup
 +
@@ -6590,6 +6672,9 @@ index 8ec7706..62d2b75 100644
 +  Mediaplane's sign-in then fails, and `apply` stops, completing no wizard for it.
 +- An appdata Mediaplane can't read says nothing: with Jellyfin's key stored, Mediaplane
 +  takes the setup as done.
++- Run outside Mediaplane (the ejectable command, or a restart of a published Jellyfin
++  whose appdata was emptied), Jellyfin starts published with its wizard open: stop it
++  before emptying its appdata, and set it up with `apply`.
 +
  ## What the proxy does not stop
 ```
@@ -6600,7 +6685,7 @@ index 8ec7706..62d2b75 100644
 
 ```diff
 diff --git a/README.md b/README.md
-index 3fa28fa..1e08d34 100644
+index 3fa28fa..348a515 100644
 --- a/README.md
 +++ b/README.md
 @@ -12,13 +12,14 @@ Compose and wires the apps together for you.**
@@ -6685,7 +6770,13 @@ index 3fa28fa..1e08d34 100644
 +[threat model](docs/security/threat-model.md#what-runs-and-who-can-reach-it) says more.
 +`apply` does the same, then makes those changes.
  
-@@ -128,6 +131,11 @@ mediaplane apply
+@@ -120,3 +123,4 @@ mediaplane plan
+   │  and asks the apps
+-  │  changes nothing in the stack
++  │  changes nothing in the stack,
++  │  but for the small marks above
+   ▼
+@@ -128,6 +132,11 @@ mediaplane apply
    ├─ pulls images, starts the apps
 +  │  (Jellyfin with no port, until
 +  │  it is set up)
@@ -6698,18 +6789,18 @@ index 3fa28fa..1e08d34 100644
 +  │  download path, indexers and
 +  │  the media server
    ├─ plans again: nothing left to do
-@@ -136,3 +144,3 @@ mediaplane apply
+@@ -136,3 +145,3 @@ mediaplane apply
  
 -Next, `apply` will wire the rest of the apps through the same APIs (Slices 5 to 7).
 +Next, `apply` will wire the rest of the apps through the same APIs (Slices 6 and 7).
  
-@@ -159,3 +167,4 @@ A few principles hold throughout:
+@@ -159,3 +168,4 @@ A few principles hold throughout:
  Most of this is real output from a run on an arm64 VM, trimmed where marked. The wiring
 -lines came later, from a run of the same stack with Slice 4. The stack is
 +lines, the first-run setup's and the last apply's came later, from a run of the same
 +stack with Slice 5. The stack is
  the example above without the VPN, which is why `plan` warns about qBittorrent, and with
-@@ -189,3 +198,8 @@ Containers:
+@@ -189,3 +199,8 @@ Containers:
  Secrets to generate: admin.password, prowlarr.apiKey, qbittorrent.apiKey, radarr.apiKey, seerr.apiKey, sonarr.apiKey
 +First-run setup:
 +  + jellyfin (with no port published until it is done)
@@ -6718,20 +6809,20 @@ index 3fa28fa..1e08d34 100644
 +  > after start jellyfin.library_movies
 +  > after start jellyfin.library_shows
    > after start qbittorrent.admin
-@@ -197,2 +211,3 @@ Wiring:
+@@ -197,2 +212,3 @@ Wiring:
    > after start radarr.root_folder
 +  > after start radarr.connection_jellyfin
    > after start sonarr.admin
-@@ -200,2 +215,3 @@ Wiring:
+@@ -200,2 +216,3 @@ Wiring:
    > after start sonarr.root_folder
 +  > after start sonarr.connection_jellyfin
    > after start prowlarr.admin
-@@ -204,3 +220,3 @@ Wiring:
+@@ -204,3 +221,3 @@ Wiring:
    > after start prowlarr.indexer_proxy
 -Plan: 6 files to write, 7 containers to change, 6 secrets to generate, 14 wiring checks after the start.
 +Plan: 6 files to write, 7 containers to change, 6 secrets to generate, 1 app to set up, 19 wiring checks after the start.
  
-@@ -214,4 +230,9 @@ Pulling images (the first time can take several minutes)…
+@@ -214,4 +231,9 @@ Pulling images (the first time can take several minutes)…
  Starting containers and waiting until every app is healthy…
 -  done    containers: every app is running and healthy
 +  done    containers: every app is running and healthy; started jellyfin without its ports, to set it up first
@@ -6742,15 +6833,15 @@ index 3fa28fa..1e08d34 100644
 +  done    wiring jellyfin.library_movies: created
 +  done    wiring jellyfin.library_shows: created
    done    wiring qbittorrent.admin: adopted
-@@ -223,2 +244,3 @@ Wiring the apps…
+@@ -223,2 +245,3 @@ Wiring the apps…
    done    wiring radarr.root_folder: created
 +  done    wiring radarr.connection_jellyfin: created
    done    wiring sonarr.admin: created
-@@ -226,2 +248,3 @@ Wiring the apps…
+@@ -226,2 +249,3 @@ Wiring the apps…
    done    wiring sonarr.root_folder: created
 +  done    wiring sonarr.connection_jellyfin: created
    done    wiring prowlarr.admin: created
-@@ -230,6 +253,6 @@ Wiring the apps…
+@@ -230,6 +254,6 @@ Wiring the apps…
    done    wiring prowlarr.indexer_proxy: created
 -  done    wiring: qbittorrent.admin adopted; qbittorrent.preferences adopted; … prowlarr.indexer_proxy created
 +  done    wiring: jellyfin.admin adopted; jellyfin.library_movies created; … prowlarr.indexer_proxy created
@@ -6759,17 +6850,17 @@ index 3fa28fa..1e08d34 100644
 -Apply complete. Change record: 20261010T031836Z-17560c95
 +Apply complete. Change record: 20261015T182931Z-ed479e70
  
-@@ -249,3 +272,3 @@ seerr        running  healthy
+@@ -249,3 +273,3 @@ seerr        running  healthy
  sonarr       running  healthy
 -Last apply: 2026-10-10T03:18:36.677Z, success (20261010T031836Z-17560c95)
 +Last apply: 2026-10-15T18:29:31.294Z, success (20261015T182931Z-ed479e70)
  
-@@ -256,3 +279,3 @@ Admin login for the apps:
+@@ -256,3 +280,3 @@ Admin login for the apps:
  
 -Jellyfin     http://127.0.0.1:8096  (its login arrives in Slice 5)
 +Jellyfin     http://127.0.0.1:8096
  Prowlarr     http://127.0.0.1:9696
-@@ -285,8 +308,11 @@ Then follow [`deploy/README.md`](deploy/README.md) to start it and run
+@@ -285,8 +309,11 @@ Then follow [`deploy/README.md`](deploy/README.md) to start it and run
  - the secrets it would generate;
 +- the first-run setup it would finish, under `First-run setup:`: Jellyfin's, with no
 +  port published until it is done;
@@ -6784,14 +6875,14 @@ index 3fa28fa..1e08d34 100644
 +It changes nothing in your stack, apart from small marks that checking a key or a
 +password can leave in an app, which the
  [threat model](docs/security/threat-model.md#what-runs-and-who-can-reach-it) names. You
-@@ -336,4 +362,4 @@ pnpm --silent mediaplane credentials --home .mediaplane-dev
+@@ -336,4 +363,4 @@ pnpm --silent mediaplane credentials --home .mediaplane-dev
  This starts real containers on this machine, with the web UIs on `localhost`. The last
 -command shows the admin login, which qBittorrent, Sonarr, Radarr and Prowlarr use, and
 -each app's address.
 +command shows the admin login, which qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin
 +use, and each app's address.
  The first `apply` downloads several GB of images, so it can take a while. To remove the
-@@ -373,5 +399,6 @@ So Mediaplane isn't instead of a pipeline. It is built to run inside one:
+@@ -373,5 +400,6 @@ So Mediaplane isn't instead of a pipeline. It is built to run inside one:
  The pipeline decides what the stack is, and Mediaplane does the stateful part. Today
 -that covers generating the keys, deploying, setting the shared login in the apps,
 -linking Sonarr and Radarr to qBittorrent and Prowlarr to them, and checking. The rest of
@@ -6801,12 +6892,12 @@ index 3fa28fa..1e08d34 100644
 +Jellyfin and Prowlarr to them, and checking. The rest of the wiring and change detection
 +are what is being built next.
  
-@@ -391,2 +418,4 @@ and keep. What it adds is everything around the file:
+@@ -391,2 +419,4 @@ and keep. What it adds is everything around the file:
  - Prowlarr linked to Sonarr and Radarr, with a Cloudflare solver as its indexer proxy;
 +- Jellyfin set up before anyone else can reach it, with its libraries, and told of each
 +  import by Sonarr and Radarr;
  - next, the rest of the wiring between the apps.
-@@ -399,5 +428,5 @@ secrets, a socket proxy, a tested VPN kill switch, and a private wiring network.
+@@ -399,5 +429,5 @@ secrets, a socket proxy, a tested VPN kill switch, and a private wiring network.
  the apps to each other, with `plan` and `apply` and a history of what it did, and leaves
 -the rest of each app's settings to you. Today it sets the shared login, links Sonarr
 -and Radarr to qBittorrent, and Prowlarr to them; the media servers and Seerr come in
@@ -6815,7 +6906,7 @@ index 3fa28fa..1e08d34 100644
 +up, links Sonarr and Radarr to qBittorrent and Jellyfin, and Prowlarr to them; Seerr and
 +Plex come in Slices 6 and 7.
  
-@@ -448,6 +477,6 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
+@@ -448,6 +478,6 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
    (packaging), S3a (the shared admin and pre-start files), S3d (the VPN's kill-switch
 -  test and `vpn-check`), S3b (the wiring framework), S3c (the download path) and S4
 -  (indexers).
@@ -6826,7 +6917,7 @@ index 3fa28fa..1e08d34 100644
 +- **Next:** S6 (requests).
 +- **After that:** S7 to S9: Plex, drift detection, and the release.
  
-@@ -473,4 +502,4 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
+@@ -473,4 +503,4 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
  - **[Runbook: wiring failed](docs/runbooks/wiring-failed.md):** an app refused Mediaplane's
 -  key or a change, an arr can't reach qBittorrent, Prowlarr can't make its proxy, or
 -  Mediaplane can't reach an app.
@@ -6839,7 +6930,7 @@ index 3fa28fa..1e08d34 100644
 
 ```diff
 diff --git a/catalog/jellyfin/README.md b/catalog/jellyfin/README.md
-index 2bd99cb..c39dea8 100644
+index 2bd99cb..b8925cc 100644
 --- a/catalog/jellyfin/README.md
 +++ b/catalog/jellyfin/README.md
 @@ -28,7 +28,50 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
@@ -6916,7 +7007,7 @@ index 2bd99cb..c39dea8 100644
 +  rename is no longer Mediaplane's: the next `apply` makes `Movies` or `Shows` again.
 +  Everything else in them, such as their metadata language, is yours.
  - **Anything else** goes in `compose.override.yaml` in the Mediaplane home. For example,
-@@ -61,6 +107,19 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
+@@ -61,6 +107,25 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
  
 +  A port you publish there is held back too while the wizard is open.
 +
@@ -6928,17 +7019,23 @@ index 2bd99cb..c39dea8 100644
 +- **A wizard finished by hand, before Slice 5.** `apply` can't sign in as the shared
 +  admin, so it can't make a key, and stops with
 +  `refused the shared admin's sign-in: its startup wizard was finished with another login`.
-+  Jellyfin stays published. Set `admin.username`, and `admin.password` to a file of your
-+  own, to Jellyfin's admin login, and apply again: the other apps take that login too.
-+  Or remove `appdata/jellyfin` to start Jellyfin afresh, which loses its database and
-+  settings, but not your media.
++  Jellyfin stays published, and until then, `apply` wires no app. Set `admin.username`,
++  and `admin.password` to a file of your own, to Jellyfin's admin login, and apply again:
++  the other apps take that login too. A library of yours named Movies or Shows then
++  becomes Mediaplane's: `plan` shows its folders changing, so rename it first to keep it.
++  Or start Jellyfin afresh: stop Jellyfin first (`docker stop mediaplane-jellyfin-1`),
++  then remove `appdata/jellyfin`, then run `apply`. That loses its database and settings,
++  but not your media.
 +- **Its key deleted in Jellyfin's dashboard** (API Keys). `plan` warns that Jellyfin
 +  refuses Mediaplane's API key. Remove the `jellyfin` entry under `apps` from
 +  `state/secrets.json`, keeping the file valid JSON, and apply: Mediaplane signs in as the
 +  admin, makes a new key, and gives it to Sonarr and Radarr. Slice 8 does this for you.
 +  The [wiring failed runbook](../../docs/runbooks/wiring-failed.md) has the details.
-+- **Its `appdata/` emptied by hand.** Jellyfin starts its wizard again: `apply` sees that
-+  in its `system.xml`, starts it unpublished, and sets it up again, with a new key.
++- **Its `appdata/` emptied by hand.** Jellyfin starts its wizard again. Stop Jellyfin
++  first (`docker stop mediaplane-jellyfin-1`), then remove `appdata/jellyfin`, then run
++  `apply`: it sees in `system.xml` that the wizard is open, starts Jellyfin unpublished,
++  and sets it up again, with a new key. A Jellyfin still running, or started again
++  outside `apply`, with its appdata emptied, comes up published with its wizard open.
 ```
 
 **Change** `catalog/sonarr/README.md`:
@@ -7069,7 +7166,7 @@ index 66bfb24..cced26a 100644
 
 ```diff
 diff --git a/docs/design/m1-engine-cli.md b/docs/design/m1-engine-cli.md
-index 1dd37d4..5e7336b 100644
+index 1dd37d4..779af83 100644
 --- a/docs/design/m1-engine-cli.md
 +++ b/docs/design/m1-engine-cli.md
 @@ -542,3 +542,3 @@ in `compose.override.yaml` is therefore wired automatically.
@@ -7077,7 +7174,7 @@ index 1dd37d4..5e7336b 100644
 -| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key check can leave a mark in an app: §11, Slices 3c and 4); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
 +| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key or password check can leave a mark in an app: §11, Slices 3c, 4 and 5); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
  | `apply` | Converge on `stack.yaml` (§5) |
-@@ -1355 +1355,82 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
+@@ -1355 +1355,85 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
    S6 requests, S7 Plex, S8 drift and S9 release. The roadmap keeps the history.
 +
 +### Slice 5: Jellyfin (2026-10-15)
@@ -7100,9 +7197,12 @@ index 1dd37d4..5e7336b 100644
 +  - **The bootstrap step** is a new step, after `start`, run only when `plan` lists a
 +    setup. It reaches the app over the wiring network without a key, finishes its setup
 +    as the shared admin, and keeps the key it makes in `state/secrets.json` at once (§5
-+    step 4). Then it runs `up` again without that file, and Compose recreates the app with
-+    its ports. An app whose setup failed while it is still open stays unpublished; one
-+    whose setup is done is published even when making its key failed.
++    step 4). Then it steps off the wiring network, as the start step does (Slice 3b, ADR
++    0011), and runs `up` again without that file, and Compose recreates the app with its
++    ports. §5 step 9's and §6.4's "re-render with ports" is this second `up` of
++    `compose.yaml` as written: nothing is rendered twice. An app whose setup failed while
++    it is still open stays unpublished; one whose setup is done is published even when
++    making its key failed.
 +  - **No new Docker API call:** `up`, and a recreate, are what `apply` already does, and
 +    the file goes on Compose's standard input (§7.2(2)).
 +- **Jellyfin's setup** (§6.1), as Jellyfin 12.2 takes it: `GET /Startup/User` first,
@@ -7166,7 +7266,7 @@ index 1dd37d4..5e7336b 100644
 
 ```diff
 diff --git a/docs/plans/m1-roadmap.md b/docs/plans/m1-roadmap.md
-index fcc5571..2ca312c 100644
+index fcc5571..7d5b5d8 100644
 --- a/docs/plans/m1-roadmap.md
 +++ b/docs/plans/m1-roadmap.md
 @@ -22,2 +22,3 @@ Detailed plans so far:
@@ -7189,7 +7289,7 @@ index fcc5571..2ca312c 100644
 @@ -181,3 +183,4 @@ item, five S8 items, an S9 item and an M2 item. Slice 4 (2026-10-15) added four
  and its final review an S5 item, two S8 items, a probe in two others, two S9 test gaps
 -and an S9 docs item. Each slice plan must address the items for that slice.
-+and an S9 docs item. Slice 5 (2026-10-15) added an S6 item and five S8 items, and
++and an S9 docs item. Slice 5 (2026-10-15) added an S6 item and six S8 items, and
 +extended one. Each slice plan must address the items for that slice.
  
 @@ -365,3 +368,3 @@ password, which are S3c's (and listed again below).
@@ -7229,7 +7329,7 @@ index fcc5571..2ca312c 100644
 +  its web UI does, and a later pass resets it (S4's and S5's probes). Decide whether
 +  scheduled drift may do that.
    - First, probe the row under repeated failing checks. The apps may escalate it, and
-@@ -482,2 +498,20 @@ password, which are S3c's (and listed again below).
+@@ -482,2 +498,23 @@ password, which are S3c's (and listed again below).
    can't read.
 +- **Jellyfin's key, deleted by hand,** shuts Mediaplane out of Jellyfin (S5): `plan`
 +  warns, and the runbook has the key removed from `state/secrets.json` so that `apply`
@@ -7249,6 +7349,9 @@ index fcc5571..2ca312c 100644
 +- **A Jellyfin whose appdata Mediaplane can't read** (S5) is taken as set up when its key
 +  is stored, so an emptied appdata there would start it published. Decide whether
 +  `plan` should warn when it can't read `system.xml`.
++- **A failed first-run setup stops all wiring** (S5): the bootstrap step's failure skips
++  the wire step, as a failed start does. Let the wire step run past a failed first-run
++  setup, with that app's resources failed so `requires` skips them (spec §5.1).
  
 ```
 
@@ -7265,7 +7368,7 @@ git diff -U0 -- docs README.md CONTRIBUTING.md catalog deploy | grep '^+' | grep
 git grep -n -E 'Slice 5|\bS5\b' -- . ':!docs/plans/m1-s1*' ':!docs/plans/m1-s2*' ':!docs/plans/m1-s3*' ':!docs/plans/m1-s4*' ':!docs/plans/m1-s5*'
 ```
 
-Expected: the check passes (1577 tests), the first `grep` prints nothing, and every line
+Expected: the check passes (1578 tests), the first `grep` prints nothing, and every line
 the second prints speaks of Slice 5 as built.
 
 ```bash
@@ -7281,14 +7384,14 @@ git commit -m "docs: Jellyfin set up before its port is published, its libraries
   sudo modprobe wireguard`), this passes:
   `pnpm format && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm docs:check && pnpm test:e2e`.
   Coverage stays at or above 90% on lines, functions, branches and statements. When this
-  plan was replayed: 98.36% of statements, 93.27% of branches, 98.61% of functions and
-  99.33% of lines, with 1577 tests in 80 files.
+  plan was replayed: 98.37% of statements, 93.27% of branches, 98.61% of functions and
+  99.33% of lines, with 1578 tests in 80 files.
 - [ ] `pnpm test:e2e` passes with Compose 2.38.2 as the host plugin too (Task 5, Step 4),
   and leaves no `mediaplane-e2e-*` container or network, and no new volume or
   `mediaplane-e2e-*` folder. When this plan was replayed, alone on the dev box, warm:
-  - with Compose 5.5.1, 8 files and 22 tests in 583 s (Slice 4's suite took
+  - with Compose 5.5.1, 8 files and 22 tests in 592 s (Slice 4's suite took
     400 s; the Jellyfin file alone takes about a minute);
-  - with Compose 2.38.2, the same in 636 s (Slice 4's: 439 s).
+  - with Compose 2.38.2, the same in 635 s (Slice 4's: 439 s).
 
   CI's e2e job allows 60 minutes, so `ci.yml` keeps its timeout.
 - [ ] The socket proxy's allow-list is unchanged: `git diff c35e04c --
