@@ -177,8 +177,9 @@ and the last four S9 items. Slice 3a (2026-10-10) added three S3 items, the S3d 
 three S8 items, two S7 items, an S9 item and an M2 item. Slice 3d (2026-10-10) added the
 last S3 item, the unscheduled list and extended two S9 items. Slice 3b (2026-10-10) added
 the S3c list, two S8 items and one unscheduled item. Slice 3c (2026-10-11) added the S4
-item, five S8 items, an S9 item and an M2 item. Slice 4 (2026-10-15) added four S8 items.
-Each slice plan must address the items for that slice.
+item, five S8 items, an S9 item and an M2 item. Slice 4 (2026-10-15) added four S8 items,
+and its final review an S5 item, two S8 items, a probe in two others, and two S9 test
+gaps. Each slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -367,6 +368,19 @@ password, which are S3c's (and listed again below).
 - **Jellyfin's health check can pass early.** In its first seconds, Jellyfin's
   `/health` answers 200 with `Degraded` while the server still answers 503 to
   everything else (S2c). Look at a check that waits for the server itself.
+- **Small gaps from S4, as S5 extends the fakes and providers** for Jellyfin's
+  connections:
+  - the fakes test a new provider sent without `enable` (`testedOnCreate`), which an
+    app would take as `false`, and not test. Mediaplane always sends it;
+  - the fake Prowlarr's test of a proxy adds an `apps` entry for the solver (`stateOf`),
+    which a test of the whole map would see;
+  - two small repeats between providers ("no apiKey to send", and a number read as 0):
+    fold them into `servarr-provider.ts`;
+  - one helper for service addresses: they are worked out three ways, and only the
+    arr's allows a VPN container in front;
+  - a CLI-level `apply` test with Prowlarr in the stack, without Docker: the links' and
+    the proxy's create, record and idempotent re-plan, and a link skipped when its
+    arr's admin fails.
 
 **S7:**
 
@@ -446,14 +460,26 @@ password, which are S3c's (and listed again below).
   level or categories, or the proxy's host, timeout or tags, changed in Prowlarr's web
   UI, are undone by the next `apply` (S4). Keep mine must cover them.
 - **Mediaplane never tests the indexer proxy.** It holds no secret, so `plan` sends no
-  test of it (S4). Prowlarr tests it once itself, when it creates it, by having the
-  solver fetch a page of Prowlarr's own service. Decide whether drift tests it, and how
-  often.
+  test of it (S4). Prowlarr runs the test itself when it creates the proxy, by having the
+  solver fetch a page of Prowlarr's own service on the internet, so that `apply` needs
+  the internet. Decide whether drift tests it, and how often.
+  - First, check whether Prowlarr's own health check tests the proxy, and use it: drift
+    could read `GET /api/v1/health` instead of running a test.
 - **`plan`'s key checks can record a failing status in the app; drift runs them on a
   schedule.** A failing test of a download client (S3c) or a Prowlarr link (S4) records
   a failure in the app's status of it (`DownloadClientStatus`, `ApplicationStatus`),
   as a test from its web UI does, and a later pass resets it (S4's probe). Decide
   whether scheduled drift may do that.
+  - First, probe the row under repeated failing checks. The apps may escalate it, and
+    disable the client or link for growing periods, which could block Prowlarr's sync
+    to that arr and raise a health warning. S4's probe saw only escalation 1.
+- **The shared provider schema doesn't check `enable` is a boolean** (S4). A download
+  client an arr gives back without it reads as disabled, and plans an `enable` update.
+  Real arrs always send it. Check it with drift, which reports expected against actual
+  for every managed field.
+- **Categories or tags in an unexpected shape read as empty** (S4, as S3c's code), so
+  every `apply` plans an update, with no message. Decide how drift reports a value it
+  can't read.
 
 **S9 (before going public):**
 
@@ -468,15 +494,20 @@ password, which are S3c's (and listed again below).
 - **Tests:** tighten the catalog tag test, and add Renovate. Let
   `test/e2e/deploy.e2e.test.ts` deploy with `deployMediaplane()` from
   `test/e2e/helpers.ts` (S3d), as the VPN test does.
-- **Small test gaps from S3c.** None hides a fault, and coverage holds without them:
+- **Small test gaps from S3c and S4.** None hides a fault, and coverage holds without
+  them:
   - the folder helper's last two guards have no test: an error from the runtime that
     isn't a `RuntimeError`, and a mkdir that fails with nothing on stderr;
-  - the download end-to-end test's `servarrFailure` doesn't cut an arr's message to one
-    short line, so a failing run could print a long one in CI's log. It is redacted, and
-    never reads an `attemptedValue`;
+  - `servarrFailure`, shared in `test/e2e/helpers.ts` since S4, doesn't cut an arr's
+    message to one short line, so a failing run could print a long one in CI's log. It
+    is redacted, and never reads an `attemptedValue`;
   - the VPN and download end-to-end tests each list the same four teardown steps.
     Sharing them needs the helpers to take a project name, so it is worth it only if a
-    third such test comes.
+    third such test comes;
+  - the fake indexer's setup (`test/e2e/indexer.ts`, S4) repeats `wireguard.ts`'s
+    echo-server setup. Sharing it isn't a plain move;
+  - `wireguard.ts` sets its "removed" flag before removing, so a failed removal isn't
+    tried again. Nothing calls its `remove()` twice.
 - **Pins outside the catalog.** Renovate must also bump the images pinned in:
   - `Dockerfile` (`node`, `docker:*-cli`);
   - `deploy/mediaplane.compose.yaml` (`wollomatic/socket-proxy`);

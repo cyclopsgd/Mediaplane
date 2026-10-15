@@ -540,7 +540,7 @@ in `compose.override.yaml` is therefore wired automatically.
 | Command | Purpose |
 |---|---|
 | `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt, including the format of `--vpn-addresses` (on a terminal, only the refusal of `--vpn-addresses` without `--vpn-provider`, and whether `--lan-subnet` fits this host, wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file. It also checks the home first, creates the data folder, adds a note before each question, and takes the WireGuard key on a hidden prompt (§11, Slice 3b) |
-| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack; in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
+| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key check can leave a mark in an app: §11, Slices 3c and 4); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
 | `apply` | Converge on `stack.yaml` (§5) |
 | `status [app]` | Container health, VPN state, and the last apply's outcome |
 | `drift` | Report drift only (§6.3) |
@@ -1329,8 +1329,8 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   Prowlarr for the tag as it makes or updates the proxy: Prowlarr gives back the one it
   has, or makes it.
   - It holds no secret, so Mediaplane never tests it (§6.3). §6.2's secret-check column
-    names Prowlarr's test of it; Prowlarr runs that test itself, once, when it creates
-    the proxy: it has the solver fetch `https://prowlarr.servarr.com/v1/ping`. So the
+    names Prowlarr's test of it; Prowlarr runs that test itself when it creates the
+    proxy: it has the solver fetch `https://prowlarr.servarr.com/v1/ping`. So the
     `apply` that makes the proxy needs that page within the solver's reach, and `plan`
     never sends the test. `plan` still reads the proxy and compares its host, timeout
     and tags.

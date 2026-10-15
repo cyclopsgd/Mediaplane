@@ -287,8 +287,11 @@ Then follow [`deploy/README.md`](deploy/README.md) to start it and run
   adding a download client. qBittorrent's login and settings show as `adopt` on a first
   `apply`: its file from before its first start set them already.
 
-It changes nothing. You need Docker (Engine 24 or newer, with the Compose plugin 2.24 or
-newer), Node 24 and pnpm.
+It changes nothing in your stack, apart from two small marks that checking a key can
+leave in an app, which the
+[threat model](docs/security/threat-model.md#what-runs-and-who-can-reach-it) names. You
+need Docker (Engine 24 or newer, with the Compose plugin 2.24 or newer), Node 24 and
+pnpm.
 
 ```bash
 corepack enable && pnpm install

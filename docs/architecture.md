@@ -376,9 +376,9 @@ mediaplane (the stack)
     a link's key is the same test: Prowlarr calls the arr with the key, and the arr calls
     Prowlarr back.
   - The indexer proxy is the stack's Cloudflare solver, Byparr or FlareSolverr, as a
-    proxy of type FlareSolverr, tagged `cloudflare`. Prowlarr tests it once, itself, when
-    it creates it: it has the solver fetch a page of Prowlarr's own service on the
-    internet, so that `apply` needs the internet. The proxy holds no secret, so
+    proxy of type FlareSolverr, tagged `cloudflare`. Prowlarr runs the test itself when
+    it creates the proxy: it has the solver fetch a page of Prowlarr's own service on
+    the internet, so that `apply` needs the internet. The proxy holds no secret, so
     Mediaplane never runs that test, and `plan` never sends it; `plan` does compare the
     proxy's host, timeout and tags on every run.
   - The indexers are yours: you add them in Prowlarr, which syncs them to the arrs, and

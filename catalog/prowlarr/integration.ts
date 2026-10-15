@@ -71,8 +71,8 @@ function categoriesOf(value: unknown): string {
  * - It is saved with forceSave: Prowlarr still tests a new one as it saves it, so a create
  *   fails while it can't reach the arr. Prowlarr comes after the arrs, so they are up.
  * - It requires the arr's admin, the first thing Mediaplane checks there: while the arr
- *   is down, refuses its key or is yet to be started, `plan` leaves the link's key
- *   unchecked rather than blame the link, and the wire step skips the link when the
+ *   isn't up, refuses its key, or has its admin yet to be set, `plan` leaves the link's
+ *   key unchecked rather than blame the link, and the wire step skips the link when the
  *   arr's admin fails.
  */
 function application(link: (typeof LINKED)[number]): ResourceSpec {

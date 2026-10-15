@@ -136,9 +136,9 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   then reports it as failing. Delete it in Prowlarr's web UI (Settings, then Apps).
 - **The indexer proxy stays when the stack drops its Cloudflare solver.** With no Byparr
   and no FlareSolverr, Mediaplane stops managing the proxy, but leaves it in Prowlarr,
-  which still sends the challenged requests of indexers tagged `cloudflare` to it. Delete
-  it in Prowlarr's web UI (Settings, then Indexers, under Indexer Proxies), or turn a
-  solver on again.
+  which still sends the challenged requests of indexers tagged `cloudflare` to it, where
+  they now fail, since the solver is gone. Delete it in Prowlarr's web UI (Settings, then
+  Indexers, under Indexer Proxies), or turn a solver on again.
 - **Set up before Slice 3a.** If Prowlarr first started before Mediaplane wrote its
   `config.xml`, the file has no API key, and `plan` stops with `prowlarr.not-seeded`. To
   fix it, stop Prowlarr, move the file aside, and apply again: Mediaplane writes a new
