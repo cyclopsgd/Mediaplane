@@ -463,6 +463,14 @@ doesn't protect, and [SECURITY.md](SECURITY.md) covers what is in scope.
 No. The header of `generated/compose.yaml` gives the exact `docker compose` command that
 runs the stack without Mediaplane.
 
+### How is it built?
+
+Mostly by AI coding agents (Claude Code), working under a maintainer who sets the
+direction and makes the product decisions. Most of the process is checking: each slice
+is built once against the real apps before its plan is final, every task is reviewed,
+and the whole branch is reviewed again before it merges.
+[How Mediaplane is built](docs/how-its-built.md) explains each stage and what it catches.
+
 ## Roadmap
 
 | Milestone              | Delivers                                                                                       |
@@ -506,6 +514,8 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
 - **[Threat model](docs/security/threat-model.md):** what is protected, how, and what
   isn't.
 - **[Architecture decision records](docs/adr/):** why things are the way they are.
+- **[How it's built](docs/how-its-built.md):** how each slice is planned, built,
+  reviewed and tested.
 - **[M1 design](docs/design/m1-engine-cli.md) and [roadmap](docs/plans/m1-roadmap.md):**
   the plan for all of M1, and where it stands.
 
