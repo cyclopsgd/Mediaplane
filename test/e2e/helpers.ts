@@ -186,6 +186,59 @@ export async function removeOrIgnoreMissing(...args: string[]): Promise<void> {
 }
 
 /**
+ * A call to an app's API on its published port, with its key, as JSON. It waits up to
+ * `timeoutMs`, 60 s unless given.
+ */
+export async function api(
+  port: number,
+  path: string,
+  headers: Record<string, string>,
+  init: { method?: string; body?: string; type?: string; timeoutMs?: number } = {},
+): Promise<Response> {
+  return fetch(`http://127.0.0.1:${String(port)}${path}`, {
+    method: init.method ?? 'GET',
+    headers: {
+      ...headers,
+      ...(init.type === undefined ? {} : { 'Content-Type': init.type }),
+    },
+    ...(init.body === undefined ? {} : { body: init.body }),
+    signal: AbortSignal.timeout(init.timeoutMs ?? 60_000),
+  });
+}
+
+/**
+ * A GET of an app's API, as JSON, after checking it answered 2xx. A failure gives the
+ * status, and only the body's length when it isn't JSON: an app's answer can hold a key
+ * (qBittorrent's preferences hold its own), and CI's log is public.
+ */
+export async function getJson<T>(
+  port: number,
+  path: string,
+  headers: Record<string, string>,
+  { timeoutMs }: { timeoutMs?: number } = {},
+): Promise<T> {
+  const response = await api(port, path, headers, { timeoutMs });
+  const what = `GET ${path} on port ${String(port)}`;
+  expect(response.ok, `${what} answered ${String(response.status)}`).toBe(true);
+  return jsonBody<T>(response, what);
+}
+
+/**
+ * A response's body, as JSON. A body that isn't JSON gives only the status and the
+ * body's length, never its text, which JSON.parse's own error would quote.
+ */
+export async function jsonBody<T>(response: Response, what: string): Promise<T> {
+  const body = await response.text();
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error(
+      `${what} answered ${String(response.status)} with ${String(body.length)} characters that aren't JSON`,
+    );
+  }
+}
+
+/**
  * Why an arr refused a request, safe for CI's public log: the status, and each validation
  * error's `propertyName: errorMessage`, with every one of `secrets` replaced. Never the
  * raw body, nor an error's `attemptedValue`, which can be the key under test. A body that

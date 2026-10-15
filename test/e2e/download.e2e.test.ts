@@ -13,9 +13,11 @@ import {
 } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
 import {
+  api,
   composeDown,
   deployMediaplane,
   expectWiringRemoved,
+  getJson,
   makeHome,
   parseRevealed,
   REPO,
@@ -105,47 +107,6 @@ apps:
     env:
 ${envLines(gluetunEnv(wg), '      ')}
 `;
-}
-
-/** A call to an app's API on its published port, with its key, as JSON. */
-async function api(
-  port: number,
-  path: string,
-  headers: Record<string, string>,
-  init: { method?: string; body?: string; type?: string } = {},
-): Promise<Response> {
-  return fetch(`http://127.0.0.1:${String(port)}${path}`, {
-    method: init.method ?? 'GET',
-    headers: {
-      ...headers,
-      ...(init.type === undefined ? {} : { 'Content-Type': init.type }),
-    },
-    ...(init.body === undefined ? {} : { body: init.body }),
-    signal: AbortSignal.timeout(60_000),
-  });
-}
-
-/**
- * A GET of an app's API, as JSON, after checking it answered 2xx. A failure gives the
- * status, and only the body's length when it isn't JSON: an app's answer can hold a key
- * (qBittorrent's preferences hold its own), and CI's log is public.
- */
-async function getJson<T>(
-  port: number,
-  path: string,
-  headers: Record<string, string>,
-): Promise<T> {
-  const response = await api(port, path, headers);
-  const what = `GET ${path} on port ${String(port)}`;
-  expect(response.ok, `${what} answered ${String(response.status)}`).toBe(true);
-  const body = await response.text();
-  try {
-    return JSON.parse(body) as T;
-  } catch {
-    throw new Error(
-      `${what} answered ${String(response.status)} with ${String(body.length)} characters that aren't JSON`,
-    );
-  }
 }
 
 interface Client {

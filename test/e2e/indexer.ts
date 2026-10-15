@@ -23,14 +23,24 @@ export interface FakeIndexer {
   /** The API path of the open feed, and of the protected one, as Prowlarr takes them. */
   open: string;
   protected: string;
-  /** How many times a browser has passed the protected feed's challenge. */
-  browserVisits(): Promise<number>;
-  /** Remove the container, the network and the files. Safe to call more than once. */
+  /**
+   * How many times a browser has passed the protected feed's challenge. Docker writes the
+   * feed's log as it comes, so it is read again every 250 ms until the count is at least
+   * `atLeast` (0 unless given), for up to 10 s; then it gives the count it saw last.
+   */
+  browserVisits(atLeast?: number): Promise<number>;
+  /**
+   * Remove the container, the network and the files. Safe to call more than once: once it
+   * has worked it does nothing, and after a failure it tries every removal again.
+   */
   remove(): Promise<void>;
 }
 
 /** What the fake indexer logs when a browser passes its challenge. */
 const PASSED = 'fake-indexer: a browser passed the challenge';
+/** How long browserVisits waits for the count it is asked for, and how often it reads. */
+const VISITS_WAIT_MS = 10_000;
+const VISITS_EVERY_MS = 250;
 
 /**
  * The CGI script behind both feeds. The header ends in CRLF, as Node's fetch insists. A
@@ -111,10 +121,10 @@ export async function startFakeIndexer(id: string): Promise<FakeIndexer> {
   const network = `${id}-indexer-net`;
   const container = `${id}-indexer`;
   const dir = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-indexer-'));
+  // Set only once every removal has worked, so a call after a failure tries them again.
   let removed = false;
   const remove = async () => {
     if (removed) return;
-    removed = true;
     // Every removal runs, even when one before it fails; the failures are reported after.
     const failures: unknown[] = [];
     for (const step of [
@@ -132,6 +142,15 @@ export async function startFakeIndexer(id: string): Promise<FakeIndexer> {
     if (failures.length > 0) {
       throw new AggregateError(failures, `could not remove all of ${id}'s fake indexer`);
     }
+    removed = true;
+  };
+  const visits = async () => {
+    const logs = await nodeExec('docker', ['logs', container], {
+      cwd: '/',
+      timeoutMs: 120_000,
+    });
+    if (logs.code !== 0) throw new Error(`docker logs failed:\n${logs.stderr}`);
+    return (logs.stdout + logs.stderr).split('\n').filter((l) => l === PASSED).length;
   };
   try {
     await mkdir(join(dir, 'www', 'cgi-bin'), { recursive: true });
@@ -173,13 +192,13 @@ export async function startFakeIndexer(id: string): Promise<FakeIndexer> {
       url: `http://${gateway}:${String(await publishedPort(container, '80/tcp'))}`,
       open: '/cgi-bin/api',
       protected: '/cgi-bin/protected',
-      browserVisits: async () => {
-        const logs = await nodeExec('docker', ['logs', container], {
-          cwd: '/',
-          timeoutMs: 120_000,
-        });
-        if (logs.code !== 0) throw new Error(`docker logs failed:\n${logs.stderr}`);
-        return (logs.stdout + logs.stderr).split('\n').filter((l) => l === PASSED).length;
+      browserVisits: async (atLeast = 0) => {
+        const deadline = Date.now() + VISITS_WAIT_MS;
+        for (;;) {
+          const count = await visits();
+          if (count >= atLeast || Date.now() >= deadline) return count;
+          await new Promise((done) => setTimeout(done, VISITS_EVERY_MS));
+        }
       },
       remove,
     };

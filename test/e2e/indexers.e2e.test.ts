@@ -11,8 +11,11 @@ import {
 } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
 import {
+  api,
   composeDown,
   expectWiringRemoved,
+  getJson,
+  jsonBody,
   makeHome,
   runTeardown,
   servarrFailure,
@@ -50,7 +53,7 @@ const ARRS = [
 const ITEMS = ['Mediaplane Test Movie 2026', 'Mediaplane Test Show S01E01'];
 
 /**
- * How the test calls an app: with this key, and every key the stack stores kept out of
+ * How the test calls an app: with this key, and every secret the stack stores kept out of
  * what a failure says, since CI's log is public.
  */
 interface Access {
@@ -58,33 +61,51 @@ interface Access {
   secrets: readonly string[];
 }
 
-/** A call to an app's API on its published port, with its key, as JSON. */
-function api(
-  port: number,
-  path: string,
-  key: string,
-  init: { method?: string; body?: unknown } = {},
-): Promise<Response> {
-  return fetch(`http://127.0.0.1:${String(port)}${path}`, {
-    method: init.method ?? 'GET',
-    headers: {
-      'X-Api-Key': key,
-      ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
-    },
-    ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-    signal: AbortSignal.timeout(120_000),
-  });
+/**
+ * How long a call may wait. Prowlarr gives the solver 60 s (the proxy's request
+ * timeout), and a call through it can wait that long: the test waits twice as long.
+ */
+const TIMEOUT_MS = 120_000;
+
+/** A GET of an app's API, with its key, as JSON, after checking it answered 2xx. */
+function get<T>(port: number, path: string, access: Access): Promise<T> {
+  return getJson<T>(port, path, { 'X-Api-Key': access.key }, { timeoutMs: TIMEOUT_MS });
 }
 
-/** A GET of an app's API, as JSON, after checking it answered 2xx. */
-async function getJson<T>(port: number, path: string, access: Access): Promise<T> {
-  const response = await api(port, path, access.key);
-  const what = `GET ${path} on port ${String(port)}`;
-  expect(
-    response.ok,
-    `${what}: ${await servarrFailure(response.clone(), access.secrets)}`,
-  ).toBe(true);
-  return (await response.json()) as T;
+/** A POST or PUT to an app's API, with its key, of `body` as JSON. */
+function send(
+  port: number,
+  path: string,
+  access: Access,
+  method: 'POST' | 'PUT',
+  body: unknown,
+): Promise<Response> {
+  return api(
+    port,
+    path,
+    { 'X-Api-Key': access.key },
+    {
+      method,
+      body: JSON.stringify(body),
+      type: 'application/json',
+      timeoutMs: TIMEOUT_MS,
+    },
+  );
+}
+
+/**
+ * Check that `response` answered `status`. Only a refusal is read, to say why: its
+ * validation errors, with every one of `secrets` replaced (servarrFailure).
+ */
+async function expectStatus(
+  response: Response,
+  status: number,
+  what: string,
+  secrets: readonly string[],
+): Promise<void> {
+  if (response.status === status) return;
+  const why = await servarrFailure(response, secrets);
+  expect(response.status, `${what}: ${why}`).toBe(status);
 }
 
 interface Provider {
@@ -118,34 +139,28 @@ async function addIndexer(
   feed: string,
   tags: number[],
 ): Promise<number> {
-  const added = await api(PROWLARR, '/api/v1/indexer', prowlarr.key, {
-    method: 'POST',
-    body: {
-      name,
-      implementation: 'Torznab',
-      configContract: 'TorznabSettings',
-      protocol: 'torrent',
-      enable: true,
-      appProfileId: 1,
-      priority: 25,
-      tags,
-      fields: [
-        { name: 'baseUrl', value: indexer.url },
-        { name: 'apiPath', value: feed },
-        { name: 'apiKey', value: 'fake-indexer-key' },
-      ],
-    },
+  const added = await send(PROWLARR, '/api/v1/indexer', prowlarr, 'POST', {
+    name,
+    implementation: 'Torznab',
+    configContract: 'TorznabSettings',
+    protocol: 'torrent',
+    enable: true,
+    appProfileId: 1,
+    priority: 25,
+    tags,
+    fields: [
+      { name: 'baseUrl', value: indexer.url },
+      { name: 'apiPath', value: feed },
+      { name: 'apiKey', value: 'fake-indexer-key' },
+    ],
   });
-  expect(
-    added.status,
-    `Prowlarr did not add ${name}: ${await servarrFailure(added.clone(), prowlarr.secrets)}`,
-  ).toBe(201);
-  return ((await added.json()) as { id: number }).id;
+  await expectStatus(added, 201, `Prowlarr did not add ${name}`, prowlarr.secrets);
+  return (await jsonBody<{ id: number }>(added, `POST /api/v1/indexer of ${name}`)).id;
 }
 
 /** The titles a search of Prowlarr's indexer `id` finds. */
 async function searched(prowlarr: Access, id: number): Promise<string[]> {
-  const found = await getJson<{ title: string }[]>(
+  const found = await get<{ title: string }[]>(
     PROWLARR,
     `/api/v1/search?query=Mediaplane&type=search&indexerIds=${String(id)}`,
     prowlarr,
@@ -160,13 +175,15 @@ async function searched(prowlarr: Access, id: number): Promise<string[]> {
  * cloudflare, aimed at the stack's solver. Returns the tag's id.
  */
 async function expectLinks(prowlarr: Access, solver: string): Promise<number> {
-  const links = await getJson<Provider[]>(PROWLARR, '/api/v1/applications', prowlarr);
-  const templates = await getJson<Provider[]>(
+  // By name, in code-unit order (as `compare` sorts), whatever order Prowlarr lists them in.
+  const links = (await get<Provider[]>(PROWLARR, '/api/v1/applications', prowlarr)).sort(
+    (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+  );
+  const templates = await get<Provider[]>(
     PROWLARR,
     '/api/v1/applications/schema',
     prowlarr,
   );
-  // Prowlarr lists them by name.
   expect(
     links.map((l) => [
       l.name,
@@ -184,23 +201,23 @@ async function expectLinks(prowlarr: Access, solver: string): Promise<number> {
       settingOf(template, 'syncCategories'),
     );
     // Prowlarr's own test: it calls the arr with the arr's key, and the arr calls it back.
-    const tested = await api(PROWLARR, '/api/v1/applications/test', prowlarr.key, {
-      method: 'POST',
-      body: link,
-    });
-    expect(
-      tested.status,
-      `${link.name}: ${await servarrFailure(tested.clone(), prowlarr.secrets)}`,
-    ).toBe(200);
+    const tested = await send(
+      PROWLARR,
+      '/api/v1/applications/test',
+      prowlarr,
+      'POST',
+      link,
+    );
+    await expectStatus(tested, 200, link.name, prowlarr.secrets);
   }
-  const tags = await getJson<{ id: number; label: string }[]>(
+  const tags = await get<{ id: number; label: string }[]>(
     PROWLARR,
     '/api/v1/tag',
     prowlarr,
   );
   const cloudflare = tags.find((t) => t.label === 'cloudflare');
   if (cloudflare === undefined) throw new Error('Prowlarr has no cloudflare tag');
-  const proxies = await getJson<Provider[]>(PROWLARR, '/api/v1/indexerproxy', prowlarr);
+  const proxies = await get<Provider[]>(PROWLARR, '/api/v1/indexerproxy', prowlarr);
   expect(
     proxies.map((p) => [p.name, p.implementation, settingOf(p, 'host'), p.tags]),
   ).toEqual([
@@ -219,28 +236,24 @@ async function expectLinks(prowlarr: Access, solver: string): Promise<number> {
  * saved with forceSave, since Prowlarr's own test of it fails.
  */
 async function wrongSonarrKey(prowlarr: Access): Promise<void> {
-  const links = await getJson<Provider[]>(PROWLARR, '/api/v1/applications', prowlarr);
+  const links = await get<Provider[]>(PROWLARR, '/api/v1/applications', prowlarr);
   const link = links.find((l) => l.name === 'Sonarr (Mediaplane)');
   if (link === undefined) throw new Error('Prowlarr has no link to Sonarr');
   const wrong = '9'.repeat(32);
-  const put = await api(
+  const put = await send(
     PROWLARR,
     `/api/v1/applications/${String(link.id)}?forceSave=true`,
-    prowlarr.key,
+    prowlarr,
+    'PUT',
     {
-      method: 'PUT',
-      body: {
-        ...link,
-        fields: link.fields.map((f) =>
-          f.name === 'apiKey' ? { ...f, value: wrong } : f,
-        ),
-      },
+      ...link,
+      fields: link.fields.map((f) => (f.name === 'apiKey' ? { ...f, value: wrong } : f)),
     },
   );
-  expect(
-    put.status,
-    `Prowlarr did not save the link: ${await servarrFailure(put.clone(), [wrong, ...prowlarr.secrets])}`,
-  ).toBe(202);
+  await expectStatus(put, 202, 'Prowlarr did not save the link', [
+    wrong,
+    ...prowlarr.secrets,
+  ]);
 }
 
 describe('indexers, through Prowlarr', () => {
@@ -291,7 +304,11 @@ describe('indexers, through Prowlarr', () => {
         ['prowlarr.indexer_proxy', 'created'],
       ]);
       const store = await readSecretStore(home);
-      const secrets = Object.values(store.apps).flatMap((keys) => Object.values(keys));
+      // Every secret the store holds: each app's, and the shared admin password.
+      const secrets = [
+        ...Object.values(store.apps).flatMap((keys) => Object.values(keys)),
+        store.shared?.adminPassword ?? '',
+      ];
       const access = (app: string): Access => {
         const key = store.apps[app]?.apiKey ?? '';
         expect(key !== '', `no ${app} key stored`).toBe(true);
@@ -320,17 +337,11 @@ describe('indexers, through Prowlarr', () => {
         indexer.protected,
         [cloudflare],
       );
-      expect(await indexer.browserVisits()).toBeGreaterThan(0);
+      expect(await indexer.browserVisits(1), 'browser visits').toBeGreaterThan(0);
       expect(await searched(prowlarr, guarded)).toEqual(ITEMS);
       for (const arr of ARRS) {
         const names = async () =>
-          (
-            await getJson<{ name: string }[]>(
-              arr.port,
-              '/api/v3/indexer',
-              access(arr.app),
-            )
-          )
+          (await get<{ name: string }[]>(arr.port, '/api/v3/indexer', access(arr.app)))
             .map((i) => i.name)
             .sort();
         await eventually(async () => (await names()).length === 2);
@@ -380,7 +391,9 @@ describe('indexers, through Prowlarr', () => {
         indexer.protected,
         [cloudflare],
       );
-      expect(await indexer.browserVisits()).toBeGreaterThan(visits);
+      expect(await indexer.browserVisits(visits + 1), 'browser visits').toBeGreaterThan(
+        visits,
+      );
       expect(await searched(prowlarr, second)).toEqual(ITEMS);
       const settled = await apply({
         ...options,
