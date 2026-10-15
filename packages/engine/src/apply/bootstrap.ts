@@ -1,4 +1,5 @@
-import { AppApiError, APP_DEADLINE_MS } from '../http/client';
+import type { Bootstrap } from '../catalog/types';
+import { AppApiError, APP_DEADLINE_MS, type AppApi } from '../http/client';
 import {
   joinFailure,
   knownSecrets,
@@ -114,10 +115,11 @@ export async function bootstrapApps(
       // At once: a key the app made, and Mediaplane lost, would need making again.
       await writeSecretStore(options.home, store);
       done.push(`${app.def.id}.${secret}`);
-      continue;
     }
-    failed.push(redact(result.failure, redactionValues(secrets)));
-    if (result.open) stillOpen.push(app.def.id);
+    if (result.failure !== undefined) {
+      failed.push(redact(result.failure, redactionValues(secrets)));
+      if (result.open) stillOpen.push(app.def.id);
+    }
   }
   const unpublished = options.pending.filter((p) => p.unpublished).map((p) => p.app);
   if (unpublished.length > 0) {
@@ -145,28 +147,51 @@ export async function bootstrapApps(
   };
 }
 
+/** What `setUp` found: the key it made, and/or why the setup isn't finished or safe. */
+interface SetUpResult {
+  key?: string;
+  failure?: string;
+  /** Whether the app still looks open to anyone (then it stays unpublished). */
+  open: boolean;
+}
+
+/** Whether `app` can still be claimed; one Mediaplane can't ask counts as open. */
+async function looksOpen(bootstrap: Bootstrap, api: AppApi): Promise<boolean> {
+  try {
+    return await bootstrap.open(api);
+  } catch (cause) {
+    if (cause instanceof AppApiError) return true;
+    throw cause;
+  }
+}
+
 /**
  * Finish `app`'s setup: its new key, or why not and whether the setup is still open (then
- * it stays unpublished). One Mediaplane can't ask counts as open.
+ * it stays unpublished). One Mediaplane can't reach or ask counts as open. A setup that
+ * says it is done is asked once more before the app is published: the engine, and not
+ * each catalog entry, keeps an app that still looks open unpublished. It still gets its
+ * key stored, since the app made it.
  */
 async function setUp(
   app: ResolvedApp,
   client: ReachedApp | undefined,
   admin: { username: string; password: string },
-): Promise<{ key: string } | { key?: undefined; failure: string; open: boolean }> {
+): Promise<SetUpResult> {
   const { bootstrap, api } = app.def;
   if (client === undefined || bootstrap === undefined || api === undefined) {
     return { failure: notOnNetwork(app), open: true };
   }
   try {
     await client.api.ready(api.ready);
-    return { key: await bootstrap.run(client.api, admin) };
+    const key = await bootstrap.run(client.api, admin);
+    if (!(await looksOpen(bootstrap, client.api))) return { key, open: false };
+    return {
+      key,
+      open: true,
+      failure: `${app.def.name}'s setup reported success, but the app still looks open (or can't be asked), so it stays unpublished`,
+    };
   } catch (cause) {
     if (!(cause instanceof AppApiError)) throw cause;
-    const open = await bootstrap.open(client.api).catch((also: unknown) => {
-      if (also instanceof AppApiError) return true;
-      throw also;
-    });
-    return { failure: cause.message, open };
+    return { failure: cause.message, open: await looksOpen(bootstrap, client.api) };
   }
 }

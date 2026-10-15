@@ -596,6 +596,8 @@ export function createAppApi(options: AppApiOptions): AppApi {
     withKey: (value) =>
       createAppApi({
         ...options,
+        // The key it replaces stays out of what it says too.
+        secrets: [...options.secrets, ...sent],
         key: { scheme: options.key?.scheme ?? 'x-api-key', value },
       }),
   };

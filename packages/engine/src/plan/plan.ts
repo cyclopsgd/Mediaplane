@@ -35,7 +35,7 @@ import { withGeneratedSecrets } from '../secrets/generate';
 import { readSecretStore, type SecretStore } from '../secrets/store';
 import { secretsToGenerate, secretValues } from '../secrets/values';
 import { planAppdata } from './appdata';
-import { planBootstrap, type BootstrapChange } from './bootstrap';
+import { inspectBootstrap, type BootstrapChange } from './bootstrap';
 import { notYetHealthy, otherHomes, ownPorts, type ContainerChange } from './containers';
 import { diffFiles, type FileChange } from './files';
 import { predictContainers, type PredictResult } from './predict';
@@ -190,7 +190,10 @@ export async function planStack(
   let containers = predicted.changes;
   // An app whose setup is open starts again without its ports, whatever it runs now: up
   // recreates it, and again once it is set up.
-  const bootstrap = await planBootstrap(stack, store);
+  const setups = await inspectBootstrap(stack, store);
+  diagnostics.push(...setups.diagnostics);
+  if (hasErrors(diagnostics)) return failed(diagnostics);
+  const bootstrap = setups.changes;
   const unpublished = new Set(bootstrap.filter((b) => b.unpublished).map((b) => b.app));
   containers = containers.map((change) =>
     unpublished.has(change.service) && change.action !== 'create'

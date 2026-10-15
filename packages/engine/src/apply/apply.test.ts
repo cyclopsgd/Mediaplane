@@ -1756,4 +1756,84 @@ describe('apply: first-run setup before the ports are published', () => {
     ]);
     expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
   });
+
+  it('keeps an app it cannot reach on the wiring network unpublished, and stores no key', async () => {
+    // No address for Jellyfin's container: the setup can't ask it anything.
+    const { home, ups, run } = await setUpStack({ addresses: {} });
+    const result = await run();
+    expect(result.outcome).toBe('failed');
+    expect(result.actions.slice(-3).map((a) => [a.step, a.result])).toEqual([
+      ['bootstrap', 'failed'],
+      ['wire', 'skipped'],
+      ['verify', 'skipped'],
+    ]);
+    expect(result.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message:
+        "the first-run setup failed: jellyfin's container is not on the stack's wiring network, so Mediaplane can't reach it",
+    });
+    expect(ups).toEqual([
+      'jellyfin unpublished, setup open',
+      'jellyfin unpublished, setup open',
+    ]);
+    expect((await readSecretStore(home)).apps.jellyfin).toBeUndefined();
+  });
+
+  it('keeps an app unpublished when it cannot say whether its setup is open, and stores no key', async () => {
+    const { home, setup, ups, run } = await setUpStack();
+    Object.assign(setup.state, { openFails: true, refuse: 'fake refusal' });
+    const result = await run();
+    expect(result.outcome).toBe('failed');
+    expect(result.diagnostics.at(-1)).toMatchObject({ code: 'apply.bootstrap-failed' });
+    expect(ups).toEqual([
+      'jellyfin unpublished, setup open',
+      'jellyfin unpublished, setup open',
+    ]);
+    expect((await readSecretStore(home)).apps.jellyfin).toBeUndefined();
+  });
+
+  it('asks again before it publishes: a setup that says it is done but leaves the app open stays unpublished, its key kept', async () => {
+    const { home, setup, ups, run } = await setUpStack();
+    setup.state.staysOpen = true;
+    const result = await run();
+    expect(result.outcome).toBe('failed');
+    expect(result.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message:
+        "the first-run setup failed: jellyfin's setup reported success, but the app still looks open (or can't be asked), so it stays unpublished",
+    });
+    expect(ups).toEqual([
+      'jellyfin unpublished, setup open',
+      'jellyfin unpublished, setup open',
+    ]);
+    // The app made the key, so it is kept for the next run.
+    expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
+  });
+
+  it("says why it couldn't step off the network to publish, publishes nothing, and keeps the key", async () => {
+    const { home, docker, ups, runtime, extra } = await setUpStack();
+    let leaves = 0;
+    const failing: Runtime = {
+      ...runtime,
+      // The start step's leave works; the bootstrap step's does not.
+      leaveWiring: () => {
+        leaves += 1;
+        return leaves === 1
+          ? docker.leaveWiring()
+          : Promise.reject(
+              new RuntimeError('could not leave the wiring network fake_wiring: fake'),
+            );
+      },
+    };
+    const result = await apply(options(home, failing, extra));
+    expect(result.outcome).toBe('failed');
+    expect(result.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message: 'could not leave the wiring network fake_wiring: fake',
+      hint: `Mediaplane steps off the stack's wiring network before Compose publishes the apps, and couldn't, so nothing was published; fix what the error says, then run apply again. See ${RUNBOOK}`,
+    });
+    // Only the start step's up: no publishing one.
+    expect(ups).toEqual(['jellyfin unpublished, setup open']);
+    expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
+  });
 });

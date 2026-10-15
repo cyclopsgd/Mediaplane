@@ -53,6 +53,10 @@ export interface FakeSetUpState {
   keyFails: boolean;
   /** Who the setup was finished as. */
   admin: string;
+  /** Fail GET /setup, with a 500: the app can't say whether it is open. */
+  openFails: boolean;
+  /** Take the setup's POST, and make the key, but leave the app open all the same. */
+  staysOpen: boolean;
 }
 
 /**
@@ -74,17 +78,21 @@ export async function fakeSetUpApp(home: string): Promise<{
     refuse: '',
     keyFails: false,
     admin: '',
+    openFails: false,
+    staysOpen: false,
   };
   const app = await fakeHttpApp((request) => {
     const { method, path, headers } = request;
     if (path === '/ready') return { status: 200 };
     if (path === '/setup' && method === 'GET') {
-      return { status: 200, body: { done: state.done } };
+      return state.openFails
+        ? { status: 500, body: { message: 'fake failure' } }
+        : { status: 200, body: { done: state.done } };
     }
     if (path === '/setup' && method === 'POST') {
       if (state.refuse !== '') return { status: 400, body: { message: state.refuse } };
       state.admin = (JSON.parse(request.body) as { user: string }).user;
-      state.done = true;
+      state.done = !state.staysOpen;
       state.key = SET_UP_KEY;
       writeFileSync(join(home, 'appdata', 'jellyfin', 'setup.txt'), 'done\n');
       return { status: 204 };

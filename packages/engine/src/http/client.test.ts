@@ -1238,4 +1238,15 @@ describe("createAppApi: Jellyfin's ways", () => {
       `Jellyfin at http://jellyfin:8096 (127.0.0.1) refused Mediaplane's API key (HTTP 401): no ${CLIENT_FIELDS}, Token="***" (GET /System/Info)`,
     );
   });
+
+  it("keeps the key it replaces out of the other client's messages too", async () => {
+    const { api } = await sonarr(() => ({ status: 401, body: `was ${KEY}` }), {
+      ...jellyfin,
+      key: { scheme: 'mediabrowser', value: KEY },
+      secrets: [],
+    });
+    const refused = await failure(api.withKey('d'.repeat(32)).check('/System/Info'));
+    expect(refused.message).toContain('was ***');
+    expect(refused.message).not.toContain(KEY);
+  });
 });

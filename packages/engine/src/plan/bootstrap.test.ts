@@ -1,12 +1,12 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { emptySecretStore, type SecretStore } from '../secrets/store';
-import { SET_UP_CATALOG } from '../testing/bootstrap';
+import { FAKE_SETUP, SET_UP_CATALOG } from '../testing/bootstrap';
 import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
 import { tempDir } from '../testing/temp';
-import { planBootstrap } from './bootstrap';
+import { inspectBootstrap, planBootstrap } from './bootstrap';
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -87,5 +87,55 @@ describe('planBootstrap', () => {
     );
     if (resolved.stack === undefined) throw new Error('the stack must resolve');
     expect(await planBootstrap(resolved.stack, emptySecretStore())).toEqual([]);
+  });
+
+  it("warns, naming the app and not the file's contents, that it can't tell when a stored key decides", async () => {
+    const stack = await stackIn();
+    await setupFile(stack, undefined);
+    const stored = await inspectBootstrap(stack, KEYED);
+    expect(stored.changes).toEqual([]);
+    expect(stored.diagnostics).toHaveLength(1);
+    expect(stored.diagnostics[0]).toMatchObject({
+      severity: 'warning',
+      code: 'bootstrap.unreadable',
+    });
+    expect(stored.diagnostics[0]?.message).toContain('jellyfin');
+    expect(stored.diagnostics[0]?.message).not.toContain('setup.txt');
+    // With no key stored it starts unpublished anyway, so there is nothing to warn of.
+    expect((await inspectBootstrap(stack, emptySecretStore())).diagnostics).toEqual([]);
+    // And none when the file reads.
+    await rm(join(stack.home, 'appdata', 'jellyfin', 'setup.txt'), { recursive: true });
+    await setupFile(stack, 'done\n');
+    expect((await inspectBootstrap(stack, KEYED)).diagnostics).toEqual([]);
+  });
+
+  it("refuses a setup in another app's network, whose ports that app publishes", async () => {
+    const catalog = SET_UP_CATALOG.map((def) =>
+      def.id === 'qbittorrent' ? { ...def, bootstrap: FAKE_SETUP } : def,
+    );
+    const resolved = resolveStack(
+      fixtureConfig(`version: 1
+paths: { data: /srv/data }
+network: { bind: localhost }
+vpn: { provider: mullvad, private_key: { file: secrets/wg.key } }
+media_server: jellyfin
+apps:
+  qbittorrent: {}
+`),
+      catalog,
+      FIXTURE_HOST,
+      await tempDir('mediaplane-bootstrap-'),
+    );
+    if (resolved.stack === undefined)
+      throw new Error(JSON.stringify(resolved.diagnostics));
+    const found = await inspectBootstrap(resolved.stack, emptySecretStore());
+    expect(found.diagnostics).toHaveLength(1);
+    expect(found.diagnostics[0]).toMatchObject({
+      severity: 'error',
+      code: 'bootstrap.network-via',
+    });
+    expect(found.diagnostics[0]?.message).toContain("inside gluetun's network");
+    // Jellyfin, which runs in its own network, is planned as before.
+    expect(found.changes).toEqual([{ app: 'jellyfin', unpublished: true }]);
   });
 });

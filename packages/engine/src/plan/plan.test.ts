@@ -16,6 +16,7 @@ import {
 } from '../runtime/types';
 import { writeResources } from '../integrations/resources';
 import type { WiringSeams } from '../integrations/wiring';
+import { FAKE_SETUP } from '../testing/bootstrap';
 import { fakeHash, fakeProbe, fakeRuntime, running } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureCatalog } from '../testing/fixtures';
 import { fakeHttpApp } from '../testing/http';
@@ -121,6 +122,16 @@ function planFor(
 }
 
 describe('plan', () => {
+  it("fails, saying why, for a first-run setup in another app's network", async () => {
+    const catalog = fixtureCatalog.map((app) =>
+      app.id === 'qbittorrent' ? { ...app, bootstrap: FAKE_SETUP } : app,
+    );
+    const result = await planFor(await makeHome(), { catalog });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.map((d) => d.code)).toContain('bootstrap.network-via');
+    expect(result.bootstrap).toEqual([]);
+  });
+
   it('plans pre-start files to create before first start, never showing them', async () => {
     const result = await planFor(await makeHome(), { catalog: WITH_FILES });
     expect(result).toMatchObject({ ok: true, changed: true });
