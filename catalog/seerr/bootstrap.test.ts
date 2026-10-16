@@ -420,6 +420,10 @@ describe("Seerr's first-run setup, through the engine's bootstrap step", () => {
       expect((failed as Error).message).toContain(
         "was set up with another login or another Jellyfin (GET /api/v1/auth/me, GET /api/v1/settings/jellyfin); Seerr is set up, but Mediaplane can't show that it is its own, so it stays unpublished",
       );
+      // The remedy works for Seerr: its admin is its first user, and its Jellyfin the stack's.
+      expect((failed as Error).message).toContain(
+        'make its admin (its first user) the Jellyfin login that admin.username names, and point its Jellyfin at jellyfin:8096, then run apply again; if not, start it afresh first',
+      );
     }
     expect(published).toEqual([['seerr'], ['seerr']]);
     expect((await readSecretStore(home)).setUp).toBeUndefined();

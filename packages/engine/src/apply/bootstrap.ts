@@ -11,6 +11,7 @@ import {
   type ReachedApp,
   type WiringSeams,
 } from '../integrations/wiring';
+import { serviceAddress } from '../integrations/address';
 import { appSetupDone, type BootstrapChange } from '../plan/bootstrap';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { RuntimeError, type Runtime } from '../runtime/types';
@@ -116,6 +117,23 @@ export async function bootstrapApps(
       return app?.def.bootstrap === undefined ? [] : [app];
     })
     .sort((a, b) => rank(a) - rank(b));
+  let store = options.store;
+  // A setup with no key that is pending is not trusted any more: its file no longer says
+  // it is done (appdata was reset), or Mediaplane can't read it. The record is dropped
+  // before the app is set up again, and made again only when the setup succeeds, so an
+  // app claimed meanwhile isn't taken as Mediaplane's by the next plan.
+  const stale = apps.filter(
+    (app) =>
+      app.def.bootstrap?.secret === undefined && (store.setUp ?? []).includes(app.def.id),
+  );
+  if (stale.length > 0) {
+    const dropped = stale.map((app) => app.def.id);
+    store = {
+      ...store,
+      setUp: (store.setUp ?? []).filter((id) => !dropped.includes(id)),
+    };
+    await writeSecretStore(options.home, store);
+  }
   const admin = await adminLogin(stack.config, options.home, options.store, options.env);
   const secrets = knownSecrets(options.values, options.store, admin);
   const found = options.found ?? foundSecrets();
@@ -152,7 +170,6 @@ export async function bootstrapApps(
     const failure = joinFailure(cause, options.env);
     throw new BootstrapFailed(failure.message, failure.hint ?? HINT);
   }
-  let store = options.store;
   const saved: string[] = [];
   const failed: string[] = [];
   const waiting: WaitingSetup[] = [];
@@ -335,16 +352,24 @@ async function setUp(
       // Unpublished on this run either way. But a setup that no longer looks open was
       // finished by someone else while it waited: that is a claimed one, said loudly.
       if (started.unpublished && !(await looksOpen(bootstrap, client.api)).open) {
-        return { failure: await claimed(app, cause.message, started.home), open: true };
+        return {
+          failure: await claimed(app, cause.message, started.home, started.stack),
+          open: true,
+        };
       }
       return { waiting: cause.message, open: true };
     }
     if (!(cause instanceof AppApiError)) throw cause;
     const now = await looksOpen(bootstrap, client.api);
     if (started.unpublished && cause.kind === 'auth' && !now.open) {
-      return { failure: await claimed(app, cause.message, started.home), open: true };
+      return {
+        failure: await claimed(app, cause.message, started.home, started.stack),
+        open: true,
+      };
     }
-    return { failure: cause.message, open: now.open };
+    // A setup that makes no key can't show the app is Mediaplane's but by succeeding: after
+    // any other failure the app stays unpublished, whatever the look says now.
+    return { failure: cause.message, open: now.open || bootstrap.secret === undefined };
   }
 }
 
@@ -354,11 +379,25 @@ async function setUp(
  * file Mediaplane can't read may hide a setup the user finished by hand, which starting
  * afresh would lose; one it can read was finished with another login meanwhile.
  */
-async function claimed(app: ResolvedApp, refused: string, home: string): Promise<string> {
+async function claimed(
+  app: ResolvedApp,
+  refused: string,
+  home: string,
+  stack: ResolvedStack,
+): Promise<string> {
   const { name, id } = app.def;
   if (app.def.bootstrap?.secret === undefined) {
-    // No key to tell: the app is set up, but Mediaplane can't show it is its own.
-    return `${refused}; ${name} is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. If you set it up yourself, sign in to ${name} with the shared admin's login (admin.username and admin.password) through the stack's own Jellyfin, then run apply again; if not, start it afresh first, as the runbook says`;
+    // No key to tell: the app is set up, but Mediaplane can't show it is its own. Its
+    // admin is its first user, so signing in again as the shared admin would not help.
+    const jellyfin = serviceAddress(
+      stack.apps.find((other) => other.def.id === 'jellyfin'),
+      'web',
+    );
+    const at =
+      jellyfin === undefined
+        ? "the stack's Jellyfin"
+        : `${jellyfin.host}:${String(jellyfin.port)}`;
+    return `${refused}; ${name} is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. If you set it up yourself, make its admin (its first user) the Jellyfin login that admin.username names, and point its Jellyfin at ${at}, then run apply again; if not, start it afresh first, as the runbook says`;
   }
   const said = `${refused}; ${name}'s setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished`;
   const done = await appSetupDone(home, app);

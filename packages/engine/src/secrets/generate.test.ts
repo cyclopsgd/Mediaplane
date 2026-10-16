@@ -84,6 +84,24 @@ describe('withGeneratedSecrets', () => {
     expect(result).toEqual({ store: existing, generated: [] });
   });
 
+  it("keeps the record of the setups that are Mediaplane's", () => {
+    const existing: SecretStore = {
+      version: 1,
+      apps: { sonarr: { apiKey: '0'.repeat(32) } },
+      shared: { adminPassword: 'fake-admin-password' },
+      setUp: ['seerr'],
+    };
+    const result = withGeneratedSecrets(stackOf(STACK), existing, constant(0xab));
+    expect(result).toEqual({ store: existing, generated: [] });
+    const fresh = withGeneratedSecrets(
+      stackOf(STACK),
+      { version: 1, apps: {}, setUp: ['seerr'] },
+      constant(0xab),
+    );
+    expect(fresh.store.setUp).toEqual(['seerr']);
+    expect(fresh.generated.length).toBeGreaterThan(0);
+  });
+
   it('generates no admin password when admin.password is set', () => {
     const yours = STACK.replace(
       'apps:',

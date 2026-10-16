@@ -30,8 +30,8 @@ export interface BootstrapPlan {
  * that makes no key (Seerr's), there is none to decide, so the app starts unpublished and
  * is set up again, with that warning. A setup that makes no key counts as done only when
  * its file says so and the store names the app (`setUp`): an app set up by someone else,
- * or before Mediaplane knew, starts unpublished, and its setup checks it is Mediaplane's. An app with a setup that runs inside another app's
- * network is an error: that app publishes its ports, and `ports: !reset []` on the app's
+ * or before Mediaplane knew, starts unpublished, and its setup checks it is Mediaplane's.
+ * An app with a setup that runs inside another app's network is an error: that app publishes its ports, and `ports: !reset []` on the app's
  * own service can't unpublish them. Reads only; writes nothing.
  */
 export async function inspectBootstrap(

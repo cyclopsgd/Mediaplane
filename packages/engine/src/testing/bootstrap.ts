@@ -61,9 +61,14 @@ async function signInOpen(api: AppApi): Promise<boolean> {
   return !(await api.get('/signed-in', z.looseObject({ done: z.boolean() }))).done;
 }
 
-/** Whether the shared admin signed in to FAKE_SIGN_IN's app, rather than someone else. */
-async function signedInAsAdmin(api: AppApi): Promise<boolean> {
-  return (await api.get('/signed-in/own', z.looseObject({ own: z.boolean() }))).own;
+/**
+ * Who FAKE_SIGN_IN's app belongs to: the first to sign in, as Seerr's admin is its first
+ * user. A later sign-in only adds a user.
+ */
+async function ownerOf(api: AppApi): Promise<string | null> {
+  return (
+    await api.get('/signed-in/own', z.looseObject({ owner: z.string().nullable() }))
+  ).owner;
 }
 
 /**
@@ -71,16 +76,17 @@ async function signedInAsAdmin(api: AppApi): Promise<boolean> {
  * and is open until the shared admin signs in through Jellyfin (POST /sign-in, which keeps
  * the session in the cookie `sid` and writes signed-in.txt in its appdata), then signs
  * out. It waits (SetupWaiting) while that sign-in is refused, as Seerr's does while
- * Jellyfin refuses the shared admin. Done already, it is asked who signed in, with the
- * key and never the password, as Seerr's is (GET /signed-in/own): the shared admin, else it is
- * refused (`auth`), as an app set up by someone else.
+ * Jellyfin refuses the shared admin. Done already, it is asked who it belongs to, with the
+ * key and never the password, as Seerr's is (GET /signed-in/own): the first to sign in
+ * has to be the shared admin, else it is refused (`auth`), as an app set up by someone
+ * else.
  */
 export const FAKE_SIGN_IN: Bootstrap = {
   done: { path: 'signed-in.txt', pattern: /^yes$/m },
   open: signInOpen,
   async run(api, admin, stack) {
     if (!(await signInOpen(api))) {
-      if (await signedInAsAdmin(api)) return undefined;
+      if ((await ownerOf(api)) === admin.username) return undefined;
       throw new AppApiError(
         `${api.name} at ${api.where} was set up with another login (GET /signed-in/own)`,
         { kind: 'auth' },
@@ -129,6 +135,10 @@ export interface FakeSignInState {
    * written) by the time the sign-in is refused.
    */
   claimant: boolean;
+  /** Answer /ready with 503, as an app that is slow to start does. */
+  notReady: boolean;
+  /** Who the app belongs to (its admin, the first user): undefined until it is set up. */
+  owner?: string;
   /** Its sessions' cookies, until signed out. */
   sessions: string[];
   /** Who signed in, as each sign-in named them, and through what. */
@@ -145,17 +155,18 @@ function fakeSignInApp(
   home: string,
 ): FakeReply {
   const { method, path, headers } = request;
-  if (path === '/ready') return { status: 200 };
+  if (path === '/ready') return { status: state.notReady ? 503 : 200 };
   if (path === '/signed-in') return { status: 200, body: { done: state.done } };
   if (path === '/signed-in/own') {
     // Asked with the app's key, as the setup of an app that is set up already is.
     if (headers['x-api-key'] === undefined) return { status: 401 };
-    return { status: 200, body: { own: state.signedIn.length > 0 } };
+    return { status: 200, body: { owner: state.owner ?? null } };
   }
   if (path === '/sign-in' && method === 'POST') {
     if (state.refuse) {
       if (state.claimant) {
         state.done = true;
+        state.owner = 'someone';
         writeFileSync(join(home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
       }
       return { status: 401 };
@@ -165,6 +176,8 @@ function fakeSignInApp(
       through: string;
     };
     state.signedIn.push({ user, through });
+    // The first to sign in is the admin; a later sign-in only adds a user.
+    state.owner ??= user;
     state.done = true;
     writeFileSync(join(home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
     const cookie = `fake-sid-${String(state.signedIn.length)}`;
@@ -226,6 +239,7 @@ export async function fakeSetUpApp(home: string): Promise<{
     done: false,
     refuse: false,
     claimant: false,
+    notReady: false,
     sessions: [],
     signedIn: [],
   };

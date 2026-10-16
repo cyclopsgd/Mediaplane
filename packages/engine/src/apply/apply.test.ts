@@ -2068,7 +2068,7 @@ describe('apply: first-run setup before the ports are published', () => {
 describe('apply: a first-run setup that makes no key, after another', () => {
   /** What a claimed setup that makes no key says it is, and what to do. */
   const CLAIMED =
-    "sonarr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. If you set it up yourself, sign in to sonarr with the shared admin's login (admin.username and admin.password) through the stack's own Jellyfin, then run apply again; if not, start it afresh first, as the runbook says";
+    "sonarr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. If you set it up yourself, make its admin (its first user) the Jellyfin login that admin.username names, and point its Jellyfin at jellyfin:8096, then run apply again; if not, start it afresh first, as the runbook says";
   /**
    * The stack with Jellyfin's FAKE_SETUP and Sonarr's FAKE_SIGN_IN, after it, and a Docker
    * that notes, at each up, which apps it starts without their ports and where each setup
@@ -2237,7 +2237,7 @@ describe('apply: a first-run setup that makes no key, after another', () => {
     const { home, setup, ups, run } = await signInStack();
     // As an older Mediaplane left it: set up, its file saying so, no record of it.
     setup.signIn.done = true;
-    setup.signIn.signedIn.push({ user: 'admin', through: 'jellyfin' });
+    setup.signIn.owner = 'admin';
     await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
     await writeFile(join(home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
     const first = await run();
@@ -2300,6 +2300,93 @@ describe('apply: a first-run setup that makes no key, after another', () => {
     expect((await readSecretStore(home)).setUp).toEqual(['sonarr']);
   });
 
+  it("keeps unpublished an app that is set up when its API is not ready in time, as one not shown to be Mediaplane's", async () => {
+    const { home, setup, ups, run } = await signInStack();
+    // Set up by someone else, and slow to start: the setup can't even ask it.
+    setup.signIn.done = true;
+    setup.signIn.owner = 'someone';
+    setup.signIn.notReady = true;
+    await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+    await writeFile(join(home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
+    const failed = await run();
+    expect(failed.outcome).toBe('failed');
+    expect(failed.diagnostics.at(-1)?.message).toContain('sonarr at http://sonarr:8989');
+    // Jellyfin is published once set up; Sonarr stays without its ports in that up.
+    expect(ups).toEqual([
+      'jellyfin sonarr unpublished; jellyfin open, sonarr done',
+      'sonarr unpublished; jellyfin done, sonarr done',
+    ]);
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
+  });
+
+  it('keeps unpublished an app set up by someone else between the setup failing and the look after it', async () => {
+    let claim = (): void => undefined;
+    const catalog = SIGN_IN_CATALOG.map((def) => {
+      const bootstrap = def.bootstrap;
+      if (def.id !== 'sonarr' || bootstrap === undefined) return def;
+      return {
+        ...def,
+        bootstrap: {
+          ...bootstrap,
+          // The setup fails (not as a refusal), and the app is set up by the next look.
+          run: (api: AppApi) => {
+            claim();
+            return Promise.reject(
+              new AppApiError(`${api.name} fake failure`, {
+                kind: 'server',
+                status: 500,
+              }),
+            );
+          },
+        },
+      };
+    });
+    const { home, setup, ups, run } = await signInStack(catalog);
+    claim = () => {
+      setup.signIn.done = true;
+      setup.signIn.owner = 'someone';
+    };
+    const failed = await run();
+    expect(failed.outcome).toBe('failed');
+    expect(failed.diagnostics.at(-1)?.message).toContain('sonarr fake failure');
+    expect(ups).toEqual([
+      'jellyfin sonarr unpublished; jellyfin open, sonarr open',
+      'sonarr unpublished; jellyfin done, sonarr done',
+    ]);
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
+  });
+
+  it('drops the record of a setup whose file no longer says it is done, before setting the app up again; plan writes nothing', async () => {
+    const { home, setup, ups, run } = await signInStack();
+    expect((await run()).outcome).toBe('success');
+    expect((await readSecretStore(home)).setUp).toEqual(['sonarr']);
+    // Its appdata was reset, and someone else set it up before the next apply.
+    await rm(join(home, 'appdata', 'sonarr', 'signed-in.txt'));
+    setup.signIn.owner = 'someone';
+    const stored = await readFile(join(home, SECRETS_PATH), 'utf8');
+    const planned = await plan({
+      home,
+      catalog: SIGN_IN_CATALOG,
+      host: FIXTURE_HOST,
+      env: {},
+      runtime: fakeDocker(home, { addresses: setup.addresses }),
+      probe: fakeProbe(),
+      wiring: setup.seams,
+    });
+    expect(planned.bootstrap).toEqual([{ app: 'sonarr', unpublished: true }]);
+    expect(await readFile(join(home, SECRETS_PATH), 'utf8')).toBe(stored);
+    const failed = await run();
+    expect(failed.outcome).toBe('failed');
+    expect(failed.diagnostics.at(-1)?.message).toContain(CLAIMED);
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
+    expect(ups.at(-1)).toBe('sonarr unpublished; jellyfin done, sonarr done');
+    // Its file says done again, as the other user's sign-in wrote it: no record, no trust.
+    await writeFile(join(home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
+    const next = await run();
+    expect(next.outcome).toBe('failed');
+    expect(next.plan.bootstrap).toEqual([{ app: 'sonarr', unpublished: true }]);
+  });
+
   it('fails, unpublished, a setup that makes a key but gives none', async () => {
     const catalog = SIGN_IN_CATALOG.map((def) => {
       const bootstrap = def.bootstrap;
@@ -2332,7 +2419,7 @@ describe('apply: a first-run setup that makes no key, after another', () => {
     const { home, setup, ups, run } = await signInStack();
     // The app says it is set up, by the shared admin; its file can't be read to say so.
     setup.signIn.done = true;
-    setup.signIn.signedIn.push({ user: 'admin', through: 'jellyfin' });
+    setup.signIn.owner = 'admin';
     await mkdir(join(home, 'appdata', 'sonarr', 'signed-in.txt'), { recursive: true });
     for (const attempt of [1, 2]) {
       const result = await run();

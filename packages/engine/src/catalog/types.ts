@@ -126,8 +126,10 @@ export interface ApiSpec {
 export interface Bootstrap {
   /**
    * The secret the setup makes, which the app creates (`createdBy: 'app'`): its key. None
-   * when Mediaplane chose the app's key (Seerr's, in `API_KEY`): its `done` file alone
-   * then says whether the setup is done.
+   * when Mediaplane chose the app's key (Seerr's, in `API_KEY`): no key can say the setup
+   * is Mediaplane's, so it counts as done only when its `done` file says so and
+   * Mediaplane's record names the app (`setUp` in state/secrets.json), made when `run`
+   * succeeded. Without the record the app starts unpublished and `run` checks it.
    */
   secret?: string;
   /**
@@ -140,10 +142,12 @@ export interface Bootstrap {
   /**
    * Finish what is left of the setup as the shared admin, in `stack`, and give the secret
    * it made, or the one the app already holds for Mediaplane; undefined for a setup that
-   * makes none. Throws AppApiError, of kind `auth` when the app refuses the shared admin:
-   * an app the plan started unpublished then stays so. Throws SetupWaiting when another
-   * app the setup goes through isn't ready for it: Jellyfin refusing the shared admin that
-   * Seerr signs in as.
+   * makes none. A setup that makes none may succeed only once it has shown that the app is
+   * Mediaplane's (it signed in first, or the app's admin is the shared admin's): success
+   * is what the record rests on. Throws AppApiError, of kind `auth` when the app refuses
+   * the shared admin: an app the plan started unpublished then stays so. Throws
+   * SetupWaiting when another app the setup goes through isn't ready for it: Jellyfin
+   * refusing the shared admin that Seerr signs in as.
    */
   run(
     api: AppApi,

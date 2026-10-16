@@ -61,7 +61,13 @@ export function withGeneratedSecrets(
     generated.push(`${app}.${name}`);
   }
   return {
-    store: { version: 1, apps, ...(shared === undefined ? {} : { shared }) },
+    store: {
+      version: 1,
+      apps,
+      ...(shared === undefined ? {} : { shared }),
+      // The apps whose setup Mediaplane knows to be its own, kept as they were.
+      ...(store.setUp === undefined ? {} : { setUp: store.setUp }),
+    },
     generated,
   };
 }
