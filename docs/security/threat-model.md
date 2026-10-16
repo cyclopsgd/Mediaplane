@@ -18,7 +18,9 @@ that power. None of them removes it.
 | qBittorrent's key, in Sonarr and Radarr      | Their download client's settings, in `appdata/`                       | It opens qBittorrent's API                                 |
 | Sonarr's and Radarr's keys, in Prowlarr      | Its links' settings, in `appdata/`                                    | They open Sonarr's and Radarr's APIs                       |
 | Jellyfin's key, which Jellyfin made          | `state/secrets.json` (0600), and Sonarr's and Radarr's connections    | It opens Jellyfin's API, as its admin                      |
-| The shared admin password                    | `state/secrets.json` (0600) or `admin.password`; a hash in `appdata/` | It opens qBittorrent, Sonarr, Radarr, Prowlarr, Jellyfin   |
+| Keys in Seerr: the arrs', and one Jellyfin's | Seerr's `settings.json`, in `appdata/`; Seerr shows them in clear     | They open Sonarr, Radarr and Jellyfin, as their admin      |
+| Seerr's session cookie, while it signs in    | Mediaplane's memory, for the moment of its first sign-in              | It opens Seerr, as its admin, until signed out             |
+| The shared admin password                    | `state/secrets.json` (0600) or `admin.password`; a hash in `appdata/` | It opens every app with a login, Seerr through Jellyfin    |
 | Your secrets: VPN key, Plex token, passwords | `secrets/` (0700), or environment variables                           | They are your accounts                                     |
 | App data                                     | `appdata/<app>/`                                                      | The apps' databases and settings, some holding credentials |
 | Your media                                   | The data folder                                                       | Your library                                               |
@@ -93,14 +95,15 @@ host network, read-only mounts
   `mkdir` exits. It uses the Docker API calls that the ownership helper
   and Mediaplane's own join of the wiring network already make, so the proxy allows
   nothing new for it. T5 says what its environment holds.
-- **The first-run setup.** An app whose setup anyone who reaches it could finish, which
-  is Jellyfin's startup wizard today, starts with no published port: `apply` gives
-  Compose one more file, on its standard input, that takes every port off it, those of
-  `compose.override.yaml` too. Mediaplane finishes the wizard over the wiring network, as
-  the shared admin, makes Jellyfin's key and keeps it, and only then starts Jellyfin
-  again with its port published (see T16). That uses the Docker API calls an `apply`
-  that recreates an app already makes, so the proxy allows nothing new for it. `plan`
-  never runs it.
+- **The first-run setup.** An app whose setup anyone who reaches it could finish starts
+  with no published port: Jellyfin, whose startup wizard is open, and Seerr, before its
+  first sign-in. `apply` gives Compose one more file, on its standard input, that takes
+  every port off them, those of `compose.override.yaml` too. Mediaplane finishes
+  Jellyfin's wizard over the wiring network, as the shared admin, makes Jellyfin's key
+  and keeps it; then it signs Seerr in through Jellyfin, as that admin, and signs out
+  again. Only then does it start them again with their ports published (see T16). That
+  uses the Docker API calls an `apply` that recreates an app already makes, so the proxy
+  allows nothing new for it. `plan` never runs it.
 - **The wiring.** `plan` and `apply` call the apps' APIs over the wiring network: from
   the Mediaplane container, or run from source, from the host. Each request goes
   straight to the app's container, through an HTTP agent of Mediaplane's own, so a proxy
@@ -109,7 +112,8 @@ host network, read-only mounts
   `Authorization: MediaBrowser Token="…"`), never in the URL. Mediaplane signs in to
   qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin with the shared login, to check it;
   Jellyfin's sign-in is signed out of again, and its activity log records both, as it
-  records any sign-in.
+  records any sign-in. It signs in to Seerr only once, for its first sign-in, and signs
+  out at once: Seerr's own key works after that.
   `plan` checks a download client with the arr's own test, which also makes a missing
   post-import category in qBittorrent, a setting Mediaplane doesn't manage: one you set
   in the arr (`tvImportedCategory`, `movieImportedCategory`) and later deleted in
@@ -117,7 +121,11 @@ host network, read-only mounts
   with its key, and has the arr call Prowlarr back, and an arr's connection to Jellyfin
   with the arr's own test, which calls Jellyfin with its key. Each of those tests, when it
   fails, records a failure in that app's status of the client, link or connection, as a
-  test from the app's web UI does; a later pass resets it.
+  test from the app's web UI does; a later pass resets it. It checks Seerr's Sonarr and
+  Radarr servers with Seerr's own test, and the key Seerr holds for Jellyfin with
+  Seerr's list of Jellyfin's users. Those leave nothing in Seerr's settings, but each one
+  that fails logs a line in Seerr's log, and a test with a key the arr refuses logs one
+  in the arr's, as a test from Seerr's web UI does.
 - **The Cloudflare solver.** Byparr, or FlareSolverr, runs a browser for Prowlarr on the
   stack's own network. Its port is never published, it has no login, and it isn't on
   the wiring network. Prowlarr sends it an indexer's request only for an indexer tagged
@@ -142,8 +150,9 @@ host network, read-only mounts
     socket.
   - Only their web UIs are published, bound as `network.bind` says. Everything else stays
     on the stack's own Docker network.
-  - The apps whose API Mediaplane calls (Sonarr, Radarr, Prowlarr, Jellyfin, and
-    qBittorrent, through Gluetun with a VPN) are on the stack's wiring network too. It is
+  - The apps whose API Mediaplane calls (Sonarr, Radarr, Prowlarr, Jellyfin, Seerr on a
+    Jellyfin stack, and qBittorrent, through Gluetun with a VPN) are on the stack's
+    wiring network too. It is
     internal: it gives them no way out, which they have on their own network.
   - Before an app's first start, Mediaplane writes the files it reads when it starts:
     Sonarr's, Radarr's and Prowlarr's `config.xml`, qBittorrent's `qBittorrent.conf` and
@@ -187,7 +196,8 @@ Controls today:
   (`security.login_on_lan`).
 - When the stack runs through `apply`, Jellyfin publishes no port while its startup
   wizard is open: Mediaplane finishes it as the shared admin first (T16 says what voids
-  that). Jellyfin asks for a login from everywhere.
+  that). Jellyfin asks for a login from everywhere. So does Seerr, which publishes no
+  port until Mediaplane has signed it in through Jellyfin, as that admin.
 - With `login_on_lan: false`, qBittorrent lets only your LAN subnet skip its login, and
   only while the web UIs are on the LAN. That subnet is `network.lan_subnet`, or else the
   subnets of the host's private addresses. Sonarr, Radarr and Prowlarr let any local
@@ -199,8 +209,9 @@ Controls today:
 What remains:
 
 - On a home network, `init` suggests `bind: lan`, which puts the web UIs on your LAN.
-- Until Slice 6 (Slice 7 with Plex), Seerr's setup is open to whoever reaches it first.
-  Complete it right after the first `apply`, or keep `bind: localhost` until you have.
+- With Plex, until Slice 7, Seerr's setup is open to whoever reaches it first, through
+  a Jellyfin or a Plex account of their own. Complete it right after the first `apply`,
+  or keep `bind: localhost` until you have.
 - With `login_on_lan: false`, anyone on a local address gets into Sonarr, Radarr and
   Prowlarr without a login. For them, "local" means any private address, not just your
   LAN subnet.
@@ -265,6 +276,10 @@ What remains:
 - Sonarr and Radarr hold Jellyfin's key, as their connection to it needs. A key is
   Jellyfin's admin, so a compromised arr can drive Jellyfin: change its settings, users
   and libraries.
+- Seerr holds Sonarr's and Radarr's keys, and a key of Jellyfin's, as its links need,
+  and shows them in clear to whoever holds its key or signs in as its admin. So a
+  compromised Seerr can drive Sonarr, Radarr and Jellyfin, and so can whoever has
+  Seerr's key or the shared admin login.
 - A link stays in Prowlarr when its arr leaves the stack, and keeps that arr's key,
   until it is removed by hand (in Prowlarr's web UI) or, if Slice 8 does that, by drift
   detection.
@@ -291,6 +306,9 @@ Controls today:
   hash. Secrets are checked by using them, such as signing in, so none needs keeping.
 - An app's error message, as Mediaplane shows it, has every key and password replaced
   with `***`, and never includes what was sent: a request body is never shown or kept.
+  So is every key Mediaplane reads in clear in an app's answer, from the moment it
+  reads it: the keys Jellyfin lists, the key Seerr made itself in Jellyfin, and the
+  arrs' keys that Seerr shows for its servers, one typed in Seerr by hand too.
   That holds for each form an app may echo a secret in: as it is, JSON-escaped,
   percent-encoded, form-encoded or HTML-escaped, and nested, such as a password
   JSON-escaped inside a form field (as qBittorrent's settings send it), or a JSON body
@@ -306,6 +324,24 @@ Controls today:
   session it signs in for that is signed out of right after. The admin password goes to
   Jellyfin only in request bodies: its startup wizard, its sign-in, and a change of its
   password, sent with its key.
+- Seerr's key is generated, and reaches Seerr in its environment (`API_KEY`), which it
+  takes at every start; Seerr also writes it into its `settings.json`. Sonarr's and
+  Radarr's keys go to Seerr in its servers' settings, request bodies again. Seerr shows
+  them in clear afterwards: Mediaplane reads them back only to hand them to Seerr's own
+  test of the server it holds, and never compares, keeps or shows them. The key Seerr
+  made itself in Jellyfin, which it also shows in clear, Mediaplane reads in Seerr's
+  answer and leaves there: it is never kept, nor sent anywhere, and it is replaced with
+  `***` in every message, as the stack's own secrets are, once read. When Jellyfin
+  refuses it, Mediaplane gives Seerr the Jellyfin key it holds itself, in a request
+  body, as it gives the arrs.
+- The admin password goes to Seerr only once, in its first sign-in's request body,
+  which Seerr passes to Jellyfin to check. The session cookie it answers with stays in
+  Mediaplane's memory, kept out of every message, for the one call that signs out at
+  once. Mediaplane never signs in to a Seerr that is set up already: it would pass the
+  password to whatever Jellyfin it was set up with.
+- Mediaplane sends an arr's key, Jellyfin's key and Seerr's own key only to the stack's
+  own address for that app, never to a host or port read from Seerr: anyone with Seerr's
+  admin can change those, and would receive the key.
 - The admin password goes to qBittorrent only in request bodies: its preferences, sent
   with its key, and the sign-in that checks it. The session cookie qBittorrent answers
   with is dropped. Its preferences hold its own key too: Mediaplane keeps only the
@@ -323,7 +359,8 @@ Controls today:
 - The files apps read at their first start are written 0600, never half-written, and
   never over an existing file. `plan` lists them without their content, and change
   records hold only their paths.
-- `appdata/` holds credentials too: the apps' keys, and qBittorrent's password hash.
+- `appdata/` holds credentials too: the apps' keys, qBittorrent's password hash, and
+  Seerr's `settings.json`, with Sonarr's, Radarr's and a Jellyfin key in clear.
   The apps rewrite their own files readable by every user on the host (0644), so
   Mediaplane keeps `appdata/` itself private (0700), as it does `state/`.
 
@@ -410,7 +447,7 @@ Controls today:
 What remains:
 
 - One password opens every app that uses it: qBittorrent, Sonarr, Radarr, Prowlarr and
-  Jellyfin. A leak from one is a leak for all.
+  Jellyfin, and Seerr, which asks Jellyfin. A leak from one is a leak for all.
 - `plan` and `apply` check Jellyfin's password by signing in. Jellyfin doesn't lock its
   admin out after failed sign-ins (none after seven in a row, on Jellyfin 12.2), but its
   activity log records each one, right or wrong, so a `plan` adds three lines there.
@@ -593,6 +630,29 @@ Controls today:
   is open. `apply` starts Jellyfin with no published port, its override's ports included,
   finishes the wizard over the wiring network, and only then publishes it. What voids
   this is under "What remains".
+- The same holds for Seerr, on a Jellyfin stack: until its first sign-in, anyone who
+  reaches it can sign in through a Jellyfin of their own and be its admin, as Seerr 3.5
+  does. `apply` starts it unpublished and, once Jellyfin is set up, signs it in through
+  Jellyfin as the shared admin, which makes that its admin and Jellyfin its media
+  server; only then does it publish Seerr. Seerr's key is Mediaplane's own, so no key
+  tells whose setup it is. Seerr counts as set up only when its `settings.json` says so
+  and Mediaplane's record does: `setUp` in `state/secrets.json`, a list of app names.
+  The record is made only by a setup that succeeds, or that shows Seerr is Mediaplane's.
+  It is dropped as soon as a pending setup runs, and made again only by a success.
+  A file Mediaplane can't read has Seerr start unpublished, and set up again, on every
+  `apply`, and each such `apply` fails at verify (exit 1), until the file is readable.
+- A Seerr that is set up when Mediaplane comes to it is checked with Seerr's key, and
+  never by sending the password, which Seerr would pass to its Jellyfin. That covers a
+  Seerr set up before this slice, or by hand, with no record; one whose file didn't say
+  it was set up when `apply` started it; and one someone signed in to in the moment
+  before Mediaplane's sign-in. It is Mediaplane's only when its admin (its first user)
+  is the Jellyfin login `admin.username` names and its Jellyfin is `jellyfin:8096`. A
+  pass is recorded. Any other, and one whose check failed in any way, stays unpublished,
+  on every `apply` until Mediaplane can show that it is its own.
+- A setup that makes no key (Seerr's) that fails in any way never publishes its app,
+  however set up the app then looks. One that waits (Jellyfin refuses the shared admin's
+  password, say) is asked once more: if someone else finished it meanwhile, it fails as a
+  claimed setup, and the app stays unpublished.
 - Before an app starts, Mediaplane reads its appdata (Jellyfin's `system.xml`) to see
   whether its setup is done. A Jellyfin whose appdata was emptied starts its wizard
   again: it starts unpublished again, even with its key stored.
@@ -613,8 +673,11 @@ Controls today:
 
 What remains:
 
+- With Plex, Mediaplane doesn't set Seerr up until Slice 7: its setup is open on its
+  published port from its first start (see T2).
 - While the wizard is open, for the seconds Mediaplane takes, any container of the stack
-  can reach Jellyfin on the stack's networks. A compromised app could claim it first.
+  can reach Jellyfin on the stack's networks, and Seerr likewise until its first sign-in.
+  A compromised app could claim either first.
   If it sets the first user and leaves the wizard open, Mediaplane's sign-in fails, and
   `apply` stops, completing no wizard for it. If it also completes the wizard, `apply`
   stops and keeps Jellyfin unpublished, but Jellyfin belongs to whoever finished it.
@@ -624,6 +687,16 @@ What remains:
   so that nobody starts afresh a Jellyfin they set up themselves. This needs a
   compromised container already inside the stack, which T4 and the other threats here
   already treat as serious.
+- A Seerr claimed that way, before Mediaplane comes to it or between its look and its
+  sign-in, has an admin that isn't the shared admin, or a Jellyfin that isn't the
+  stack's: it stays unpublished, and `apply` stops. One claimed through the stack's own
+  Jellyfin, as its admin, needed the shared admin's password already.
+- A Seerr set up by hand before Slice 6, as its README then advised, has no record. The
+  first `apply` of this slice starts it unpublished and checks it once, with its key and
+  never the password. It stays unpublished unless its admin (its first user) is the
+  Jellyfin login `admin.username` names and its Jellyfin is `jellyfin:8096`; otherwise
+  `apply` stops, and the runbook has the ways out. Once it passes, it is recorded and
+  published; the only cost is that one unpublished recreate.
 - A wizard finished by hand before `apply` started Jellyfin (from before Slice 5, say)
   is done, so Jellyfin starts published, and nobody can claim it. If the shared admin
   can't sign in to it, `apply` stops, and Jellyfin stays published: it belongs to
@@ -631,16 +704,23 @@ What remains:
   finished before `apply` ran.
 - An appdata Mediaplane can't read says nothing: with Jellyfin's key stored, Mediaplane
   takes the setup as done, and `plan` warns (`bootstrap.unreadable`) that it can't tell.
-  Fix the file's ownership, or the user Mediaplane runs as.
-- `compose.override.yaml` can void the guarantee that Jellyfin is set up before it is
-  published. Mediaplane resets Jellyfin's `ports`, so ports the override adds to Jellyfin
-  are held back too. But `!reset` covers only `ports`. An override that gives Jellyfin
-  `network_mode: host`, or any network setting that publishes it through another
-  service, publishes it while its wizard is open. Keep such settings out of the
+  Seerr has no key to decide: it starts unpublished and is set up again on every
+  `apply`, which fails at verify. Fix the file's ownership, or the user Mediaplane runs
+  as.
+- `compose.override.yaml` can void the guarantee that Jellyfin and Seerr are set up
+  before they are published. Mediaplane resets their `ports`, so ports the override adds
+  to them are held back too. But `!reset` covers only `ports`. An override that gives
+  either `network_mode: host`, or any network setting that publishes it through another
+  service, publishes it while its setup is open. Keep such settings out of the
   override.
-- Run outside Mediaplane (the ejectable command, or a restart of a published Jellyfin
-  whose appdata was emptied), Jellyfin starts published with its wizard open: stop it
-  before emptying its appdata, and set it up with `apply`.
+- Run outside Mediaplane (the ejectable command, or a restart of a published Jellyfin or
+  Seerr whose appdata was emptied), the app starts published with its setup open: stop
+  it before emptying its appdata, and set it up with `apply`.
+- Seerr's appdata reset outside `apply`, and the app claimed on the LAN before the next
+  `apply` runs: Mediaplane's record can't catch it. No key tells, since Seerr takes
+  `API_KEY` at every start, so the next plan sees a done file and a record, and treats
+  the claimed Seerr as its own. Inside `apply`, the record is dropped as soon as the
+  file stops saying done. So stop Seerr before resetting its appdata.
 
 ## What the proxy does not stop
 

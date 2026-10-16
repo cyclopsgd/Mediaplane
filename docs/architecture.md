@@ -13,9 +13,10 @@ You describe the stack you want in one file, `stack.yaml`. Mediaplane then works
   it joins the stack's wiring network, to ask the apps: see [The wiring](#the-wiring)).
   Checking a key or a password can leave small marks in an app: a post-import category
   made in qBittorrent, a failure recorded in an app's status of a client, link or
-  connection, and a sign-in in Jellyfin's activity log. It never runs an app's first-run
-  setup. The [threat model](security/threat-model.md#what-runs-and-who-can-reach-it) says
-  more;
+  connection, a sign-in in Jellyfin's activity log, and a line in Seerr's log for each of
+  its checks that fails (and one in the arr's, for a key the arr refuses). It never runs
+  an app's first-run setup, nor finishes Seerr's. The
+  [threat model](security/threat-model.md#what-runs-and-who-can-reach-it) says more;
 - `apply` makes those changes, then plans again to check that nothing is left.
 
 What it writes is an ordinary Docker Compose project, which runs without Mediaplane.
@@ -135,7 +136,7 @@ Each part, and where its code is:
 
 Not built yet:
 
-- the rest of the links between the apps: the requests app (Slice 6) and Plex (Slice 7);
+- Plex, and the links to it (Slice 7); until then, a Plex stack's Seerr isn't wired;
 - drift detection, with Keep mine (Slice 8).
 
 ## `plan`
@@ -306,30 +307,38 @@ Shows and Movies libraries.
 ## Bootstrap before publish
 
 Jellyfin's startup wizard answers whoever reaches it, and whoever finishes it owns the
-server. So `apply` does not publish it while it is open (see
+server. So does Seerr's setup: until its first sign-in, anyone who reaches it can sign
+in through a Jellyfin of their own, and be its admin. So `apply` publishes neither
+while it is open (see
 [T16](security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)
 for what voids that):
 
 ```text
 plan
-  │ Jellyfin: its system.xml
-  │ doesn't say the wizard
-  │ is done
+  │ Jellyfin: system.xml says
+  │ the wizard isn't done;
+  │ Seerr: settings.json names
+  │ no media server, or
+  │ Mediaplane has no record
+  │ that it set Seerr up
   ▼
 up --wait
-  │ Jellyfin with no port
+  │ both with no port
   │ published: one more
   │ Compose file, on stdin,
-  │ resets its ports
+  │ resets their ports
   ▼
 first-run setup, over the
-wiring network
-  │ the wizard, as the shared
-  │ admin; sign in; make the
-  │ key, keep it; sign out
+wiring network, in order
+  │ Jellyfin: the wizard, as
+  │ the shared admin; make
+  │ the key, keep it
+  │ Seerr: sign in through
+  │ Jellyfin, as that admin;
+  │ sign out
   ▼
 up --wait again
-  Jellyfin published
+  both published
 ```
 
 - **Which apps.** An app with a `bootstrap` in its catalog entry, whose key isn't stored,
@@ -338,9 +347,25 @@ up --wait again
   `plan` lists it under `First-run setup:` (`bootstrap` in `--json`), shows its container
   recreated when it runs published, and checks its wiring after the start. It never
   runs the setup. A file Mediaplane can't read says nothing: with the key stored, the
-  key decides, and `plan` warns (`bootstrap.unreadable`) that it can't tell. An app with
-  a setup can't run inside another app's network, which would publish its ports: `plan`
-  fails with `bootstrap.network-via`.
+  key decides, and `plan` warns (`bootstrap.unreadable`) that it can't tell. Seerr's
+  setup makes no key (Mediaplane makes Seerr's, in `API_KEY`), so it counts as done only
+  when its `settings.json` says so and Mediaplane's record does: `setUp` in
+  `state/secrets.json`, a list of app names and no secret. A Seerr with no record, as
+  one set up by hand before this slice, or by someone else, starts unpublished once and
+  is checked (below). The record is dropped when a pending setup runs, and made again
+  only by a success. A file Mediaplane can't read has Seerr start unpublished, and set
+  up again, on every `apply`, with that warning, and each such `apply` fails at verify
+  (exit 1), until the file is readable. An app with a setup can't run inside another
+  app's network, which would publish its ports: `plan` fails with
+  `bootstrap.network-via`.
+- **In order.** The setups go in the order of the apps' integrations: Seerr comes after
+  Jellyfin. A setup that can't run yet waits: Seerr's, while Jellyfin refuses the shared
+  admin's password, or after Jellyfin's own setup failed. The app stays as it was,
+  unpublished; the step warns (`bootstrap.waiting`), the wire step wires the rest and
+  skips its resources, and verify fails with the setup left to do. The next `apply` sets
+  it up, once the wire step has set Jellyfin's admin. Mediaplane asks the app once more
+  after it waits: if someone else finished its setup meanwhile, the step fails as for a
+  claimed setup (below), and the app stays unpublished.
 - **No port at all.** The file Compose gets on its standard input, after
   `compose.override.yaml`, sets the app's `ports` to `!reset []`, so the override's ports
   go too. `compose.yaml` itself always has the ports, so the stack runs as written
@@ -348,8 +373,17 @@ up --wait again
   reset covers `ports` only: an override with `network_mode: host`, or a network shared
   with a service that publishes, voids the guarantee (see
   [T16](security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)).
-- **The setup** reaches the app on the wiring network without a key, finishes its
-  wizard, and keeps the key it makes in `state/secrets.json` at once. Then Mediaplane
+- **The setup** reaches the app on the wiring network without a key. For Jellyfin, it
+  finishes its wizard, and keeps the key it makes in `state/secrets.json` at once. For
+  Seerr, it signs in through Jellyfin (`POST /api/v1/auth/jellyfin`, with Jellyfin's
+  service and port), as the shared admin: that makes it Seerr's admin, and Jellyfin
+  Seerr's media server. Seerr's key works from then on, so the session is signed out of
+  at once. A Seerr that is set up already is checked with its key, never by sending the
+  password, which it would pass to whatever Jellyfin it was set up with. That includes
+  one with no record, and one found set up when the sign-in fails, since someone may have
+  signed in first. It is Mediaplane's only when its admin (its first user) is the shared
+  admin and its Jellyfin is the stack's; a pass is recorded, and a failure of any kind,
+  including a question Mediaplane couldn't get answered, keeps it unpublished. Then Mediaplane
   steps off the wiring network, `up` runs again, without the extra file, and Compose
   recreates the app with its ports. Before that, the engine asks the app once more
   whether its setup is still open, and publishes it only if it is not. If it still looks
@@ -357,9 +391,12 @@ up --wait again
   whose setup failed while it is still open stays unpublished; one whose setup is done
   is published even when making its key failed. But an app the plan started
   unpublished, whose shared admin is then refused, stays unpublished whatever it says:
-  its wizard was finished with another login while Mediaplane set it up. Its appdata,
-  read again, tells that from a setup done by hand whose file Mediaplane can't read,
-  and the error says which.
+  its setup was finished with another login while Mediaplane set it up. For Jellyfin,
+  its appdata, read again, tells that from a setup done by hand whose file Mediaplane
+  can't read, and the error says which. Seerr has no key to tell by: one set up, but not
+  shown to be Mediaplane's, stays unpublished on every `apply` until it is. A setup that
+  makes no key (Seerr's) that fails in any way never publishes its app, however set up
+  it then looks.
 - **No new Docker call:** the proxy allows nothing new.
 
 ## The wiring
@@ -368,8 +405,8 @@ Wiring is what Mediaplane does through each app's API once the apps run. Today t
 the shared admin login in Sonarr, Radarr, Prowlarr, qBittorrent and Jellyfin; the
 download path: qBittorrent's settings and categories, and Sonarr's and Radarr's download
 client and root folder; the indexers: Prowlarr's links to Sonarr and Radarr, and its
-indexer proxy; and the media server: Jellyfin's libraries, and Sonarr's and Radarr's
-connection to it.
+indexer proxy; the media server: Jellyfin's libraries, and Sonarr's and Radarr's
+connection to it; and the requests app: Seerr's links to Jellyfin, Sonarr and Radarr.
 
 ```text
 mediaplane-system
@@ -379,7 +416,7 @@ mediaplane-system
     ▼
 mediaplane (the stack)
   sonarr, radarr, prowlarr,
-  jellyfin
+  jellyfin, seerr
   gluetun ─ qbittorrent
   (each keeps its default
   network, for its own
@@ -484,6 +521,47 @@ mediaplane (the stack)
     with it. It needs Jellyfin's admin in place: while Jellyfin is still to be set up,
     `plan` leaves the connection's key for `apply` to check.
 
+- **The requests app:**
+
+  ```text
+  seerr
+    │ media server: jellyfin,
+    │ Movies and Shows enabled
+    │ servers "<arr>
+    │ (Mediaplane)": the arr's
+    │ key, its root folder, a
+    │ profile, the default
+    ▼
+  jellyfin, sonarr, radarr
+  ```
+
+  - Seerr comes last, after Jellyfin, Sonarr, Radarr and, when the stack has it,
+    Prowlarr, once its first sign-in (above) has made its admin: its key works only from
+    then on.
+  - Its media server is Jellyfin, at `jellyfin:8096`, with Mediaplane's Movies and Shows
+    libraries enabled; a library you enable yourself stays yours. The key Seerr uses for
+    Jellyfin is the one Seerr made itself as it signed in. It stays while it works, which
+    Mediaplane checks with Seerr's list of Jellyfin's users; when Jellyfin refuses it,
+    Mediaplane gives Seerr its own Jellyfin key. When Jellyfin moves, Seerr's libraries
+    are synced again, since another Jellyfin has other library ids. It needs Jellyfin's
+    admin and libraries in place.
+  - Its Sonarr and Radarr servers reach each arr at its service and port, with its key,
+    file into its root folder, and are the default, so requests go there. The quality
+    profile is the one `apps.seerr.sonarr_profile` (or `radarr_profile`) names, else
+    `HD-1080p`, else `Any`, else the arr's first: only the arr knows which it has, so
+    Mediaplane asks it through Seerr's own test. Seerr shows a server's key in clear;
+    Mediaplane checks it with Seerr's test of the server it holds, never by comparing
+    it. A new Sonarr server uses season folders, as Sonarr's own default; a Radarr one
+    doesn't, since films have none. Each needs its arr's root folder in place.
+  - An arr's key, and Jellyfin's, go only to that app's own address in the stack, never
+    to a host or port read from Seerr: anyone with Seerr's admin can change those. Every
+    key Mediaplane reads from Seerr is kept out of its output: the one Seerr made in
+    Jellyfin, the arrs' keys that Seerr shows, and the keys in Jellyfin's list.
+  - Last, Seerr's setup is finished (`initialize`), once its links are in place, so its
+    web UI stops offering its admin the setup wizard.
+  - A request goes from Seerr to the arr through TMDB, an outside service: the end-to-end
+    tests stop at the links, and Seerr's own test of each.
+
 - **Each resource** is one of:
   - `create` or `update`: the app lacks it, or a managed field or a secret differs. A
     secret is checked by using it, never compared: signing in, or the app's own test, as
@@ -499,7 +577,8 @@ mediaplane (the stack)
     change its container.
   - `unknown`: Mediaplane couldn't ask the app, and a warning says why.
 - **The wire step** waits until each app is ready (`/ping` for Sonarr, Radarr and
-  Prowlarr, `/System/Info/Public` for Jellyfin), checks that its key still works, then
+  Prowlarr, `/System/Info/Public` for Jellyfin, `/api/v1/settings/public` for Seerr),
+  checks that its key still works, then
   makes each resource what the stack
   wants, in order: an app comes after the apps its integration names. A resource that
   fails doesn't stop the others, and one that needs it is skipped. Each result is kept at
@@ -573,7 +652,7 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
-- the rest of the wiring, app by app: the requests app (Slice 6) and Plex (Slice 7);
+- Plex (Slice 7);
 - drift detection (Slice 8);
 - releases (Slice 9);
 - the web panel (M2).

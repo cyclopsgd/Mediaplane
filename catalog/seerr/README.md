@@ -26,8 +26,53 @@ Radarr. Mediaplane runs the upstream image, unmodified (see
 
 ## What Mediaplane does today
 
-- **Its API key.** Generated once, and passed in `API_KEY`. It does nothing until Seerr
-  has its first user.
+With Jellyfin as the media server (with Plex, see Not built yet):
+
+- **Its first sign-in, before its web UI is published.** Until someone signs in, anyone
+  who reaches Seerr can sign in through a Jellyfin of their own and be its admin. So
+  `apply` starts Seerr with no port published, and once Jellyfin is set up, signs Seerr in
+  through Jellyfin as the shared admin: that makes the shared admin Seerr's admin, and
+  Jellyfin, at `jellyfin:8096`, its media server. It signs out again at once, and only
+  then publishes Seerr. `plan` lists it under `First-run setup:`. Seerr counts as set up
+  only when its `settings.json` says so (`mediaServerType`) and Mediaplane's record does
+  (`setUp` in `state/secrets.json`, a list of app names). A Seerr someone else signed in
+  to first, even in the moment before Mediaplane's sign-in, stays unpublished, and
+  `apply` stops. This holds when `apply` runs the stack; the threat model lists what
+  voids it, such as a Seerr whose appdata is reset outside `apply`:
+  [T16](../../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
+- **A Seerr set up before this slice,** by hand, has no record. The first `apply` starts
+  it unpublished once and checks it with its key, never the password. It is
+  Mediaplane's only when its admin (its first user) is the Jellyfin login
+  `admin.username` names and its Jellyfin is `jellyfin:8096`; then it is recorded and
+  published. Otherwise it stays unpublished, and the
+  [runbook](../../docs/runbooks/wiring-failed.md) has the ways out.
+- **Its login** is Jellyfin's: on Seerr's sign-in page, choose Jellyfin and use the
+  shared admin login (`mediaplane credentials`). It follows Jellyfin's, so a change of
+  `admin.password` reaches Seerr once it reaches Jellyfin. Seerr makes a user for anyone
+  else who signs in with a Jellyfin account, as it always does.
+- **Its API key.** Generated once, kept in `state/secrets.json`, and passed in
+  `API_KEY`, which Seerr takes at every start (its `settings.json` keeps the first). It
+  works once Seerr has its admin.
+- **Its media server** (`seerr.media_server`): Jellyfin, at its service and port, with
+  the Movies and Shows libraries enabled. A library you enable in Seerr stays yours.
+  Seerr uses the key it made itself in Jellyfin as it signed in (named `Seerr` in
+  Jellyfin's dashboard): Mediaplane checks that it works, and gives Seerr its own
+  Jellyfin key only when Jellyfin refuses Seerr's. When Jellyfin moves, Seerr's
+  libraries are synced again. Seerr shows that key in clear: Mediaplane keeps it out of
+  all it prints and records.
+- **Its Sonarr and Radarr servers** (`seerr.server_sonarr`, `seerr.server_radarr`), each
+  while the stack runs the arr, named `Sonarr (Mediaplane)` and `Radarr (Mediaplane)`:
+  the arr at its service and port, with its key, its root folder, a quality profile,
+  and set as the default, so requests go there. The profile is `HD-1080p`, else `Any`,
+  else the arr's first, unless you name one (below). The rest is what Seerr's own web UI
+  gives a new server, but with season folders for Sonarr, as Sonarr's own default (Radarr's
+  has none), and stays yours after. Seerr shows the arr's key in clear; Mediaplane checks
+  it with Seerr's own test of the server, which calls the arr with it, and keeps it out
+  of all it prints and records, a key typed in Seerr by hand too. Mediaplane sends the
+  arr's key only to the arr's own address in the stack, never to a host read from Seerr.
+  Seerr is wired after Prowlarr, when the stack has it.
+- **Its setup, finished** (`seerr.setup`): once its links are in place, Mediaplane sends
+  Seerr's `initialize`, so it stops offering its admin the setup wizard.
 - **Its user.** Seerr's image runs as uid 1000, the `node` user. So before it starts,
   Mediaplane gives `appdata/seerr` to 1000:1000, with a throwaway container of Seerr's own
   image.
@@ -35,16 +80,14 @@ Radarr. Mediaplane runs the upstream image, unmodified (see
   Seerr does not turn either on: list one of them too, or `plan` reports an error.
 - **`init: true`,** as Seerr's own Compose example has it.
 - **`LOG_LEVEL=info`.**
-- **Its web UI,** published as `network.bind` says.
+- **Its web UI,** published as `network.bind` says, once it is set up.
 
 ## Not built yet
 
-- **Slice 6:**
-  - Seerr's first sign-in, as the Jellyfin admin;
-  - its links to Jellyfin, Sonarr and Radarr;
-  - `apps.seerr.sonarr_profile` and `radarr_profile`, which choose the quality profiles
-    it requests with.
-- **Slice 7:** with Plex, its first sign-in with your Plex token, and its link to Plex.
+- **Slice 7:** with Plex, its first sign-in with your Plex account, and its link to Plex.
+  Until then, on a Plex stack, Mediaplane doesn't call Seerr at all, and
+  `mediaplane credentials` says its login arrives in Slice 7.
+- **Slice 8:** drift detection and Keep mine for what it manages here.
 
 See the [roadmap](../../docs/plans/m1-roadmap.md).
 
@@ -53,12 +96,26 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 - **In `stack.yaml`,** under `apps.seerr`, you can set `port`, `version`, `env` and
   `enabled: false`. A different `version` is an untested combination, and `plan` warns
   about it. See the [`stack.yaml` reference](../../docs/reference/stack-yaml.md).
+- **The quality profiles** it requests with: `apps.seerr.sonarr_profile` and
+  `apps.seerr.radarr_profile`, each a profile's name, as the arr shows it. A name the
+  arr doesn't have fails, listing those it has.
+- **What Mediaplane manages** (the fields above) is put back by the next `apply` when
+  changed in Seerr: its Jellyfin, its libraries, and each server's host, port, profile,
+  root folder and default. Keep mine comes in Slice 8.
 - **Anything else** goes in `compose.override.yaml` in the Mediaplane home.
 
 ## Known issues
 
-- **Setup is open.** Until Slice 6 (Slice 7 with Plex), Seerr's setup page is open to
-  whoever reaches it first. Finish it yourself as soon as `apply` is done, or keep
+- **Setup is open with Plex.** Until Slice 7, on a Plex stack, Seerr's setup page is open
+  to whoever reaches it first. Finish it yourself as soon as `apply` is done, or keep
   `network.bind: localhost` until you have.
+- **A request needs the internet.** Seerr looks up films and series on TMDB, an outside
+  service, and the arrs look them up again on their own: Mediaplane's tests stop at the
+  links, and Seerr's own test of each.
+- **A failing check is logged.** `plan` and `apply` check Seerr's servers and its key for
+  Jellyfin; each check that fails logs a line in Seerr's log (Settings, Logs), and one
+  with a key the arr refuses, a line in the arr's.
+- **Jellyfin keeps a key named `Seerr`,** which Seerr made as it first signed in, and a
+  device of Seerr's sign-in. Both are Seerr's own: leave them.
 - **Removing it needs `sudo`.** `appdata/seerr` belongs to uid 1000, so unless you are
   that user, deleting it needs `sudo`.

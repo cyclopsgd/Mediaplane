@@ -10,20 +10,25 @@ Compose and wires the apps together for you.**
 >
 > - **Works today:** `mediaplane plan` checks a real host and shows exactly what it
 >   would do. `mediaplane apply` then starts the stack, confirms that every app is
->   healthy, and sets one admin login in qBittorrent, Sonarr, Radarr, Prowlarr and
->   Jellyfin (`mediaplane credentials` shows it). It sets Jellyfin up before its web UI
+>   healthy, and sets one admin login in qBittorrent, Sonarr, Radarr, Prowlarr, Jellyfin
+>   and Seerr (`mediaplane credentials` shows it). It sets Jellyfin up before its web UI
 >   is published, with its Movies and Shows libraries, when `apply` runs the stack (the
 >   [threat model](docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)
 >   says what voids that). It links Sonarr and Radarr to
 >   qBittorrent: download clients, categories and root folders, and to Jellyfin, which
 >   they tell of each import. It links Prowlarr to Sonarr and Radarr, so the indexers you
 >   add in Prowlarr reach both, with Byparr as Prowlarr's proxy for indexers behind
->   Cloudflare. `mediaplane vpn-check` confirms that qBittorrent reaches the internet
->   only through the VPN. Mediaplane runs in its own hardened container, behind a Docker
->   socket proxy, and reaches the apps over a private network with no route out.
-> - **Next:** the rest of the wiring: Seerr, then Plex. Until that lands, those still
->   need setting up by hand. Seerr's setup is open to anyone who can reach it until you
->   complete it, so complete it first.
+>   Cloudflare. It signs Seerr in through Jellyfin, as the same admin, before Seerr's web
+>   UI is published, again when `apply` runs the stack (the same
+>   [threat model](docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)
+>   entry says what voids that), and links Seerr to Jellyfin, with both libraries, and to
+>   Sonarr and Radarr, with a quality profile, ready for requests. `mediaplane vpn-check`
+>   confirms that qBittorrent reaches the internet only through the VPN. Mediaplane runs
+>   in its own hardened container, behind a Docker socket proxy, and reaches the apps
+>   over a private network with no route out.
+> - **Next:** Plex. Until that lands, a Plex stack still needs setting up by hand, Seerr
+>   included: its setup is open to anyone who can reach it until you complete it, so
+>   complete it first.
 > - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
 >   your LAN (`network.bind: lan`) or keep them on this machine (`localhost`).
 >
@@ -59,7 +64,7 @@ Mediaplane does that part for you:
 | Generate keys and start the stack (`mediaplane apply`)                            | Done         |
 | See each app's health and every past apply (`status`, `history`)                  | Done         |
 | Write a starter `stack.yaml` (`init`)                                             | Done         |
-| One admin login for qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin            | Done         |
+| One admin login for qBittorrent, Sonarr, Radarr, Prowlarr, Jellyfin and Seerr     | Done         |
 | Reach the apps' APIs over a private network with no route out                     | Done         |
 | A VPN kill switch, tested against a real WireGuard server, and `vpn-check`        | Done         |
 | Run in a hardened container, behind a Docker socket proxy                         | Done         |
@@ -67,7 +72,8 @@ Mediaplane does that part for you:
 | Link Sonarr and Radarr to qBittorrent: download clients, categories, root folders | Done         |
 | Link Prowlarr to Sonarr and Radarr, with Byparr or FlareSolverr as its proxy      | Done         |
 | Set up Jellyfin before it is published, with its libraries and links              | Done         |
-| Wire the rest together (requests, Plex)                                           | Planned      |
+| Sign Seerr in through Jellyfin before it is published, and link it                | Done         |
+| Wire Plex, and Seerr with Plex                                                    | Planned      |
 | Detect manual changes and offer Re-apply or "Keep mine"                           | Planned      |
 | Web panel with a setup wizard                                                     | Planned (M2) |
 
@@ -110,7 +116,8 @@ Mediaplane works like `terraform plan` and `apply`. `plan` validates `stack.yaml
 the host, renders the Compose project and diffs it against what is running. It shows you
 the changes and touches nothing in your stack, apart from small marks that checking a key
 or a password can leave in an app: a category in qBittorrent, a failure in an app's own
-status of a client, link or connection, and a sign-in in Jellyfin's activity log. The
+status of a client, link or connection, a sign-in in Jellyfin's activity log, and a line
+in Seerr's log (and an arr's) for a check of Seerr's that fails. The
 [threat model](docs/security/threat-model.md#what-runs-and-who-can-reach-it) says more.
 `apply` does the same, then makes those changes.
 
@@ -132,20 +139,21 @@ mediaplane apply
   ├─ writes compose.yaml, .env, and
   │  files apps read at first start
   ├─ pulls images, starts the apps
-  │  (Jellyfin with no port, until
-  │  it is set up)
+  │  (Jellyfin and Seerr with no
+  │  port, until they are set up)
   ├─ waits until every app is healthy
-  ├─ sets Jellyfin up, then
-  │  publishes it
+  ├─ sets Jellyfin up, signs Seerr
+  │  in through it, then publishes
+  │  them
   ├─ wires the apps through their
   │  APIs: the shared login, the
-  │  download path, indexers and
-  │  the media server
+  │  download path, indexers, the
+  │  media server and requests
   ├─ plans again: nothing left to do
   └─ records the change in history
 ```
 
-Next, `apply` will wire the rest of the apps through the same APIs (Slices 6 and 7).
+Next, `apply` will wire Plex through the same APIs (Slice 7).
 
 A few principles hold throughout:
 
@@ -169,7 +177,7 @@ A few principles hold throughout:
 
 Most of this is real output from a run on an arm64 VM, trimmed where marked. The wiring
 lines, the first-run setup's and the last apply's came later, from a run of the same
-stack with Slice 5. The stack is
+stack with Slice 6. The stack is
 the example above without the VPN, which is why `plan` warns about qBittorrent, and with
 `network.bind: localhost`.
 
@@ -201,6 +209,7 @@ Containers:
 Secrets to generate: admin.password, prowlarr.apiKey, qbittorrent.apiKey, radarr.apiKey, seerr.apiKey, sonarr.apiKey
 First-run setup:
   + jellyfin (with no port published until it is done)
+  + seerr (with no port published until it is done)
 Wiring:
   > after start jellyfin.admin
   > after start jellyfin.library_movies
@@ -221,7 +230,11 @@ Wiring:
   > after start prowlarr.application_sonarr
   > after start prowlarr.application_radarr
   > after start prowlarr.indexer_proxy
-Plan: 6 files to write, 7 containers to change, 6 secrets to generate, 1 app to set up, 19 wiring checks after the start.
+  > after start seerr.media_server
+  > after start seerr.server_sonarr
+  > after start seerr.server_radarr
+  > after start seerr.setup
+Plan: 6 files to write, 7 containers to change, 6 secrets to generate, 2 apps to set up, 23 wiring checks after the start.
 
 $ mediaplane apply --yes
   … the same plan …
@@ -231,9 +244,9 @@ Pulling images (the first time can take several minutes)…
   done    images: images present
   done    appdata ownership: seerr → 1000:1000
 Starting containers and waiting until every app is healthy…
-  done    containers: every app is running and healthy; started jellyfin without its ports, to set it up first
+  done    containers: every app is running and healthy; started jellyfin, seerr without their ports, to set them up first
 Finishing first-run setup before publishing the web UIs…
-  done    first-run setup: set up jellyfin and saved jellyfin.apiKey; published jellyfin
+  done    first-run setup: set up jellyfin, seerr and saved jellyfin.apiKey; published jellyfin, seerr
 Wiring the apps…
   done    wiring jellyfin.admin: adopted
   done    wiring jellyfin.library_movies: created
@@ -254,10 +267,14 @@ Wiring the apps…
   done    wiring prowlarr.application_sonarr: created
   done    wiring prowlarr.application_radarr: created
   done    wiring prowlarr.indexer_proxy: created
-  done    wiring: jellyfin.admin adopted; jellyfin.library_movies created; … prowlarr.indexer_proxy created
+  done    wiring seerr.media_server: updated libraries
+  done    wiring seerr.server_sonarr: created
+  done    wiring seerr.server_radarr: created
+  done    wiring seerr.setup: updated initialized
+  done    wiring: jellyfin.admin adopted; jellyfin.library_movies created; … seerr.setup updated initialized
   done    verify: no changes remain
 
-Apply complete. Change record: 20261015T182931Z-ed479e70
+Apply complete. Change record: 20261016T030144Z-2bc6267e
 
 $ mediaplane apply --yes
 warning: qBittorrent is running without a VPN (apps.qbittorrent.vpn: false)
@@ -273,7 +290,7 @@ qbittorrent  running  healthy
 radarr       running  healthy
 seerr        running  healthy
 sonarr       running  healthy
-Last apply: 2026-10-15T18:29:31.294Z, success (20261015T182931Z-ed479e70)
+Last apply: 2026-10-16T03:01:44.032Z, success (20261016T030144Z-2bc6267e)
 
 $ mediaplane credentials
 Admin login for the apps:
@@ -284,7 +301,7 @@ Jellyfin     http://127.0.0.1:8096
 Prowlarr     http://127.0.0.1:9696
 qBittorrent  http://127.0.0.1:8080
 Radarr       http://127.0.0.1:7878
-Seerr        http://127.0.0.1:5055  (its login arrives in Slice 6)
+Seerr        http://127.0.0.1:5055
 Sonarr       http://127.0.0.1:8989
 ```
 
@@ -309,17 +326,19 @@ Then follow [`deploy/README.md`](deploy/README.md) to start it and run
 - the containers it would create, recreate, start, restart or remove (`restart` is for
   qBittorrent when Gluetun starts again on its own);
 - the secrets it would generate;
-- the first-run setup it would finish, under `First-run setup:`: Jellyfin's, with no
-  port published until it is done;
+- the first-run setups it would finish, under `First-run setup:`: Jellyfin's, and
+  Seerr's first sign-in through it, each with no port published until it is done;
 - the wiring it would do in the apps, under `Wiring:`, such as setting the admin login or
   adding a download client. qBittorrent's login and settings show as `adopt` on a first
   `apply`: its file from before its first start set them already, as Jellyfin's
   first-run setup sets its admin.
 
 It changes nothing in your stack, apart from small marks that checking a key or a
-password can leave in an app, which the
-[threat model](docs/security/threat-model.md#what-runs-and-who-can-reach-it) names. You
-need Docker (Engine 24 or newer, with the Compose plugin 2.24 or newer), Node 24 and
+password can leave in an app: a category in qBittorrent, a failure in an app's own
+status of a client, link or connection, a sign-in in Jellyfin's activity log, and a line
+in Seerr's log (and an arr's) for a check of Seerr's that fails. The
+[threat model](docs/security/threat-model.md#what-runs-and-who-can-reach-it) says more.
+You need Docker (Engine 24 or newer, with the Compose plugin 2.24 or newer), Node 24 and
 pnpm.
 
 ```bash
@@ -364,7 +383,7 @@ pnpm --silent mediaplane credentials --home .mediaplane-dev
 
 This starts real containers on this machine, with the web UIs on `localhost`. The last
 command shows the admin login, which qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin
-use, and each app's address.
+use, and Seerr through Jellyfin, and each app's address.
 The first `apply` downloads several GB of images, so it can take a while. To remove the
 containers, run `docker compose -p mediaplane-dev down`, then
 `sudo rm -rf .mediaplane-dev`. Seerr's folder belongs to uid 1000, which is why `sudo`
@@ -401,9 +420,9 @@ So Mediaplane isn't instead of a pipeline. It is built to run inside one:
 
 The pipeline decides what the stack is, and Mediaplane does the stateful part. Today
 that covers generating the keys, deploying, setting Jellyfin up and taking the key it
-makes, setting the shared login in the apps, linking Sonarr and Radarr to qBittorrent and
-Jellyfin and Prowlarr to them, and checking. The rest of the wiring and change detection
-are what is being built next.
+makes, signing Seerr in through it, setting the shared login in the apps, linking Sonarr
+and Radarr to qBittorrent and Jellyfin, Prowlarr to them, and Seerr to all three, and
+checking. Plex and change detection are what is being built next.
 
 ### Why not just write the Compose file myself?
 
@@ -421,7 +440,9 @@ and keep. What it adds is everything around the file:
 - Prowlarr linked to Sonarr and Radarr, with a Cloudflare solver as its indexer proxy;
 - Jellyfin set up by `apply` before its web UI is published on your network, with its
   libraries, and told of each import by Sonarr and Radarr;
-- next, the rest of the wiring between the apps.
+- Seerr signed in through Jellyfin by `apply` before its web UI is published, and
+  linked to Jellyfin, Sonarr and Radarr;
+- next, Plex.
 
 ### How is this different from Buildarr or Recyclarr?
 
@@ -430,8 +451,8 @@ as quality profiles. Mediaplane deploys the whole stack and makes it safe: gener
 secrets, a socket proxy, a tested VPN kill switch, and a private wiring network. It wires
 the apps to each other, with `plan` and `apply` and a history of what it did, and leaves
 the rest of each app's settings to you. Today it sets the shared login, sets Jellyfin
-up, links Sonarr and Radarr to qBittorrent and Jellyfin, and Prowlarr to them; Seerr and
-Plex come in Slices 6 and 7.
+and Seerr up, links Sonarr and Radarr to qBittorrent and Jellyfin, Prowlarr to them, and
+Seerr to all three; Plex comes in Slice 7.
 
 They can be used together. Recyclarr is planned for M4.
 
@@ -487,9 +508,9 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
 - **Merged:** S1 (the pure core), S2a (`plan` against a real host), S2b (`apply`), S2c
   (packaging), S3a (the shared admin and pre-start files), S3d (the VPN's kill-switch
   test and `vpn-check`), S3b (the wiring framework), S3c (the download path), S4
-  (indexers) and S5 (Jellyfin).
-- **Next:** S6 (requests).
-- **After that:** S7 to S9: Plex, drift detection, and the release.
+  (indexers), S5 (Jellyfin) and S6 (requests).
+- **Next:** S7 (Plex).
+- **After that:** S8 and S9: drift detection, and the release.
 
 ## Documentation
 
@@ -511,8 +532,9 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
 - **[Runbook: the VPN is down](docs/runbooks/vpn-down.md):** what `vpn-check` found, and
   what to do about a VPN that is down or a leak.
 - **[Runbook: wiring failed](docs/runbooks/wiring-failed.md):** an app refused Mediaplane's
-  key or a change, Jellyfin's first-run setup failed, an arr can't reach qBittorrent or
-  Jellyfin, Prowlarr can't make its proxy, or Mediaplane can't reach an app.
+  key or a change, Jellyfin's or Seerr's first-run setup failed or waits, an arr can't
+  reach qBittorrent or Jellyfin, Seerr can't reach an arr, Prowlarr can't make its proxy,
+  or Mediaplane can't reach an app.
 - **[Threat model](docs/security/threat-model.md):** what is protected, how, and what
   isn't.
 - **[Architecture decision records](docs/adr/):** why things are the way they are.

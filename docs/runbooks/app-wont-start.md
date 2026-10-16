@@ -63,10 +63,11 @@
   `Healthy`. In the first seconds of every start, it answers `Degraded`, then Jellyfin
   restarts its server, which answers 503 for a few seconds more (seen on Jellyfin 12.2).
   Read its log (check 3) for what it is doing.
-- **Jellyfin runs, but its port isn't open.** `apply` starts Jellyfin with no published
-  port while its first-run setup is open, and publishes it only once the setup is
-  finished and Mediaplane has asked once more that it is. If `apply` failed at its
-  first-run setup step, or `plan` lists Jellyfin under `First-run setup:`, see
+- **Jellyfin or Seerr runs, but its port isn't open.** `apply` starts Jellyfin, and Seerr
+  with Jellyfin, with no published port while their first-run setup is open, and
+  publishes each only once its setup is finished and Mediaplane has asked once more that
+  it is. If `apply` failed at its first-run setup step, warned that Seerr's setup waits,
+  or `plan` lists the app under `First-run setup:`, see
   [wiring failed](wiring-failed.md). What this covers, and what voids it, is in
   [T16](../security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
 - **A slow start.** With the health checks Mediaplane sets, failed checks don't count
@@ -79,7 +80,9 @@
   connection, a 500, 502, 503 or 504 answer, or a rate limit), apply has already retried
   three times, after 5, 15 and 45 seconds. So the error is likely to last: a wrong image
   name or tag, a refused login, a name that doesn't resolve, or a long outage. Check the
-  network and the registry, then run `apply` again.
+  network and the registry, then run `apply` again. A registry's brief failure to
+  resolve an image's digest ("not found" for a digest it serves) is retried the same
+  way: Compose 2.x asks the registry again even for an image that is already present.
 - **`compose.override.yaml` broke it.** `plan` reports `compose.invalid` when Compose
   rejects the file. Otherwise, take the change out and run `apply` again.
 - **A `version:` you chose.** It is an untested combination, and `plan` warns about it.

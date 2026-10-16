@@ -540,7 +540,7 @@ in `compose.override.yaml` is therefore wired automatically.
 | Command | Purpose |
 |---|---|
 | `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt, including the format of `--vpn-addresses` (on a terminal, only the refusal of `--vpn-addresses` without `--vpn-provider`, and whether `--lan-subnet` fits this host, wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file. It also checks the home first, creates the data folder, adds a note before each question, and takes the WireGuard key on a hidden prompt (§11, Slice 3b) |
-| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key or password check can leave a mark in an app: §11, Slices 3c, 4 and 5); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
+| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key or password check can leave a mark in an app: §11, Slices 3c, 4, 5 and 6); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
 | `apply` | Converge on `stack.yaml` (§5) |
 | `status [app]` | Container health, VPN state, and the last apply's outcome |
 | `drift` | Report drift only (§6.3) |
@@ -1456,3 +1456,116 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 - **Jellyfin's key, deleted by hand,** shuts Mediaplane out of Jellyfin, and `plan` says
   so. Removing it from `state/secrets.json` has the next `apply` sign in, make a new one,
   and give it to the arrs' connections; Slice 8 automates that, with key recovery.
+
+### Slice 6: requests (2026-10-16)
+
+- **Seerr's first sign-in is a first-run setup, before it is published** (§5 step 9,
+  §6.1, §6.4). Until its first sign-in, Seerr 3.5 lets anyone who reaches its port sign
+  in through a Jellyfin of their own choosing (`POST /api/v1/auth/jellyfin` with a
+  `hostname`) and be its admin, and its key does nothing (403) until that admin exists
+  (probed). So Seerr has a `bootstrap`, as Jellyfin does, and starts unpublished.
+  - §6.4's guarantee holds for Seerr as it does for Jellyfin: while `apply` runs the
+    stack. An override that changes Seerr's network, or the stack run outside
+    Mediaplane, voids it (threat model T16).
+  - **Done** is its `settings.json` naming a media server (`mediaServerType` 1 to 3; 4
+    is none), and Mediaplane's record that the setup is its own. Its key is Mediaplane's
+    (`API_KEY`), so a setup may make no key, and then no key tells whose setup it is.
+    The record is `setUp` in `state/secrets.json`: a sorted list of app names, written
+    only when it is not empty. A keyless setup counts as done only when its file says so
+    and `setUp` names the app. The record is made, at once, by a setup that succeeds or
+    that shows the app is Mediaplane's, and not by a claimed or waiting one. It is
+    dropped, and the store written at once, when a pending keyless setup runs, and made
+    again only by a success. A Seerr set up before this slice has no record, so it is
+    checked once, unpublished, then recorded. A file Mediaplane can't read has the app
+    start unpublished, and set up again, on every `apply` (`bootstrap.unreadable`), and
+    each such `apply` fails at verify (exit 1), until the file is readable.
+  - **The setup** signs in through Jellyfin, at Jellyfin's service and container port,
+    as the shared admin, which makes it Seerr's admin and Jellyfin Seerr's media server,
+    then signs out (`POST /api/v1/auth/logout`, with the session's cookie, which the
+    typed client keeps out of every message). A Seerr found set up when its setup runs
+    (with no record, or its file not saying so when `apply` started it) is Mediaplane's
+    only when its admin (its first user) is the shared admin and its Jellyfin the stack's,
+    asked with its key: the password is never sent to it, since Seerr would pass it to
+    its own Jellyfin. So is one found set up when the sign-in fails: someone inside the
+    stack may have signed in between the look and the sign-in, and Seerr then refuses a
+    second Jellyfin (500). Any other is refused as claimed (`auth`), and stays
+    unpublished. Those two questions fail closed: one that can't be answered (a timeout,
+    a 5xx) is refused as `auth` too, with "couldn't tell whether it is its own". A setup
+    with no key that fails in any other way never publishes its app either, whatever the
+    app then looks like. A setup that waits keeps its app unpublished and is asked once
+    more: if someone else finished it meanwhile, it fails with the claimed message and
+    stays unpublished.
+  - **Order, and waiting** (the roadmap's S6 item). The setups run in the order of the
+    apps' integrations, so Seerr's comes after Jellyfin's. A setup may wait
+    (`SetupWaiting`): Seerr's, while Jellyfin refuses the shared admin's password, and
+    any setup after an app whose own setup failed or waits. A setup that waits leaves its
+    app as it was, unpublished; the step warns (`bootstrap.waiting`) and doesn't fail, the
+    wire step skips that app's resources (and what requires them), and verify fails with
+    the setup still listed. So a Jellyfin whose admin password changed gets it set by the
+    wire step, and the next `apply` signs Seerr in. The roadmap's sign-in that `requires`
+    `jellyfin.admin` is this wait: a setup runs before the wire step, so it can't require
+    a resource; Seerr's link to Jellyfin requires it.
+  - **With Plex, Seerr isn't wired until Slice 7** (`notWiredYet`): the resolver leaves
+    out its API, integration and setup on a Plex stack, so nothing calls it there, and
+    its `login` says Slice 7. Its login is `'shared'` with Jellyfin, through Jellyfin.
+- **Seerr's resources** (§6.2), after Jellyfin, Sonarr and Radarr, and Prowlarr when the
+  stack has it (so §6.2's order doesn't rest on an id tie-break):
+  - `seerr.media_server`: Jellyfin at its service and port (`hostname` and `port`, as
+    Seerr's settings `ip` and `port`), with the Movies and Shows libraries enabled
+    (`libraries`, those of Mediaplane's that are enabled; one you enable is yours). Its
+    `apiKey` is the key Seerr holds for Jellyfin, which Seerr made itself in its first
+    sign-in and shows in clear: once read, it is redacted for the rest of the run, as
+    the stack's own secrets are. It is checked by using it, never compared, through
+    Seerr's list of Jellyfin's users, which fails (500) while Jellyfin refuses it
+    (probed). Mediaplane gives Seerr its own Jellyfin key only when Seerr's is refused, or
+    Jellyfin's address changes. `hostname` is never sent: it is the sign-in's field, which
+    Seerr refuses once set (500), and a stray setting in `/api/v1/settings/jellyfin`.
+    Libraries are synced from Jellyfin, then enabled one at a time; they are synced
+    again when Jellyfin's address changes, since another Jellyfin has other library ids.
+    It requires `jellyfin.admin` and both libraries.
+  - `seerr.server_sonarr` and `seerr.server_radarr`, named `<Arr> (Mediaplane)`, each
+    while the stack runs the arr: `hostname`, `port`, `activeProfile` (the profile's
+    name), `activeDirectory` (the arr's root folder) and `isDefault`; `apiKey` is a
+    secret. Seerr shows the key in clear, but it is still checked, never compared, as
+    §6.3 says, with Seerr's own test (`POST /api/v1/settings/<arr>/test`) of the server
+    it holds. Seerr's test fails with one 500 whatever the cause (probed), so a failure
+    is tested again with the stack's key, at the stack's address for the arr: a pass then
+    means the key was refused (an update); a second failure is Seerr not reaching the arr. A server is saved whole, its
+    id read-only (probed), and made with what Seerr's web UI gives a new one, but with
+    season folders on for Sonarr, Sonarr's own default; Radarr's are off, as films have
+    no seasons. Each key Seerr shows for a server is redacted once read. Each requires
+    its arr's root folder.
+  - `seerr.setup`: `initialized`, set by `POST /api/v1/settings/initialize` while it is
+    false, once Seerr's links are in place, which it requires. Seerr takes it again
+    (probed), but it is sent once.
+- **Seerr's default profile** (§6.2) needs the arr's profiles, which only the arr has.
+  A resource may now `resolve` what only the app can say, before its fields are compared:
+  the servers ask the arr through Seerr's test. `apps.seerr.sonarr_profile` and
+  `radarr_profile` name a profile; one the arr lacks fails, listing those it has. `plan`
+  leaves it unresolved, and those fields uncompared, while a resource it requires is
+  still to be put in place, as it leaves secrets unchecked. Every other field, and every
+  field of a resource without `resolve`, is compared as before.
+- **`plan`'s marks** (§5.2): Seerr's checks leave nothing in its settings, but each that
+  fails logs a line in Seerr's log, and a test with a key the arr refuses logs one in the
+  arr's (probed). A passing check logs nothing.
+- **Keys go only to the stack's own addresses.** An arr's key, Jellyfin's key and Seerr's
+  own key are sent only to the stack's address for that app (`serviceAddress`), never to
+  a host or port read from Seerr, which anyone with Seerr's admin can change. That holds
+  for the servers' second test too: it carries the stack's key and the stack's address.
+- **Seerr's key** is generated, set through `API_KEY`, which Seerr takes at every start,
+  and written by Seerr into `settings.json` (`main.apiKey`) at its first start (probed).
+  A key Seerr's web UI makes anew lasts until Seerr restarts.
+- **A request reaches the arr through outside services:** Seerr looks the title up on
+  TMDB, and the arr looks it up again on its own metadata service. So the end-to-end
+  test of the whole stack (success criterion 1) stops at the links: Seerr signed in
+  through Jellyfin, linked to Jellyfin with both libraries and to both arrs, each passing
+  Seerr's own test, a second `apply` with no changes, and hand changes put back.
+- **The typed HTTP client** gains a sign-in whose session lives in a cookie, kept out of
+  every message, and a sign-in's fields of any JSON type.
+- **Secrets read in an answer** (§6.3): a key Mediaplane reads in clear, which it didn't
+  know when the run started, joins the run's redaction from then on
+  (`AppApi.addSecret`): the clients', `plan`'s diagnostics, and the bootstrap and wire
+  steps' failures, which go into the change record. Those are the keys Jellyfin lists,
+  the key Seerr made itself in Jellyfin, and the keys Seerr shows for its servers.
+- **No new Docker API call:** Seerr's setup is the same unpublished `up` and recreate as
+  Jellyfin's (§7.2(2)).

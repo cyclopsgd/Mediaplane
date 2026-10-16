@@ -81,15 +81,20 @@ LinuxServer.io image, unmodified.
     failure is Sonarr's own message, such as Jellyfin out of its reach. A test that
     fails records a failure in Sonarr's status of the connection, as a test from its
     web UI does, and a later pass resets it.
+- **Seerr's link to it.** With Seerr in the stack and Jellyfin as the media server,
+  `apply` adds `Sonarr (Mediaplane)` to Seerr (`seerr.server_sonarr`, see
+  [Seerr's README](../seerr/README.md)), with Sonarr's key, its root folder, and the
+  `HD-1080p` quality profile unless `apps.seerr.sonarr_profile` names another. Seerr then
+  sends the series people request to Sonarr. A failing test of it logs a line in
+  Sonarr's log when the key is refused.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its
   address.
 
 ## Not built yet
 
-The rest of the wiring arrives in Slices 6 and 7 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
+The rest of the wiring arrives in Slice 7 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
 
-- **Slice 6:** Seerr's link to it.
-- **Slice 7:** the same connection for Plex.
+- **Slice 7:** the same connection for Plex, and Seerr's link to it with Plex.
 
 ## Changing it
 

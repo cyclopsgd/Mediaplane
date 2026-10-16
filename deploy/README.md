@@ -11,17 +11,18 @@ Mediaplane runs as two containers in their own Compose project, `mediaplane-syst
 The stack Mediaplane deploys is a separate Compose project, `mediaplane`, so `apply` can
 never touch Mediaplane itself.
 
-> Mediaplane is pre-alpha. Sonarr and Radarr are linked to qBittorrent and Jellyfin, and
-> Prowlarr to them, but Seerr is not wired yet (Slice 6 does that, Slice 7 with Plex). On
-> a home network, `init` suggests publishing the web UIs on your LAN. Until then, Seerr's
-> setup is open to anyone on your LAN until you complete it, so complete it first.
-> When `apply` runs the stack, Jellyfin's startup wizard is not published while it is
-> open: Mediaplane finishes it first. The threat model says what voids that:
+> Mediaplane is pre-alpha. Sonarr and Radarr are linked to qBittorrent and Jellyfin,
+> Prowlarr to them, and Seerr to all three; Plex is not wired yet (Slice 7). On a home
+> network, `init` suggests publishing the web UIs on your LAN. When `apply` runs the
+> stack, Jellyfin's startup wizard and Seerr's setup are not published while they are
+> open: Mediaplane finishes them first. The threat model says what voids that:
 > [T16](../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
+> With Plex, until Slice 7, Seerr's setup is open to anyone on your LAN until you
+> complete it, so complete it first.
 >
-> qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin have the shared admin login:
-> `mediaplane credentials` shows it. To keep the web UIs on this machine only, answer
-> `localhost` when `init` asks (see [First run](#first-run)).
+> qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin have the shared admin login, and
+> Seerr through Jellyfin: `mediaplane credentials` shows it. To keep the web UIs on this
+> machine only, answer `localhost` when `init` asks (see [First run](#first-run)).
 
 ## What you need
 
@@ -142,18 +143,19 @@ nothing. Without a terminal it asks nothing: pass the flags in the
   - With `lan`, it also asks whether your own network must sign in too
     (`security.login_on_lan`; `--no-login-on-lan` says no).
 
-  Until Slice 6 (Slice 7 with Plex), Seerr's setup is open to anyone on your LAN until
-  you complete it. Complete it right after the first `apply`.
+  With Plex, until Slice 7, Seerr's setup is open to anyone on your LAN until you
+  complete it. Complete it right after the first `apply`.
 
 - **The admin login.** `init` asks for its user name (`--admin-user`), and whether
   Mediaplane should generate its password or read yours from a file in the home
   (`--admin-password-file secrets/admin-password`, at least 12 characters). After
   `apply`, `mediaplane credentials` shows the login and each app's address. It shows a
   password of your own only with `--reveal`, and its `--json` output leaves out either
-  unless you add `--reveal`. qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin use it.
-  qBittorrent gets it before its first start, and Jellyfin in its first-run setup.
-  `apply` sets it in all five through their API once they run, and sets it again
-  whenever it changes.
+  unless you add `--reveal`. qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin use it,
+  and Seerr through Jellyfin. qBittorrent gets it before its first start, Jellyfin in its
+  first-run setup, and Seerr in its first sign-in. `apply` sets it in the first five
+  through their API once they run, and sets it again whenever it changes; Seerr follows
+  Jellyfin.
   - Removing your own `admin.password` brings back the password Mediaplane generated
     before, if it generated one. It keeps it, and never generates another.
 - **The VPN address.** With a VPN provider, `init` asks for your WireGuard address
@@ -239,6 +241,16 @@ compute a container's configuration hash differently
 ([ADR 0010](../docs/adr/0010-predict-container-changes-with-compose-hashes.md)). If that
 happens, the next `mediaplane plan` shows most apps as `recreate`, and the next `apply`
 recreates them once. Their data stays where it is.
+
+An update that brings Seerr's wiring treats a Seerr you set up by hand before it as one
+Mediaplane has no record of. The next `apply` recreates it
+once, unpublished, and checks it with its key, never the password. If its admin (its
+first user) is the Jellyfin login `admin.username` names and its Jellyfin is
+`jellyfin:8096`, Mediaplane records it and publishes it again; if not, it stays
+unpublished and `apply` stops. The
+[wiring failed runbook](../docs/runbooks/wiring-failed.md) has the ways out. What
+voids the guarantee that Seerr is not published while its setup is open is in
+[T16](../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
 
 ## Running without the socket proxy
 

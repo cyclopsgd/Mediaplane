@@ -79,6 +79,14 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
   connection to Jellyfin, `Jellyfin (Mediaplane)`, which has Jellyfin update its library
   when a file is imported, upgraded, renamed or deleted (see
   [Sonarr's](../sonarr/README.md) and [Radarr's](../radarr/README.md) READMEs).
+- **Seerr signs in through it.** With Seerr in the stack, once Jellyfin is set up,
+  `apply` signs Seerr in through Jellyfin as the shared admin, before Seerr is published
+  (when `apply` runs the stack: see
+  [T16](../../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)),
+  and links Seerr to it with both libraries enabled (see
+  [Seerr's README](../seerr/README.md)). That sign-in leaves Jellyfin a key named
+  `Seerr`, and a device of Seerr's, which Seerr uses: leave them. Seerr's sign-in page
+  then checks the shared admin login against Jellyfin.
 - **A health check that waits for the server.** In the first seconds of every start,
   Jellyfin's `/health` answers `Degraded` while the server itself answers 503 to
   everything else, so the check passes only on `Healthy`. Its start period is 120
@@ -88,7 +96,6 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
 
 ## Not built yet
 
-- **Slice 6:** Seerr's link to Jellyfin, signing in as its admin.
 - **Slice 8:** drift: reporting a setting changed by hand, rather than putting it back,
   and Keep mine.
 

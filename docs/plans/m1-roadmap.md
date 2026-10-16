@@ -21,12 +21,13 @@ Detailed plans so far:
 - Slice 3c: [`m1-s3c-download-path.md`](m1-s3c-download-path.md) (done).
 - Slice 4: [`m1-s4-indexers.md`](m1-s4-indexers.md) (done).
 - Slice 5: [`m1-s5-jellyfin.md`](m1-s5-jellyfin.md) (done).
+- Slice 6: [`m1-s6-requests.md`](m1-s6-requests.md) (done).
 
 Where M1 stands (the README shows the same):
 
-- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4 and S5.
-- **Next:** S6 (requests).
-- **After that:** S7 to S9.
+- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4, S5 and S6.
+- **Next:** S7 (Plex).
+- **After that:** S8 and S9.
 
 ## Slices
 
@@ -182,8 +183,9 @@ the S3c list, two S8 items and one unscheduled item. Slice 3c (2026-10-11) added
 item, five S8 items, an S9 item and an M2 item. Slice 4 (2026-10-15) added four S8 items,
 and its final review an S5 item, two S8 items, a probe in two others, two S9 test gaps
 and an S9 docs item. Slice 5 (2026-10-15) added an S6 item, six S8 items and an S9
-item, and extended one, and its final review an S8 item and four S9 items. Each slice
-plan must address the items for that slice.
+item, and extended one, and its final review an S8 item and four S9 items. Slice 6
+(2026-10-16) added an S7 item and changed one, added five S8 items and changed one, and
+added an S9 item. Each slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -398,6 +400,14 @@ password, which are S3c's (and listed again below).
   makes, and `jellyfin.admin` keeps as the shared admin (S5). Seerr's sign-in should
   `require` `jellyfin.admin`, and Seerr come `after` Jellyfin, so that a Jellyfin still to
   be set up, or one whose key is refused, skips it rather than fails it.
+  - **Done in S6,** as a first-run setup: Seerr's setup is open to anyone on its port
+    until its first sign-in, so the sign-in runs before Seerr is published, where no
+    resource can be required. Setups run in the order of `after`, so Seerr's follows
+    Jellyfin's; it waits (`bootstrap.waiting`), unpublished, without failing the step,
+    while Jellyfin refuses the shared admin's password or after Jellyfin's setup failed,
+    and the wire step skips Seerr's resources. `seerr.media_server` requires
+    `jellyfin.admin`, so a Jellyfin that refuses its key skips it. Seerr's sign-in needs
+    the password, not Jellyfin's key.
 
 **S7:**
 
@@ -409,9 +419,14 @@ password, which are S3c's (and listed again below).
   your plex.tv account, never the shared admin (spec §6.1). With Plex, Seerr's
   first sign-in uses that account too. The catalog's `login` (S3a) is `'shared'`
   or the slice that brings it, so `credentials` says their login arrives in
-  Slice 7 (Plex) or Slice 6 (Seerr). Give `login` a value for your own account,
-  and use it for both. Seerr's `comingIn` says Slice 6 on a Plex stack too, where
-  Seerr's wiring comes in Slice 7 (S4): fix that with this item.
+  Slice 7. Give `login` a value for your own account, and use it for both. Since S6,
+  Seerr's `login` is `'shared'` on a Jellyfin stack, and on a Plex stack the catalog's
+  `notWiredYet` drops Seerr's API, integration and setup and makes its login say
+  Slice 7: remove that once Seerr's Plex sign-in is built.
+- **Seerr's Plex sign-in is open too** (S6, from Seerr 3.5's code). Before its first
+  user, `POST /api/v1/auth/plex` makes whoever signs in with a plex.tv account Seerr's
+  admin, as its Jellyfin sign-in does. Make it a first-run setup before Seerr is
+  published, as S6 made the Jellyfin one, and give Seerr's resources a Plex media server.
 - **Plex's web UI is at `/web`.** `credentials` prints `http://<address>:<port>`
   for every app, so give the catalog a per-app web path.
 
@@ -518,7 +533,28 @@ password, which are S3c's (and listed again below).
   (`bootstrap.unreadable`). Decide whether drift should also report it.
 - **A failed first-run setup stops all wiring** (S5): the bootstrap step's failure skips
   the wire step, as a failed start does. Let the wire step run past a failed first-run
-  setup, with that app's resources failed so `requires` skips them (spec §5.1).
+  setup, with that app's resources failed so `requires` skips them (spec §5.1). S6 did
+  this for a setup that waits (Seerr's, while Jellyfin refuses the shared admin), whose
+  app's resources are skipped; a failed one still stops the wiring.
+- **Seerr's checks log a line when they fail** (S6, probed): Seerr's own test of a
+  server, and its list of Jellyfin's users that checks its Jellyfin key, log an error in
+  Seerr's log, and a refused key one in the arr's. Decide how often scheduled drift may
+  run them.
+- **Seerr keeps its own Jellyfin key** (S6): the one its first sign-in made, named
+  `Seerr` in Jellyfin, which Mediaplane checks by using and never keeps, so it can't be
+  rotated; it is redacted only once Mediaplane has read it in that run. Mediaplane gives
+  Seerr its own Jellyfin key only when Seerr's is refused. Decide whether drift should
+  replace it, and remove the one Seerr made.
+- **A Seerr whose `settings.json` Mediaplane can't read** is set up again, unpublished,
+  on every `apply` (S6): two recreates each time, with a warning, and `apply` fails at
+  verify (exit 1) each time, until the file is readable. Decide whether drift reports
+  it, or asks Seerr over the wiring network instead.
+- **Seerr's libraries are enabled by name, from Seerr's last sync** (S6). A library made
+  anew in Jellyfin has a new id; `plan` reads Seerr's last sync, which `apply` refreshes
+  only when the libraries differ. Decide whether drift syncs them, which writes to Seerr.
+- **Seerr's servers are its default** (S6): making `Sonarr (Mediaplane)` the default
+  clears a default of yours of the same kind, and a profile changed in Seerr is put back.
+  Keep mine must cover the servers' fields, and Seerr's libraries.
 - **A folder with a comma in its name, added by hand to a Jellyfin library** (S5), is
   never removed, because `paths` is joined with ",": `apply` tries to remove the
   pieces, which Jellyfin answers 404, so the library fails on every `apply`. Re-read
@@ -562,8 +598,11 @@ password, which are S3c's (and listed again below).
   `finally` (S5). Move the restore into one.
 - **Two wide tables** (S5): convert the README's capability table and the threat
   model's asset table to lists.
-- **A second app with a first-run setup** (S5): a published app whose wizard still
-  looks open would keep its ports in the publishing `up`. Take them away, and say so.
+- **A second app with a first-run setup** (S5): S6 brought it, Seerr. So a Jellyfin
+  `apply` started published, whose re-check still says its wizard is open, keeps its
+  ports in the publishing `up` that Seerr's setup brings: its error says that it is
+  published, and to stop it. Nothing new is exposed, since it was published already.
+  Take the ports away, and say so.
 - **Pins outside the catalog.** Renovate must also bump the images pinned in:
   - `Dockerfile` (`node`, `docker:*-cli`);
   - `deploy/mediaplane.compose.yaml` (`wollomatic/socket-proxy`);
@@ -584,6 +623,11 @@ password, which are S3c's (and listed again below).
 - **Publish the image,** and give `MEDIAPLANE_IMAGE` in
   `deploy/mediaplane.compose.yaml` a pinned default. Then the install guide can pull
   instead of build.
+- **Registry rate limits in CI** (S6). S5's first arm64 run failed on
+  `toomanyrequests` during `docker compose pull`, after apply's four tries: the runners
+  pull every image afresh, anonymously. Pull with a read-only registry token kept as a
+  secret (never given to fork PRs), or through a pull-through cache, for the e2e and
+  image jobs. S6 adds no image: each e2e file pulls only what is missing.
 
 **M2 (the panel):**
 
