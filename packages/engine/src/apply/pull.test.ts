@@ -8,6 +8,19 @@ const TLS: CommandResult = {
   error: 'Get "https://registry.test/v2/": net/http: TLS handshake timeout',
 };
 
+/** A made-up image pinned by digest, as the catalog pins every image. */
+const PINNED = `registry.test/fake/app@sha256:${'7'.repeat(64)}`;
+
+/**
+ * Compose 2.x asks the registry again for an image already present, and the registry can
+ * briefly fail to find a digest it serves (seen on Compose 2.38.2), as Compose prints it.
+ */
+const DIGEST_NOT_FOUND = [
+  ' prowlarr  Interrupted',
+  ' radarr  Interrupted',
+  `Error response from daemon: failed to resolve reference "${PINNED}": ${PINNED}: not found`,
+].join('\n');
+
 /** A sleep that returns at once and records how long it was asked to wait. */
 function sleeper(): { slept: number[]; sleep: (ms: number) => Promise<void> } {
   const slept: number[] = [];
@@ -60,6 +73,26 @@ describe('isTransientPullError', () => {
     ].join('\n');
     expect(isTransientPullError(mixed)).toBe(false);
   });
+
+  it('retries a digest the registry briefly failed to resolve', () => {
+    expect(isTransientPullError(DIGEST_NOT_FOUND)).toBe(true);
+  });
+
+  it('does not retry a missing digest mixed with an error that waiting will not fix', () => {
+    const mixed = [
+      DIGEST_NOT_FOUND,
+      'sonarr Error pull access denied for registry.test/fake, repository does not exist',
+    ].join('\n');
+    expect(isTransientPullError(mixed)).toBe(false);
+  });
+
+  it('does not retry a reference without a digest that is not found', () => {
+    expect(
+      isTransientPullError(
+        'Error response from daemon: failed to resolve reference "registry.test/fake/app:1": registry.test/fake/app:1: not found',
+      ),
+    ).toBe(false);
+  });
 });
 
 describe('pullImages', () => {
@@ -90,6 +123,39 @@ describe('pullImages', () => {
     );
     expect(calls).toHaveLength(4);
     expect(slept).toEqual([...PULL_RETRY_DELAYS_MS]);
+  });
+
+  it('tries again after the registry briefly failed to resolve a digest', async () => {
+    const { slept, sleep } = sleeper();
+    const calls: string[] = [];
+    const runtime = fakeRuntime({
+      calls,
+      pull: [{ ok: false, error: DIGEST_NOT_FOUND }, { ok: true }],
+    });
+    expect(await pullImages(runtime, {}, sleep)).toBe('images present, after 1 retry');
+    expect(calls).toEqual(['pull', 'pull']);
+    expect(slept).toEqual([5_000]);
+  });
+
+  it('never retries a reference without a digest that is not found', async () => {
+    const { slept, sleep } = sleeper();
+    const calls: string[] = [];
+    const error =
+      'failed to resolve reference "registry.test/fake/app:1": registry.test/fake/app:1: not found';
+    const runtime = fakeRuntime({ calls, pull: { ok: false, error } });
+    await expect(pullImages(runtime, {}, sleep)).rejects.toThrow(error);
+    expect(calls).toEqual(['pull']);
+    expect(slept).toEqual([]);
+  });
+
+  it('never retries a missing digest mixed with an error that waiting will not fix', async () => {
+    const { slept, sleep } = sleeper();
+    const calls: string[] = [];
+    const error = `${DIGEST_NOT_FOUND}\nsonarr Error manifest unknown: manifest unknown`;
+    const runtime = fakeRuntime({ calls, pull: { ok: false, error } });
+    await expect(pullImages(runtime, {}, sleep)).rejects.toThrow('manifest unknown');
+    expect(calls).toEqual(['pull']);
+    expect(slept).toEqual([]);
   });
 
   it('never retries an error that waiting will not fix', async () => {

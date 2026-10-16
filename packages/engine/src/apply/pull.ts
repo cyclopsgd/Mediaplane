@@ -36,13 +36,28 @@ const PERMANENT_PULL_ERRORS: readonly RegExp[] = [
 ];
 
 /**
+ * A reference pinned by digest that the registry briefly failed to resolve. Compose 2.x
+ * asks the registry again for an image already present, and a registry can answer "not
+ * found" for a digest it serves (seen on Compose 2.38.2). Every image is pinned, so a
+ * digest that pulled before is almost surely still there; one really gone fails after the
+ * retries. A reference without a digest that isn't found stays permanent.
+ */
+const DIGEST_NOT_RESOLVED =
+  /failed to resolve reference "[^"\n]*@sha256:[0-9a-f]{64}"[^\n]*not found/i;
+
+/**
  * Whether a failed pull is worth trying again: a temporary error, and nothing that waiting
  * won't fix. Compose prints one line per image, so a pull can fail both ways at once.
+ * Each line of a digest not resolved is temporary, and kept from the permanent check,
+ * whose "not found" it would match.
  */
 export function isTransientPullError(message: string): boolean {
+  const lines = message.split('\n');
+  const pinned = lines.some((line) => DIGEST_NOT_RESOLVED.test(line));
+  const rest = lines.filter((line) => !DIGEST_NOT_RESOLVED.test(line)).join('\n');
   return (
-    TRANSIENT_PULL_ERRORS.some((pattern) => pattern.test(message)) &&
-    !PERMANENT_PULL_ERRORS.some((pattern) => pattern.test(message))
+    (pinned || TRANSIENT_PULL_ERRORS.some((pattern) => pattern.test(rest))) &&
+    !PERMANENT_PULL_ERRORS.some((pattern) => pattern.test(rest))
   );
 }
 
