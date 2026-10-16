@@ -1,10 +1,10 @@
-import { chmod, mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import {
+  ensureDir,
   loadConfigFile,
   newClientId,
   PlexTvError,
-  readSecret,
   signInLink,
   STACK_PATH,
   writeFileAtomic,
@@ -78,10 +78,17 @@ export async function plexLogin(
   }
   const path = isAbsolute(ref.file) ? ref.file : join(home, ref.file);
   const shown = isAbsolute(ref.file) ? ref.file : relative(home, path);
+  // Whether the failing call is the check of the saved token, which the message says.
+  let checking = false;
   try {
-    const saved = await readSecret(ref, home, io.env);
+    // Read even with --force: a file that can't be read is the file's owner's to fix.
+    const existing = await readToken(path, shown);
+    const saved = existing === '' ? undefined : existing;
     if (saved !== undefined && !options.force) {
-      if (await works(plexTv, saved)) {
+      checking = true;
+      const takes = await works(plexTv, saved);
+      checking = false;
+      if (takes) {
         report(options, io, {
           saved: shown,
           signedIn: false,
@@ -92,6 +99,8 @@ export async function plexLogin(
       }
       io.stderr(`plex.tv refuses the Plex token in ${shown}, so sign in again.\n`);
     }
+    // Before the PIN, so a folder that can't be made loses no sign-in.
+    await prepareFolder(path, home, shown);
     const pin = await plexTv.createPin(newClientId());
     const wait = Math.min(seconds ?? pin.expiresIn, pin.expiresIn);
     // On stderr with --json: what to do, for you, apart from what scripts read.
@@ -100,22 +109,20 @@ export async function plexLogin(
       else io.stdout(text);
     };
     say(
-      `Sign in to Plex in a browser, with this link:\n\n  ${signInLink(pin)}\n\nWaiting for you to sign in (up to ${minutes(wait)})...\n`,
+      `Sign in to Plex in a browser, with this link:\n\n  ${signInLink(pin)}\n\nWaiting for you to sign in (up to ${duration(wait)})...\n`,
     );
     const token = await plexTv.waitForPin(pin, wait);
     if (token === undefined) {
       throw new LoginStopped(
-        `nobody signed in within ${minutes(wait)}; run plex-login again for a new link`,
+        `nobody signed in within ${duration(wait)}; run plex-login again for a new link`,
       );
     }
-    await mkdir(dirname(path), { recursive: true });
-    if (dirname(path) === join(home, 'secrets')) await chmod(dirname(path), 0o700);
     // Whole or not at all, and 0600: the token is the key to your Plex account.
     await writeFileAtomic(path, `${token}\n`, 0o600);
     report(options, io, {
       saved: shown,
       signedIn: true,
-      replaced: saved !== undefined,
+      replaced: existing !== undefined,
       said: `Signed in. Saved your Plex token in ${shown}. Next: run "mediaplane apply".`,
     });
     return 0;
@@ -125,14 +132,63 @@ export async function plexLogin(
       return 1;
     }
     if (!(cause instanceof PlexTvError)) throw cause;
-    const next =
-      cause.kind === 'expired'
-        ? 'the link ran out before you signed in; run plex-login again for a new one'
-        : cause.unsure
-          ? `couldn't reach plex.tv: ${cause.message}; check this host's internet connection, then run plex-login again`
-          : `plex.tv refused: ${cause.message}`;
-    printError(next, { json }, io);
+    printError(failureMessage(cause, checking, shown), { json }, io);
     return 1;
+  }
+}
+
+/**
+ * What a plex.tv failure says. "Couldn't reach" is only for no answer at all; a 403, a 429
+ * or a 5xx is an answer that doesn't say whether the token works. plex.tv's body is never
+ * quoted (the error holds the status only).
+ */
+function failureMessage(cause: PlexTvError, checking: boolean, shown: string): string {
+  const keep = `the Plex token in ${shown} is kept`;
+  const later =
+    'try again later, or run "mediaplane plex-login --force" to sign in anyway';
+  if (cause.kind === 'expired') {
+    return 'the link ran out before you signed in; run plex-login again for a new one';
+  }
+  if (cause.kind === 'unreachable') {
+    return checking
+      ? `couldn't reach plex.tv: ${cause.message}; ${keep}. Check this host's internet connection and ${later}.`
+      : `couldn't reach plex.tv: ${cause.message}; check this host's internet connection, then run plex-login again`;
+  }
+  if (cause.kind === 'failed') {
+    const status = cause.status === undefined ? '' : ` with HTTP ${String(cause.status)}`;
+    return checking
+      ? `plex.tv answered${status}, so Mediaplane can't tell whether the Plex token in ${shown} still works. It is kept. Try again later, or run "mediaplane plex-login --force" to sign in anyway.`
+      : `plex.tv answered${status}; run plex-login again later`;
+  }
+  // A refusal or an answer Mediaplane can't read: the error says which, as it is.
+  return cause.message;
+}
+
+/** The saved token ('' when the file is empty); undefined when there is no file. */
+async function readToken(path: string, shown: string): Promise<string | undefined> {
+  try {
+    return (await readFile(path, 'utf8')).trim();
+  } catch (cause) {
+    const code = (cause as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return undefined;
+    throw new LoginStopped(
+      `can't read the Plex token file ${shown} (${code ?? 'unknown error'}): fix the file's owner or mode, then run plex-login again`,
+    );
+  }
+}
+
+/** Make the token's folder: 0700 for secrets/, whatever it is already for another. */
+async function prepareFolder(path: string, home: string, shown: string): Promise<void> {
+  const folder = dirname(path);
+  try {
+    if (folder === join(home, 'secrets')) await ensureDir(folder, 0o700);
+    else await mkdir(folder, { recursive: true });
+  } catch (cause) {
+    const code = (cause as NodeJS.ErrnoException).code;
+    const name = isAbsolute(shown) ? folder : dirname(shown);
+    throw new LoginStopped(
+      `can't make the folder ${name} for the Plex token (${code ?? 'unknown error'}): fix the folder's owner or mode, then run plex-login again`,
+    );
   }
 }
 
@@ -156,7 +212,7 @@ function timeoutSeconds(value: string | undefined): number | null | undefined {
 }
 
 /** "30 minutes", "2 minutes", "1 minute", "45 seconds", "1 second". */
-function minutes(seconds: number): string {
+function duration(seconds: number): string {
   if (seconds >= 60 && seconds % 60 === 0) {
     const count = seconds / 60;
     return `${String(count)} minute${count === 1 ? '' : 's'}`;

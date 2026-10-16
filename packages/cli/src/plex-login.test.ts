@@ -1,4 +1,12 @@
-import { lstat, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readFile,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { plexTvClient, type PlexTv } from '@mediaplane/engine';
 import {
@@ -133,6 +141,125 @@ describe('mediaplane plex-login', () => {
     expect(said).not.toContain(OLD);
     expect(said).not.toContain(TOKEN);
   });
+
+  it.each([
+    [
+      403,
+      'error: plex.tv answered with HTTP 403, so Mediaplane can\'t tell whether the Plex token in secrets/plex-token still works. It is kept. Try again later, or run "mediaplane plex-login --force" to sign in anyway.\n',
+    ],
+    [
+      503,
+      'error: plex.tv answered with HTTP 503, so Mediaplane can\'t tell whether the Plex token in secrets/plex-token still works. It is kept. Try again later, or run "mediaplane plex-login --force" to sign in anyway.\n',
+    ],
+  ])(
+    'keeps the saved token, and makes no PIN, when plex.tv answers %i to the check',
+    async (status, message) => {
+      const home = await makeHome();
+      await mkdir(join(home, 'secrets'));
+      await writeFile(join(home, 'secrets', 'plex-token'), `${TOKEN}\n`);
+      const plexTv = await fakePlexTv();
+      plexTv.state.failing.push({ path: '/api/v2/user', status });
+      plexTv.state.signIn = { token: 'new-plex-token-00002', afterReads: 0 };
+      const { code, stdout, stderr } = await login(home, plexTv.client);
+      expect(code).toBe(1);
+      expect(stdout).toBe('');
+      expect(stderr).toBe(message);
+      expect(await readFile(join(home, 'secrets', 'plex-token'), 'utf8')).toBe(
+        `${TOKEN}\n`,
+      );
+      expect(plexTv.state.pins).toEqual([]);
+      expect(plexTv.state.calls.some((call) => call.startsWith('POST'))).toBe(false);
+      expect(stderr).not.toContain('fake failure');
+    },
+  );
+
+  it('says the saved token is kept when plex.tv cannot be reached for the check', async () => {
+    const home = await makeHome();
+    await mkdir(join(home, 'secrets'));
+    await writeFile(join(home, 'secrets', 'plex-token'), `${TOKEN}\n`);
+    const client = plexTvClient({
+      base: `http://127.0.0.1:${String(await closedPort())}`,
+      sleep: () => Promise.resolve(),
+    });
+    const { code, stderr } = await login(home, client);
+    expect(code).toBe(1);
+    expect(stderr).toBe(
+      'error: couldn\'t reach plex.tv: plex.tv could not be reached (ECONNREFUSED) (GET /api/v2/user); the Plex token in secrets/plex-token is kept. Check this host\'s internet connection and try again later, or run "mediaplane plex-login --force" to sign in anyway.\n',
+    );
+    expect(await readFile(join(home, 'secrets', 'plex-token'), 'utf8')).toBe(
+      `${TOKEN}\n`,
+    );
+  });
+
+  it("does not call an answer it can't understand a refusal", async () => {
+    const home = await makeHome();
+    await mkdir(join(home, 'secrets'));
+    await writeFile(join(home, 'secrets', 'plex-token'), `${TOKEN}\n`);
+    const plexTv = await fakePlexTv();
+    plexTv.state.failing.push({ path: '/api/v2/user', status: 400 });
+    const { code, stderr } = await login(home, plexTv.client);
+    expect(code).toBe(1);
+    expect(stderr).toBe(
+      'error: plex.tv refused the request (HTTP 400) (GET /api/v2/user)\n',
+    );
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'fails before any PIN when the token file exists but cannot be read, even with --force',
+    async () => {
+      const home = await makeHome();
+      await mkdir(join(home, 'secrets'));
+      const path = join(home, 'secrets', 'plex-token');
+      await writeFile(path, `${TOKEN}\n`);
+      await chmod(path, 0o000);
+      const plexTv = await fakePlexTv();
+      plexTv.state.signIn = { token: 'new-plex-token-00002', afterReads: 0 };
+      for (const args of [[], ['--force']]) {
+        const { code, stderr } = await login(home, plexTv.client, args);
+        expect(code).toBe(1);
+        expect(stderr).toBe(
+          "error: can't read the Plex token file secrets/plex-token (EACCES): fix the file's owner or mode, then run plex-login again\n",
+        );
+        expect(stderr).not.toContain(TOKEN);
+      }
+      expect(plexTv.state.calls).toEqual([]);
+    },
+  );
+
+  it('counts an empty token file as absent, and says replaced when it writes over it', async () => {
+    const home = await makeHome();
+    await mkdir(join(home, 'secrets'));
+    await writeFile(join(home, 'secrets', 'plex-token'), '  \n');
+    const plexTv = await fakePlexTv();
+    plexTv.state.signIn = { token: TOKEN, afterReads: 0 };
+    const { code, stdout } = await login(home, plexTv.client, ['--json']);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ signedIn: true, replaced: true });
+    expect(plexTv.state.calls).not.toContain('GET /api/v2/user');
+    expect(await readFile(join(home, 'secrets', 'plex-token'), 'utf8')).toBe(
+      `${TOKEN}\n`,
+    );
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'makes the folder before the PIN, so a folder it cannot make loses no sign-in',
+    async () => {
+      const home = await makeHome(
+        PLEX_STACK.replace('secrets/plex-token', 'secrets/more/plex-token'),
+      );
+      await mkdir(join(home, 'secrets'));
+      await chmod(join(home, 'secrets'), 0o500);
+      const plexTv = await fakePlexTv();
+      plexTv.state.signIn = { token: TOKEN, afterReads: 0 };
+      const { code, stderr } = await login(home, plexTv.client);
+      await chmod(join(home, 'secrets'), 0o700);
+      expect(code).toBe(1);
+      expect(stderr).toBe(
+        "error: can't make the folder secrets/more for the Plex token (EACCES): fix the folder's owner or mode, then run plex-login again\n",
+      );
+      expect(plexTv.state.calls).toEqual([]);
+    },
+  );
 
   it('stops after --timeout when nobody signs in, and saves nothing', async () => {
     const home = await makeHome();
