@@ -310,6 +310,29 @@ describe('planWiring', () => {
     ).toEqual([{ resource: 'sonarr.login', action: 'update', changes: ['profile'] }]);
   });
 
+  it('compares every field of a resource without `resolve` while a resource it requires is yet to be made', async () => {
+    const first: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'first',
+      secrets: [],
+      observe: () => Promise.resolve(undefined),
+    };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    // Nothing resolves the profile: not running `resolve` is no reason to skip it.
+    const spec: ResourceSpec = { ...profiled('HD', { requires: ['sonarr.first'] }).spec };
+    delete spec.resolve;
+    expect(
+      (
+        await planWiring(
+          options(sonarr, { stack: sonarrWith([first, spec]), known: PROFILED }),
+        )
+      ).changes,
+    ).toEqual([
+      { resource: 'sonarr.first', action: 'create' },
+      { resource: 'sonarr.login', action: 'update', changes: ['profile'] },
+    ]);
+  });
+
   it('leaves the secrets unchecked while a resource they require is to be updated, or could not be looked at', async () => {
     // "sonarr.first" holds another user, so apply would update it; then the app refuses
     // it (404), so plan can't say. Either way it isn't in place yet.

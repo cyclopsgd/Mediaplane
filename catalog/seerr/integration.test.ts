@@ -146,7 +146,7 @@ describe("Seerr's media server", () => {
   });
 
   it("gives Seerr Mediaplane's key once Jellyfin refuses its own, or Jellyfin moved", async () => {
-    const { api, state, jellyfin } = await seerr();
+    const { api, state, jellyfin, calls } = await seerr();
     const desired = wanted(spec);
     jellyfin.apiKeys = jellyfin.apiKeys.filter((k) => k.AppName !== 'Seerr');
     const observed = await spec.observe(api, undefined, desired);
@@ -157,13 +157,38 @@ describe("Seerr's media server", () => {
     await spec.update(api, desired, observed);
     expect(state.seerr.jellyfin).toMatchObject({ ip: 'jellyfin', apiKey: JELLYFIN_KEY });
     expect(await spec.verify?.(api, desired, observed)).toBe(true);
-    // Pointed elsewhere by hand: put back, with the key.
+    // Seerr's field is `ip`: a `hostname` would be kept as a stray setting, and is the
+    // sign-in's field, which Seerr refuses once set.
+    expect(state.seerr.jellyfin).not.toHaveProperty('hostname');
+    // Pointed elsewhere by hand: put back, with the key, and its libraries synced again.
     state.seerr.jellyfin.ip = 'elsewhere';
     const moved = await spec.observe(api, undefined, desired);
     expect(moved?.fields.hostname).toBe('elsewhere');
     if (moved === undefined) throw new Error('moved');
+    const before = calls().length;
     await spec.update(api, desired, moved);
     expect(state.seerr.jellyfin.ip).toBe('jellyfin');
+    expect(state.seerr.jellyfin).not.toHaveProperty('hostname');
+    expect(calls(before)).toContain('POST /api/v1/settings/jellyfin/library/sync');
+  });
+
+  it("sends Mediaplane's Jellyfin key only to the stack's Jellyfin, whatever Seerr holds", async () => {
+    const { api, apis, state } = await seerr();
+    const desired = wanted(spec);
+    state.seerr.jellyfin.ip = 'elsewhere';
+    state.seerr.jellyfin.port = 4444;
+    const observed = await spec.observe(api, undefined, desired);
+    if (observed === undefined) throw new Error('observed');
+    const before = apis.app.requests.length;
+    await spec.update(api, desired, observed);
+    const carrying = apis.app.requests
+      .slice(before)
+      .filter((r) => r.body.includes(JELLYFIN_KEY));
+    expect(carrying).toHaveLength(1);
+    expect(JSON.parse(carrying[0]?.body ?? '{}')).toMatchObject({
+      ip: 'jellyfin',
+      port: 8096,
+    });
   });
 
   it('makes it when Seerr has no Jellyfin, and refuses to enable a library Jellyfin lacks', async () => {
@@ -325,6 +350,29 @@ describe.each([
     expect(await thrown(spec.create(api, desired))).toMatchObject({
       message: `Seerr at http://seerr:5055 (127.0.0.1) can't reach ${name} at http://${arr}:${String(port)} with the stack's key (POST /api/v1/settings/${arr}/test)`,
     });
+  });
+
+  it("never sends the stack's key to a host read from Seerr, which its admin can change", async () => {
+    const { api, apis, state } = await seerr();
+    const desired =
+      (await spec.resolve?.(api, wanted(spec), contextOf())) ?? wanted(spec);
+    await spec.create(api, desired);
+    const held = state.seerr[arr][0];
+    if (held === undefined) throw new Error('held');
+    // Pointed at a host of someone else's, with a key Seerr's test refuses.
+    Object.assign(held, { hostname: 'elsewhere', port: 4444, apiKey: '0'.repeat(32) });
+    const observed = await spec.observe(api, undefined, desired);
+    if (observed === undefined) throw new Error('observed');
+    const before = apis.app.requests.length;
+    expect(await spec.verify?.(api, desired, observed)).toBe(false);
+    await spec.update(api, desired, observed);
+    expect(state.seerr[arr][0]).toMatchObject({ hostname: arr, port, apiKey: key });
+    const carrying = apis.app.requests
+      .slice(before)
+      .filter((r) => r.body.includes(key))
+      .map((r) => JSON.parse(r.body) as Record<string, unknown>);
+    expect(carrying.length).toBeGreaterThan(0);
+    for (const body of carrying) expect(body).toMatchObject({ hostname: arr, port });
   });
 
   it('puts back what was changed by hand: its profile, folder and default', async () => {

@@ -5,6 +5,7 @@ import {
   type AppApi,
   type DesiredResource,
   type ResourceSpec,
+  type WiringContext,
 } from '@mediaplane/engine';
 import { z } from 'zod';
 import { secretOf } from '../_shared/secret';
@@ -16,6 +17,29 @@ const SETTINGS = '/api/v1/settings';
 
 /** The Jellyfin libraries Seerr has enabled: those Mediaplane makes, by name, in order. */
 const WANTED = LIBRARIES.map((library) => library.name);
+
+/**
+ * The stack's own address for app `id`, and its key as a secret: the only place the
+ * stack's keys ever go. Undefined when the stack has no such app. The key is missing
+ * before the app has made it: its first-run setup is one `plan` never runs, so until then
+ * the link is still wanted, and apply has the key by the wire step.
+ */
+function stackApp(
+  { stack, keys }: Pick<WiringContext, 'stack' | 'keys'>,
+  id: string,
+): { host: string; port: number; secrets: Record<string, string> } | undefined {
+  const at = serviceAddress(
+    stack.apps.find((app) => app.def.id === id),
+    'web',
+  );
+  if (at === undefined) return undefined;
+  const key = keys[id]?.apiKey;
+  return {
+    host: at.host,
+    port: at.port,
+    secrets: key === undefined ? {} : { apiKey: key },
+  };
+}
 
 const library = z.looseObject({ id: z.string(), name: z.string(), enabled: z.boolean() });
 const jellyfinSettings = z.looseObject({
@@ -102,20 +126,13 @@ const mediaServer: ResourceSpec = {
   fields: ['hostname', 'port', 'libraries'],
   secrets: ['apiKey'],
   requires: ['jellyfin.admin', 'jellyfin.library_movies', 'jellyfin.library_shows'],
-  desired: ({ stack, keys }) => {
-    const at = serviceAddress(
-      stack.apps.find((app) => app.def.id === 'jellyfin'),
-      'web',
-    );
+  desired: (ctx) => {
+    const at = stackApp(ctx, 'jellyfin');
     if (at === undefined) return undefined;
-    // Jellyfin makes its key in its first-run setup, which plan never runs: until then
-    // the link is still wanted, and apply has the key by the wire step.
-    const key = keys.jellyfin?.apiKey;
-    const secrets: Record<string, string> = key === undefined ? {} : { apiKey: key };
     return {
       name: 'Jellyfin',
       fields: { hostname: at.host, port: at.port, libraries: WANTED.join(',') },
-      secrets,
+      secrets: at.secrets,
     };
   },
   async observe(api) {
@@ -144,14 +161,15 @@ const mediaServer: ResourceSpec = {
       observed.fields.hostname !== desired.fields.hostname ||
       observed.fields.port !== desired.fields.port;
     if (moved || !(await heldKeyWorks(api))) await saveJellyfin(api, desired);
-    if (observed.fields.libraries !== desired.fields.libraries) {
+    // Another Jellyfin has other library ids, though the names match: sync them again.
+    if (moved || observed.fields.libraries !== desired.fields.libraries) {
       await enableLibraries(api);
     }
   },
 };
 
 /** Seerr's quality profile preferences, when the stack names none (spec §6.2). */
-export const PREFERRED_PROFILES = ['HD-1080p', 'Any'];
+export const PREFERRED_PROFILES = ['HD-1080p', 'Any'] as const;
 
 /** Sonarr and Radarr, as Seerr holds them. */
 const ARRS = {
@@ -202,9 +220,11 @@ const offered = z.looseObject({
  *   has, so `resolve` asks it through Seerr's own test.
  * - Seerr shows each server's key in clear, the stack's or not: once read, each is kept
  *   out of what the run says. It is checked, never compared, with Seerr's own test of
- *   the server it holds: one that fails is tested again with the stack's key, and only a
- *   pass then says the key was refused (an update); otherwise Seerr can't reach the arr,
- *   in its own words (500, "Failed to connect", probed, whatever the cause). A failing
+ *   the server it holds: one that fails is tested again with the stack's key, at the
+ *   stack's own address for the arr (never the host Seerr holds, which Seerr's admin can
+ *   change), and only a pass then says the key was refused (an update); otherwise Seerr
+ *   can't reach the arr, in its own words (500, "Failed to connect", probed, whatever
+ *   the cause). A failing
  *   test logs a line in Seerr's log, and the arr one in its own, as from Seerr's web UI.
  * - Seerr keeps a server whole, its id read-only: an update sends it back as Seerr gave
  *   it, without the id, so its other settings stay yours.
@@ -278,14 +298,9 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
     fields: ['hostname', 'port', 'activeProfile', 'activeDirectory', 'isDefault'],
     secrets: ['apiKey'],
     requires: [`${arr}.root_folder`],
-    desired: ({ stack, keys }) => {
-      const at = serviceAddress(
-        stack.apps.find((app) => app.def.id === arr),
-        'web',
-      );
+    desired: (ctx) => {
+      const at = stackApp(ctx, arr);
       if (at === undefined) return undefined;
-      const key = keys[arr]?.apiKey;
-      const secrets: Record<string, string> = key === undefined ? {} : { apiKey: key };
       return {
         name,
         fields: {
@@ -294,7 +309,7 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
           activeDirectory: spec.folder,
           isDefault: true,
         },
-        secrets,
+        secrets: at.secrets,
       };
     },
     async resolve(api, desired, ctx) {
@@ -340,14 +355,12 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
     async verify(api, desired, observed) {
       const held = await heldOf(api, observed.id);
       if ((await test(api, held)) !== undefined) return true;
-      if (
-        (await test(api, { ...held, apiKey: secretOf(desired, 'apiKey') })) !== undefined
-      ) {
-        return false;
-      }
+      // The stack's key goes only to the stack's own address for the arr, never to the
+      // host Seerr holds, which anyone who is Seerr's admin can change.
+      if ((await test(api, { ...held, ...reach(desired) })) !== undefined) return false;
       throw unreachable(
         api,
-        `http://${held.hostname}:${String(held.port)}`,
+        `http://${String(desired.fields.hostname)}:${String(desired.fields.port)}`,
         "with the key it holds, or the stack's",
       );
     },
@@ -417,9 +430,10 @@ const setup: ResourceSpec = {
  * What Mediaplane wires in Seerr (spec §6.2): Jellyfin as its media server, with its
  * libraries; Sonarr and Radarr, each while the stack runs it; then its setup, finished.
  * Its first sign-in (bootstrap.ts) comes before, and makes its admin. It comes after
- * Jellyfin, Sonarr and Radarr, whose resources its own require.
+ * Jellyfin, Sonarr and Radarr, whose resources its own require, and after Prowlarr, as
+ * spec §6.2 orders them.
  */
 export default defineIntegration({
-  after: ['jellyfin', 'radarr', 'sonarr'],
+  after: ['jellyfin', 'prowlarr', 'radarr', 'sonarr'],
   resources: [mediaServer, seerrServer('sonarr'), seerrServer('radarr'), setup],
 });
