@@ -1,11 +1,12 @@
 import {
   AppApiError,
-  serviceAddress,
   SetupWaiting,
+  stackAddress,
   type AppApi,
   type Bootstrap,
 } from '@mediaplane/engine';
 import { z } from 'zod';
+import { atStackJellyfin, jellyfinSettings } from './jellyfin';
 
 /** Seerr's media-server types (`MediaServerType`): Jellyfin's, and none yet. */
 const JELLYFIN = 2;
@@ -16,11 +17,6 @@ const SIGN_IN = '/api/v1/auth/jellyfin';
 
 const publicSettings = z.looseObject({ mediaServerType: z.number() });
 const me = z.looseObject({ jellyfinUsername: z.string().nullable().optional() });
-const jellyfinSettings = z.looseObject({
-  ip: z.string(),
-  port: z.number(),
-  apiKey: z.string(),
-});
 
 /**
  * Whether Seerr's setup is open: until its first sign-in sets its media server, anyone
@@ -35,9 +31,12 @@ async function open(api: AppApi): Promise<boolean> {
 
 /**
  * Refuse (`auth`) a Seerr that is set up but not Mediaplane's: its admin isn't the shared
- * admin, or its Jellyfin isn't the stack's. It is asked with the key, never by sending the
- * password, which would go to whatever Jellyfin Seerr was set up with. The Jellyfin key
- * Seerr holds, which it shows in clear, is kept out of what the run says.
+ * admin, or its Jellyfin isn't the stack's, with no URL base and no TLS (a user named as
+ * the shared admin is easily made on a Jellyfin of one's own, which `@<host>` in the URL
+ * base reaches). It is asked with the key, never by sending the password, which would
+ * go to whatever Jellyfin Seerr was set up with. The Jellyfin key Seerr holds, which it
+ * shows in clear, is kept out of what the run says. A question that fails is refused as
+ * `unsure`: Mediaplane couldn't tell.
  */
 async function ownSetup(
   api: AppApi,
@@ -55,15 +54,11 @@ async function ownSetup(
     if (!(cause instanceof AppApiError) || cause.kind === 'auth') throw cause;
     throw new AppApiError(
       `${api.name} at ${api.where} is set up, and Mediaplane couldn't tell whether it is its own: ${cause.message}`,
-      { kind: 'auth' },
+      { kind: 'auth', unsure: true },
     );
   }
   api.addSecret(held.apiKey);
-  if (
-    jellyfinUsername !== admin.username ||
-    held.ip !== jellyfin.host ||
-    held.port !== jellyfin.port
-  ) {
+  if (jellyfinUsername !== admin.username || !atStackJellyfin(held, jellyfin)) {
     throw new AppApiError(
       `${api.name} at ${api.where} was set up with another login or another Jellyfin (GET /api/v1/auth/me, GET /api/v1/settings/jellyfin)`,
       { kind: 'auth' },
@@ -104,10 +99,7 @@ export const seerrBootstrap: Bootstrap = {
   done: { path: 'settings.json', pattern: /"mediaServerType":\s*[123]\b/ },
   open,
   async run(api, admin, stack) {
-    const jellyfin = serviceAddress(
-      stack.apps.find((app) => app.def.id === 'jellyfin'),
-      'web',
-    );
+    const jellyfin = stackAddress(stack, 'jellyfin');
     if (jellyfin === undefined) {
       throw new AppApiError(
         `${api.name} at ${api.where} can't be set up: the stack runs no Jellyfin for it to sign in through`,

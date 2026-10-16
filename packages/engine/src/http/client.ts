@@ -36,6 +36,11 @@ export class AppApiError extends Error {
   readonly transient: boolean;
   /** Whether the request may have reached the app: false only for a refused connection. */
   readonly reachedApp: boolean;
+  /**
+   * For an `auth` refusal of an app found set up: Mediaplane couldn't tell whether the
+   * app is its own (the question failed), rather than found it isn't.
+   */
+  readonly unsure: boolean;
 
   constructor(
     message: string,
@@ -44,6 +49,7 @@ export class AppApiError extends Error {
       status?: number;
       transient?: boolean;
       reachedApp?: boolean;
+      unsure?: boolean;
     },
   ) {
     super(message);
@@ -51,6 +57,7 @@ export class AppApiError extends Error {
     this.status = details.status;
     this.transient = details.transient ?? false;
     this.reachedApp = details.reachedApp ?? true;
+    this.unsure = details.unsure ?? false;
   }
 }
 

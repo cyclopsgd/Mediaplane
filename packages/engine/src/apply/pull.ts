@@ -48,13 +48,18 @@ const DIGEST_NOT_RESOLVED =
 /**
  * Whether a failed pull is worth trying again: a temporary error, and nothing that waiting
  * won't fix. Compose prints one line per image, so a pull can fail both ways at once.
- * Each line of a digest not resolved is temporary, and kept from the permanent check,
- * whose "not found" it would match.
+ * A line of a digest not resolved is temporary, and only its "not found" is kept from the
+ * permanent check: the same line saying `denied`, `unauthorized` or `manifest unknown`
+ * is still permanent.
  */
 export function isTransientPullError(message: string): boolean {
   const lines = message.split('\n');
   const pinned = lines.some((line) => DIGEST_NOT_RESOLVED.test(line));
-  const rest = lines.filter((line) => !DIGEST_NOT_RESOLVED.test(line)).join('\n');
+  const rest = lines
+    .map((line) =>
+      DIGEST_NOT_RESOLVED.test(line) ? line.replace(/not found/gi, '') : line,
+    )
+    .join('\n');
   return (
     (pinned || TRANSIENT_PULL_ERRORS.some((pattern) => pattern.test(rest))) &&
     !PERMANENT_PULL_ERRORS.some((pattern) => pattern.test(rest))

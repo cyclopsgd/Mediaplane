@@ -1,4 +1,4 @@
-import type { ResolvedApp } from '../resolver/resolve';
+import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 
 /**
  * The service whose container serves `app` on the stack's networks: the app's own, or for
@@ -21,4 +21,19 @@ export function serviceAddress(
   return app === undefined || container === undefined
     ? undefined
     : { host: serviceOf(app), port: container };
+}
+
+/**
+ * How the stack's other apps reach its app `id` at its port `port` (`web` by default), as
+ * serviceAddress gives it: undefined when the stack runs no such app.
+ */
+export function stackAddress(
+  stack: Pick<ResolvedStack, 'apps'>,
+  id: string,
+  port = 'web',
+): { host: string; port: number } | undefined {
+  return serviceAddress(
+    stack.apps.find((app) => app.def.id === id),
+    port,
+  );
 }

@@ -382,21 +382,21 @@ up --wait again
   password, which it would pass to whatever Jellyfin it was set up with. That includes
   one with no record, and one found set up when the sign-in fails, since someone may have
   signed in first. It is Mediaplane's only when its admin (its first user) is the shared
-  admin and its Jellyfin is the stack's; a pass is recorded, and a failure of any kind,
-  including a question Mediaplane couldn't get answered, keeps it unpublished. Then
-  Mediaplane steps off the wiring network, `up` runs again, without the extra file, and
-  Compose recreates the app with its ports. Before that, the engine asks the app once more
-  whether its setup is still open, and publishes it only if it is not. If it still looks
-  open, or can't be asked, the step fails and that app is not published. An app
-  whose setup failed while it is still open stays unpublished; one whose setup is done
-  is published even when making its key failed. But an app the plan started
-  unpublished, whose shared admin is then refused, stays unpublished whatever it says:
-  its setup was finished with another login while Mediaplane set it up. For Jellyfin,
-  its appdata, read again, tells that from a setup done by hand whose file Mediaplane
-  can't read, and the error says which. Seerr has no key to tell by: one set up, but not
-  shown to be Mediaplane's, stays unpublished on every `apply` until it is. A setup that
-  makes no key (Seerr's) that fails in any way never publishes its app, however set up
-  it then looks.
+  admin and its Jellyfin is the stack's, with no URL base and no TLS; a pass is recorded,
+  and a failure of any kind, including a question Mediaplane couldn't get answered, keeps
+  it unpublished. Then Mediaplane steps off the wiring network, `up` runs again, without
+  the extra file, and Compose recreates the app with its ports. Before that, the engine
+  asks the app once more whether its setup is still open, and publishes it only if it is
+  not. If it still looks open, or can't be asked, the step fails and that app is not
+  published. An app whose setup failed while it is still open stays unpublished; one whose
+  setup is done is published even when making its key failed. But an app the plan started
+  unpublished, whose shared admin is then refused, stays unpublished whatever it says: its
+  setup was finished with another login while Mediaplane set it up. For Jellyfin, its
+  appdata, read again, tells that from a setup done by hand whose file Mediaplane can't
+  read, and the error says which. Seerr has no key to tell by: one set up, but not shown
+  to be Mediaplane's, stays unpublished on every `apply` until it is. A setup that makes
+  no key (Seerr's) that fails in any way never publishes its app, however set up it then
+  looks.
 - **No new Docker call:** the proxy allows nothing new.
 
 ## The wiring
@@ -538,13 +538,14 @@ mediaplane (the stack)
   - Seerr comes last, after Jellyfin, Sonarr, Radarr and, when the stack has it,
     Prowlarr, once its first sign-in (above) has made its admin: its key works only from
     then on.
-  - Its media server is Jellyfin, at `jellyfin:8096`, with Mediaplane's Movies and Shows
-    libraries enabled; a library you enable yourself stays yours. The key Seerr uses for
-    Jellyfin is the one Seerr made itself as it signed in. It stays while it works, which
-    Mediaplane checks with Seerr's list of Jellyfin's users. When Jellyfin refuses it, or
-    Jellyfin moves, Mediaplane gives Seerr its own Jellyfin key; on a move, Seerr's
-    libraries are synced again too, since another Jellyfin has other library ids. It
-    needs Jellyfin's admin and libraries in place.
+  - Its media server is Jellyfin, at `jellyfin:8096` with no URL base and no TLS (a URL
+    base or TLS set in Seerr counts as Jellyfin moved, and is put back), with Mediaplane's
+    Movies and Shows libraries enabled; a library you enable yourself stays yours. The key
+    Seerr uses for Jellyfin is the one Seerr made itself as it signed in. It stays while
+    it works, which Mediaplane checks with Seerr's list of Jellyfin's users. When Jellyfin
+    refuses it, or Jellyfin moves, Mediaplane gives Seerr its own Jellyfin key; on a move,
+    Seerr's libraries are synced again too, since another Jellyfin has other library ids.
+    It needs Jellyfin's admin and libraries in place.
   - Its Sonarr and Radarr servers reach each arr at its service and port, with its key,
     file into its root folder, and are the default, so requests go there. The quality
     profile is the one `apps.seerr.sonarr_profile` (or `radarr_profile`) names, else
@@ -553,10 +554,11 @@ mediaplane (the stack)
     Mediaplane checks it with Seerr's test of the server it holds, never by comparing
     it. A new Sonarr server uses season folders, as Sonarr's own default; a Radarr one
     doesn't, since films have none. Each needs its arr's root folder in place.
-  - An arr's key, and Jellyfin's, go only to that app's own address in the stack, never
-    to a host or port read from Seerr: anyone with Seerr's admin can change those. Every
-    key Mediaplane reads from Seerr is kept out of its output: the one Seerr made in
-    Jellyfin, the arrs' keys that Seerr shows, and the keys in Jellyfin's list.
+  - An arr's key, and Jellyfin's, go only to that app's own address in the stack, with no
+    URL base, never to a host, port or URL base read from Seerr: anyone with Seerr's admin
+    can change those. Every key Mediaplane reads from Seerr is kept out of its output: the
+    one Seerr made in Jellyfin, the arrs' keys that Seerr shows, and the keys in
+    Jellyfin's list.
   - Last, Seerr's setup is finished (`initialize`), once its links are in place, so its
     web UI stops offering its admin the setup wizard.
   - A request goes from Seerr to the arr through TMDB, an outside service: the end-to-end

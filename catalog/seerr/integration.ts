@@ -1,7 +1,7 @@
 import {
   AppApiError,
   defineIntegration,
-  serviceAddress,
+  stackAddress,
   type AppApi,
   type DesiredResource,
   type ResourceSpec,
@@ -12,6 +12,7 @@ import { secretOf } from '../_shared/secret';
 import { LIBRARIES } from '../jellyfin/integration';
 import { ROOT_FOLDER as MOVIES } from '../radarr/integration';
 import { ROOT_FOLDER as TV } from '../sonarr/integration';
+import { heldHost, jellyfinSettings as heldJellyfin } from './jellyfin';
 
 const SETTINGS = '/api/v1/settings';
 
@@ -28,10 +29,7 @@ function stackApp(
   { stack, keys }: Pick<WiringContext, 'stack' | 'keys'>,
   id: string,
 ): { host: string; port: number; secrets: Record<string, string> } | undefined {
-  const at = serviceAddress(
-    stack.apps.find((app) => app.def.id === id),
-    'web',
-  );
+  const at = stackAddress(stack, id);
   if (at === undefined) return undefined;
   const key = keys[id]?.apiKey;
   return {
@@ -42,12 +40,7 @@ function stackApp(
 }
 
 const library = z.looseObject({ id: z.string(), name: z.string(), enabled: z.boolean() });
-const jellyfinSettings = z.looseObject({
-  ip: z.string(),
-  port: z.number(),
-  apiKey: z.string(),
-  libraries: z.array(library),
-});
+const jellyfinSettings = heldJellyfin.extend({ libraries: z.array(library) });
 
 /** Which of Mediaplane's libraries Seerr has enabled, as one list: the managed field. */
 function enabledOf(libraries: readonly z.infer<typeof library>[]): string {
@@ -57,9 +50,9 @@ function enabledOf(libraries: readonly z.infer<typeof library>[]): string {
 }
 
 /**
- * Whether Seerr reaches Jellyfin with the key it holds: its list of Jellyfin's users, which
- * it asks Jellyfin for with that key, fails with a 500 while Jellyfin refuses the key
- * (probed). That failure logs a line in Seerr's log, as one from its web UI does.
+ * Whether Seerr reaches Jellyfin with the key it holds: its list of Jellyfin's users,
+ * which it asks Jellyfin for with that key, fails with a 500 while Jellyfin refuses the
+ * key (probed). That failure logs a line in Seerr's log, as one from its web UI does.
  */
 async function heldKeyWorks(api: AppApi): Promise<boolean> {
   try {
@@ -72,9 +65,10 @@ async function heldKeyWorks(api: AppApi): Promise<boolean> {
 }
 
 /**
- * Point Seerr at Jellyfin, with Mediaplane's key for Jellyfin. Seerr saves it only once it
- * has reached Jellyfin there with that key. `ip` is the setting; a `hostname` would be
- * kept as a stray setting, and is the sign-in's field, which Seerr refuses once set.
+ * Point Seerr at Jellyfin, with no URL base and no TLS, with Mediaplane's key for
+ * Jellyfin. Seerr saves it only once it has reached Jellyfin there with that key. `ip` is
+ * the setting; a `hostname` would be kept as a stray setting, and is the sign-in's field,
+ * which Seerr refuses once set.
  */
 async function saveJellyfin(api: AppApi, desired: DesiredResource): Promise<void> {
   await api.submit('POST', `${SETTINGS}/jellyfin`, {
@@ -111,8 +105,8 @@ async function enableLibraries(api: AppApi): Promise<void> {
 }
 
 /**
- * Seerr's media server (spec §6.2): Jellyfin, at its service and container port, with its
- * Movies and Shows libraries enabled.
+ * Seerr's media server (spec §6.2): Jellyfin, at its service and container port, with no
+ * URL base and no TLS, and its Movies and Shows libraries enabled.
  * - Seerr's first sign-in sets it (bootstrap.ts), with a key Seerr makes itself in
  *   Jellyfin ("Seerr"), which Seerr shows in clear: once read, it is kept out of what
  *   the run says. That key stays while it works: the secret is checked by using it
@@ -144,7 +138,8 @@ const mediaServer: ResourceSpec = {
           id: null,
           name: 'Jellyfin',
           fields: {
-            hostname: held.ip,
+            // With TLS or a URL base, the URL Seerr calls: another host than the stack's.
+            hostname: heldHost(held),
             port: held.port,
             libraries: enabledOf(held.libraries),
           },
@@ -221,11 +216,11 @@ const offered = z.looseObject({
  * - Seerr shows each server's key in clear, the stack's or not: once read, each is kept
  *   out of what the run says. It is checked, never compared, with Seerr's own test of
  *   the server it holds: one that fails is tested again with the stack's key, at the
- *   stack's own address for the arr (never the host Seerr holds, which Seerr's admin can
- *   change), and only a pass then says the key was refused (an update); otherwise Seerr
- *   can't reach the arr, in its own words (500, "Failed to connect", probed, whatever
- *   the cause). A failing
- *   test logs a line in Seerr's log, and the arr one in its own, as from Seerr's web UI.
+ *   stack's own address for the arr, with no URL base (never the host or base Seerr
+ *   holds, which Seerr's admin can change), and only a pass then says the key was
+ *   refused (an update); otherwise Seerr can't reach the arr, in its own words (500,
+ *   "Failed to connect", probed, whatever the cause). A failing test logs a line in
+ *   Seerr's log, and the arr one in its own, as from Seerr's web UI.
  * - Seerr keeps a server whole, its id read-only: an update sends it back as Seerr gave
  *   it, without the id, so its other settings stay yours.
  * - It requires the arr's root folder, which it names, and Seerr comes after the arr.
@@ -243,11 +238,16 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
       throw cause;
     }
   };
+  /**
+   * Where the stack's key goes: the stack's own address for the arr, without TLS and with
+   * no URL base, since Seerr adds the base after the port (`@<host>` would be a host).
+   */
   const reach = (desired: DesiredResource) => ({
     hostname: desired.fields.hostname,
     port: desired.fields.port,
     apiKey: secretOf(desired, 'apiKey'),
     useSsl: false,
+    baseUrl: '',
   });
   const unreachable = (api: AppApi, at: string, how: string) =>
     new AppApiError(
@@ -356,7 +356,7 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
       const held = await heldOf(api, observed.id);
       if ((await test(api, held)) !== undefined) return true;
       // The stack's key goes only to the stack's own address for the arr, never to the
-      // host Seerr holds, which anyone who is Seerr's admin can change.
+      // host or URL base Seerr holds, which anyone who is Seerr's admin can change.
       if ((await test(api, { ...held, ...reach(desired) })) !== undefined) return false;
       throw unreachable(
         api,

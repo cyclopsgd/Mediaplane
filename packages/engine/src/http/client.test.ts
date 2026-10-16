@@ -1403,6 +1403,29 @@ describe("createAppApi: Seerr's session", () => {
   });
 });
 
+describe('createAppApi: a session cookie that is not validly percent-encoded', () => {
+  it('is kept out of what the run says as it is set, and the session still works', async () => {
+    const found = foundSecrets();
+    const odd = 's%ZZfake-session.signed';
+    const { api, app } = await sonarr(
+      (request) =>
+        request.path === '/api/v1/auth/jellyfin'
+          ? {
+              status: 200,
+              body: {},
+              headers: { 'Set-Cookie': `connect.sid=${odd}; Path=/` },
+            }
+          : { status: 500, body: { message: `near ${odd}` } },
+      { found, secrets: [] },
+    );
+    const session = await api.session('/api/v1/auth/jellyfin', {}, 'connect.sid', []);
+    if (session === undefined) throw new Error('the sign-in must pass');
+    expect(found.values).toEqual([odd]);
+    expect((await failure(session.check('/boom'))).message).toContain('near ***');
+    expect(app.requests[1]?.headers.cookie).toBe(`connect.sid=${odd}`);
+  });
+});
+
 describe('createAppApi: a secret read in an answer', () => {
   /** A key an app holds in clear, which the run didn't know of when it started. */
   const HELD = 'e'.repeat(32);

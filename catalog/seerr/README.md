@@ -32,10 +32,11 @@ With Jellyfin as the media server (with Plex, see Not built yet):
   who reaches Seerr can sign in through a Jellyfin of their own and be its admin. So
   `apply` starts Seerr with no port published, and once Jellyfin is set up, signs Seerr in
   through Jellyfin as the shared admin: that makes the shared admin Seerr's admin, and
-  Jellyfin, at `jellyfin:8096`, its media server. It signs out again at once, and only
-  then publishes Seerr. `plan` lists it under `First-run setup:`. Seerr counts as set up
-  only when its `settings.json` says so (`mediaServerType`) and Mediaplane's record does
-  (`setUp` in `state/secrets.json`, a list of app names). A Seerr someone else signed in
+  Jellyfin, at `jellyfin:8096` with no URL base and no TLS, its media server. It signs
+  out again at once, and only then publishes Seerr. `plan` lists it under
+  `First-run setup:`. Seerr counts as set up only when its `settings.json` says so
+  (`mediaServerType`) and Mediaplane's record does (`setUp` in `state/secrets.json`, a
+  list of app names). A Seerr someone else signed in
   to first, even in the moment before Mediaplane's sign-in, stays unpublished, and
   `apply` stops. This holds when `apply` runs the stack; the threat model lists what
   voids it, such as a Seerr whose appdata is reset outside `apply`:
@@ -43,8 +44,8 @@ With Jellyfin as the media server (with Plex, see Not built yet):
 - **A Seerr set up before this slice,** by hand, has no record. The first `apply` starts
   it unpublished once and checks it with its key, never the password. It is
   Mediaplane's only when its admin (its first user) is the Jellyfin login
-  `admin.username` names and its Jellyfin is `jellyfin:8096`; then it is recorded and
-  published. Otherwise it stays unpublished, and the
+  `admin.username` names and its Jellyfin is `jellyfin:8096`, with no URL base and no
+  TLS; then it is recorded and published. Otherwise it stays unpublished, and the
   [runbook](../../docs/runbooks/wiring-failed.md) has the ways out.
 - **Its login** is Jellyfin's: on Seerr's sign-in page, choose Jellyfin and use the
   shared admin login (`mediaplane credentials`). It follows Jellyfin's, so a change of
@@ -54,12 +55,13 @@ With Jellyfin as the media server (with Plex, see Not built yet):
   `API_KEY`, which Seerr takes at every start (its `settings.json` keeps the first). It
   works once Seerr has its admin.
 - **Its media server** (`seerr.media_server`): Jellyfin, at its service and port, with
-  the Movies and Shows libraries enabled. A library you enable in Seerr stays yours.
-  Seerr uses the key it made itself in Jellyfin as it signed in (named `Seerr` in
-  Jellyfin's dashboard): Mediaplane checks that it works, and gives Seerr its own
-  Jellyfin key only when Jellyfin refuses Seerr's, or Jellyfin moves, when Seerr's
-  libraries are synced again too. Seerr shows that key in clear: Mediaplane keeps it
-  out of all it prints and records.
+  no URL base and no TLS (either, set in Seerr, counts as Jellyfin moved, and `apply`
+  puts it back), and the Movies and Shows libraries enabled. A library you enable in
+  Seerr stays yours. Seerr uses the key it made itself in Jellyfin as it signed in
+  (named `Seerr` in Jellyfin's dashboard): Mediaplane checks that it works, and gives
+  Seerr its own Jellyfin key only when Jellyfin refuses Seerr's, or Jellyfin moves,
+  when Seerr's libraries are synced again too. Seerr shows that key in clear: Mediaplane
+  keeps it out of all it prints and records.
 - **Its Sonarr and Radarr servers** (`seerr.server_sonarr`, `seerr.server_radarr`), each
   while the stack runs the arr, named `Sonarr (Mediaplane)` and `Radarr (Mediaplane)`: the
   arr at its service and port, with its key, its root folder, a quality profile, and set

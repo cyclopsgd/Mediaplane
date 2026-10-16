@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { wiringStack } from '../testing/wiring';
 import { fixtureCatalog } from '../testing/fixtures';
-import { serviceAddress, serviceOf } from './address';
+import { serviceAddress, serviceOf, stackAddress } from './address';
 
 const STACK = (qbittorrent: string) => `version: 1
 paths: { data: /srv/data }
@@ -39,5 +39,18 @@ describe('serviceAddress', () => {
   it('gives nothing for an app the stack lacks, or a port it has none of', () => {
     expect(serviceAddress(undefined, 'web')).toBeUndefined();
     expect(serviceAddress(appOf('sonarr'), 'api')).toBeUndefined();
+  });
+});
+
+describe('stackAddress', () => {
+  it("finds the stack's app by its id, and gives nothing for one the stack lacks", () => {
+    const stack = wiringStack(fixtureCatalog, STACK('{}'));
+    expect(stackAddress(stack, 'sonarr')).toEqual({ host: 'sonarr', port: 8989 });
+    expect(stackAddress(stack, 'qbittorrent', 'web')).toEqual({
+      host: 'gluetun',
+      port: 8080,
+    });
+    expect(stackAddress(stack, 'radarr')).toBeUndefined();
+    expect(stackAddress(stack, 'sonarr', 'api')).toBeUndefined();
   });
 });

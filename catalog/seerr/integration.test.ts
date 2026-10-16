@@ -191,6 +191,51 @@ describe("Seerr's media server", () => {
     });
   });
 
+  it.each([
+    [
+      'a URL base to another host',
+      { urlBase: '@198.51.100.7' },
+      'http://jellyfin:8096@198.51.100.7',
+    ],
+    ['a URL base', { urlBase: '/jellyfin' }, 'http://jellyfin:8096/jellyfin'],
+    ['TLS', { useSsl: true }, 'https://jellyfin:8096'],
+  ])(
+    'sees %s as Jellyfin moved, and puts it back through the settings, never sending hostname',
+    async (_what, change, seen) => {
+      const { api, apis, state } = await seerr();
+      const desired = wanted(spec);
+      Object.assign(state.seerr.jellyfin, change);
+      const observed = await spec.observe(api, undefined, desired);
+      expect(observed?.fields.hostname).toBe(seen);
+      if (observed === undefined) throw new Error('observed');
+      const before = apis.app.requests.length;
+      await spec.update(api, desired, observed);
+      expect(state.seerr.jellyfin).toMatchObject({
+        ip: 'jellyfin',
+        port: 8096,
+        useSsl: false,
+        urlBase: '',
+      });
+      const sent = apis.app.requests.slice(before);
+      const saves = sent.filter(
+        (r) => r.method === 'POST' && r.path === '/api/v1/settings/jellyfin',
+      );
+      expect(saves).toHaveLength(1);
+      const body = JSON.parse(saves[0]?.body ?? '{}') as Record<string, unknown>;
+      expect(body).toMatchObject({
+        ip: 'jellyfin',
+        port: 8096,
+        useSsl: false,
+        urlBase: '',
+      });
+      expect(body).not.toHaveProperty('hostname');
+      expect(sent.some((r) => r.path === '/api/v1/auth/jellyfin')).toBe(false);
+      expect((await spec.observe(api, undefined, desired))?.fields.hostname).toBe(
+        'jellyfin',
+      );
+    },
+  );
+
   it('makes it when Seerr has no Jellyfin, and refuses to enable a library Jellyfin lacks', async () => {
     const { api, state, jellyfin } = await seerr();
     const desired = wanted(spec);
@@ -373,6 +418,36 @@ describe.each([
       .map((r) => JSON.parse(r.body) as Record<string, unknown>);
     expect(carrying.length).toBeGreaterThan(0);
     for (const body of carrying) expect(body).toMatchObject({ hostname: arr, port });
+  });
+
+  it("sends the stack's key with no URL base, whatever base Seerr holds for the server", async () => {
+    const { api, apis, state } = await seerr();
+    const before = apis.app.requests.length;
+    const desired =
+      (await spec.resolve?.(api, wanted(spec), contextOf())) ?? wanted(spec);
+    await spec.create(api, desired);
+    const held = state.seerr[arr][0];
+    if (held === undefined) throw new Error('held');
+    // A URL base that takes Seerr's test to a host of someone else's, and a key the
+    // test refuses: the retest and the update carry the stack's key.
+    Object.assign(held, { baseUrl: '@203.0.113.9', apiKey: '0'.repeat(32) });
+    const observed = await spec.observe(api, undefined, desired);
+    if (observed === undefined) throw new Error('observed');
+    const verdict = await (
+      spec.verify?.(api, desired, observed) ?? Promise.resolve()
+    ).catch((cause: unknown) => cause);
+    await spec.update(api, desired, observed);
+    const carrying = apis.app.requests
+      .slice(before)
+      .filter((r) => r.body.includes(key))
+      .map((r) => `${r.method} ${r.path} ${JSON.stringify(JSON.parse(r.body))}`);
+    // The resolve's test, the create, the retest and the update.
+    expect(carrying.length).toBeGreaterThanOrEqual(4);
+    for (const request of carrying) expect(request).toContain('"baseUrl":""');
+    for (const request of carrying) expect(request).not.toContain('203.0.113.9');
+    expect(verdict).toBe(false);
+    expect(state.seerr[arr][0]).toMatchObject({ baseUrl: '', apiKey: key });
+    expect(await spec.verify?.(api, desired, observed)).toBe(true);
   });
 
   it('puts back what was changed by hand: its profile, folder and default', async () => {

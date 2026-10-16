@@ -86,6 +86,16 @@ describe('isTransientPullError', () => {
     expect(isTransientPullError(mixed)).toBe(false);
   });
 
+  it.each([
+    ['denied', 'pull access denied for registry.test/fake/app'],
+    ['unauthorized', 'unauthorized: authentication required'],
+    ['manifest unknown', 'manifest unknown: manifest unknown'],
+  ])('does not retry a missing digest whose own line also says %s', (_what, also) => {
+    const line = `Error response from daemon: failed to resolve reference "${PINNED}": ${also}: ${PINNED}: not found`;
+    expect(isTransientPullError(line)).toBe(false);
+    expect(isTransientPullError(`${DIGEST_NOT_FOUND}\n${line}`)).toBe(false);
+  });
+
   it('does not retry a reference without a digest that is not found', () => {
     expect(
       isTransientPullError(

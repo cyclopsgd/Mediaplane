@@ -1484,17 +1484,18 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     then signs out (`POST /api/v1/auth/logout`, with the session's cookie, which the
     typed client keeps out of every message). A Seerr found set up when its setup runs
     (with no record, or its file not saying so when `apply` started it) is Mediaplane's
-    only when its admin (its first user) is the shared admin and its Jellyfin the stack's,
-    asked with its key: the password is never sent to it, since Seerr would pass it to
-    its own Jellyfin. So is one found set up when the sign-in fails: someone inside the
-    stack may have signed in between the look and the sign-in, and Seerr then refuses a
-    second Jellyfin (500). Any other is refused as claimed (`auth`), and stays
-    unpublished. Those two questions fail closed: one that can't be answered (a timeout,
-    a 5xx) is refused as `auth` too, with "couldn't tell whether it is its own". A setup
-    with no key that fails in any other way never publishes its app either, whatever the
-    app then looks like. A setup that waits keeps its app unpublished and is asked once
-    more: if someone else finished it meanwhile, it fails with the claimed message and
-    stays unpublished.
+    only when its admin (its first user) is the shared admin and its Jellyfin the stack's
+    (`jellyfin:8096`, with no URL base and no TLS: Seerr adds `urlBase` after the port,
+    so `@<host>` there is another host), asked with its key: the password is never sent to
+    it, since Seerr would pass it to its own Jellyfin. So is one found set up when the
+    sign-in fails: someone inside the stack may have signed in between the look and the
+    sign-in, and Seerr then refuses a second Jellyfin (500). Any other is refused as
+    claimed (`auth`), and stays unpublished. Those two questions fail closed: one that
+    can't be answered (a timeout, a 5xx) is refused as `auth` too, with "couldn't tell
+    whether it is its own". A setup with no key that fails in any other way never
+    publishes its app either, whatever the app then looks like. A setup that waits keeps
+    its app unpublished and is asked once more: if someone else finished it meanwhile, it
+    fails with the claimed message and stays unpublished.
   - **Order, and waiting** (the roadmap's S6 item). The setups run in the order of the
     apps' integrations, so Seerr's comes after Jellyfin's. A setup may wait
     (`SetupWaiting`): Seerr's, while Jellyfin refuses the shared admin's password, and
@@ -1518,11 +1519,13 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     the stack's own secrets are. It is checked by using it, never compared, through
     Seerr's list of Jellyfin's users, which fails (500) while Jellyfin refuses it
     (probed). Mediaplane gives Seerr its own Jellyfin key only when Seerr's is refused, or
-    Jellyfin's address changes. `hostname` is never sent: it is the sign-in's field, which
-    Seerr refuses once set (500), and a stray setting in `/api/v1/settings/jellyfin`.
-    Libraries are synced from Jellyfin, then enabled one at a time; they are synced
-    again when Jellyfin's address changes, since another Jellyfin has other library ids.
-    It requires `jellyfin.admin` and both libraries.
+    Jellyfin's address changes. Seerr's `useSsl` and `urlBase` are part of that address:
+    with either set, `hostname` is observed as the URL Seerr calls, so it differs, and the
+    update sends `useSsl: false` and `urlBase: ''`. `hostname` is never sent: it is the
+    sign-in's field, which Seerr refuses once set (500), and a stray setting in
+    `/api/v1/settings/jellyfin`. Libraries are synced from Jellyfin, then enabled one at a
+    time; they are synced again when Jellyfin's address changes, since another Jellyfin
+    has other library ids. It requires `jellyfin.admin` and both libraries.
   - `seerr.server_sonarr` and `seerr.server_radarr`, named `<Arr> (Mediaplane)`, each
     while the stack runs the arr: `hostname`, `port`, `activeProfile` (the profile's
     name), `activeDirectory` (the arr's root folder) and `isDefault`; `apiKey` is a
@@ -1549,9 +1552,11 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   fails logs a line in Seerr's log, and a test with a key the arr refuses logs one in the
   arr's (probed). A passing check logs nothing.
 - **Keys go only to the stack's own addresses.** An arr's key, Jellyfin's key and Seerr's
-  own key are sent only to the stack's address for that app (`serviceAddress`), never to
-  a host or port read from Seerr, which anyone with Seerr's admin can change. That holds
-  for the servers' second test too: it carries the stack's key and the stack's address.
+  own key are sent only to the stack's address for that app (`serviceAddress`), with no
+  URL base, never to a host, port or URL base read from Seerr, which anyone with Seerr's
+  admin can change (Seerr adds a server's `baseUrl` after the port, so `@<host>` there is
+  another host). That holds for the servers' second test too: it carries the stack's
+  key, the stack's address and `baseUrl: ''`, as the create and the update do.
 - **Seerr's key** is generated, set through `API_KEY`, which Seerr takes at every start,
   and written by Seerr into `settings.json` (`main.apiKey`) at its first start (probed).
   A key Seerr's web UI makes anew lasts until Seerr restarts.

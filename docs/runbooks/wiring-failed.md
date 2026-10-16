@@ -367,12 +367,13 @@ differ, and a `reason` when it is `unknown`.
   failed in the same `apply`, so Mediaplane didn't try Seerr's, which goes through it.
   Fix Jellyfin's error, which comes first, then run `apply` again.
 - **`refused the request (HTTP 404): INVALID_URL (POST /api/v1/auth/jellyfin)`**
-  (`apply.bootstrap-failed`). Seerr can't reach Jellyfin at `jellyfin:8096` on the
-  stack's network. Check that Jellyfin is healthy (`mediaplane status jellyfin`), and
-  that no `compose.override.yaml` takes Jellyfin or Seerr off the stack's network, then
-  run `apply` again. Seerr stays unpublished. So it does when its setup fails in any
-  other way, even if Seerr then looks set up: Seerr's key is Mediaplane's own, so
-  nothing but a setup that succeeds shows that Seerr is Mediaplane's.
+  (`apply.bootstrap-failed`). Seerr can't reach Jellyfin at `jellyfin:8096`, with no
+  URL base and no TLS, on the stack's network. Check that Jellyfin is healthy
+  (`mediaplane status jellyfin`), and that no `compose.override.yaml` takes Jellyfin or
+  Seerr off the stack's network, then run `apply` again. Seerr stays unpublished. So
+  it does when its setup fails in any other way, even if Seerr then looks set up:
+  Seerr's key is Mediaplane's own, so nothing but a setup that succeeds shows that Seerr
+  is Mediaplane's.
 - **Seerr is set up, but Mediaplane can't show that it is its own**
   (`apply.bootstrap-failed`). The message says `was set up with another login or another
 Jellyfin`, or `is set up, and Mediaplane couldn't tell whether it is its own`. Seerr
@@ -381,7 +382,8 @@ Jellyfin`, or `is set up, and Mediaplane couldn't tell whether it is its own`. S
   Mediaplane has no record of (`setUp` in `state/secrets.json`). Mediaplane never sends
   the password to such a Seerr, which would pass it on to its Jellyfin; it asks with
   Seerr's key. It counts Seerr as its own only when Seerr's admin (its first user) is
-  the Jellyfin login `admin.username` names and its Jellyfin is `jellyfin:8096`.
+  the Jellyfin login `admin.username` names and its Jellyfin is `jellyfin:8096`, with
+  no URL base and no TLS (a URL base such as `@<host>` takes Seerr to another host).
   Otherwise Seerr stays unpublished, on every `apply` until Mediaplane can show that it
   is its own. What the message says decides what to do:
   - **`couldn't tell whether it is its own`:** one of the two questions failed, and the
@@ -392,9 +394,9 @@ Jellyfin`, or `is set up, and Mediaplane couldn't tell whether it is its own`. S
     admin or its Jellyfin is not the stack's. Three ways out, the safe one first:
     - If the Jellyfin login Seerr was set up with is yours, set `admin.username` and
       `admin.password` to it. This works only if Seerr's Jellyfin is already
-      `jellyfin:8096`.
+      `jellyfin:8096`, with no URL base and no TLS.
     - Or make Seerr's first user the Jellyfin login `admin.username` names, with
-      Seerr's Jellyfin already at `jellyfin:8096`.
+      Seerr's Jellyfin already at `jellyfin:8096`, with no URL base and no TLS.
     - Or, if you did not set Seerr up, start it afresh: stop it
       (`docker stop mediaplane-seerr-1`), remove `appdata/seerr` (with `sudo`: uid 1000
       owns it), and run `apply`. That loses Seerr's requests and users, but nothing in

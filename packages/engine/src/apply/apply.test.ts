@@ -2068,7 +2068,7 @@ describe('apply: first-run setup before the ports are published', () => {
 describe('apply: a first-run setup that makes no key, after another', () => {
   /** What a claimed setup that makes no key says it is, and what to do. */
   const CLAIMED =
-    "sonarr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. If you set it up yourself, make its admin (its first user) the Jellyfin login that admin.username names, and point its Jellyfin at jellyfin:8096, then run apply again; if not, start it afresh first, as the runbook says";
+    "sonarr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. First: if the Jellyfin login it was set up with is yours, set admin.username and admin.password to it. Or second: make its admin (its first user) the Jellyfin login that admin.username names. Either needs its Jellyfin already at jellyfin:8096, with no URL base and no TLS; then run apply again. Last, if you did not set it up: start it afresh, as the runbook says";
   /**
    * The stack with Jellyfin's FAKE_SETUP and Sonarr's FAKE_SIGN_IN, after it, and a Docker
    * that notes, at each up, which apps it starts without their ports and where each setup
@@ -2429,10 +2429,14 @@ describe('apply: a first-run setup that makes no key, after another', () => {
       );
       expect(result.diagnostics.at(-1)?.message).toContain('sonarr (first-run setup)');
     }
-    // Set up again each time, and unpublished until the app is asked.
-    expect(ups.filter((u) => u.startsWith('sonarr unpublished')).length).toBeGreaterThan(
-      0,
-    );
+    // Started unpublished on each apply, and published only once its setup has shown it
+    // is Mediaplane's (its owner is the shared admin).
+    expect(ups).toEqual([
+      'jellyfin sonarr unpublished; jellyfin open, sonarr done',
+      'all published; jellyfin done, sonarr done',
+      'sonarr unpublished; jellyfin done, sonarr done',
+      'all published; jellyfin done, sonarr done',
+    ]);
   });
 
   it('keeps unpublished, and fails, an app with a setup but no API to finish it through', async () => {

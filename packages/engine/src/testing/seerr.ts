@@ -39,10 +39,16 @@ export interface FakeSeerr {
   mediaServerType: number;
   /** Its users, by the Jellyfin user each signed in as: the first is its admin (id 1). */
   users: string[];
-  /** Its Jellyfin: where it is, the key it uses, and its libraries; ip '' until set. */
+  /**
+   * Its Jellyfin: where it is, the key it uses, and its libraries; ip '' until set. Seerr
+   * reaches it at `http(s)://<ip>:<port><urlBase>` (`getHostname`): TLS or a URL base
+   * takes it elsewhere than the stack's Jellyfin, as `@<host>` in `urlBase` does.
+   */
   jellyfin: {
     ip: string;
     port: number;
+    useSsl: boolean;
+    urlBase: string;
     apiKey: string;
     libraries: FakeSeerrLibrary[];
     [setting: string]: unknown;
@@ -66,11 +72,12 @@ export interface FakeSeerr {
   /** Paths it refuses (400), whatever is sent: as a request Seerr won't take. */
   failing: string[];
   /**
-   * Who signs in first, and through what Jellyfin (its host), just before the next
-   * sign-in reaches a Seerr nobody has set up: someone inside the stack, between
-   * Mediaplane's look at its setup and its own sign-in. Unset: nobody.
+   * Who signs in first, and through what Jellyfin (its host, at 8096, and its URL base
+   * and TLS, none unless set), just before the next sign-in reaches a Seerr nobody has
+   * set up: someone inside the stack, between Mediaplane's look at its setup and its own
+   * sign-in. Unset: nobody.
    */
-  claimant?: { user: string; jellyfin: string };
+  claimant?: { user: string; jellyfin: string; urlBase?: string; useSsl?: boolean };
   /**
    * Where Seerr keeps settings.json (its appdata folder): the fake writes it there as
    * Seerr does, naming its media-server type, on each request it answers. Unset: nowhere.
@@ -99,7 +106,14 @@ export function freshSeerr(): FakeSeerr {
   return {
     mediaServerType: SEERR_NOT_CONFIGURED,
     users: [],
-    jellyfin: { ip: '', port: 8096, apiKey: '', libraries: [] },
+    jellyfin: {
+      ip: '',
+      port: 8096,
+      useSsl: false,
+      urlBase: '',
+      apiKey: '',
+      libraries: [],
+    },
     sonarr: [],
     radarr: [],
     initialized: false,
@@ -163,10 +177,11 @@ function sessionCookie(header: string | undefined): string | undefined {
  * - before its first sign-in, anyone may sign in through a Jellyfin of their choosing
  *   (`POST /auth/jellyfin` with a hostname), and its key (`state.key`, any when empty)
  *   does nothing; the first Jellyfin admin who signs in is its admin, and sets its
- *   Jellyfin, where Seerr makes itself a key named "Seerr". After that, sending a
- *   hostname again is a 500, and a wrong password is 401;
+ *   Jellyfin, with the sign-in's URL base and TLS, where Seerr makes itself a key named
+ *   "Seerr". After that, sending a hostname again is a 500, and a wrong password is 401;
  * - a sign-in gives a session cookie, `connect.sid`, until it signs out;
- * - its Jellyfin settings, saved only once Seerr reaches Jellyfin at them with their key;
+ * - its Jellyfin settings, saved only once Seerr reaches Jellyfin at them with their key,
+ *   which it does only without TLS or a URL base;
  *   its libraries, synced from Jellyfin and enabled one by one; and a list of Jellyfin's
  *   users, which fails (500) while Jellyfin refuses Seerr's key;
  * - its Sonarr and Radarr servers, kept with their keys in clear, saved only whole (its
@@ -226,6 +241,9 @@ function answer(
       seerr.jellyfin = {
         ...seerr.jellyfin,
         ip: seerr.claimant.jellyfin,
+        port: 8096,
+        useSsl: seerr.claimant.useSsl ?? false,
+        urlBase: seerr.claimant.urlBase ?? '',
         apiKey: 'fake-claimants-key',
       };
     }
@@ -261,13 +279,30 @@ function answer(
   );
 }
 
-/** Whether Seerr reaches Jellyfin at `ip`:`port`: its service, while it runs, at 8096. */
+/** Where Seerr reaches Jellyfin, as its settings or a first sign-in name it. */
+interface JellyfinAt {
+  ip: unknown;
+  port: unknown;
+  useSsl?: unknown;
+  urlBase?: unknown;
+}
+
+/**
+ * Whether Seerr reaches the stack's Jellyfin `at`: its service, while it runs, at 8096,
+ * without TLS or a URL base (with either, Seerr calls another URL than Jellyfin's).
+ */
 function reachesJellyfin(
-  ip: unknown,
-  port: unknown,
+  at: JellyfinAt,
   jellyfin: FakeAppState | undefined,
 ): jellyfin is FakeAppState {
-  return jellyfin !== undefined && jellyfin.up && ip === 'jellyfin' && port === 8096;
+  return (
+    jellyfin !== undefined &&
+    jellyfin.up &&
+    at.ip === 'jellyfin' &&
+    at.port === 8096 &&
+    (at.useSsl ?? false) === false &&
+    (at.urlBase ?? '') === ''
+  );
 }
 
 /** Whether `key` is one of Jellyfin's keys. */
@@ -297,10 +332,15 @@ function signIn(
   if (!configured && sent.hostname === undefined) {
     return { status: 500, body: { error: 'No hostname provided.' } };
   }
-  const at = configured
-    ? { ip: seerr.jellyfin.ip, port: seerr.jellyfin.port }
-    : { ip: sent.hostname, port: sent.port ?? 8096 };
-  if (!reachesJellyfin(at.ip, at.port, jellyfin)) {
+  const at: JellyfinAt = configured
+    ? seerr.jellyfin
+    : {
+        ip: sent.hostname,
+        port: sent.port ?? 8096,
+        useSsl: sent.useSsl ?? false,
+        urlBase: sent.urlBase ?? '',
+      };
+  if (!reachesJellyfin(at, jellyfin)) {
     return { status: 404, body: { message: 'INVALID_URL' } };
   }
   const right =
@@ -316,6 +356,8 @@ function signIn(
     seerr.mediaServerType = SEERR_JELLYFIN;
     seerr.jellyfin.ip = String(at.ip);
     seerr.jellyfin.port = Number(at.port);
+    seerr.jellyfin.useSsl = at.useSsl === true;
+    seerr.jellyfin.urlBase = typeof at.urlBase === 'string' ? at.urlBase : '';
     seerr.jellyfin.apiKey = makeApiKey(jellyfin, 'Seerr');
   }
   if (!seerr.users.includes(sent.username)) seerr.users.push(sent.username);
@@ -347,8 +389,6 @@ function fakeSeerrJellyfin(
   const settings = '/api/v1/settings/jellyfin';
   const shown = () => ({
     name: 'jellyfin',
-    useSsl: false,
-    urlBase: '',
     externalHostname: '',
     serverId: 'fake',
     ...seerr.jellyfin,
@@ -358,7 +398,7 @@ function fakeSeerrJellyfin(
     const sent = body();
     const merged = { ...seerr.jellyfin, ...sent };
     // It asks Jellyfin for its system info at the merged settings first.
-    if (!reachesJellyfin(merged.ip, merged.port, jellyfin)) {
+    if (!reachesJellyfin(merged, jellyfin)) {
       seerr.errors.push('Something went wrong testing Jellyfin connection');
       return { status: 502, body: { message: 'INVALID_URL' } };
     }
@@ -370,7 +410,7 @@ function fakeSeerrJellyfin(
     return { status: 200, body: shown() };
   }
   const works =
-    reachesJellyfin(seerr.jellyfin.ip, seerr.jellyfin.port, jellyfin) &&
+    reachesJellyfin(seerr.jellyfin, jellyfin) &&
     jellyfinTakes(seerr.jellyfin.apiKey, jellyfin);
   if (path === `${settings}/users` && method === 'GET') {
     if (!works) {

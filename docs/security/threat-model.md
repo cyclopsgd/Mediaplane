@@ -340,8 +340,9 @@ Controls today:
   once. Mediaplane never signs in to a Seerr that is set up already: it would pass the
   password to whatever Jellyfin it was set up with.
 - Mediaplane sends an arr's key, Jellyfin's key and Seerr's own key only to the stack's
-  own address for that app, never to a host or port read from Seerr: anyone with Seerr's
-  admin can change those, and would receive the key.
+  own address for that app, with no URL base, never to a host, port or URL base read
+  from Seerr: anyone with Seerr's admin can change those, and would receive the key
+  (Seerr adds the URL base after the port, so `@<host>` there is another host).
 - The admin password goes to qBittorrent only in request bodies: its preferences, sent
   with its key, and the sign-in that checks it. The session cookie qBittorrent answers
   with is dropped. Its preferences hold its own key too: Mediaplane keeps only the
@@ -646,9 +647,11 @@ Controls today:
   Seerr set up before this slice, or by hand, with no record; one whose file didn't say
   it was set up when `apply` started it; and one someone signed in to in the moment
   before Mediaplane's sign-in. It is Mediaplane's only when its admin (its first user)
-  is the Jellyfin login `admin.username` names and its Jellyfin is `jellyfin:8096`. A
-  pass is recorded. Any other, and one whose check failed in any way, stays unpublished,
-  on every `apply` until Mediaplane can show that it is its own.
+  is the Jellyfin login `admin.username` names and its Jellyfin is `jellyfin:8096`,
+  with no URL base and no TLS: Seerr adds its URL base after the port, so one such as
+  `@198.51.100.7` takes it to another host, where anyone can make a user named as the
+  shared admin. A pass is recorded. Any other, and one whose check failed in any way,
+  stays unpublished, on every `apply` until Mediaplane can show that it is its own.
 - A setup that makes no key (Seerr's) that fails in any way never publishes its app,
   however set up the app then looks. One that waits (Jellyfin refuses the shared admin's
   password, say) is asked once more: if someone else finished it meanwhile, it fails as a
@@ -689,14 +692,16 @@ What remains:
   already treat as serious.
 - A Seerr claimed that way, before Mediaplane comes to it or between its look and its
   sign-in, has an admin that isn't the shared admin, or a Jellyfin that isn't the
-  stack's: it stays unpublished, and `apply` stops. One claimed through the stack's own
-  Jellyfin, as its admin, needed the shared admin's password already.
+  stack's, with no URL base and no TLS: it stays unpublished, and `apply` stops. One
+  claimed through the stack's own Jellyfin, as its admin, needed the shared admin's
+  password already.
 - A Seerr set up by hand before Slice 6, as its README then advised, has no record. The
   first `apply` of this slice starts it unpublished and checks it once, with its key and
   never the password. It stays unpublished unless its admin (its first user) is the
-  Jellyfin login `admin.username` names and its Jellyfin is `jellyfin:8096`; otherwise
-  `apply` stops, and the runbook has the ways out. Once it passes, it is recorded and
-  published; the only cost is that one unpublished recreate.
+  Jellyfin login `admin.username` names and its Jellyfin is `jellyfin:8096`, with no
+  URL base and no TLS; otherwise `apply` stops, and the runbook has the ways out. Once
+  it passes, it is recorded and published; the only cost is that one unpublished
+  recreate.
 - A wizard finished by hand before `apply` started Jellyfin (from before Slice 5, say)
   is done, so Jellyfin starts published, and nobody can claim it. If the shared admin
   can't sign in to it, `apply` stops, and Jellyfin stays published: it belongs to

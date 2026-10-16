@@ -354,6 +354,46 @@ describe("fakeStackApis' Seerr", () => {
     });
   });
 
+  it("keeps a claimant's URL base and TLS, which take Seerr to the claimant's host", async () => {
+    const { port, seerr } = await stack();
+    seerr.seerr.claimant = {
+      user: 'someone',
+      jellyfin: 'jellyfin',
+      urlBase: '@198.51.100.7',
+    };
+    await call(port, '/api/v1/auth/jellyfin', { body: FIRST });
+    expect(seerr.seerr.jellyfin).toMatchObject({
+      ip: 'jellyfin',
+      port: 8096,
+      useSsl: false,
+      urlBase: '@198.51.100.7',
+    });
+    const shown = await call(port, '/api/v1/settings/jellyfin', { headers: keyed });
+    expect(shown.body).toMatchObject({ ip: 'jellyfin', urlBase: '@198.51.100.7' });
+    // Its key check goes to that host, not to the stack's Jellyfin.
+    expect(
+      (await call(port, '/api/v1/settings/jellyfin/users', { headers: keyed })).status,
+    ).toBe(500);
+  });
+
+  it("reaches the stack's Jellyfin only without TLS or a URL base, and keeps both", async () => {
+    const { port, seerr } = await stack();
+    const signIn = (body: unknown) => call(port, '/api/v1/auth/jellyfin', { body });
+    for (const other of [{ urlBase: '@198.51.100.7' }, { useSsl: true }]) {
+      expect(await signIn({ ...FIRST, ...other })).toMatchObject({
+        status: 404,
+        body: { message: 'INVALID_URL' },
+      });
+    }
+    expect((await signIn(FIRST)).status).toBe(200);
+    expect(seerr.seerr.jellyfin).toMatchObject({ useSsl: false, urlBase: '' });
+    const settings = '/api/v1/settings/jellyfin';
+    const save = (body: unknown) => call(port, settings, { body, headers: keyed });
+    expect(await save({ urlBase: '/elsewhere' })).toMatchObject({ status: 502 });
+    expect(await save({ useSsl: true })).toMatchObject({ status: 502 });
+    expect(seerr.seerr.jellyfin).toMatchObject({ useSsl: false, urlBase: '' });
+  });
+
   it('quotes every key it holds in its refusals while echoKey is set, as an app may', async () => {
     const { port, seerr } = await stack();
     await call(port, '/api/v1/auth/jellyfin', { body: FIRST });

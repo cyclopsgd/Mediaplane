@@ -28,12 +28,15 @@ import {
   FAKE_JELLYFIN_USER_ID,
   FIXTURE_HOST,
   fakeDocker,
+  fakeJellyfinSetUp,
   fakeProbe,
   fakeRuntime,
   fakeStackApis,
   freshAppState,
   running,
+  SET_UP_JELLYFIN,
   tempDir,
+  thrown,
 } from '@mediaplane/engine/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PromptCancelled } from './prompt';
@@ -69,7 +72,7 @@ async function makeHome(stack = STACK): Promise<string> {
 const AT = '2026-10-10T12:00:00.000Z';
 
 /** The key Jellyfin made for Mediaplane, in a home of the test stack set up already. */
-const JELLYFIN_KEY = '5'.repeat(32);
+const JELLYFIN_KEY = SET_UP_JELLYFIN.key;
 
 /** Jellyfin's libraries, as resources.json records them and Jellyfin holds them. */
 const LIBRARIES = [
@@ -196,23 +199,23 @@ async function currentHome(
       '<ServerConfiguration>\n  <IsStartupWizardCompleted>true</IsStartupWizardCompleted>\n</ServerConfiguration>\n',
     );
   }
-  // The apps hold what the stack wants, as resources.json records.
+  // The apps hold what the stack wants, as resources.json records: Jellyfin set up as
+  // Mediaplane sets it up, with the stack's admin password.
   const password = store.shared?.adminPassword ?? '';
-  apis.apps.set('jellyfin', {
-    ...freshAppState(),
-    wizard: 'done',
-    user: 'admin',
-    password,
-    apiKeys: [{ AccessToken: JELLYFIN_KEY, AppName: 'Mediaplane', DateCreated: AT }],
-    libraries: LIBRARIES.map(([, name, collectionType, path]) => ({
-      Name: name,
-      CollectionType: collectionType,
-      Locations: [path],
-      LibraryOptions: {},
-    })),
-    folders: LIBRARIES.map(([, , , path]) => path),
-    ...(prestart ? { configDir: jellyfinConfig(home) } : {}),
-  });
+  apis.apps.set(
+    'jellyfin',
+    fakeJellyfinSetUp({
+      password,
+      libraries: LIBRARIES.map(([, name, collectionType, path]) => ({
+        Name: name,
+        CollectionType: collectionType,
+        Locations: [path],
+        LibraryOptions: {},
+      })),
+      folders: LIBRARIES.map(([, , , path]) => path),
+      ...(prestart ? { configDir: jellyfinConfig(home) } : {}),
+    }),
+  );
   // qBittorrent takes only the stack's key, and gives it back among its preferences.
   const key = store.apps.qbittorrent?.apiKey;
   if (key === undefined) throw new Error('the test stack must store a qBittorrent key');
@@ -1204,6 +1207,96 @@ describe('mediaplane apply: Seerr in the stack', () => {
     const again = capture();
     expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
     expect(again.stdout()).toBe('No changes.\n');
+  });
+
+  it("keeps unpublished and unrecorded, giving it no key of the stack's, a Seerr claimed through Jellyfin's address with a URL base to another host", async () => {
+    const home = await seerrHome();
+    const seerr = apis.apps.get('seerr')?.seerr;
+    if (seerr === undefined) throw new Error('no Seerr faked');
+    // Signed in first as a user named as the shared admin, on a Jellyfin of their own,
+    // which Seerr reaches at http://jellyfin:8096@198.51.100.7.
+    seerr.claimant = { user: 'admin', jellyfin: 'jellyfin', urlBase: '@198.51.100.7' };
+    const docker = fakeDocker(home);
+    const ups: string[][] = [];
+    const runtime: Runtime = {
+      ...docker,
+      up: (seconds, values, unpublished = []) => {
+        ups.push([...unpublished]);
+        return docker.up(seconds, values, unpublished);
+      },
+    };
+    for (const attempt of [1, 2]) {
+      const applied = capture();
+      expect(
+        await run(['apply', '--home', home, '--yes'], applied.io, deps(runtime)),
+        `apply ${String(attempt)}`,
+      ).toBe(1);
+      expect(applied.stdout() + applied.stderr()).toContain(
+        'was set up with another login or another Jellyfin',
+      );
+    }
+    // Every up kept it unpublished, and nothing recorded it as Mediaplane's.
+    expect(ups.length).toBeGreaterThan(0);
+    for (const unpublished of ups) expect(unpublished).toContain('seerr');
+    const store = await readSecretStore(home);
+    expect(store.setUp).toBeUndefined();
+    // No key of the stack's reached it: no server, and no request to it carrying one.
+    expect(seerr.sonarr).toEqual([]);
+    const stackKeys = [store.apps.sonarr?.apiKey, store.apps.qbittorrent?.apiKey].filter(
+      (k): k is string => k !== undefined,
+    );
+    expect(stackKeys.length).toBe(2);
+    const toSeerr = apis.app.requests.filter((r) =>
+      (r.headers.host ?? '').startsWith('seerr'),
+    );
+    expect(toSeerr.length).toBeGreaterThan(0);
+    for (const request of toSeerr) {
+      for (const key of stackKeys) expect(request.body).not.toContain(key);
+    }
+  });
+
+  it('plan only reads Seerr: no sign-in, no settings write, no initialize, no sync, and no record', async () => {
+    const home = await seerrHome();
+    const docker = fakeDocker(home);
+    const seerr = apis.apps.get('seerr')?.seerr;
+    if (seerr === undefined) throw new Error('no Seerr faked');
+    /** What was sent to Seerr from request `from` on that only reads. */
+    const sentToSeerr = (from: number) =>
+      apis.app.requests
+        .slice(from)
+        .filter((r) => (r.headers.host ?? '').startsWith('seerr'))
+        .map((r) => `${r.method} ${r.path.split('?')[0] ?? r.path}`);
+    const readsOnly = (calls: string[]) =>
+      calls.filter(
+        (c) => !c.startsWith('GET ') && !/^POST \S+\/(sonarr|radarr)\/test$/.test(c),
+      );
+    const secretsFile = () => readFile(join(home, 'state', 'secrets.json'), 'utf8');
+    // Before its setup: plan doesn't ask Seerr to do anything.
+    expect(await run(['plan', '--home', home], capture().io, deps(docker))).toBe(2);
+    expect(readsOnly(sentToSeerr(0))).toEqual([]);
+    expect(seerr).toMatchObject({ users: [], signIns: 0, initialized: false });
+    expect(await thrown(secretsFile())).toMatchObject({ code: 'ENOENT' });
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(0);
+    // Changed by hand, every link: plan checks them all, and changes none.
+    const shows = seerr.jellyfin.libraries.find((l) => l.name === 'Shows');
+    if (shows !== undefined) shows.enabled = false;
+    seerr.jellyfin.urlBase = '/elsewhere';
+    const server = seerr.sonarr[0];
+    if (server !== undefined) server.apiKey = '0'.repeat(32);
+    seerr.initialized = false;
+    const held = structuredClone(seerr);
+    const stored = await secretsFile();
+    const from = apis.app.requests.length;
+    const planned = capture();
+    expect(await run(['plan', '--home', home], planned.io, deps(docker))).toBe(2);
+    expect(planned.stdout()).toContain('seerr.media_server');
+    const sent = sentToSeerr(from);
+    expect(sent).toContain('POST /api/v1/settings/sonarr/test');
+    expect(readsOnly(sent)).toEqual([]);
+    expect(seerr).toEqual(held);
+    expect(await secretsFile()).toBe(stored);
   });
 
   it("keeps the keys Seerr shows in clear out of plan's warning, apply's failure and the change record", async () => {

@@ -96,7 +96,25 @@ const callOf = ({ method, path }: FakeRequest) => `${method} ${path}`;
 const SET_UP = {
   mediaServerType: SEERR_JELLYFIN,
   users: ['admin'],
-  jellyfin: { ip: 'jellyfin', port: 8096, apiKey: JELLYFIN_KEY, libraries: [] },
+  jellyfin: {
+    ip: 'jellyfin',
+    port: 8096,
+    useSsl: false,
+    urlBase: '',
+    apiKey: JELLYFIN_KEY,
+    libraries: [],
+  },
+};
+
+/**
+ * Someone who signed in first through Jellyfin's service and port, as Mediaplane would,
+ * but with a URL base that takes Seerr to a host of their own: Seerr calls
+ * `http://jellyfin:8096@198.51.100.7`, where they made a user named as the shared admin.
+ */
+const THROUGH_ANOTHER_HOST = {
+  user: 'admin',
+  jellyfin: 'jellyfin',
+  urlBase: '@198.51.100.7',
 };
 
 describe("Seerr's first-run setup", () => {
@@ -164,6 +182,13 @@ describe("Seerr's first-run setup", () => {
   it.each([
     ['another admin', { users: ['someone'] }],
     ['another Jellyfin', { jellyfin: { ...SET_UP.jellyfin, ip: 'elsewhere' } }],
+    ['another port', { jellyfin: { ...SET_UP.jellyfin, port: 4444 } }],
+    [
+      'a URL base to another host',
+      { jellyfin: { ...SET_UP.jellyfin, urlBase: '@198.51.100.7' } },
+    ],
+    ['a URL base', { jellyfin: { ...SET_UP.jellyfin, urlBase: '/jellyfin' } }],
+    ['TLS', { jellyfin: { ...SET_UP.jellyfin, useSsl: true } }],
     ['no admin at all', { users: [] }],
   ])('refuses as not its own a Seerr set up with %s', async (_what, more) => {
     const { api, calls, stack } = await seerrOf(fakeJellyfinSetUp(), {
@@ -194,6 +219,22 @@ describe("Seerr's first-run setup", () => {
       'GET /api/v1/auth/me',
       'GET /api/v1/settings/jellyfin',
     ]);
+  });
+
+  it("refuses a Seerr someone signed in to first through the stack's Jellyfin address, with a URL base to their own host", async () => {
+    const { api, state, stack } = await seerrOf(fakeJellyfinSetUp(), {
+      claimant: THROUGH_ANOTHER_HOST,
+    });
+    expect(await thrown(seerrBootstrap.run(api, ADMIN, stack))).toMatchObject({
+      kind: 'auth',
+      message:
+        'Seerr at http://seerr:5055 (127.0.0.1) was set up with another login or another Jellyfin (GET /api/v1/auth/me, GET /api/v1/settings/jellyfin)',
+    });
+    // Its admin has the shared admin's name, and its Jellyfin the stack's ip and port.
+    expect(state.seerr).toMatchObject({
+      users: ['admin'],
+      jellyfin: { ip: 'jellyfin', port: 8096, urlBase: '@198.51.100.7' },
+    });
   });
 
   it('takes as done a Seerr found set up as its own once the sign-in fails, as when its answer was lost', async () => {
@@ -309,7 +350,8 @@ describe("Seerr's first-run setup: what it can't confirm is not Mediaplane's", (
     const { api, calls, stack } = await seerrOf(fakeJellyfinSetUp(), {
       claimant: { user: 'someone', jellyfin: 'jellyfin' },
     });
-    // The second look (after the failed sign-in) is the second call for the public settings.
+    // The second look (after the failed sign-in) is the second call for the public
+    // settings.
     const refused = await thrown(
       seerrBootstrap.run(
         failingAt(api, '/api/v1/settings/public', 'server', 2),
@@ -408,6 +450,45 @@ describe("Seerr's first-run setup, through the engine's bootstrap step", () => {
     expect(again.pending).toEqual([]);
   });
 
+  it("keeps unpublished, unrecorded, a Seerr claimed through the stack's Jellyfin address with a URL base to another host", async () => {
+    const { home, state, published, run, store } = await stepOf({
+      claimant: THROUGH_ANOTHER_HOST,
+    });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const failed = await thrown(run(store));
+      expect(failed).toBeInstanceOf(BootstrapFailed);
+      expect((failed as Error).message).toContain(
+        'was set up with another login or another Jellyfin (GET /api/v1/auth/me, GET /api/v1/settings/jellyfin)',
+      );
+    }
+    expect(state.seerr.jellyfin).toMatchObject({
+      ip: 'jellyfin',
+      urlBase: '@198.51.100.7',
+    });
+    expect(published).toEqual([['seerr'], ['seerr']]);
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
+  });
+
+  it("keeps unpublished a Seerr it couldn't tell is its own, and says to run apply again first, never to start it afresh", async () => {
+    const { home, state, published, run, store } = await stepOf({
+      ...SET_UP,
+      failing: ['/api/v1/settings/jellyfin'],
+    });
+    const failed = await thrown(run(store));
+    expect(failed).toBeInstanceOf(BootstrapFailed);
+    expect((failed as Error).message).toContain(
+      "Seerr at http://seerr:5055 (127.0.0.1) is set up, and Mediaplane couldn't tell whether it is its own: Seerr at http://seerr:5055 (127.0.0.1) refused the request (HTTP 400): request/fake failure (GET /api/v1/settings/jellyfin); Seerr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. Run apply again first: a failure that was temporary clears, and Seerr, if it is Mediaplane's, is then recorded and published. If it fails again, see the runbook",
+    );
+    expect((failed as Error).message).not.toContain('afresh');
+    expect(published).toEqual([['seerr']]);
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
+    // The failure clears: the next apply records it and publishes it.
+    state.seerr.failing = [];
+    const set = await run(store);
+    expect(set.detail).toBe('set up seerr; published seerr');
+    expect(set.store.setUp).toEqual(['seerr']);
+  });
+
   it('keeps a claimed Seerr unpublished, now and on every later apply, and a Seerr shown to be its own is published', async () => {
     const { home, state, published, run, store } = await stepOf({
       ...SET_UP,
@@ -420,9 +501,10 @@ describe("Seerr's first-run setup, through the engine's bootstrap step", () => {
       expect((failed as Error).message).toContain(
         "was set up with another login or another Jellyfin (GET /api/v1/auth/me, GET /api/v1/settings/jellyfin); Seerr is set up, but Mediaplane can't show that it is its own, so it stays unpublished",
       );
-      // The remedy works for Seerr: its admin is its first user, and its Jellyfin the stack's.
+      // The three ways out, the safe one first: its admin is its first user, and its
+      // Jellyfin has to be the stack's.
       expect((failed as Error).message).toContain(
-        'make its admin (its first user) the Jellyfin login that admin.username names, and point its Jellyfin at jellyfin:8096, then run apply again; if not, start it afresh first',
+        "Seerr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. First: if the Jellyfin login it was set up with is yours, set admin.username and admin.password to it. Or second: make its admin (its first user) the Jellyfin login that admin.username names. Either needs its Jellyfin already at jellyfin:8096, with no URL base and no TLS; then run apply again. Last, if you did not set it up: start it afresh, as the runbook says",
       );
     }
     expect(published).toEqual([['seerr'], ['seerr']]);
