@@ -57,20 +57,20 @@ With Jellyfin as the media server (with Plex, see Not built yet):
   the Movies and Shows libraries enabled. A library you enable in Seerr stays yours.
   Seerr uses the key it made itself in Jellyfin as it signed in (named `Seerr` in
   Jellyfin's dashboard): Mediaplane checks that it works, and gives Seerr its own
-  Jellyfin key only when Jellyfin refuses Seerr's. When Jellyfin moves, Seerr's
-  libraries are synced again. Seerr shows that key in clear: Mediaplane keeps it out of
-  all it prints and records.
+  Jellyfin key only when Jellyfin refuses Seerr's, or Jellyfin moves, when Seerr's
+  libraries are synced again too. Seerr shows that key in clear: Mediaplane keeps it
+  out of all it prints and records.
 - **Its Sonarr and Radarr servers** (`seerr.server_sonarr`, `seerr.server_radarr`), each
-  while the stack runs the arr, named `Sonarr (Mediaplane)` and `Radarr (Mediaplane)`:
-  the arr at its service and port, with its key, its root folder, a quality profile,
-  and set as the default, so requests go there. The profile is `HD-1080p`, else `Any`,
-  else the arr's first, unless you name one (below). The rest is what Seerr's own web UI
-  gives a new server, but with season folders for Sonarr, as Sonarr's own default (Radarr's
-  has none), and stays yours after. Seerr shows the arr's key in clear; Mediaplane checks
-  it with Seerr's own test of the server, which calls the arr with it, and keeps it out
-  of all it prints and records, a key typed in Seerr by hand too. Mediaplane sends the
-  arr's key only to the arr's own address in the stack, never to a host read from Seerr.
-  Seerr is wired after Prowlarr, when the stack has it.
+  while the stack runs the arr, named `Sonarr (Mediaplane)` and `Radarr (Mediaplane)`: the
+  arr at its service and port, with its key, its root folder, a quality profile, and set
+  as the default, so requests go there. The profile is `HD-1080p`, else `Any`, else the
+  arr's first, unless you name one (below). The rest is what Seerr's own web UI gives a
+  new server, but with season folders for Sonarr, as Sonarr's own default (Radarr's has
+  none), and stays yours after. Seerr shows the arr's key in clear; Mediaplane checks it
+  with Seerr's own test of the server, which calls the arr with it, and keeps it out of
+  all it prints and records, a key typed in Seerr by hand too. Mediaplane sends the arr's
+  key only to the arr's own address in the stack, never to a host read from Seerr. Seerr
+  is wired after Prowlarr, when the stack has it.
 - **Its setup, finished** (`seerr.setup`): once its links are in place, Mediaplane sends
   Seerr's `initialize`, so it stops offering its admin the setup wizard.
 - **Its user.** Seerr's image runs as uid 1000, the `node` user. So before it starts,

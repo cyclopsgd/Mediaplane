@@ -83,6 +83,7 @@
   network and the registry, then run `apply` again. A registry's brief failure to
   resolve an image's digest ("not found" for a digest it serves) is retried the same
   way: Compose 2.x asks the registry again even for an image that is already present.
+  A run that recovers reports `images present, after N retries`, which is normal.
 - **`compose.override.yaml` broke it.** `plan` reports `compose.invalid` when Compose
   rejects the file. Otherwise, take the change out and run `apply` again.
 - **A `version:` you chose.** It is an untested combination, and `plan` warns about it.

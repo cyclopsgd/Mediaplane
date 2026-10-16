@@ -332,8 +332,8 @@ Controls today:
   made itself in Jellyfin, which it also shows in clear, Mediaplane reads in Seerr's
   answer and leaves there: it is never kept, nor sent anywhere, and it is replaced with
   `***` in every message, as the stack's own secrets are, once read. When Jellyfin
-  refuses it, Mediaplane gives Seerr the Jellyfin key it holds itself, in a request
-  body, as it gives the arrs.
+  refuses it, or Jellyfin moves, Mediaplane gives Seerr the Jellyfin key it holds
+  itself, in a request body, as it gives the arrs.
 - The admin password goes to Seerr only once, in its first sign-in's request body,
   which Seerr passes to Jellyfin to check. The session cookie it answers with stays in
   Mediaplane's memory, kept out of every message, for the one call that signs out at

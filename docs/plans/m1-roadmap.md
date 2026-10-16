@@ -185,7 +185,7 @@ and its final review an S5 item, two S8 items, a probe in two others, two S9 tes
 and an S9 docs item. Slice 5 (2026-10-15) added an S6 item, six S8 items and an S9
 item, and extended one, and its final review an S8 item and four S9 items. Slice 6
 (2026-10-16) added an S7 item and changed one, added five S8 items and changed one, and
-added an S9 item. Each slice plan must address the items for that slice.
+added an S9 item and changed one. Each slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -543,8 +543,8 @@ password, which are S3c's (and listed again below).
 - **Seerr keeps its own Jellyfin key** (S6): the one its first sign-in made, named
   `Seerr` in Jellyfin, which Mediaplane checks by using and never keeps, so it can't be
   rotated; it is redacted only once Mediaplane has read it in that run. Mediaplane gives
-  Seerr its own Jellyfin key only when Seerr's is refused. Decide whether drift should
-  replace it, and remove the one Seerr made.
+  Seerr its own Jellyfin key only when Seerr's is refused, or Jellyfin moves. Decide
+  whether drift should replace it, and remove the one Seerr made.
 - **A Seerr whose `settings.json` Mediaplane can't read** is set up again, unpublished,
   on every `apply` (S6): two recreates each time, with a warning, and `apply` fails at
   verify (exit 1) each time, until the file is readable. Decide whether drift reports

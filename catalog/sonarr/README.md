@@ -84,7 +84,8 @@ LinuxServer.io image, unmodified.
 - **Seerr's link to it.** With Seerr in the stack and Jellyfin as the media server,
   `apply` adds `Sonarr (Mediaplane)` to Seerr (`seerr.server_sonarr`, see
   [Seerr's README](../seerr/README.md)), with Sonarr's key, its root folder, and the
-  `HD-1080p` quality profile unless `apps.seerr.sonarr_profile` names another. Seerr then
+  `HD-1080p` quality profile (else `Any`, else Sonarr's first) unless
+  `apps.seerr.sonarr_profile` names another. Seerr then
   sends the series people request to Sonarr. A failing test of it logs a line in
   Sonarr's log when the key is refused.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its

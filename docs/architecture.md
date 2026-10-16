@@ -369,9 +369,9 @@ up --wait again
 - **No port at all.** The file Compose gets on its standard input, after
   `compose.override.yaml`, sets the app's `ports` to `!reset []`, so the override's ports
   go too. `compose.yaml` itself always has the ports, so the stack runs as written
-  without Mediaplane, and then Jellyfin starts published with its wizard open. The
-  reset covers `ports` only: an override with `network_mode: host`, or a network shared
-  with a service that publishes, voids the guarantee (see
+  without Mediaplane, and then Jellyfin and Seerr start published with their setup open.
+  The reset covers `ports` only: an override with `network_mode: host`, or a network
+  shared with a service that publishes, voids the guarantee (see
   [T16](security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)).
 - **The setup** reaches the app on the wiring network without a key. For Jellyfin, it
   finishes its wizard, and keeps the key it makes in `state/secrets.json` at once. For
@@ -383,9 +383,9 @@ up --wait again
   one with no record, and one found set up when the sign-in fails, since someone may have
   signed in first. It is Mediaplane's only when its admin (its first user) is the shared
   admin and its Jellyfin is the stack's; a pass is recorded, and a failure of any kind,
-  including a question Mediaplane couldn't get answered, keeps it unpublished. Then Mediaplane
-  steps off the wiring network, `up` runs again, without the extra file, and Compose
-  recreates the app with its ports. Before that, the engine asks the app once more
+  including a question Mediaplane couldn't get answered, keeps it unpublished. Then
+  Mediaplane steps off the wiring network, `up` runs again, without the extra file, and
+  Compose recreates the app with its ports. Before that, the engine asks the app once more
   whether its setup is still open, and publishes it only if it is not. If it still looks
   open, or can't be asked, the step fails and that app is not published. An app
   whose setup failed while it is still open stays unpublished; one whose setup is done
@@ -541,10 +541,10 @@ mediaplane (the stack)
   - Its media server is Jellyfin, at `jellyfin:8096`, with Mediaplane's Movies and Shows
     libraries enabled; a library you enable yourself stays yours. The key Seerr uses for
     Jellyfin is the one Seerr made itself as it signed in. It stays while it works, which
-    Mediaplane checks with Seerr's list of Jellyfin's users; when Jellyfin refuses it,
-    Mediaplane gives Seerr its own Jellyfin key. When Jellyfin moves, Seerr's libraries
-    are synced again, since another Jellyfin has other library ids. It needs Jellyfin's
-    admin and libraries in place.
+    Mediaplane checks with Seerr's list of Jellyfin's users. When Jellyfin refuses it, or
+    Jellyfin moves, Mediaplane gives Seerr its own Jellyfin key; on a move, Seerr's
+    libraries are synced again too, since another Jellyfin has other library ids. It
+    needs Jellyfin's admin and libraries in place.
   - Its Sonarr and Radarr servers reach each arr at its service and port, with its key,
     file into its root folder, and are the default, so requests go there. The quality
     profile is the one `apps.seerr.sonarr_profile` (or `radarr_profile`) names, else

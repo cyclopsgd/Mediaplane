@@ -327,7 +327,9 @@ Then follow [`deploy/README.md`](deploy/README.md) to start it and run
   qBittorrent when Gluetun starts again on its own);
 - the secrets it would generate;
 - the first-run setups it would finish, under `First-run setup:`: Jellyfin's, and
-  Seerr's first sign-in through it, each with no port published until it is done;
+  Seerr's first sign-in through it, each with no port published until it is done, when
+  `apply` runs the stack
+  ([what voids that](docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup));
 - the wiring it would do in the apps, under `Wiring:`, such as setting the admin login or
   adding a download client. qBittorrent's login and settings show as `adopt` on a first
   `apply`: its file from before its first start set them already, as Jellyfin's
@@ -441,7 +443,8 @@ and keep. What it adds is everything around the file:
 - Jellyfin set up by `apply` before its web UI is published on your network, with its
   libraries, and told of each import by Sonarr and Radarr;
 - Seerr signed in through Jellyfin by `apply` before its web UI is published, and
-  linked to Jellyfin, Sonarr and Radarr;
+  linked to Jellyfin, Sonarr and Radarr (both guarantees hold when `apply` runs the
+  stack: [what voids them](docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup));
 - next, Plex.
 
 ### How is this different from Buildarr or Recyclarr?

@@ -83,7 +83,8 @@ LinuxServer.io image, unmodified.
 - **Seerr's link to it.** With Seerr in the stack and Jellyfin as the media server,
   `apply` adds `Radarr (Mediaplane)` to Seerr (`seerr.server_radarr`, see
   [Seerr's README](../seerr/README.md)), with Radarr's key, its root folder, and the
-  `HD-1080p` quality profile unless `apps.seerr.radarr_profile` names another. Seerr then
+  `HD-1080p` quality profile (else `Any`, else Radarr's first) unless
+  `apps.seerr.radarr_profile` names another. Seerr then
   sends the films people request to Radarr. A failing test of it logs a line in Radarr's
   log when the key is refused.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its

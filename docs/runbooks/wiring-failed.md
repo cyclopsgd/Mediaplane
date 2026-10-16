@@ -113,6 +113,16 @@ Radarr, and its setup, finished. Slice 7 adds Plex.
     hint: check the permissions of appdata/jellyfin
   ```
 
+  For Seerr, which has no key to decide, `plan` warns that it starts unpublished, and
+  `apply` fails at verify (exit 1) on every run, until the file is readable:
+
+  ```console
+  warning: Mediaplane can't read the file in Seerr's appdata that says whether its first-run setup is done, so it can't tell whether the setup is open; Seerr starts unpublished, and is set up again, until it can
+    hint: check the permissions of appdata/seerr
+  …
+  error: changes remain after apply: seerr (first-run setup)
+  ```
+
 - **`mediaplane plan` fails** with an app whose first-run setup is in another app's
   network (`bootstrap.network-via`). No app in the catalog does this today:
 
@@ -176,11 +186,12 @@ In `--json` output, each `diagnostics` entry has a `code`:
 - `wire.folders`: a folder a resource needs, such as a root folder, couldn't be made.
 - `wire.network`: Mediaplane won't join the wiring network, or Docker refused the join.
 - `resources.invalid`: `state/resources.json` can't be read.
-- `bootstrap.unreadable` (a warning): Mediaplane can't read an app's setup-done file
-  while its key is stored, so it can't tell whether the setup is open. For Seerr, whose
-  key Mediaplane makes, the file and Mediaplane's record (`setUp` in
-  `state/secrets.json`) say: it starts unpublished and is set up again, and `apply`
-  fails at verify (exit 1) on every run, until the file is readable.
+- `bootstrap.unreadable` (a warning): Mediaplane can't read an app's setup-done file, so
+  it can't tell whether the setup is open. Jellyfin has its stored key to decide. Seerr
+  has none, since Mediaplane makes its key: only its file and Mediaplane's record
+  (`setUp` in `state/secrets.json`) can say it is done, and a file Mediaplane can't read
+  says nothing. So Seerr starts unpublished and is set up again, and `apply` fails at
+  verify (exit 1) on every run, until the file is readable.
 - `bootstrap.waiting` (a warning): an app's first-run setup waits for another app, as
   Seerr's waits for Jellyfin to take the shared admin; the rest is wired without it.
 - `bootstrap.network-via` (an error): an app with a first-run setup runs inside another
@@ -217,7 +228,8 @@ differ, and a `reason` when it is `unknown`.
      read it (`MEDIAPLANE_UID` in the image, or your own user from source);
    - for Seerr, `docker port mediaplane-seerr-1` likewise, and
      `grep mediaServerType appdata/seerr/settings.json` says `2` (Jellyfin) once its
-     first sign-in is done, `4` before;
+     first sign-in is done, `4` before; `ls -l appdata/seerr/settings.json` and
+     `ls -ld appdata appdata/seerr` show whether the user Mediaplane runs as can read it;
    - `mediaplane history <id>` shows the first-run setup step's result and error.
 
 ## Fix
@@ -361,32 +373,32 @@ differ, and a `reason` when it is `unknown`.
   run `apply` again. Seerr stays unpublished. So it does when its setup fails in any
   other way, even if Seerr then looks set up: Seerr's key is Mediaplane's own, so
   nothing but a setup that succeeds shows that Seerr is Mediaplane's.
-- **`was set up with another login or another Jellyfin`** or **`is set up, and Mediaplane
-couldn't tell whether it is its own`** (`apply.bootstrap-failed`). Seerr was already
-  set up when Mediaplane came to it. That is a Seerr that looked open when `apply`
-  started it but was set up before its sign-in, one from before Slice 6, one whose
-  appdata was reset, or one Mediaplane has no record of (`setUp` in
-  `state/secrets.json`). Mediaplane never sends the password to such a Seerr, which
-  would pass it on to its Jellyfin; it asks with Seerr's key. It counts Seerr as its own
-  only when Seerr's admin (its first user) is the Jellyfin login `admin.username` names
-  and its Jellyfin is `jellyfin:8096`. Otherwise Seerr stays unpublished, on every
-  `apply` until Mediaplane can show that it is its own, and what follows the message
-  says why:
-  - **`was set up with another login or another Jellyfin`:** Seerr answered, and its
-    admin or its Jellyfin is not the stack's.
+- **Seerr is set up, but Mediaplane can't show that it is its own**
+  (`apply.bootstrap-failed`). The message says `was set up with another login or another
+Jellyfin`, or `is set up, and Mediaplane couldn't tell whether it is its own`. Seerr
+  was already set up when Mediaplane came to it: it looked open when `apply` started it
+  but was set up before its sign-in, or it is a Seerr from before Slice 6, or one
+  Mediaplane has no record of (`setUp` in `state/secrets.json`). Mediaplane never sends
+  the password to such a Seerr, which would pass it on to its Jellyfin; it asks with
+  Seerr's key. It counts Seerr as its own only when Seerr's admin (its first user) is
+  the Jellyfin login `admin.username` names and its Jellyfin is `jellyfin:8096`.
+  Otherwise Seerr stays unpublished, on every `apply` until Mediaplane can show that it
+  is its own. What the message says decides what to do:
   - **`couldn't tell whether it is its own`:** one of the two questions failed, and the
     message says how. Run `apply` again first: a failure that was temporary clears the
-    next time. If it fails again, read Seerr's log (check 3).
-
-  For the first message, three ways out, the safe one first:
-  - If the Jellyfin login Seerr was set up with is yours, set `admin.username` and
-    `admin.password` to it.
-  - Or make Seerr's first user the Jellyfin login `admin.username` names, with Seerr's
-    Jellyfin at `jellyfin:8096`.
-  - Or, if you did not set Seerr up, start it afresh: stop it
-    (`docker stop mediaplane-seerr-1`), remove `appdata/seerr` (with `sudo`: uid 1000
-    owns it), and run `apply`. That loses Seerr's requests and users, but nothing in the
-    other apps.
+    next time, and Seerr, if it is Mediaplane's, is then recorded and published. If it
+    fails again, read Seerr's log (check 3).
+  - **`was set up with another login or another Jellyfin`:** Seerr answered, and its
+    admin or its Jellyfin is not the stack's. Three ways out, the safe one first:
+    - If the Jellyfin login Seerr was set up with is yours, set `admin.username` and
+      `admin.password` to it. This works only if Seerr's Jellyfin is already
+      `jellyfin:8096`.
+    - Or make Seerr's first user the Jellyfin login `admin.username` names, with
+      Seerr's Jellyfin already at `jellyfin:8096`.
+    - Or, if you did not set Seerr up, start it afresh: stop it
+      (`docker stop mediaplane-seerr-1`), remove `appdata/seerr` (with `sudo`: uid 1000
+      owns it), and run `apply`. That loses Seerr's requests and users, but nothing in
+      the other apps.
 
   Then run `apply` again. It checks Seerr once, unpublished, records it in
   `state/secrets.json`, and publishes it from then on.
@@ -416,6 +428,17 @@ couldn't tell whether it is its own`** (`apply.bootstrap-failed`). Seerr was alr
   user that owns the file, which is usually the stack's `user:`: set `MEDIAPLANE_UID` to
   its uid. Or make the file readable by Mediaplane's own user. Then run `plan` again.
   Until then, an emptied `appdata/jellyfin` isn't noticed.
+- **`Mediaplane can't read the file in Seerr's appdata`** (`bootstrap.unreadable`).
+  Seerr has no stored key to decide, so `plan` takes its setup as not done: Seerr starts
+  unpublished, and `apply` signs it in again (or checks it) on every run, which recreates
+  it twice. Then verify fails with `seerr (first-run setup)` still to do (exit 1), on
+  every `apply`, until Mediaplane can read `appdata/seerr/settings.json`. Seerr writes
+  its own files readable by all (0644, uid 1000), so what stops Mediaplane is usually
+  `appdata/` itself (0700, the stack's `user:`) or the user it runs as. Run Mediaplane
+  as the user that owns `appdata/`: set `MEDIAPLANE_UID` in the image to its uid, or
+  run from source as that user. Or make the file readable by Mediaplane's own user.
+  Then run `plan` again: the warning is gone, and the next `apply` sets Seerr up, or
+  checks it, and records it.
 - **`runs inside <app>'s network, which publishes its ports`** (`bootstrap.network-via`).
   Mediaplane can't keep an app unpublished while its setup is open when the app shares
   another app's network, because that app publishes the ports. Run the app in its own
@@ -583,7 +606,8 @@ Then run `mediaplane apply`. It plans again and does only what is left
   hand. It goes through Jellyfin's admin, so keep that login the shared one.
 - **Keep `appdata/jellyfin` and `appdata/seerr` readable** by the user Mediaplane runs
   as, so `plan` can tell whether their setup is open. Seerr's folder belongs to uid
-  1000, and its files are readable by all, as Seerr writes them.
+  1000, and its files are readable by all, as Seerr writes them. Until Mediaplane can
+  read Seerr's `settings.json`, every `apply` fails at verify.
 - **Leave the wiring network out of `compose.override.yaml`**
   ([ADR 0011](../adr/0011-a-private-wiring-network.md)).
 - **Bring `mediaplane-system` down before the stack.** While Mediaplane is on the wiring

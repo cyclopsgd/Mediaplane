@@ -243,13 +243,12 @@ happens, the next `mediaplane plan` shows most apps as `recreate`, and the next 
 recreates them once. Their data stays where it is.
 
 An update that brings Seerr's wiring treats a Seerr you set up by hand before it as one
-Mediaplane has no record of. The next `apply` recreates it
-once, unpublished, and checks it with its key, never the password. If its admin (its
-first user) is the Jellyfin login `admin.username` names and its Jellyfin is
-`jellyfin:8096`, Mediaplane records it and publishes it again; if not, it stays
-unpublished and `apply` stops. The
-[wiring failed runbook](../docs/runbooks/wiring-failed.md) has the ways out. What
-voids the guarantee that Seerr is not published while its setup is open is in
+Mediaplane has no record of. The next `apply` recreates it once, unpublished, and checks
+it with its key, never the password. If its admin (its first user) is the Jellyfin login
+`admin.username` names and its Jellyfin is `jellyfin:8096`, Mediaplane records it and
+publishes it again; if not, it stays unpublished and `apply` stops. The
+[wiring failed runbook](../docs/runbooks/wiring-failed.md) has the ways out. What voids
+the guarantee that Seerr is not published while its setup is open is in
 [T16](../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
 
 ## Running without the socket proxy
