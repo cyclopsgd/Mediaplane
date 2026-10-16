@@ -12,7 +12,7 @@ import type * as FsPromises from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppDefinition, Catalog } from '../catalog/types';
+import type { AppDefinition, BootstrapContext, Catalog } from '../catalog/types';
 import { AppApiError, type AppApi } from '../http/client';
 import { listRecords } from '../history/records';
 import { readResources } from '../integrations/resources';
@@ -35,6 +35,7 @@ import {
   SET_UP_KEY,
   SIGN_IN_CATALOG,
 } from '../testing/bootstrap';
+import { fakePlexTv } from '../testing/plextv';
 import {
   fakeDocker,
   fakeProbe,
@@ -45,6 +46,7 @@ import {
 import { FIXTURE_HOST, fixtureApp, fixtureCatalog } from '../testing/fixtures';
 import { FAKE_LOGIN, fakeSonarr, WIRED_CATALOG } from '../testing/wiring';
 import { apply, unhealthyServices, type ApplyOptions, type StepEvent } from './apply';
+import { BootstrapFailed } from './bootstrap';
 import { tempDir } from '../testing/temp';
 
 // chmod() passes straight through, except where a test refuses it for one path, as the
@@ -2068,7 +2070,7 @@ describe('apply: first-run setup before the ports are published', () => {
 describe('apply: a first-run setup that makes no key, after another', () => {
   /** What a claimed setup that makes no key says it is, and what to do. */
   const CLAIMED =
-    "sonarr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. First: if the Jellyfin login it was set up with is yours, set admin.username and admin.password to it. Or second: make its admin (its first user) the Jellyfin login that admin.username names. Either needs its Jellyfin already at jellyfin:8096, with no URL base and no TLS; then run apply again. Last, if you did not set it up: start it afresh, as the runbook says";
+    "sonarr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. First: sign in to mediaplane-sonarr-1 as the shared admin, then run apply again. Last: start it afresh";
   /**
    * The stack with Jellyfin's FAKE_SETUP and Sonarr's FAKE_SIGN_IN, after it, and a Docker
    * that notes, at each up, which apps it starts without their ports and where each setup
@@ -2470,5 +2472,128 @@ describe('apply: a first-run setup that makes no key, after another', () => {
       'jellyfin sonarr unpublished; jellyfin open, sonarr open',
       'jellyfin sonarr unpublished; jellyfin open, sonarr open',
     ]);
+  });
+
+  it('says to start it afresh if you did not set it up, when its setup gives no remedies of its own', async () => {
+    const catalog = SIGN_IN_CATALOG.map((def) =>
+      def.id === 'sonarr' && def.bootstrap !== undefined
+        ? { ...def, bootstrap: { ...def.bootstrap, claimedHint: undefined } }
+        : def,
+    );
+    const { home, setup, run } = await signInStack(catalog);
+    setup.signIn.done = true;
+    await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+    await writeFile(join(home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
+    const failed = await run();
+    expect(failed.diagnostics.at(-1)?.message).toBe(
+      "the first-run setup failed: sonarr at http://sonarr:8989 (127.0.0.1) was set up with another login (GET /signed-in/own); sonarr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. If you did not set it up: start it afresh, as the runbook says",
+    );
+  });
+});
+
+describe("apply: a setup's first start, and what it is given", () => {
+  /** The value Sonarr's first start is given, as a claim token would be: a secret. */
+  const FIRST = 'fake-first-start-value';
+  /**
+   * SIGN_IN_CATALOG, Sonarr's setup giving its first start FIRST in FIRST_START, and
+   * noting what it and its run were given.
+   */
+  function startCatalog(seen: BootstrapContext[], fails?: Error): Catalog {
+    return SIGN_IN_CATALOG.map((def) => {
+      const bootstrap = def.bootstrap;
+      if (def.id !== 'sonarr' || bootstrap === undefined) return def;
+      return {
+        ...def,
+        bootstrap: {
+          ...bootstrap,
+          firstStart: (_stack, ctx) => {
+            seen.push(ctx);
+            return fails === undefined
+              ? Promise.resolve({ FIRST_START: FIRST })
+              : Promise.reject(fails);
+          },
+          run: (api, admin, stack, ctx) => {
+            seen.push(ctx);
+            return bootstrap.run(api, admin, stack, ctx);
+          },
+        },
+      };
+    });
+  }
+
+  /** The stack of the setups' tests, with the start variables each up was given. */
+  async function startStack(catalog: Catalog) {
+    const home = await makeHome();
+    const setup = await fakeSetUpApp(home);
+    const docker = fakeDocker(home, { addresses: setup.addresses });
+    const given: string[] = [];
+    const runtime: Runtime = {
+      ...docker,
+      up: (seconds, values, unpublished = [], startEnv = {}) => {
+        given.push(JSON.stringify(startEnv));
+        return docker.up(seconds, values, unpublished, startEnv);
+      },
+    };
+    const plexTv = (await fakePlexTv()).client;
+    const run = () =>
+      apply(options(home, runtime, { catalog, wiring: setup.seams, plexTv }));
+    return { home, setup, calls: docker.calls, given, plexTv, run };
+  }
+
+  it('gives an app it starts unpublished what its setup gives its first start, and only then', async () => {
+    const seen: BootstrapContext[] = [];
+    const { calls, given, plexTv, run } = await startStack(startCatalog(seen));
+    const first = await run();
+    expect(first.outcome).toBe('success');
+    expect(calls).toContain('up unpublished jellyfin sonarr with sonarr.FIRST_START');
+    // The publishing up keeps it only for an app still unpublished: none here.
+    expect(given).toEqual([JSON.stringify({ sonarr: { FIRST_START: FIRST } }), '{}']);
+    // The first start and the setup are given the stack's keys, and plex.tv as apply was
+    // given it, but no secret you give that no app's API takes as its key: the VPN key.
+    expect(seen).toHaveLength(2);
+    for (const ctx of seen) {
+      expect(ctx.plexTv).toBe(plexTv);
+      expect(ctx.keys.sonarr?.apiKey).toBeDefined();
+      expect(ctx.keys.gluetun?.wireguardKey).toBeUndefined();
+    }
+    // Never in a record or a result.
+    expect(JSON.stringify(first)).not.toContain(FIRST);
+    // Set up: its done file says so, so the next apply gives nothing.
+    const again = await run();
+    expect(again.outcome).toBe('no-changes');
+    expect(seen).toHaveLength(2);
+  });
+
+  it('keeps giving it to an app the publishing up leaves unpublished, so it is not recreated', async () => {
+    const seen: BootstrapContext[] = [];
+    const { setup, given, run } = await startStack(startCatalog(seen));
+    setup.signIn.refuse = true;
+    setup.signIn.claimant = true;
+    expect((await run()).outcome).toBe('failed');
+    expect(given).toEqual([
+      JSON.stringify({ sonarr: { FIRST_START: FIRST } }),
+      JSON.stringify({ sonarr: { FIRST_START: FIRST } }),
+    ]);
+  });
+
+  it('starts nothing when a first start can not be given what it needs, with what to do', async () => {
+    const seen: BootstrapContext[] = [];
+    const { calls, run } = await startStack(
+      startCatalog(
+        seen,
+        new BootstrapFailed('fake: no claim token', 'fake: sign in again'),
+      ),
+    );
+    const failed = await run();
+    expect(failed.outcome).toBe('failed');
+    expect(failed.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.start-failed',
+      message: 'fake: no claim token',
+      hint: 'fake: sign in again',
+    });
+    expect(calls.some((call) => call.startsWith('up'))).toBe(false);
+    // Asked before anything changed: Mediaplane is still on the wiring network.
+    expect(calls).not.toContain('leave-wiring');
+    expect(failed.actions.map((a) => `${a.step} ${a.result}`)).toContain('start failed');
   });
 });

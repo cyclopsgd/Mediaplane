@@ -97,6 +97,27 @@ describe('wire', () => {
     );
   });
 
+  it('reaches an app with a key you give, as Plex takes your token, never keeping it, and keeps it out of what it says', async () => {
+    const store = { version: 1 as const, apps: {}, shared: { adminPassword: PASSWORD } };
+    const sonarr = await fakeSonarr({ key: KEY });
+    const given = await wireWith(sonarr, { store, given: { sonarr: { apiKey: KEY } } });
+    expect(await given.run).toEqual(['sonarr.login created']);
+    const keyed = sonarr.app.requests.filter((r) => r.path !== '/ping');
+    expect(keyed.every((r) => r.headers['x-api-key'] === KEY)).toBe(true);
+    expect(JSON.stringify(await readResources(given.home))).not.toContain(KEY);
+    // Refused, the app repeats the key it was sent: the step says so with ***.
+    const refusing = await fakeSonarr({ key: '1'.repeat(32) });
+    const refused = await wireWith(refusing, {
+      store,
+      given: { sonarr: { apiKey: KEY } },
+    });
+    expect(await refused.run.catch((cause: unknown) => cause)).toBeInstanceOf(
+      WiringFailed,
+    );
+    expect(JSON.stringify(refused.actions)).toContain('Unauthorized: ***');
+    expect(JSON.stringify(refused.actions)).not.toContain(KEY);
+  });
+
   it('updates what differs, saying what, and adopts what is already right', async () => {
     const wrong = await fakeSonarr({ key: KEY, user: 'someone', password: 'other' });
     const updated = await wireWith(wrong, { known: RECORDED });

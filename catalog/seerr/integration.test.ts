@@ -9,6 +9,7 @@ import {
   fakeJellyfinSetUp,
   fakeStackApis,
   freshAppState,
+  NO_SETUP_CONTEXT,
   SERVARR_PROFILES,
   SET_UP_JELLYFIN,
   thrown,
@@ -101,7 +102,7 @@ async function seerr() {
     secrets: [PASSWORD, JELLYFIN_KEY, SEERR_KEY, SONARR_KEY, RADARR_KEY],
     retry: { deadlineMs: 0 },
   });
-  await seerrBootstrap.run(api, ADMIN, contextOf().stack);
+  await seerrBootstrap.run(api, ADMIN, contextOf().stack, NO_SETUP_CONTEXT);
   const calls = (from = 0) =>
     apis.app.requests.slice(from).map((r: FakeRequest) => `${r.method} ${r.path}`);
   return { api, apis, jellyfin, sonarr, radarr, state, calls };

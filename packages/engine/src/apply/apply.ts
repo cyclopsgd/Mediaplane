@@ -14,6 +14,7 @@ import { wire, WiringFailed } from '../integrations/wire';
 import { redactionValues } from '../integrations/wiring';
 import { COMPOSE_PATH, COMPOSE_PREV_PATH, ENV_PATH, STACK_PATH } from '../paths';
 import { plan, planStack, type PlanOptions, type PlanResult } from '../plan/plan';
+import { NO_PLEX_TV, type PlexTv } from '../plextv/client';
 import { PROJECT_NAME } from '../render/compose';
 import { renderEnvFile } from '../render/env';
 import { runbookUrl } from '../runbooks';
@@ -27,7 +28,7 @@ import {
 } from '../runtime/types';
 import { withGeneratedSecrets, type RandomBytes } from '../secrets/generate';
 import { writeSecretStore } from '../secrets/store';
-import { secretValues } from '../secrets/values';
+import { secretValues, stackKeys, userSecrets } from '../secrets/values';
 import { acquireLock, LockedError, type Lock } from '../state/lock';
 import { writeFileAtomic } from '../util/atomic';
 import { codeOf } from '../util/error-code';
@@ -35,7 +36,7 @@ import { readIfExists } from '../util/fs';
 import { foundSecrets, redact } from '../util/redact';
 import { compare } from '../util/sort';
 import { vpnCheck, VPN_RUNBOOK } from '../vpn/check';
-import { bootstrapApps, BootstrapFailed } from './bootstrap';
+import { bootstrapApps, BootstrapFailed, startVariables } from './bootstrap';
 import {
   AppdataNotPrivateError,
   ensureAppdataDirs,
@@ -70,6 +71,11 @@ export interface ApplyOptions extends PlanOptions {
    * names its containers by it.
    */
   project?: string;
+  /**
+   * plex.tv, for Plex's claim and the setups that ask it: called directly from source,
+   * through the plex.tv helper in the image. Without it, each call fails.
+   */
+  plexTv?: PlexTv;
 }
 
 export type ApplyOutcome = 'success' | 'failed' | 'no-changes' | 'cancelled' | 'invalid';
@@ -146,10 +152,21 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
   const steps = new Steps(options.onStep);
   let store = context.store;
   let values: Record<string, string> = {};
-  /** `up`, with `unpublished` started without their ports; a failure names the apps. */
+  /** The secrets you give, such as Plex's token: read once, never kept. */
+  const given = await userSecrets(stack, options.env);
+  const plexTv = options.plexTv ?? NO_PLEX_TV;
+  /** Each app's start variables while it starts unpublished (Plex's claim): secrets. */
+  let startEnv: Record<string, Record<string, string>> = {};
+  /**
+   * `up`, with `unpublished` started without their ports, and with their start variables;
+   * a failure names the apps.
+   */
   const up = async (unpublished: readonly string[]) => {
     const wait = options.waitSeconds ?? DEFAULT_WAIT_SECONDS;
-    const result = await runtime.up(wait, values, unpublished);
+    const env = Object.fromEntries(
+      Object.entries(startEnv).filter(([service]) => unpublished.includes(service)),
+    );
+    const result = await runtime.up(wait, values, unpublished, env);
     if (!result.ok) throw new Error(await startFailure(runtime, result.error));
   };
 
@@ -194,6 +211,17 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       : fixes.map((f) => `${f.service} → ${String(f.uid)}:${String(f.gid)}`).join(', ');
   });
   await steps.run('start', async () => {
+    // An app whose setup needs something for its first start gets it now, as late as can
+    // be (Plex's claim token lasts four minutes), but before anything changes: one that
+    // can't be had stops the step, and stops the app it was for if it runs, since it
+    // isn't shown to be yours.
+    startEnv = await startVariables(
+      stack,
+      shown.bootstrap,
+      { keys: stackKeys(stack, store, given), plexTv },
+      runtime,
+      values,
+    );
     // Compose can't recreate the wiring network while another project's container is on
     // it, so Mediaplane steps off before up, and back on in the wire step (ADR 0011).
     try {
@@ -234,6 +262,8 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         stack,
         store,
         values,
+        given,
+        plexTv,
         env: options.env,
         runtime,
         pending: shown.bootstrap,
@@ -262,6 +292,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         stack,
         store,
         values,
+        given,
         env: options.env,
         runtime,
         now,

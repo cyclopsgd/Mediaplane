@@ -205,18 +205,20 @@ export async function reachApps(
 
 /**
  * Every secret an app's answer could repeat: the .env values, every key in the store, the
- * admin password in use, and the one the store keeps. That one stays stored when you set
- * admin.password to a file of your own, and an app may still hold it. The client
- * replaces each with *** in what it says.
+ * ones you give (`given`: Plex's token), the admin password in use, and the one the store
+ * keeps. That one stays stored when you set admin.password to a file of your own, and an
+ * app may still hold it. The client replaces each with *** in what it says.
  */
 export function knownSecrets(
   values: Readonly<Record<string, string>>,
   store: SecretStore,
   admin: { password: string },
+  given: Readonly<Record<string, Readonly<Record<string, string>>>> = {},
 ): string[] {
   const all = [
     ...Object.values(values),
     ...Object.values(store.apps).flatMap((secrets) => Object.values(secrets)),
+    ...Object.values(given).flatMap((secrets) => Object.values(secrets)),
     ...(store.shared?.adminPassword === undefined ? [] : [store.shared.adminPassword]),
     admin.password,
   ];

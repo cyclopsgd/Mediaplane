@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
@@ -28,8 +28,10 @@ import {
   FAKE_JELLYFIN_USER_ID,
   FIXTURE_HOST,
   fakeDocker,
+  claimFakePlex,
   fakeJellyfinSetUp,
   FAKE_PLEX_ACCOUNT,
+  FAKE_SERVER_TOKEN,
   fakePlexTv,
   fakeProbe,
   fakeRuntime,
@@ -285,10 +287,15 @@ function expectNoSecrets(output: string, secrets: readonly string[]): void {
   for (const secret of secrets) expect(output).not.toContain(secret);
 }
 
-/** The apps' APIs, faked anew for each test: the test stack's Sonarr and qBittorrent. */
+/**
+ * The apps' APIs, faked anew for each test: the test stack's Sonarr and qBittorrent; and
+ * the plex.tv they and Mediaplane ask, so that no test reaches the real one.
+ */
 let apis: Awaited<ReturnType<typeof fakeStackApis>>;
+let plexTv: Awaited<ReturnType<typeof fakePlexTv>>;
 beforeEach(async () => {
-  apis = await fakeStackApis();
+  plexTv = await fakePlexTv();
+  apis = await fakeStackApis(plexTv.state);
 });
 
 /**
@@ -322,6 +329,7 @@ function deps(runtime: Runtime = fakeRuntime()): Partial<CliDeps> {
     runtime: () => reachingFakeApis(runtime),
     probe: () => fakeProbe(),
     wiring: apis.seams,
+    plexTv: () => plexTv.client,
   };
 }
 
@@ -1405,6 +1413,135 @@ describe('mediaplane apply: Seerr in the stack', () => {
     const then = capture();
     expect(await run(['apply', '--home', home, '--yes'], then.io, deps(docker))).toBe(0);
     expect(apis.apps.get('seerr')?.seerr.users).toEqual(['admin']);
+  });
+});
+
+describe('mediaplane apply: Plex as the media server', () => {
+  const PLEX_STACK = `version: 1
+paths: { data: /srv/data }
+network: { bind: localhost }
+media_server: plex
+plex: { token: { file: secrets/plex-token } }
+apps:
+  sonarr: {}
+  qbittorrent: { vpn: false }
+`;
+
+  /**
+   * A home of the Plex stack, with `token` saved as yours, and a Docker that starts Plex
+   * as its image does: trading its PLEX_CLAIM at plex.tv as it first starts, unless
+   * `claims` is false.
+   */
+  async function plexHome(token = FAKE_PLEX_ACCOUNT.token, claims = true) {
+    const home = await makeHome(PLEX_STACK);
+    await writeFile(join(home, 'secrets', 'plex-token'), `${token}\n`);
+    const plex = freshAppState();
+    plex.plex.configDir = join(home, 'appdata', 'plex');
+    apis.apps.set('plex', plex);
+    const docker = fakeDocker(home, {
+      onUp: (_unpublished, startEnv) => {
+        if (claims) claimFakePlex(plex.plex, startEnv.plex?.PLEX_CLAIM, plexTv.state);
+      },
+    });
+    return { home, plex: plex.plex, docker };
+  }
+
+  /** Every secret of the run: your token, the claim tokens, Plex's own token. */
+  function plexSecrets(): string[] {
+    return [
+      FAKE_PLEX_ACCOUNT.token,
+      FAKE_SERVER_TOKEN,
+      ...plexTv.state.claims.map((claim) => claim.token),
+    ];
+  }
+
+  it('claims Plex for your account before publishing it, then leaves it as it is', async () => {
+    const { home, plex, docker } = await plexHome();
+    const planned = capture();
+    expect(await run(['plan', '--home', home], planned.io, deps(docker))).toBe(2);
+    expect(planned.stdout()).toContain(
+      '+ plex (with no port published until it is done)\n',
+    );
+    // plan never asks plex.tv: the claim token is fetched only as apply starts Plex.
+    expect(plexTv.state.calls).toEqual([]);
+    const first = capture();
+    expect(await run(['apply', '--home', home, '--yes'], first.io, deps(docker))).toBe(0);
+    expect(docker.calls.filter((call) => call.startsWith('up'))).toEqual([
+      'up unpublished plex with plex.PLEX_CLAIM',
+      'up',
+    ]);
+    expect(first.stdout()).toContain(
+      '  done    first-run setup: set up plex; published plex\n',
+    );
+    expect(plex.owner).toBe(FAKE_PLEX_ACCOUNT.id);
+    expect((await readSecretStore(home)).setUp).toEqual(['plex']);
+    // One claim token, fetched with your token, and used.
+    expect(plexTv.state.claims).toEqual([
+      { token: plexTv.state.claims[0]?.token, account: FAKE_PLEX_ACCOUNT.id, used: true },
+    ]);
+    const records = await readdir(join(home, 'state', 'history'));
+    const recorded = await Promise.all(
+      records.map((name) => readFile(join(home, 'state', 'history', name), 'utf8')),
+    );
+    const secrets = [...(await secretsIn(home)), ...plexSecrets()];
+    expectNoSecrets(first.stdout() + first.stderr() + recorded.join(''), secrets);
+    expectNoSecrets(await readFile(join(home, 'state', 'secrets.json'), 'utf8'), [
+      FAKE_PLEX_ACCOUNT.token,
+      ...plexTv.state.claims.map((claim) => claim.token),
+    ]);
+    const again = capture();
+    expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
+    expect(again.stdout()).toBe('No changes.\n');
+  });
+
+  it('starts nothing when plex.tv refuses your token, and says to sign in again', async () => {
+    const { home, docker } = await plexHome('revoked-plex-token-0');
+    const term = capture();
+    expect(await run(['apply', '--home', home, '--yes'], term.io, deps(docker))).toBe(1);
+    expect(term.stderr()).toContain(
+      'error: Plex\'s first start needs a claim token from plex.tv, which Mediaplane couldn\'t get, so nothing was started: plex.tv refused the Plex token (HTTP 401) (GET /api/claim/token.json)\n  hint: plex.tv refused your Plex token: it was revoked, or is not one. Run "mediaplane plex-login" to sign in again, then run apply again\n',
+    );
+    expect(docker.calls.some((call) => call.startsWith('up'))).toBe(false);
+    expectNoSecrets(term.stdout() + term.stderr(), ['revoked-plex-token-0']);
+  });
+
+  it('stops a Plex that runs published, unclaimed, when plex.tv refuses your token, changing nothing else', async () => {
+    const { home, docker } = await plexHome('revoked-plex-token-0');
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(1);
+    // As an apply from before this slice left it, or a "docker compose up": Plex
+    // published, and unclaimed.
+    expect((await docker.up(60, {}, [])).ok).toBe(true);
+    docker.calls.length = 0;
+    const term = capture();
+    expect(await run(['apply', '--home', home, '--yes'], term.io, deps(docker))).toBe(1);
+    expect(term.stderr()).toContain(
+      "plex.tv refused the Plex token (HTTP 401) (GET /api/claim/token.json); Mediaplane stopped plex, which ran, but isn't shown to be yours, so that it isn't left published\n",
+    );
+    // Stopped, and nothing else: Mediaplane didn't leave the wiring network, nor stop or
+    // start anything more.
+    expect(docker.calls.filter((call) => /^(up|stop|leave-wiring)\b/.test(call))).toEqual(
+      ['stop plex'],
+    );
+    expectNoSecrets(term.stdout() + term.stderr(), ['revoked-plex-token-0']);
+  });
+
+  it("keeps a Plex that didn't claim itself unpublished, and fails", async () => {
+    const { home, plex, docker } = await plexHome(FAKE_PLEX_ACCOUNT.token, false);
+    const term = capture();
+    expect(await run(['apply', '--home', home, '--yes'], term.io, deps(docker))).toBe(1);
+    // Still unpublished, still with its claim token: up recreates nothing.
+    expect(docker.calls.filter((call) => call.startsWith('up'))).toEqual([
+      'up unpublished plex with plex.PLEX_CLAIM',
+      'up unpublished plex with plex.PLEX_CLAIM',
+    ]);
+    expect(term.stderr()).toContain(
+      "didn't claim itself as it started, so it stays unpublished: its claim token may have run out, or it couldn't reach plex.tv",
+    );
+    expect(plex.owner).toBeNull();
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
+    expectNoSecrets(term.stdout() + term.stderr(), plexSecrets());
   });
 });
 

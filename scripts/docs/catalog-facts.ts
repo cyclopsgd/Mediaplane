@@ -84,7 +84,9 @@ function api(def: AppDefinition): string {
       ? 'as a Bearer token'
       : key.scheme === 'mediabrowser'
         ? "in Jellyfin's `Authorization: MediaBrowser` header"
-        : 'in the `X-Api-Key` header';
+        : key.scheme === 'x-plex-token'
+          ? "in Plex's `X-Plex-Token` header"
+          : 'in the `X-Api-Key` header';
   // An app not wired yet with Plex (`notWiredYet`) has no API there, until its slice.
   const later = def.notWiredYet?.(PLEX_STACK);
   const unless = later === undefined ? '' : `; with Plex, none until ${later.comingIn}`;

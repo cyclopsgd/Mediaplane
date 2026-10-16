@@ -621,6 +621,31 @@ describe('createDockerRuntime', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("gives an unpublished service its start variables as references to Compose's environment", async () => {
+    const { exec, calls } = recorder(() => ({
+      code: 1,
+      stdout: '',
+      stderr: 'plex failed with claim-fake1cccccccccccccccc\n',
+    }));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane-test', exec });
+    const claim = 'claim-fake1cccccccccccccccc';
+    expect(
+      await runtime.up(600, {}, ['jellyfin', 'plex'], { plex: { PLEX_CLAIM: claim } }),
+    ).toEqual({ ok: false, error: 'plex failed with ***' });
+    expect(calls[0]?.options?.input).toBe(
+      'services:\n  jellyfin:\n    ports: !reset []\n  plex:\n    ports: !reset []\n    environment:\n      PLEX_CLAIM: "${MP_START_PLEX_PLEX_CLAIM}"\n',
+    );
+    // The value goes in Compose's environment only: never in a file or an argument.
+    expect(calls[0]?.options?.env).toMatchObject({ MP_START_PLEX_PLEX_CLAIM: claim });
+    expect(calls[0]?.args.join(' ')).not.toContain(claim);
+    // A service started published gets none: start variables go with no published port.
+    await runtime.up(600, {}, [], { plex: { PLEX_CLAIM: claim } });
+    expect(calls[1]?.options?.input).toBeUndefined();
+    await expect(
+      runtime.up(600, {}, ['plex'], { plex: { 'PLEX CLAIM': claim } }),
+    ).rejects.toThrow('refusing the start variable "PLEX CLAIM"');
+  });
+
   it("reports a failed command with Compose's last lines, secrets replaced", async () => {
     const { exec } = recorder(() => ({
       code: 1,

@@ -38,6 +38,7 @@ describe('catalog', () => {
   it('gives an API to the apps Mediaplane wires', () => {
     expect(catalog.filter((app) => app.api !== undefined).map((app) => app.id)).toEqual([
       'jellyfin',
+      'plex',
       'prowlarr',
       'qbittorrent',
       'radarr',
@@ -63,14 +64,18 @@ describe('catalog', () => {
 
   it('gives a first-run setup to the apps that open one to anyone, each with the key its API carries', () => {
     const set = catalog.filter((app) => app.bootstrap !== undefined);
-    expect(set.map((app) => app.id)).toEqual(['jellyfin', 'seerr']);
+    expect(set.map((app) => app.id)).toEqual(['jellyfin', 'plex', 'seerr']);
     for (const app of set) {
       const key = app.api?.key.secret ?? '';
       const made = app.bootstrap?.secret;
       // One whose setup makes its key names it; one that makes none has a key of
-      // Mediaplane's, which its done file can't stand in for.
-      if (made === undefined) expect(app.secrets[key]).toEqual({ generate: 'hex32' });
-      else {
+      // Mediaplane's (Seerr's), or yours (Plex's token), which its done file can't stand
+      // in for.
+      if (made === undefined) {
+        expect([{ generate: 'hex32' }, { userProvided: 'plex.token' }]).toContainEqual(
+          app.secrets[key],
+        );
+      } else {
         expect(made).toBe(key);
         expect(app.secrets[made]).toEqual({ createdBy: 'app' });
       }

@@ -21,6 +21,7 @@ import {
   FIXTURE_HOST,
   fixtureConfig,
   freshAppState,
+  NO_SETUP_CONTEXT,
   SEERR_JELLYFIN,
   SET_UP_JELLYFIN,
   tempDir,
@@ -126,7 +127,7 @@ describe("Seerr's first-run setup", () => {
       kind: 'auth',
       status: 403,
     });
-    expect(await seerrBootstrap.run(api, ADMIN, stack)).toBeUndefined();
+    expect(await seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT)).toBeUndefined();
     expect(state.seerr).toMatchObject({
       mediaServerType: SEERR_JELLYFIN,
       users: ['admin'],
@@ -151,7 +152,7 @@ describe("Seerr's first-run setup", () => {
     const { api, state, stack } = await seerrOf(
       fakeJellyfinSetUp({ password: 'fake-other-password' }),
     );
-    const waited = await thrown(seerrBootstrap.run(api, ADMIN, stack));
+    const waited = await thrown(seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT));
     expect(waited).toBeInstanceOf(SetupWaiting);
     expect((waited as Error).message).toBe(
       "Seerr at http://seerr:5055 (127.0.0.1) can't sign in through Jellyfin yet: Jellyfin refused the shared admin's password (POST /api/v1/auth/jellyfin)",
@@ -162,7 +163,7 @@ describe("Seerr's first-run setup", () => {
 
   it("fails, in Seerr's words and without the password, when Seerr can't reach Jellyfin", async () => {
     const { api, stack } = await seerrOf(fakeJellyfinSetUp({ up: false }));
-    const failed = await thrown(seerrBootstrap.run(api, ADMIN, stack));
+    const failed = await thrown(seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT));
     expect(failed).toBeInstanceOf(AppApiError);
     expect((failed as AppApiError).message).toBe(
       'Seerr at http://seerr:5055 (127.0.0.1) refused the request (HTTP 404): INVALID_URL (POST /api/v1/auth/jellyfin)',
@@ -171,7 +172,7 @@ describe("Seerr's first-run setup", () => {
 
   it("takes as done a Seerr set up with the shared admin and the stack's Jellyfin, asked with the key, never the password", async () => {
     const { api, calls, stack } = await seerrOf(fakeJellyfinSetUp(), SET_UP);
-    expect(await seerrBootstrap.run(api, ADMIN, stack)).toBeUndefined();
+    expect(await seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT)).toBeUndefined();
     expect(calls()).toEqual([
       'GET /api/v1/settings/public',
       'GET /api/v1/auth/me',
@@ -195,7 +196,7 @@ describe("Seerr's first-run setup", () => {
       ...SET_UP,
       ...more,
     });
-    const refused = await thrown(seerrBootstrap.run(api, ADMIN, stack));
+    const refused = await thrown(seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT));
     expect(refused).toBeInstanceOf(AppApiError);
     expect(refused).toMatchObject({ kind: 'auth' });
     expect(calls()).not.toContain('POST /api/v1/auth/jellyfin');
@@ -205,7 +206,7 @@ describe("Seerr's first-run setup", () => {
     const { api, calls, stack } = await seerrOf(fakeJellyfinSetUp(), {
       claimant: { user: 'someone', jellyfin: 'jellyfin' },
     });
-    const refused = await thrown(seerrBootstrap.run(api, ADMIN, stack));
+    const refused = await thrown(seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT));
     expect(refused).toBeInstanceOf(AppApiError);
     expect(refused).toMatchObject({
       kind: 'auth',
@@ -225,7 +226,9 @@ describe("Seerr's first-run setup", () => {
     const { api, state, stack } = await seerrOf(fakeJellyfinSetUp(), {
       claimant: THROUGH_ANOTHER_HOST,
     });
-    expect(await thrown(seerrBootstrap.run(api, ADMIN, stack))).toMatchObject({
+    expect(
+      await thrown(seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT)),
+    ).toMatchObject({
       kind: 'auth',
       message:
         'Seerr at http://seerr:5055 (127.0.0.1) was set up with another login or another Jellyfin (GET /api/v1/auth/me, GET /api/v1/settings/jellyfin)',
@@ -242,7 +245,7 @@ describe("Seerr's first-run setup", () => {
     const { api, calls, stack } = await seerrOf(fakeJellyfinSetUp(), {
       claimant: { user: 'admin', jellyfin: 'jellyfin' },
     });
-    expect(await seerrBootstrap.run(api, ADMIN, stack)).toBeUndefined();
+    expect(await seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT)).toBeUndefined();
     expect(calls().filter((c) => c === 'POST /api/v1/auth/jellyfin')).toHaveLength(1);
   });
 
@@ -251,7 +254,7 @@ describe("Seerr's first-run setup", () => {
       ...SET_UP,
       jellyfin: { ...SET_UP.jellyfin, apiKey: SEERRS_OWN },
     });
-    expect(await seerrBootstrap.run(api, ADMIN, stack)).toBeUndefined();
+    expect(await seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT)).toBeUndefined();
     state.seerr.echoKey = true;
     expect(await thrown(api.check('/api/v1/nosuch'))).toMatchObject({
       message:
@@ -268,7 +271,9 @@ describe("Seerr's first-run setup", () => {
         'media_server: plex\nplex: { token: { env: PLEX_TOKEN } }',
       ),
     );
-    expect(await thrown(seerrBootstrap.run(api, ADMIN, plex))).toMatchObject({
+    expect(
+      await thrown(seerrBootstrap.run(api, ADMIN, plex, NO_SETUP_CONTEXT)),
+    ).toMatchObject({
       kind: 'rejected',
       message:
         "Seerr at http://seerr:5055 (127.0.0.1) can't be set up: the stack runs no Jellyfin for it to sign in through",
@@ -298,7 +303,7 @@ describe("Seerr's first-run setup: what it can't confirm is not Mediaplane's", (
       const { api, stack } = await seerrOf(fakeJellyfinSetUp(), SET_UP);
       for (const path of ['/api/v1/auth/me', '/api/v1/settings/jellyfin']) {
         const refused = await thrown(
-          seerrBootstrap.run(failingAt(api, path, kind), ADMIN, stack),
+          seerrBootstrap.run(failingAt(api, path, kind), ADMIN, stack, NO_SETUP_CONTEXT),
         );
         expect(refused).toBeInstanceOf(AppApiError);
         expect(refused).toMatchObject({ kind: 'auth', unsure: true });
@@ -315,7 +320,7 @@ describe("Seerr's first-run setup: what it can't confirm is not Mediaplane's", (
       const { api, stack } = await seerrOf(fakeJellyfinSetUp(), SET_UP);
       for (const path of ['/api/v1/auth/me', '/api/v1/settings/jellyfin']) {
         const refused = await thrown(
-          seerrBootstrap.run(failingAt(api, path, kind), ADMIN, stack),
+          seerrBootstrap.run(failingAt(api, path, kind), ADMIN, stack, NO_SETUP_CONTEXT),
         );
         expect(refused).toBeInstanceOf(AppApiError);
         expect(refused).toMatchObject({ kind: 'auth', unsure: false });
@@ -331,7 +336,9 @@ describe("Seerr's first-run setup: what it can't confirm is not Mediaplane's", (
       ...SET_UP,
       failing: ['/api/v1/settings/jellyfin'],
     });
-    expect(await thrown(seerrBootstrap.run(api, ADMIN, stack))).toMatchObject({
+    expect(
+      await thrown(seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT)),
+    ).toMatchObject({
       kind: 'auth',
     });
     // Claimed through Plex: a media-server type of 1, another login, no Jellyfin.
@@ -339,7 +346,9 @@ describe("Seerr's first-run setup: what it can't confirm is not Mediaplane's", (
       mediaServerType: 1,
       users: ['someone'],
     });
-    expect(await thrown(seerrBootstrap.run(plex.api, ADMIN, plex.stack))).toMatchObject({
+    expect(
+      await thrown(seerrBootstrap.run(plex.api, ADMIN, plex.stack, NO_SETUP_CONTEXT)),
+    ).toMatchObject({
       kind: 'auth',
     });
   });
@@ -351,11 +360,13 @@ describe("Seerr's first-run setup: what it can't confirm is not Mediaplane's", (
     const lookFails = (api: AppApi) =>
       failingAt(api, '/api/v1/settings/public', 'timeout');
     expect(
-      await seerrBootstrap.run(lookFails(own.api), ADMIN, own.stack),
+      await seerrBootstrap.run(lookFails(own.api), ADMIN, own.stack, NO_SETUP_CONTEXT),
     ).toBeUndefined();
     const fresh = await seerrOf();
     expect(
-      await thrown(seerrBootstrap.run(lookFails(fresh.api), ADMIN, fresh.stack)),
+      await thrown(
+        seerrBootstrap.run(lookFails(fresh.api), ADMIN, fresh.stack, NO_SETUP_CONTEXT),
+      ),
     ).toMatchObject({ kind: 'auth' });
     expect(fresh.calls()).not.toContain('POST /api/v1/auth/jellyfin');
   });
@@ -371,6 +382,7 @@ describe("Seerr's first-run setup: what it can't confirm is not Mediaplane's", (
         failingAt(api, '/api/v1/settings/public', 'server', 2),
         ADMIN,
         stack,
+        NO_SETUP_CONTEXT,
       ),
     );
     expect(refused).toMatchObject({ kind: 'auth' });
@@ -381,7 +393,7 @@ describe("Seerr's first-run setup: what it can't confirm is not Mediaplane's", (
     const { api, state, stack } = await seerrOf(fakeJellyfinSetUp(), {
       failing: ['/api/v1/auth/logout'],
     });
-    expect(await seerrBootstrap.run(api, ADMIN, stack)).toBeUndefined();
+    expect(await seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT)).toBeUndefined();
     expect(state.seerr.mediaServerType).toBe(SEERR_JELLYFIN);
     // Its session runs out by itself.
     expect(state.seerr.sessions).toHaveLength(1);
@@ -392,7 +404,7 @@ describe("Seerr's first-run setup: what it can't confirm is not Mediaplane's", (
       ...SET_UP,
       users: ['someone'],
     });
-    const refused = await thrown(seerrBootstrap.run(api, ADMIN, stack));
+    const refused = await thrown(seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT));
     expect(refused).toMatchObject({ kind: 'auth', status: undefined });
   });
 });

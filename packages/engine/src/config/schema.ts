@@ -231,7 +231,7 @@ const stackShape = {
   plex: z
     .strictObject({
       token: secretRefSchema.describe(
-        'Your Plex token, as a secret reference. Checked to exist, but not used yet: claiming the server arrives in Slice 7.',
+        'Your Plex token, as a secret reference: "mediaplane plex-login" saves it. Mediaplane claims Plex with it, as yours, and it is the key Mediaplane and the other apps reach Plex with.',
       ),
     })
     .optional()

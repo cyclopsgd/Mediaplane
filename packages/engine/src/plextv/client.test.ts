@@ -3,6 +3,7 @@ import { closedPort, fakeHttpApp } from '../testing/http';
 import { FAKE_PLEX_ACCOUNT, fakePlexTv } from '../testing/plextv';
 import { thrown } from '../testing/seerr';
 import {
+  NO_PLEX_TV,
   newClientId,
   PLEX_CLIENT_ID,
   plexTvClient,
@@ -314,6 +315,20 @@ describe('plexTvClient', () => {
       kind: 'protocol',
       message: 'plex.tv answered more than 1 MiB (GET /api/v2/user)',
     });
+  });
+
+  it('fails every call, unsure, when it was given no plex.tv', async () => {
+    for (const call of [
+      NO_PLEX_TV.createPin(newClientId()),
+      NO_PLEX_TV.claimToken(TOKEN),
+      NO_PLEX_TV.accountId(TOKEN),
+    ]) {
+      expect(await thrown(call)).toMatchObject({
+        kind: 'unreachable',
+        unsure: true,
+        message: 'Mediaplane was given no way to reach plex.tv',
+      });
+    }
   });
 
   it('refuses a token that can not go in a header, without showing it', async () => {

@@ -1,4 +1,4 @@
-import type { Bootstrap } from '../catalog/types';
+import type { Bootstrap, BootstrapContext } from '../catalog/types';
 import { AppApiError, APP_DEADLINE_MS, type AppApi } from '../http/client';
 import {
   joinFailure,
@@ -11,12 +11,13 @@ import {
   type ReachedApp,
   type WiringSeams,
 } from '../integrations/wiring';
-import { stackAddress } from '../integrations/address';
 import { appSetupDone, type BootstrapChange } from '../plan/bootstrap';
+import { NO_PLEX_TV, type PlexTv } from '../plextv/client';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { RuntimeError, type Runtime } from '../runtime/types';
 import { adminLogin } from '../secrets/admin';
 import { writeSecretStore, type SecretStore } from '../secrets/store';
+import { stackKeys } from '../secrets/values';
 import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
 
 export interface BootstrapOptions {
@@ -25,6 +26,10 @@ export interface BootstrapOptions {
   store: SecretStore;
   /** The secret values of .env: kept out of every message. */
   values: Readonly<Record<string, string>>;
+  /** The secrets you give (userSecrets), such as Plex's token: keys, never kept. */
+  given?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /** plex.tv, for a setup that asks it (Plex's, Seerr's with Plex); none by default. */
+  plexTv?: PlexTv;
   env: NodeJS.ProcessEnv;
   runtime: Runtime;
   /** The Compose project `runtime` manages: hints name its containers as Compose does. */
@@ -135,19 +140,23 @@ export async function bootstrapApps(
     await writeSecretStore(options.home, store);
   }
   const admin = await adminLogin(stack.config, options.home, options.store, options.env);
-  const secrets = knownSecrets(options.values, options.store, admin);
+  const given = options.given ?? {};
+  const secrets = knownSecrets(options.values, options.store, admin, given);
   const found = options.found ?? foundSecrets();
-  // A key that Mediaplane chose, and the app takes from its environment (Seerr's), is
-  // carried: the setup asks an app that is set up already with it, never with the
-  // password. A key the setup makes isn't there yet, or may be stale.
+  const allKeys = stackKeys(stack, options.store, given);
+  // A key that Mediaplane chose, and the app takes from its environment (Seerr's), or
+  // one you give (Plex's token), is carried: the setup asks an app that is set up already
+  // with it, never with the password. A key the setup makes isn't there yet, or may be
+  // stale.
   const appKeys = Object.fromEntries(
     apps.flatMap((app) => {
-      const own = options.store.apps[app.def.id];
+      const own = allKeys[app.def.id];
       return app.def.bootstrap?.secret === undefined && own !== undefined
         ? [[app.def.id, own]]
         : [];
     }),
   );
+  const ctx: BootstrapContext = { keys: allKeys, plexTv: options.plexTv ?? NO_PLEX_TV };
   let reached: Map<string, ReachedApp>;
   try {
     if ((await runtime.joinWiring()) === 'no-network') {
@@ -188,6 +197,7 @@ export async function bootstrapApps(
             container: `${options.project}-${app.def.id}-1`,
             home: options.home,
             stack,
+            ctx,
           })
         : {
             waiting: `${app.def.name} waits for ${before.def.name}'s first-run setup, which isn't done`,
@@ -318,6 +328,7 @@ async function setUp(
     container: string;
     home: string;
     stack: ResolvedStack;
+    ctx: BootstrapContext;
   },
 ): Promise<SetUpResult> {
   const { bootstrap, api } = app.def;
@@ -327,7 +338,7 @@ async function setUp(
   const name = app.def.name;
   try {
     await client.api.ready(api.ready);
-    const key = await bootstrap.run(client.api, admin, started.stack);
+    const key = await bootstrap.run(client.api, admin, started.stack, started.ctx);
     if (bootstrap.secret !== undefined && key === undefined) {
       // A setup that makes a key and gives none is a bug in the setup: the app would be
       // published with no key stored, and nothing failed.
@@ -379,13 +390,13 @@ async function setUp(
  * file Mediaplane can't read may hide a setup the user finished by hand, which starting
  * afresh would lose; one it can read was finished with another login meanwhile. For a
  * setup that makes no key, `unsure` says the check couldn't be made, rather than found
- * the app isn't Mediaplane's.
+ * the app isn't Mediaplane's; otherwise the app's own remedies follow (claimedHint).
  */
 async function claimed(
   app: ResolvedApp,
   refused: string,
   unsure: boolean,
-  { home, stack }: { home: string; stack: ResolvedStack },
+  { home, stack, container }: { home: string; stack: ResolvedStack; container: string },
 ): Promise<string> {
   const { name, id } = app.def;
   if (app.def.bootstrap?.secret === undefined) {
@@ -395,12 +406,10 @@ async function claimed(
     if (unsure) {
       return `${said}. Run apply again first: a failure that was temporary clears, and ${name}, if it is Mediaplane's, is then recorded and published. If it fails again, see the runbook`;
     }
-    const jellyfin = stackAddress(stack, 'jellyfin');
-    const at =
-      jellyfin === undefined
-        ? "the stack's Jellyfin"
-        : `${jellyfin.host}:${String(jellyfin.port)}`;
-    return `${said}. First: if the Jellyfin login it was set up with is yours, set admin.username and admin.password to it. Or second: make its admin (its first user) the Jellyfin login that admin.username names. Either needs its Jellyfin already at ${at}, with no URL base and no TLS; then run apply again. Last, if you did not set it up: start it afresh, as the runbook says`;
+    const remedies =
+      app.def.bootstrap?.claimedHint?.(stack, container) ??
+      'If you did not set it up: start it afresh, as the runbook says';
+    return `${said}. ${remedies}`;
   }
   const said = `${refused}; ${name}'s setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished`;
   const done = await appSetupDone(home, app);
@@ -410,4 +419,79 @@ async function claimed(
   }
   const next = done ? ', and the next apply would publish it' : '';
   return `${said}: its setup was finished with another login while Mediaplane set it up${next}. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says`;
+}
+
+/**
+ * The start variables of each app the plan starts unpublished whose setup gives some for
+ * its first start (`Bootstrap.firstStart`), while its appdata doesn't say the setup is done
+ * (a file Mediaplane can't read doesn't say so either), by service: Plex's PLEX_CLAIM. One
+ * that can't be made throws, before anything starts.
+ */
+export async function firstStartEnv(
+  stack: ResolvedStack,
+  pending: readonly BootstrapChange[],
+  ctx: BootstrapContext,
+): Promise<Record<string, Record<string, string>>> {
+  const env: Record<string, Record<string, string>> = {};
+  for (const app of await firstStartApps(stack, pending)) {
+    const bootstrap = app.def.bootstrap;
+    if (bootstrap?.firstStart === undefined) continue;
+    env[app.def.id] = await bootstrap.firstStart(stack, ctx);
+  }
+  return env;
+}
+
+/** The apps firstStartEnv asks for start variables, in the plan's order. */
+async function firstStartApps(
+  stack: ResolvedStack,
+  pending: readonly BootstrapChange[],
+): Promise<ResolvedApp[]> {
+  const apps: ResolvedApp[] = [];
+  for (const change of pending) {
+    if (!change.unpublished) continue;
+    const app = stack.apps.find((a) => a.def.id === change.app);
+    if (app?.def.bootstrap?.firstStart === undefined) continue;
+    if ((await appSetupDone(stack.home, app)) === true) continue;
+    apps.push(app);
+  }
+  return apps;
+}
+
+/**
+ * firstStartEnv, for apply's start step, before it changes anything. When it throws, each
+ * app it was for that runs is stopped first: an app whose setup isn't done isn't shown to
+ * be yours (Plex, unclaimed or claimed by someone else, such as one an apply before
+ * Slice 7 published), so it must not stay published. A BootstrapFailed then says so.
+ */
+export async function startVariables(
+  stack: ResolvedStack,
+  pending: readonly BootstrapChange[],
+  ctx: BootstrapContext,
+  runtime: Runtime,
+  values: Readonly<Record<string, string>>,
+): Promise<Record<string, Record<string, string>>> {
+  try {
+    return await firstStartEnv(stack, pending, ctx);
+  } catch (cause) {
+    const apps = (await firstStartApps(stack, pending)).map((app) => app.def.id);
+    let running: string[];
+    try {
+      running = (await runtime.containers())
+        .filter((c) => apps.includes(c.service) && c.state === 'running')
+        .map((c) => c.service);
+    } catch {
+      // Not known to be stopped: stop them all.
+      running = apps;
+    }
+    if (running.length === 0) throw cause;
+    const stopped = await runtime.stop(running, { ...values });
+    if (!(cause instanceof BootstrapFailed)) throw cause;
+    const names = running.join(', ');
+    throw new BootstrapFailed(
+      stopped.ok
+        ? `${cause.message}; Mediaplane stopped ${names}, which ran, but isn't shown to be yours, so that it isn't left published`
+        : `${cause.message}; ${names} runs, isn't shown to be yours, and couldn't be stopped: ${stopped.error}. Stop it yourself`,
+      cause.hint,
+    );
+  }
 }

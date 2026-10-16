@@ -3,6 +3,7 @@ import type { AppSettings, StackConfig } from '../config/schema';
 import type { Diagnostic } from '../diagnostics';
 import type { AppApi, KeyScheme } from '../http/client';
 import type { Integration } from '../integrations/types';
+import type { PlexTv } from '../plextv/client';
 import type { ResolvedStack } from '../resolver/resolve';
 
 export type Arch = 'amd64' | 'arm64';
@@ -117,11 +118,22 @@ export interface ApiSpec {
   check: string;
 }
 
+/** What a first-run setup can use besides the app's API. It holds secrets: never print it. */
+export interface BootstrapContext {
+  /**
+   * The stack's keys, by app then name: those in state/secrets.json, and the ones you
+   * give, such as Plex's token (`keys.plex.token`).
+   */
+  keys: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /** plex.tv: called directly from source, through the plex.tv helper in the image. */
+  plexTv: PlexTv;
+}
+
 /**
  * First-run setup that an app opens to anyone who reaches it, which Mediaplane finishes
  * before it publishes the app's ports (spec §5 step 9, §6.4: bootstrap before publish),
  * over the wiring network, without a key: Jellyfin's startup wizard, then the API key that
- * only the app can make; Seerr's first sign-in, through Jellyfin.
+ * only the app can make; Seerr's first sign-in, through Jellyfin; Plex's claim.
  */
 export interface Bootstrap {
   /**
@@ -140,6 +152,17 @@ export interface Bootstrap {
   /** Whether anyone who reaches the app can still claim it. Throws AppApiError. */
   open(api: AppApi): Promise<boolean>;
   /**
+   * Environment variables for the app's start while its setup isn't done, which only
+   * apply's start step gives it, with its ports unpublished: Plex's PLEX_CLAIM, a claim
+   * token fetched from plex.tv. They reach Compose on its standard input, as references to
+   * values in its own environment: never in compose.yaml, .env, a record or the output.
+   * Each value is a secret of the run. Throws BootstrapFailed, and then nothing starts.
+   */
+  firstStart?(
+    stack: ResolvedStack,
+    ctx: BootstrapContext,
+  ): Promise<Record<string, string>>;
+  /**
    * Finish what is left of the setup as the shared admin, in `stack`, and give the secret
    * it made, or the one the app already holds for Mediaplane; undefined for a setup that
    * makes none. A setup that makes none may succeed only once it has shown that the app is
@@ -153,7 +176,15 @@ export interface Bootstrap {
     api: AppApi,
     admin: { username: string; password: string },
     stack: ResolvedStack,
+    ctx: BootstrapContext,
   ): Promise<string | undefined>;
+  /**
+   * For a setup that makes no key: what to do about an app found set up that Mediaplane
+   * can't show is its own, the safe remedies first and starting afresh last, as sentences.
+   * `container` is the app's container's name. Without it, the step says to start the app
+   * afresh if you did not set it up.
+   */
+  claimedHint?(stack: ResolvedStack, container: string): string;
 }
 
 export interface ServiceExtras {

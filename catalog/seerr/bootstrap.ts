@@ -5,6 +5,7 @@ import {
   type AppApi,
   type AppApiErrorKind,
   type Bootstrap,
+  type ResolvedStack,
 } from '@mediaplane/engine';
 import { z } from 'zod';
 import { atStackJellyfin, jellyfinSettings } from './jellyfin';
@@ -83,6 +84,20 @@ async function ownSetup(
 }
 
 /**
+ * What to do about a Seerr set up with a login Mediaplane can't show is its own: make
+ * that login the shared admin's, or the shared admin Seerr's admin, at the stack's
+ * Jellyfin; and only last, start Seerr afresh.
+ */
+function claimedHint(stack: ResolvedStack): string {
+  const jellyfin = stackAddress(stack, 'jellyfin');
+  const at =
+    jellyfin === undefined
+      ? "the stack's Jellyfin"
+      : `${jellyfin.host}:${String(jellyfin.port)}`;
+  return `First: if the Jellyfin login it was set up with is yours, set admin.username and admin.password to it. Or second: make its admin (its first user) the Jellyfin login that admin.username names. Either needs its Jellyfin already at ${at}, with no URL base and no TLS; then run apply again. Last, if you did not set it up: start it afresh, as the runbook says`;
+}
+
+/**
  * Whether Seerr's setup is open, when it can be asked; a Seerr that can't be asked counts
  * as set up, and `ownSetup` then decides, with its key, whether it is Mediaplane's.
  */
@@ -114,6 +129,7 @@ async function openOrSetUp(api: AppApi): Promise<boolean> {
 export const seerrBootstrap: Bootstrap = {
   done: { path: 'settings.json', pattern: /"mediaServerType":\s*[123]\b/ },
   open,
+  claimedHint,
   async run(api, admin, stack) {
     const jellyfin = stackAddress(stack, 'jellyfin');
     if (jellyfin === undefined) {

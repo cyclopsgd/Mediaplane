@@ -1,0 +1,424 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import {
+  AppApiError,
+  bootstrapApps,
+  BootstrapFailed,
+  createAppApi,
+  firstStartEnv,
+  inspectBootstrap,
+  plexTvClient,
+  readSecretStore,
+  resolveStack,
+  type BootstrapContext,
+  type PlexTv,
+  type ResolvedStack,
+  type SecretStore,
+} from '@mediaplane/engine';
+import {
+  claimFakePlex,
+  closedPort,
+  FAKE_PLEX_ACCOUNT,
+  fakeContainer,
+  fakePlexTv,
+  fakeRuntime,
+  fakeStackApis,
+  FIXTURE_HOST,
+  fixtureConfig,
+  freshAppState,
+  PLEX_PREFERENCES,
+  tempDir,
+  thrown,
+  wiringStack,
+} from '@mediaplane/engine/testing';
+import { describe, expect, it } from 'vitest';
+import { catalog } from '../index';
+import { plexBootstrap, PREFERENCES } from './bootstrap';
+
+const TOKEN = FAKE_PLEX_ACCOUNT.token;
+const ADMIN = { username: 'admin', password: 'fake-admin-password' };
+/** Another plex.tv account, which can claim a Plex too. */
+const SOMEONE = { id: 7_000_099, token: 'someone-plex-token-9' };
+
+const STACK = `version: 1
+paths: { data: /srv/data }
+network: { bind: localhost }
+media_server: plex
+plex: { token: { file: secrets/plex-token } }
+apps:
+  sonarr: {}
+  qbittorrent: { vpn: false }
+`;
+
+/** STACK, resolved in `home`. */
+function stackIn(home: string): ResolvedStack {
+  const resolved = resolveStack(fixtureConfig(STACK), catalog, FIXTURE_HOST, home);
+  if (resolved.stack === undefined) throw new Error(JSON.stringify(resolved.diagnostics));
+  return resolved.stack;
+}
+
+/**
+ * The stack's fakes, Plex as it first starts, keeping its Preferences.xml in a home of
+ * its own, plex.tv knowing your account and SOMEONE's, and a client of Plex with your
+ * token, whose waits pass at once on a clock of its own (a deadline of `deadlineMs` on
+ * it).
+ */
+async function plexOf(deadlineMs = 0) {
+  const home = await tempDir('mediaplane-plex-');
+  const plexTv = await fakePlexTv();
+  plexTv.state.accounts.push({ ...SOMEONE });
+  const apis = await fakeStackApis(plexTv.state);
+  const state = freshAppState();
+  state.plex.configDir = join(home, 'appdata', 'plex');
+  apis.apps.set('plex', state);
+  let clock = 0;
+  const api = createAppApi({
+    name: 'Plex',
+    service: 'plex',
+    port: 32400,
+    endpoint: { host: '127.0.0.1', port: apis.app.port },
+    key: { scheme: 'x-plex-token', value: TOKEN },
+    secrets: [TOKEN],
+    retry: {
+      deadlineMs,
+      now: () => clock,
+      sleep: (ms) => {
+        clock += ms;
+        return Promise.resolve();
+      },
+    },
+  });
+  const ctx: BootstrapContext = {
+    keys: { plex: { token: TOKEN } },
+    plexTv: plexTv.client,
+  };
+  return { api, state, plexTv, ctx, stack: stackIn(home) };
+}
+
+describe("Plex's first-run setup", () => {
+  it('is open until Plex is claimed, as Plex says to anyone', async () => {
+    const { api, state, plexTv } = await plexOf();
+    expect(await plexBootstrap.open(api)).toBe(true);
+    const claim = await plexTv.client.claimToken(TOKEN);
+    expect(claimFakePlex(state.plex, claim, plexTv.state)).toBe(true);
+    expect(await plexBootstrap.open(api)).toBe(false);
+    expect(plexBootstrap.done.path).toBe(PLEX_PREFERENCES);
+    expect(PREFERENCES).toBe(PLEX_PREFERENCES);
+  });
+
+  it('gives its first start a claim token for your account, fetched with your token', async () => {
+    const { plexTv, ctx, stack } = await plexOf();
+    const env = await plexBootstrap.firstStart?.(stack, ctx);
+    expect(env).toEqual({ PLEX_CLAIM: plexTv.state.claims[0]?.token });
+    expect(plexTv.state.claims).toEqual([
+      { token: env?.PLEX_CLAIM, account: FAKE_PLEX_ACCOUNT.id, used: false },
+    ]);
+  });
+
+  it("says what to do when it can't get a claim token, and never shows the token", async () => {
+    const { stack, plexTv } = await plexOf();
+    const refused = await thrown(
+      Promise.resolve(
+        plexBootstrap.firstStart?.(stack, {
+          keys: { plex: { token: 'revoked-plex-token-0' } },
+          plexTv: plexTv.client,
+        }),
+      ),
+    );
+    expect(refused).toBeInstanceOf(BootstrapFailed);
+    expect(refused).toMatchObject({
+      message:
+        "Plex's first start needs a claim token from plex.tv, which Mediaplane couldn't get, so nothing was started: plex.tv refused the Plex token (HTTP 401) (GET /api/claim/token.json)",
+      hint: 'plex.tv refused your Plex token: it was revoked, or is not one. Run "mediaplane plex-login" to sign in again, then run apply again',
+    });
+    const away: PlexTv = plexTvClient({
+      base: `http://127.0.0.1:${String(await closedPort())}`,
+      sleep: () => Promise.resolve(),
+    });
+    const unreached = await thrown(
+      Promise.resolve(
+        plexBootstrap.firstStart?.(stack, {
+          keys: { plex: { token: TOKEN } },
+          plexTv: away,
+        }),
+      ),
+    );
+    expect(unreached).toMatchObject({
+      hint: 'check that this host reaches plex.tv, then run apply again',
+    });
+    expect((unreached as Error).message).not.toContain(TOKEN);
+    const none = await thrown(
+      Promise.resolve(plexBootstrap.firstStart?.(stack, { keys: {}, plexTv: away })),
+    );
+    expect(none).toMatchObject({
+      message:
+        "Plex can't be claimed: Mediaplane has no Plex token, so nothing was started",
+      hint: 'run "mediaplane plex-login", then run apply again',
+    });
+  });
+
+  it('takes a Plex your account claimed, waiting while it claims itself as it starts', async () => {
+    const { api, state, plexTv, ctx, stack } = await plexOf(60_000);
+    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    // It says it is unclaimed twice more, as the image restarts it after its claim.
+    state.plex.claimingFor = 2;
+    expect(await plexBootstrap.run(api, ADMIN, stack, ctx)).toBeUndefined();
+    expect(state.plex.claimingFor).toBe(0);
+  });
+
+  it("keeps a Plex that didn't claim itself unpublished, saying why", async () => {
+    const { api, ctx, stack } = await plexOf(60_000);
+    const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+    expect(failed).toBeInstanceOf(AppApiError);
+    expect(failed).toMatchObject({
+      kind: 'rejected',
+      message:
+        'Plex at http://plex:32400 (127.0.0.1) didn\'t claim itself as it started, so it stays unpublished: its claim token may have run out, or it couldn\'t reach plex.tv; its log says which ("mediaplane status plex" names its container)',
+    });
+  });
+
+  it('refuses a Plex another plex.tv account claimed, asking plex.tv, not Plex', async () => {
+    const { api, state, plexTv, ctx, stack } = await plexOf();
+    claimFakePlex(
+      state.plex,
+      await plexTv.client.claimToken(SOMEONE.token),
+      plexTv.state,
+    );
+    const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+    expect(failed).toMatchObject({
+      kind: 'auth',
+      unsure: false,
+      message:
+        "Plex at http://plex:32400 (127.0.0.1) is claimed by another plex.tv account than yours: plex.tv says the token its claim gave it is another account's",
+    });
+    expect(plexTv.state.calls.slice(-2)).toEqual([
+      'GET /api/v2/user',
+      'GET /api/v2/user',
+    ]);
+    expect((failed as Error).message).not.toContain(state.plex.serverToken);
+  });
+
+  it("refuses another account's Plex that says the machine identifier of a server of yours", async () => {
+    const { api, state, plexTv, ctx, stack } = await plexOf();
+    // A Plex of yours elsewhere, whose machine identifier anyone who reaches it can read.
+    plexTv.state.servers.push({
+      machineId: 'your-other-plex-0001',
+      owner: FAKE_PLEX_ACCOUNT.id,
+      name: 'Living room',
+      token: 'fake-server-token-99',
+    });
+    claimFakePlex(
+      state.plex,
+      await plexTv.client.claimToken(SOMEONE.token),
+      plexTv.state,
+    );
+    // Its admin gives it that identifier, as Plex's PUT /:/prefs takes it (probed).
+    state.plex.machineId = 'your-other-plex-0001';
+    const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+    expect(failed).toMatchObject({ kind: 'auth', unsure: false });
+    expect((failed as Error).message).toContain('is claimed by another plex.tv account');
+  });
+
+  it('refuses a Plex whose token plex.tv refuses, as once it is removed from its account', async () => {
+    const { api, state, plexTv, ctx, stack } = await plexOf();
+    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    plexTv.state.servers = [];
+    const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+    expect(failed).toMatchObject({
+      kind: 'auth',
+      unsure: false,
+      message:
+        'Plex at http://plex:32400 (127.0.0.1) is claimed by no plex.tv account of yours: plex.tv refuses the token its claim gave it, as it does once the server is removed from its account',
+    });
+  });
+
+  it("refuses, as unsure, a Plex when plex.tv can't be asked whose it is", async () => {
+    const { api, state, plexTv, ctx, stack } = await plexOf();
+    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    plexTv.state.failing.push({ path: '/api/v2/user', status: 503 });
+    const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+    expect(failed).toMatchObject({ kind: 'auth', unsure: true });
+    expect((failed as Error).message).toContain(
+      "is claimed, and Mediaplane couldn't tell whether by your plex.tv account: plex.tv failed (HTTP 503)",
+    );
+  });
+
+  it("refuses, as unsure, a claimed Plex whose Preferences.xml holds no token, and one Mediaplane can't read", async () => {
+    const { api, state, plexTv, ctx, stack } = await plexOf();
+    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    state.plex.serverToken = '';
+    const tokenless = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+    expect(tokenless).toMatchObject({
+      kind: 'auth',
+      unsure: true,
+      message:
+        "Plex at http://plex:32400 (127.0.0.1) is claimed, and its Preferences.xml holds no token of its claim, so Mediaplane couldn't tell whether by your plex.tv account",
+    });
+    const other = await plexOf();
+    other.state.plex.configDir = undefined;
+    claimFakePlex(
+      other.state.plex,
+      await other.plexTv.client.claimToken(TOKEN),
+      other.plexTv.state,
+    );
+    const unread = await thrown(
+      plexBootstrap.run(other.api, ADMIN, other.stack, other.ctx),
+    );
+    expect(unread).toMatchObject({
+      kind: 'rejected',
+      message: `Plex at http://plex:32400 (127.0.0.1) is claimed, and Mediaplane can't read appdata/plex/${PLEX_PREFERENCES} (ENOENT) to tell by whose plex.tv account`,
+    });
+  });
+
+  it('says plex.tv refused your token when asked whose Plex it is, never as claimed', async () => {
+    const { api, state, plexTv, stack } = await plexOf();
+    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    const failed = await thrown(
+      plexBootstrap.run(api, ADMIN, stack, {
+        keys: { plex: { token: 'revoked-plex-token-0' } },
+        plexTv: plexTv.client,
+      }),
+    );
+    expect(failed).toMatchObject({ kind: 'rejected' });
+    expect((failed as Error).message).toContain(
+      'Run "mediaplane plex-login" to sign in again',
+    );
+    expect((failed as Error).message).not.toContain('revoked-plex-token');
+  });
+
+  it('gives the safe remedies for a Plex claimed by someone else first, and starting afresh last', () => {
+    const hint = plexBootstrap.claimedHint?.(
+      wiringStack(catalog, STACK),
+      'mediaplane-plex-1',
+    );
+    expect(hint).toBe(
+      'First: if that plex.tv account is yours too, run "mediaplane plex-login" and sign in as it, then run apply again. Or second, keeping what Plex holds: stop it ("docker stop mediaplane-plex-1"), remove every attribute whose name starts with PlexOnline from appdata/plex/Library/Application Support/Plex Media Server/Preferences.xml, then run apply again, which claims it as yours. Last, only if you don\'t need what it holds: start it afresh, as the runbook says',
+    );
+  });
+});
+
+describe("Plex's setup, as apply's bootstrap step runs it", () => {
+  /**
+   * Plex in a home of its own, set up by the engine's step as `apply` would run it:
+   * planned from its Preferences.xml and the store, its first start given its claim, which
+   * it trades at the fake plex.tv as the image does, then set up. `published` has, for
+   * each publishing up, the apps it leaves unpublished.
+   */
+  async function stepOf() {
+    const store: SecretStore = {
+      version: 1,
+      apps: {},
+      shared: { adminPassword: ADMIN.password },
+    };
+    const home = await tempDir('mediaplane-plex-');
+    await mkdir(join(home, 'secrets'));
+    await writeFile(join(home, 'secrets', 'plex-token'), `${TOKEN}\n`);
+    const plexTv = await fakePlexTv();
+    plexTv.state.accounts.push({ ...SOMEONE });
+    const apis = await fakeStackApis(plexTv.state);
+    const state = freshAppState();
+    state.plex.configDir = join(home, 'appdata', 'plex');
+    apis.apps.set('plex', state);
+    const stack = stackIn(home);
+    const runtime = fakeRuntime({
+      containers: [fakeContainer('plex', 'fake-plex')],
+      addresses: apis.addresses,
+    });
+    const published: string[][] = [];
+    const given = { plex: { token: TOKEN } };
+    const ctx: BootstrapContext = { keys: given, plexTv: plexTv.client };
+    const run = async (from: SecretStore) => {
+      const pending = (await inspectBootstrap(stack, from)).changes;
+      // The start step: Plex's first start, with what its setup gives it.
+      const env = await firstStartEnv(stack, pending, ctx);
+      claimFakePlex(state.plex, env.plex?.PLEX_CLAIM, plexTv.state);
+      const set = await bootstrapApps({
+        home,
+        stack,
+        store: from,
+        values: {},
+        given,
+        plexTv: plexTv.client,
+        env: {},
+        runtime,
+        project: 'mediaplane',
+        pending,
+        publish: (unpublished) => {
+          published.push([...unpublished]);
+          return Promise.resolve();
+        },
+        seams: apis.seams,
+      });
+      return { pending, env, ...set };
+    };
+    return { home, state, plexTv, published, run, store, ctx, stack, apis };
+  }
+
+  it('claims a fresh Plex with its claim token, records it, and publishes it', async () => {
+    const { home, state, published, run, store, apis } = await stepOf();
+    const first = await run(store);
+    // Plex is asked whether it is claimed without your token, which it may not be yours
+    // to have: every question of the setup's, and the re-check before publishing.
+    const identity = apis.app.requests.filter(
+      (r) => r.headers.host?.startsWith('plex') === true && r.path === '/identity',
+    );
+    expect(identity.length).toBeGreaterThanOrEqual(3);
+    expect(identity.filter((r) => r.headers['x-plex-token'] !== undefined)).toEqual([]);
+    // Plex never got your token: nothing else was asked of it.
+    expect(
+      apis.app.requests
+        .filter((r) => r.headers.host?.startsWith('plex') === true)
+        .filter((r) => r.headers['x-plex-token'] !== undefined)
+        .map((r) => r.path),
+    ).toEqual([]);
+    expect(first.pending).toEqual([{ app: 'plex', unpublished: true }]);
+    expect(Object.keys(first.env)).toEqual(['plex']);
+    expect(state.plex.owner).toBe(FAKE_PLEX_ACCOUNT.id);
+    expect(first.detail).toBe('set up plex; published plex');
+    expect(published).toEqual([[]]);
+    expect((await readSecretStore(home)).setUp).toEqual(['plex']);
+    // Recorded, and its Preferences.xml says it is claimed: nothing more to do.
+    const again = await run(first.store);
+    expect(again.pending).toEqual([]);
+    expect(again.env).toEqual({});
+  });
+
+  it('keeps a Plex claimed by someone else unpublished, on every apply, with the safe remedies first', async () => {
+    const { home, state, plexTv, published, run, store } = await stepOf();
+    claimFakePlex(
+      state.plex,
+      await plexTv.client.claimToken(SOMEONE.token),
+      plexTv.state,
+    );
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const failed = await thrown(run(store));
+      expect(failed).toBeInstanceOf(BootstrapFailed);
+      const said = (failed as Error).message;
+      expect(said).toContain(
+        "is claimed by another plex.tv account than yours: plex.tv says the token its claim gave it is another account's; Plex is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. First: if that plex.tv account is yours too",
+      );
+      expect(said).toContain('("docker stop mediaplane-plex-1")');
+      expect(said.indexOf('afresh')).toBeGreaterThan(said.indexOf('PlexOnline'));
+    }
+    // Its Preferences.xml says it is claimed, so it gets no claim token.
+    expect(plexTv.state.claims.filter((c) => c.account === FAKE_PLEX_ACCOUNT.id)).toEqual(
+      [],
+    );
+    expect(published).toEqual([['plex'], ['plex']]);
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
+  });
+
+  it("asks for a claim token while Mediaplane can't read Preferences.xml, which can't say Plex is claimed", async () => {
+    const { stack, ctx } = await stepOf();
+    const unreadable = [{ app: 'plex', unpublished: true }];
+    // A folder where the file should be: reading it fails.
+    await mkdir(join(stack.home, 'appdata', 'plex', PLEX_PREFERENCES), {
+      recursive: true,
+    });
+    expect(Object.keys(await firstStartEnv(stack, unreadable, ctx))).toEqual(['plex']);
+    // Started published, it gets none: start variables go only with an unpublished start.
+    expect(
+      await firstStartEnv(stack, [{ app: 'plex', unpublished: false }], ctx),
+    ).toEqual({});
+  });
+});

@@ -6,6 +6,7 @@ import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { RuntimeError, type Runtime } from '../runtime/types';
 import { adminLogin } from '../secrets/admin';
 import type { SecretStore } from '../secrets/store';
+import { stackKeys } from '../secrets/values';
 import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
 import { readResources, writeResources, type KnownResources } from './resources';
 import type { DesiredResource, Fields, ResourceSpec, WiringContext } from './types';
@@ -37,6 +38,8 @@ export interface WireOptions {
   store: SecretStore;
   /** The secret values of .env: kept out of every message. */
   values: Readonly<Record<string, string>>;
+  /** The secrets you give (userSecrets), such as Plex's token: keys, never kept. */
+  given?: Readonly<Record<string, Readonly<Record<string, string>>>>;
   env: NodeJS.ProcessEnv;
   runtime: Runtime;
   now: () => Date;
@@ -93,7 +96,9 @@ export async function wire(options: WireOptions): Promise<string[]> {
     );
   }
   const admin = await adminLogin(stack.config, options.home, options.store, options.env);
-  const secrets = knownSecrets(options.values, options.store, admin);
+  const given = options.given ?? {};
+  const keys = stackKeys(stack, options.store, given);
+  const secrets = knownSecrets(options.values, options.store, admin, given);
   const found = options.found ?? foundSecrets();
   let reached: Map<string, ReachedApp>;
   try {
@@ -107,7 +112,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
     reached = await reachApps(order, {
       runtime,
       current: await runtime.containers(),
-      keys: options.store.apps,
+      keys,
       secrets,
       found,
       deadlineMs: APP_DEADLINE_MS,
@@ -154,7 +159,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
     return new WiringFailed(message, diagnostics);
   };
   for (const app of order) {
-    const ctx: WiringContext = { stack, app, admin, keys: options.store.apps };
+    const ctx: WiringContext = { stack, app, admin, keys };
     const targets = wiringTargets(ctx);
     if (options.waiting?.includes(app.def.id) === true) {
       for (const target of targets) {

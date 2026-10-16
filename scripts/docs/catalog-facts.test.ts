@@ -56,6 +56,9 @@ describe('renderFacts', () => {
       "with `apiKey` in Jellyfin's `Authorization: MediaBrowser` header\n",
     );
     expect(renderFacts(app('plex'))).toContain(
+      "with `token` in Plex's `X-Plex-Token` header\n",
+    );
+    expect(renderFacts(app('byparr'))).toContain(
       '- **API:** none over the wiring network\n',
     );
     // vpn-check calls Gluetun's control server, from inside qBittorrent's network.

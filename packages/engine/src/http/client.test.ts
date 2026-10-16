@@ -129,6 +129,62 @@ describe('createAppApi', () => {
     expect(app.requests[0]?.headers['x-api-key']).toBeUndefined();
   });
 
+  it('asks again until the answer says it is done, or the deadline passes, giving the last', async () => {
+    let asked = 0;
+    const slept: number[] = [];
+    let clock = 0;
+    const app = await fakeHttpApp(() => {
+      asked += 1;
+      return { status: 200, body: { claimed: asked >= 3 } };
+    });
+    const client = (deadlineMs: number) =>
+      createAppApi({
+        name: 'Plex',
+        service: 'plex',
+        port: 32400,
+        endpoint: { host: '127.0.0.1', port: app.port },
+        key: { scheme: 'x-plex-token', value: KEY },
+        secrets: [],
+        retry: {
+          deadlineMs,
+          now: () => clock,
+          sleep: (ms) => {
+            slept.push(ms);
+            clock += ms;
+            return Promise.resolve();
+          },
+        },
+      });
+    const claimed = z.looseObject({ claimed: z.boolean() });
+    expect(await client(60_000).until('/identity', claimed, (i) => i.claimed)).toEqual({
+      claimed: true,
+    });
+    expect(slept).toEqual([250, 500]);
+    // Out of time: the last answer, not done.
+    asked = -100;
+    expect(await client(0).until('/identity', claimed, (i) => i.claimed)).toEqual({
+      claimed: false,
+    });
+    expect(asked).toBe(-99);
+    // Without the key, when asked so: an app not shown to be yours never gets it.
+    await client(0).until('/identity', claimed, () => true, { anonymous: true });
+    expect(app.requests.at(-1)?.headers['x-plex-token']).toBeUndefined();
+    expect(app.requests.at(-2)?.headers['x-plex-token']).toBe(KEY);
+  });
+
+  it("sends Plex's token in X-Plex-Token when the app takes one", async () => {
+    const { api, app } = await sonarr(() => ({ status: 200, body: {} }), {
+      key: { scheme: 'x-plex-token', value: KEY },
+    });
+    await api.check('/library/sections');
+    expect(app.requests[0]?.headers['x-plex-token']).toBe(KEY);
+    expect(app.requests[0]?.headers['x-api-key']).toBeUndefined();
+    expect(app.requests[0]?.headers.authorization).toBeUndefined();
+    // Anonymous calls carry no token, as Plex's readiness path takes none.
+    await api.ready('/identity');
+    expect(app.requests[1]?.headers['x-plex-token']).toBeUndefined();
+  });
+
   it('checks a key with any 2xx answer, reading no JSON: qBittorrent answers plain text', async () => {
     const { api, app } = await sonarr(() => ({ status: 200, body: 'v5.2.4' }), {
       key: { scheme: 'bearer', value: KEY },

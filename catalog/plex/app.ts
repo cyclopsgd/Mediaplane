@@ -1,4 +1,5 @@
 import { defineApp } from '@mediaplane/engine';
+import { plexBootstrap } from './bootstrap';
 
 export default defineApp({
   id: 'plex',
@@ -22,6 +23,14 @@ export default defineApp({
     test: ['CMD', 'curl', '-fsS', 'http://localhost:32400/identity'],
     startPeriod: '120s',
   },
+  // Your token is its key: Plex takes a token of the account that claimed it.
+  api: {
+    port: 'web',
+    ready: '/identity',
+    key: { secret: 'token', scheme: 'x-plex-token' },
+    check: '/library/sections',
+  },
+  bootstrap: plexBootstrap,
   env: () => ({ VERSION: 'docker' }),
   login: { comingIn: 'Slice 7' },
   experimental: false,

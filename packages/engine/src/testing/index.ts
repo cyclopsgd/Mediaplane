@@ -4,6 +4,7 @@ export * from './fixtures';
 export * from './fakes';
 export * from './http';
 export * from './jellyfin';
+export * from './plex';
 export * from './plextv';
 export * from './prowlarr';
 export * from './providers';

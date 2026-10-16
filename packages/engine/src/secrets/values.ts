@@ -39,6 +39,53 @@ export function secretsToGenerate(stack: ResolvedStack, store: SecretStore): str
   ];
 }
 
+/**
+ * The secrets you give (`userProvided`), by app then name, read from their references in
+ * stack.yaml now: Plex's token, the VPN key. They are never kept in state/secrets.json.
+ * One that can't be read is left out, as plan has already said.
+ */
+export async function userSecrets(
+  stack: ResolvedStack,
+  env: NodeJS.ProcessEnv,
+): Promise<Record<string, Record<string, string>>> {
+  const given: Record<string, Record<string, string>> = {};
+  for (const app of stack.apps) {
+    for (const [name, source] of Object.entries(app.def.secrets).sort(([a], [b]) =>
+      compare(a, b),
+    )) {
+      if (!('userProvided' in source)) continue;
+      const ref = userProvidedRef(stack, source.userProvided);
+      const value =
+        ref === undefined ? undefined : await readSecret(ref, stack.home, env);
+      if (value !== undefined)
+        given[app.def.id] = { ...given[app.def.id], [name]: value };
+    }
+  }
+  return given;
+}
+
+/**
+ * Every app's keys, by app then name: the store's, and of the ones you give (userSecrets),
+ * only those an app's API takes as its key, such as Plex's token, which is Plex's key to
+ * Mediaplane. The others, such as the VPN key, are redacted, but never reach a setup or a
+ * resource.
+ */
+export function stackKeys(
+  stack: ResolvedStack,
+  store: SecretStore,
+  given: Readonly<Record<string, Readonly<Record<string, string>>>>,
+): Record<string, Record<string, string>> {
+  const keys: Record<string, Record<string, string>> = { ...store.apps };
+  for (const app of stack.apps) {
+    const name = app.def.api?.key.secret;
+    const value = name === undefined ? undefined : given[app.def.id]?.[name];
+    if (name !== undefined && value !== undefined) {
+      keys[app.def.id] = { ...keys[app.def.id], [name]: value };
+    }
+  }
+  return keys;
+}
+
 /** The value of every ${MP_…} variable compose.yaml references. Unknown values are "". */
 export async function secretValues(
   stack: ResolvedStack,

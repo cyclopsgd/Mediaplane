@@ -71,10 +71,10 @@ export interface TestFailure {
 
 /**
  * How a request carries the key: the X-Api-Key header (Servarr), a Bearer token
- * (qBittorrent), or Jellyfin's `Authorization: MediaBrowser …` header, whose client
- * fields go with every request, a token or not.
+ * (qBittorrent), Jellyfin's `Authorization: MediaBrowser …` header, whose client fields go
+ * with every request, a token or not, or Plex's X-Plex-Token header.
  */
-export type KeyScheme = 'x-api-key' | 'bearer' | 'mediabrowser';
+export type KeyScheme = 'x-api-key' | 'bearer' | 'mediabrowser' | 'x-plex-token';
 
 /**
  * The client fields Jellyfin asks of every request in its MediaBrowser header: a sign-in
@@ -212,6 +212,18 @@ export interface AppApi {
   /** Wait, until the deadline, for `path` to answer 200 without the key. */
   ready(path: string): Promise<void>;
   /**
+   * GET `path` with the key (without it, when `anonymous`), checked with `schema`, again
+   * and again until `done` says so of the answer or the deadline passes, waiting a little
+   * longer each time, up to 2 s: the last answer, either way. For what an app finishes by
+   * itself once it is ready, such as Plex claiming itself as it first starts.
+   */
+  until<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    done: (answer: T) => boolean,
+    options?: { anonymous?: boolean },
+  ): Promise<T>;
+  /**
    * The same app's API, carrying `value` as its key, the way this one carries its own: a
    * session's token, say. It keeps `value` out of its messages.
    */
@@ -327,6 +339,7 @@ export function createAppApi(options: AppApiOptions): AppApi {
           key === undefined ? MEDIA_BROWSER : `${MEDIA_BROWSER}, Token="${key}"`;
       } else if (key !== undefined) {
         if (options.key?.scheme === 'bearer') headers.Authorization = `Bearer ${key}`;
+        else if (options.key?.scheme === 'x-plex-token') headers['X-Plex-Token'] = key;
         else headers['X-Api-Key'] = key;
       }
       if (options.cookie !== undefined && !call.anonymous) {
@@ -679,6 +692,17 @@ export function createAppApi(options: AppApiOptions): AppApi {
         true,
         (answer) => answer.status === 200,
       );
+    },
+    async until(path, schema, done, how = {}) {
+      const start = retry.now();
+      const call: Call = { method: 'GET', path, anonymous: how.anonymous === true };
+      for (let tries = 0; ; tries++) {
+        const answer = parsed(call, await send(call, true), schema);
+        if (done(answer)) return answer;
+        const delay = Math.min(2_000, 250 * 2 ** tries);
+        if (retry.now() + delay - start > retry.deadlineMs) return answer;
+        await retry.sleep(delay);
+      }
     },
     withKey: (value) =>
       createAppApi({

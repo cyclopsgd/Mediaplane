@@ -105,6 +105,23 @@ export interface PlexTv {
   accountId(token: string): Promise<number>;
 }
 
+/**
+ * plex.tv for a caller that was given none, such as a test of a stack without Plex: every
+ * call fails, as plex.tv out of reach does.
+ */
+export const NO_PLEX_TV: PlexTv = {
+  createPin: () => Promise.reject(unavailable()),
+  waitForPin: () => Promise.reject(unavailable()),
+  claimToken: () => Promise.reject(unavailable()),
+  accountId: () => Promise.reject(unavailable()),
+};
+
+function unavailable(): PlexTvError {
+  return new PlexTvError('Mediaplane was given no way to reach plex.tv', {
+    kind: 'unreachable',
+  });
+}
+
 /** How a plex.tv client is made; tests give a fake plex.tv's address and a clock. */
 export interface PlexTvOptions {
   /** plex.tv's address: PLEX_TV, unless a test points it at a fake. */

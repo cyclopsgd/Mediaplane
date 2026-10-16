@@ -300,6 +300,7 @@ export function createProgram(
         probe: deps.probe(runtime, home),
         ...(deps.wiring === undefined ? {} : { wiring: deps.wiring }),
         project,
+        plexTv: deps.plexTv(runtime),
         confirm: async (shown) => {
           if (!asJson) printPlan(shown, { json: false }, io);
           if (yes || ask === undefined) return true;

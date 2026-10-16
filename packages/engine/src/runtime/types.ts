@@ -95,11 +95,16 @@ export interface Runtime {
    * `unpublished` started without any published port, the override's too (bootstrap
    * before publish, spec §6.4): Compose gets one more file, on its standard input, that
    * resets their `ports`. An `up` without them recreates them with their ports.
+   * `startEnv` gives such a service more environment variables, by service: that file
+   * names each as a reference to a variable in Compose's own environment, where its value
+   * goes, so a value is never in a file nor on a command line (Plex's PLEX_CLAIM). Its
+   * values are redacted from errors, as `values` are.
    */
   up(
     waitSeconds: number,
     values: Record<string, string>,
     unpublished?: readonly string[],
+    startEnv?: Readonly<Record<string, Readonly<Record<string, string>>>>,
   ): Promise<CommandResult>;
   /**
    * Run `command` in a throwaway container of `service` (`compose run --rm --no-deps -T`),

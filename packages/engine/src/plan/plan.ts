@@ -33,7 +33,12 @@ import { RuntimeError, type ContainerState, type Runtime } from '../runtime/type
 import { adminLogin } from '../secrets/admin';
 import { withGeneratedSecrets } from '../secrets/generate';
 import { readSecretStore, type SecretStore } from '../secrets/store';
-import { secretsToGenerate, secretValues } from '../secrets/values';
+import {
+  secretsToGenerate,
+  secretValues,
+  stackKeys,
+  userSecrets,
+} from '../secrets/values';
 import { planAppdata } from './appdata';
 import { inspectBootstrap, type BootstrapChange } from './bootstrap';
 import { notYetHealthy, otherHomes, ownPorts, type ContainerChange } from './containers';
@@ -226,6 +231,8 @@ export async function planStack(
     // read the admin login doesn't come after the join (wiringAddresses can still fail
     // after it).
     const admin = await adminLogin(stack.config, home, preview, options.env);
+    // The secrets you give, such as Plex's token, which is Plex's key.
+    const given = await userSecrets(stack, options.env);
     // An app to set up is asked once it is: without its key, it can't be asked now.
     const changing = new Set([
       ...containers.filter((c) => c.action !== 'unchanged').map((c) => c.service),
@@ -249,9 +256,9 @@ export async function planStack(
         changing,
         onNetwork,
         runtime: options.runtime,
-        keys: preview.apps,
+        keys: stackKeys(stack, preview, given),
         admin,
-        secrets: knownSecrets(values, preview, admin),
+        secrets: knownSecrets(values, preview, admin, given),
         known,
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });

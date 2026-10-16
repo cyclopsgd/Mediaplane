@@ -4,7 +4,13 @@ import { describe, expect, it } from 'vitest';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
 import { emptySecretStore, type SecretStore } from './store';
-import { missingGeneratedSecrets, secretsToGenerate, secretValues } from './values';
+import {
+  missingGeneratedSecrets,
+  secretsToGenerate,
+  secretValues,
+  stackKeys,
+  userSecrets,
+} from './values';
 import { tempDir } from '../testing/temp';
 
 const STACK = `version: 1
@@ -100,5 +106,50 @@ describe('secretValues', () => {
       'MP_SONARR_ENV_TOKEN',
     ]);
     expect(values.MP_GLUETUN_ENV_FAKE_EXTRA).toBe('fake-extra-value');
+  });
+});
+
+describe('userSecrets and stackKeys', () => {
+  it("reads every secret you give, by app, and adds to the stored keys only an app's API key", async () => {
+    const stack = await stackIn();
+    const given = await userSecrets(stack, {});
+    // Every one is read, so that it is redacted: the VPN key too.
+    expect(given).toEqual({ gluetun: { wireguardKey: 'fake-wireguard-key-for-tests' } });
+    // No app's API takes the VPN key, so no setup or resource gets it.
+    expect(stackKeys(stack, stored, given)).toEqual(stored.apps);
+    // One an app's API takes as its key, as Plex's takes your token, is a key.
+    const keyed: ResolvedStack = {
+      ...stack,
+      apps: stack.apps.map((app) =>
+        app.def.id === 'gluetun'
+          ? {
+              ...app,
+              def: {
+                ...app.def,
+                api: {
+                  port: 'control',
+                  ready: '/',
+                  key: { secret: 'wireguardKey', scheme: 'x-api-key' },
+                  check: '/',
+                },
+              },
+            }
+          : app,
+      ),
+    };
+    expect(stackKeys(keyed, stored, given)).toEqual({
+      gluetun: {
+        controlApiKey: '1'.repeat(32),
+        wireguardKey: 'fake-wireguard-key-for-tests',
+      },
+      sonarr: { apiKey: '0'.repeat(32) },
+    });
+    // The store itself is left as it was: what you give is never saved in it.
+    expect(stored.apps.gluetun).toEqual({ controlApiKey: '1'.repeat(32) });
+  });
+
+  it('leaves out one that is missing', async () => {
+    const stack = await stackIn(STACK.replace('secrets/wg.key', 'secrets/none.key'));
+    expect(await userSecrets(stack, {})).toEqual({});
   });
 });

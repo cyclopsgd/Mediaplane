@@ -2,11 +2,18 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { SetupWaiting } from '../apply/bootstrap';
-import type { Bootstrap, Catalog } from '../catalog/types';
+import type { Bootstrap, BootstrapContext, Catalog } from '../catalog/types';
 import { AppApiError, type AppApi } from '../http/client';
 import type { WiringSeams } from '../integrations/wiring';
+import { NO_PLEX_TV } from '../plextv/client';
 import { FIXTURE_API, fixtureCatalog } from './fixtures';
 import { fakeHttpApp, type FakeApp, type FakeReply, type FakeRequest } from './http';
+
+/**
+ * What a setup gets besides the app's API, for one that needs none of it (Jellyfin's, and
+ * Seerr's through Jellyfin): no keys, and no plex.tv.
+ */
+export const NO_SETUP_CONTEXT: BootstrapContext = { keys: {}, plexTv: NO_PLEX_TV };
 
 /** The key the fake setup makes. */
 export const SET_UP_KEY = '9'.repeat(32);
@@ -84,6 +91,8 @@ async function ownerOf(api: AppApi): Promise<string | null> {
 export const FAKE_SIGN_IN: Bootstrap = {
   done: { path: 'signed-in.txt', pattern: /^yes$/m },
   open: signInOpen,
+  claimedHint: (_stack, container) =>
+    `First: sign in to ${container} as the shared admin, then run apply again. Last: start it afresh`,
   async run(api, admin, stack) {
     if (!(await signInOpen(api))) {
       if ((await ownerOf(api)) === admin.username) return undefined;

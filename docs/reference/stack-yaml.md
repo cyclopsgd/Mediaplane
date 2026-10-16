@@ -33,7 +33,7 @@ Each field shows its type, then `required` or its default, if it has one.
 - `admin.password` (secret reference): The admin password, as a secret reference, at least 12 characters long. Left out, Mediaplane generates one; "mediaplane credentials" shows it.
 - `media_server` (`jellyfin` or `plex`; required): The media server, jellyfin or plex. It runs whether or not it is listed under apps.
 - `plex` (object): Plex settings, needed when media_server is plex.
-- `plex.token` (secret reference; required): Your Plex token, as a secret reference. Checked to exist, but not used yet: claiming the server arrives in Slice 7.
+- `plex.token` (secret reference; required): Your Plex token, as a secret reference: "mediaplane plex-login" saves it. Mediaplane claims Plex with it, as yours, and it is the key Mediaplane and the other apps reach Plex with.
 - `vpn` (object): The VPN that qBittorrent's traffic goes through, by way of Gluetun. Needed while apps.qbittorrent.vpn is true.
 - `vpn.provider` (string; required): The VPN provider, by its Gluetun name, such as mullvad.
 - `vpn.private_key` (secret reference; required): Your WireGuard private key, as a secret reference.

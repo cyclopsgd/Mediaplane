@@ -90,6 +90,15 @@ export interface FakeRuntimeOptions {
   /** What pull answers: the same for every call, or one per call, the last repeating. */
   pull?: CommandResult | readonly CommandResult[];
   up?: CommandResult;
+  /**
+   * Called on each `up` that succeeds, before it answers, with the services it starts
+   * unpublished and their start variables: what an app does as it starts, such as Plex
+   * claiming itself with its PLEX_CLAIM.
+   */
+  onUp?: (
+    unpublished: readonly string[],
+    startEnv: Readonly<Record<string, Readonly<Record<string, string>>>>,
+  ) => void | Promise<void>;
   chown?: CommandResult;
   /** Answers a one-off command; without it, every one-off exits 0 and prints nothing. */
   run?: (service: string, command: OneOffCommand) => ExecResult | Promise<ExecResult>;
@@ -156,9 +165,20 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
         results[Math.min(pulls++, results.length - 1)] ?? { ok: true },
       );
     },
-    up: (_seconds, _values, unpublished = []) => {
-      record(unpublished.length === 0 ? 'up' : `up unpublished ${unpublished.join(' ')}`);
-      return Promise.resolve(options.up ?? { ok: true });
+    // async: a throwing onUp rejects like a failed docker call.
+    up: async (_seconds, _values, unpublished = [], startEnv = {}) => {
+      // Start variables go only with an unpublished start, as the real runtime's do.
+      const given = unpublished.flatMap((service) =>
+        Object.keys(startEnv[service] ?? {}).map((name) => `${service}.${name}`),
+      );
+      record(
+        unpublished.length === 0
+          ? 'up'
+          : `up unpublished ${unpublished.join(' ')}${given.length === 0 ? '' : ` with ${given.join(' ')}`}`,
+      );
+      const result = options.up ?? { ok: true };
+      if (result.ok) await options.onUp?.(unpublished, startEnv);
+      return result;
     },
     // async: a throwing callback rejects like a failed docker call.
     run: async (service, command) => {
@@ -266,14 +286,26 @@ export function fakeDocker(
           ? details
           : { ...details, networkMode: `container:${host}` };
       }),
-    up: async (waitSeconds, values, unpublished = []) => {
-      const result = await base.up(waitSeconds, values, unpublished);
+    up: async (waitSeconds, values, unpublished = [], startEnv = {}) => {
+      const result = await base.up(waitSeconds, values, unpublished, startEnv);
       if (!result.ok || options.upChangesNothing === true) return result;
       const compose = parse(await readFile(join(home, COMPOSE_PATH), 'utf8')) as {
         services: Record<string, Record<string, unknown>>;
       };
-      // As `ports: !reset []` leaves them: with no ports at all.
-      for (const service of unpublished) delete compose.services[service]?.ports;
+      // As `ports: !reset []` leaves them: with no ports at all, and the start variables
+      // in their environment, which Compose's hash takes in.
+      for (const service of unpublished) {
+        const config = compose.services[service];
+        if (config === undefined) continue;
+        delete config.ports;
+        const env = startEnv[service] ?? {};
+        if (Object.keys(env).length > 0) {
+          config.environment = {
+            ...(config.environment as Record<string, string> | undefined),
+            ...env,
+          };
+        }
+      }
       for (const config of Object.values(compose.services)) {
         const mode = config.network_mode;
         const host =

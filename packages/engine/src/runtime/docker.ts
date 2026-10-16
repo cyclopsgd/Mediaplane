@@ -364,8 +364,8 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
       return commandResult(result, values);
     },
 
-    async up(waitSeconds, values, unpublished = []) {
-      const reset = unpublishedPorts(unpublished);
+    async up(waitSeconds, values, unpublished = [], startEnv = {}) {
+      const reset = unpublishedPorts(unpublished, startEnv);
       const result = await docker(
         'compose up',
         [
@@ -382,10 +382,10 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
         ],
         {
           timeoutMs: (waitSeconds + 120) * 1000,
-          ...(reset === undefined ? {} : { input: reset }),
+          ...(reset === undefined ? {} : { input: reset.file, env: reset.values }),
         },
       );
-      return commandResult(result, values);
+      return commandResult(result, { ...values, ...reset?.values });
     },
 
     run,
@@ -693,14 +693,42 @@ function serviceName(service: string): string {
  * `!reset` (Compose 2.24 and later, the floor preflight checks) empties what the files
  * before it set.
  */
-function unpublishedPorts(services: readonly string[]): string | undefined {
+function unpublishedPorts(
+  services: readonly string[],
+  startEnv: Readonly<Record<string, Readonly<Record<string, string>>>>,
+): { file: string; values: Record<string, string> } | undefined {
   if (services.length === 0) return undefined;
-  const names = services.map((service) => serviceName(service));
-  return [
-    'services:',
-    ...names.map((name) => `  ${name}:\n    ports: !reset []`),
-    '',
-  ].join('\n');
+  const values: Record<string, string> = {};
+  const blocks = services.map((service) => {
+    const name = serviceName(service);
+    const env = Object.entries(startEnv[service] ?? {});
+    const lines = env.map(([variable, value]) => {
+      const reference = startEnvName(service, variable);
+      values[reference] = value;
+      return `      ${variable}: "\${${reference}}"`;
+    });
+    return [
+      `  ${name}:`,
+      '    ports: !reset []',
+      ...(lines.length === 0 ? [] : ['    environment:', ...lines]),
+    ].join('\n');
+  });
+  return { file: ['services:', ...blocks, ''].join('\n'), values };
+}
+
+/**
+ * The variable in Compose's environment that holds `service`'s start variable `variable`:
+ * MP_START_<SERVICE>_<VARIABLE>. Throws for a variable name Compose's environment can't
+ * take, or that YAML would need quoting for.
+ */
+export function startEnvName(service: string, variable: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(variable)) {
+    throw new RuntimeError(
+      `refusing the start variable ${JSON.stringify(variable)}: it is not an environment variable name`,
+    );
+  }
+  const part = (text: string) => text.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+  return `MP_START_${part(service)}_${part(variable)}`;
 }
 
 /**

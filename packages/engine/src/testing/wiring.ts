@@ -15,6 +15,8 @@ import {
   type FakeConnection,
   type FakeLibrary,
 } from './jellyfin';
+import { fakePlex, freshPlex, type FakePlex } from './plex';
+import { freshPlexTv, type FakePlexTvState } from './plextv';
 import { fakeProwlarr, type FakeProvider } from './prowlarr';
 import { fakeSeerr, freshSeerr, type FakeSeerr } from './seerr';
 import {
@@ -176,6 +178,8 @@ export interface FakeAppState {
   profiles: { id: number; name: string }[];
   /** What Seerr holds (fakeSeerr). */
   seerr: FakeSeerr;
+  /** What Plex holds (fakePlex). */
+  plex: FakePlex;
 }
 
 /** The quality profiles Sonarr 4 and Radarr 6 make at their first start, in order. */
@@ -224,6 +228,7 @@ export function freshAppState(): FakeAppState {
     connections: [],
     profiles: SERVARR_PROFILES.map((profile) => ({ ...profile })),
     seerr: freshSeerr(),
+    plex: freshPlex(),
   };
 }
 
@@ -352,15 +357,18 @@ function fakeServarrDownloads(
  * qBittorrent 5.2 answers them, and is `apps`' "qbittorrent" also when reached through
  * Gluetun; Jellyfin has its startup wizard, sign-in, keys, user and libraries
  * (fakeJellyfin); Seerr its sign-in through Jellyfin, its settings and its tests of the
- * arrs (fakeSeerr). Any key is taken, but qBittorrent takes only a Bearer token (X-Api-Key
- * gets a 403): its `key` when that is set; Jellyfin only one of its own, in its
- * MediaBrowser header; and Seerr its `key`, once it has a user. `seams` send every app's
- * calls there. `mkdir` is what the wire step's folder helper does to them: pass it what a
- * fake runtime's `run` is given.
+ * arrs (fakeSeerr); Plex its identity and its libraries, once claimed (fakePlex). Any key
+ * is taken, but qBittorrent takes only a Bearer token (X-Api-Key gets a 403): its `key`
+ * when that is set; Jellyfin only one of its own, in its MediaBrowser header; Seerr its
+ * `key`, once it has a user; and Plex only a token of the plex.tv account that claimed it,
+ * as `plexTv` knows them. `seams` send every app's calls there. `mkdir` is what the wire
+ * step's folder helper does to them: pass it what a fake runtime's `run` is given.
  */
-export async function fakeStackApis(): Promise<{
+export async function fakeStackApis(plexTv: FakePlexTvState = freshPlexTv()): Promise<{
   app: FakeApp;
   apps: Map<string, FakeAppState>;
+  /** The plex.tv the fake apps ask: Plex's tokens, and its claims. */
+  plexTv: FakePlexTvState;
   seams: WiringSeams;
   addresses: Record<string, string>;
   /**
@@ -389,6 +397,7 @@ export async function fakeStackApis(): Promise<{
     if (service === 'qbittorrent') return fakeQbittorrent(request, state);
     if (service === 'jellyfin') return fakeJellyfin(request, state);
     if (service === 'seerr') return fakeSeerr(request, state, (other) => apps.get(other));
+    if (service === 'plex') return fakePlex(request, state.plex, plexTv);
     const keyed =
       headers['x-api-key'] !== undefined || headers.authorization !== undefined;
     if (path === '/ping') return { status: state.up ? 200 : 503, body: { status: 'OK' } };
@@ -426,6 +435,7 @@ export async function fakeStackApis(): Promise<{
   return {
     app,
     apps,
+    plexTv,
     seams: {
       endpoint: () => ({ host: '127.0.0.1', port: app.port }),
       retry: { deadlineMs: 0 },
@@ -433,6 +443,7 @@ export async function fakeStackApis(): Promise<{
     addresses: onWiring([
       'gluetun',
       'jellyfin',
+      'plex',
       'prowlarr',
       'qbittorrent',
       'radarr',
