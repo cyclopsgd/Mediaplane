@@ -61,18 +61,31 @@ async function signInOpen(api: AppApi): Promise<boolean> {
   return !(await api.get('/signed-in', z.looseObject({ done: z.boolean() }))).done;
 }
 
+/** Whether the shared admin signed in to FAKE_SIGN_IN's app, rather than someone else. */
+async function signedInAsAdmin(api: AppApi): Promise<boolean> {
+  return (await api.get('/signed-in/own', z.looseObject({ own: z.boolean() }))).own;
+}
+
 /**
  * A first-run setup shaped like Seerr's: it makes no key (the app's is Mediaplane's own),
  * and is open until the shared admin signs in through Jellyfin (POST /sign-in, which keeps
  * the session in the cookie `sid` and writes signed-in.txt in its appdata), then signs
  * out. It waits (SetupWaiting) while that sign-in is refused, as Seerr's does while
- * Jellyfin refuses the shared admin. Done already, it does nothing.
+ * Jellyfin refuses the shared admin. Done already, it is asked who signed in, with the
+ * key and never the password, as Seerr's is (GET /signed-in/own): the shared admin, else it is
+ * refused (`auth`), as an app set up by someone else.
  */
 export const FAKE_SIGN_IN: Bootstrap = {
   done: { path: 'signed-in.txt', pattern: /^yes$/m },
   open: signInOpen,
   async run(api, admin, stack) {
-    if (!(await signInOpen(api))) return undefined;
+    if (!(await signInOpen(api))) {
+      if (await signedInAsAdmin(api)) return undefined;
+      throw new AppApiError(
+        `${api.name} at ${api.where} was set up with another login (GET /signed-in/own)`,
+        { kind: 'auth' },
+      );
+    }
     const through = stack.apps.find((app) => app.def.id === 'jellyfin')?.def.id;
     const session = await api.session(
       '/sign-in',
@@ -134,6 +147,11 @@ function fakeSignInApp(
   const { method, path, headers } = request;
   if (path === '/ready') return { status: 200 };
   if (path === '/signed-in') return { status: 200, body: { done: state.done } };
+  if (path === '/signed-in/own') {
+    // Asked with the app's key, as the setup of an app that is set up already is.
+    if (headers['x-api-key'] === undefined) return { status: 401 };
+    return { status: 200, body: { own: state.signedIn.length > 0 } };
+  }
   if (path === '/sign-in' && method === 'POST') {
     if (state.refuse) {
       if (state.claimant) {

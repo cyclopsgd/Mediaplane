@@ -28,7 +28,9 @@ export interface BootstrapPlan {
  * says the setup is done, when nobody can claim it any more. A file Mediaplane can't read
  * says nothing, so the stored key decides, with a warning that it can't tell; for a setup
  * that makes no key (Seerr's), there is none to decide, so the app starts unpublished and
- * is set up again, with that warning. An app with a setup that runs inside another app's
+ * is set up again, with that warning. A setup that makes no key counts as done only when
+ * its file says so and the store names the app (`setUp`): an app set up by someone else,
+ * or before Mediaplane knew, starts unpublished, and its setup checks it is Mediaplane's. An app with a setup that runs inside another app's
  * network is an error: that app publishes its ports, and `ports: !reset []` on the app's
  * own service can't unpublish them. Reads only; writes nothing.
  */
@@ -68,9 +70,17 @@ export async function inspectBootstrap(
       );
     }
     // Set up already: its key made, and its file not saying otherwise; or, for a setup
-    // that makes no key, its file saying so.
-    if (setup.secret === undefined ? done === true : made && done !== false) continue;
-    changes.push({ app: app.def.id, unpublished: done !== true });
+    // that makes no key, its file saying so and Mediaplane knowing the setup is its own
+    // (the store names it): a file alone doesn't say who set the app up.
+    const known = store.setUp?.includes(app.def.id) === true;
+    if (setup.secret === undefined ? done === true && known : made && done !== false) {
+      continue;
+    }
+    changes.push({
+      app: app.def.id,
+      // A setup that makes no key starts unpublished until it is known to be Mediaplane's.
+      unpublished: setup.secret === undefined || done !== true,
+    });
   }
   return { changes, diagnostics };
 }

@@ -65,6 +65,13 @@ describe('renderFacts', () => {
     expect(renderFacts(app('gluetun'))).not.toContain('none that Mediaplane calls');
   });
 
+  it('says an API an app does not have yet with Plex is none there, until its slice', () => {
+    expect(renderFacts(app('seerr'))).toContain(
+      "- **API:** on its `web` port, which Mediaplane reaches over the stack's wiring network, with `apiKey` in the `X-Api-Key` header; with Plex, none until Slice 7\n",
+    );
+    expect(renderFacts(app('sonarr'))).not.toContain('with Plex');
+  });
+
   it('lists what Mediaplane manages in an app, by override key', () => {
     const wired = { ...app('prowlarr'), integration: servarrIntegration('v1') };
     expect(renderFacts(wired)).toContain(

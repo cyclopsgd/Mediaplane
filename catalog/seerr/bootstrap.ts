@@ -44,8 +44,20 @@ async function ownSetup(
   admin: { username: string },
   jellyfin: { host: string; port: number },
 ): Promise<void> {
-  const { jellyfinUsername } = await api.get('/api/v1/auth/me', me);
-  const held = await api.get('/api/v1/settings/jellyfin', jellyfinSettings);
+  let jellyfinUsername: string | null | undefined;
+  let held: z.infer<typeof jellyfinSettings>;
+  try {
+    jellyfinUsername = (await api.get('/api/v1/auth/me', me)).jellyfinUsername;
+    held = await api.get('/api/v1/settings/jellyfin', jellyfinSettings);
+  } catch (cause) {
+    // Not shown to be Mediaplane's is not Mediaplane's: whatever the failure, Seerr
+    // stays unpublished (the engine publishes an app that is set up, but for an `auth`).
+    if (!(cause instanceof AppApiError) || cause.kind === 'auth') throw cause;
+    throw new AppApiError(
+      `${api.name} at ${api.where} is set up, and Mediaplane couldn't tell whether it is its own: ${cause.message}`,
+      { kind: 'auth' },
+    );
+  }
   api.addSecret(held.apiKey);
   if (
     jellyfinUsername !== admin.username ||
@@ -54,8 +66,21 @@ async function ownSetup(
   ) {
     throw new AppApiError(
       `${api.name} at ${api.where} was set up with another login or another Jellyfin (GET /api/v1/auth/me, GET /api/v1/settings/jellyfin)`,
-      { kind: 'auth', status: 403 },
+      { kind: 'auth' },
     );
+  }
+}
+
+/**
+ * Whether Seerr's setup is open, when it can be asked; a Seerr that can't be asked counts
+ * as set up, and `ownSetup` then decides, with its key, whether it is Mediaplane's.
+ */
+async function openOrSetUp(api: AppApi): Promise<boolean> {
+  try {
+    return await open(api);
+  } catch (cause) {
+    if (cause instanceof AppApiError) return false;
+    throw cause;
   }
 }
 
@@ -89,7 +114,7 @@ export const seerrBootstrap: Bootstrap = {
         { kind: 'rejected' },
       );
     }
-    if (!(await open(api))) {
+    if (!(await openOrSetUp(api))) {
       await ownSetup(api, admin, jellyfin);
       return undefined;
     }
@@ -112,7 +137,7 @@ export const seerrBootstrap: Bootstrap = {
     } catch (cause) {
       // Set up since the look: by someone else, unless it is Mediaplane's own sign-in
       // that reached Seerr before the answer was lost.
-      if (!(cause instanceof AppApiError) || (await open(api))) throw cause;
+      if (!(cause instanceof AppApiError) || (await openOrSetUp(api))) throw cause;
       await ownSetup(api, admin, jellyfin);
       return undefined;
     }
@@ -121,7 +146,13 @@ export const seerrBootstrap: Bootstrap = {
         `${api.name} at ${api.where} can't sign in through Jellyfin yet: Jellyfin refused the shared admin's password (POST ${SIGN_IN})`,
       );
     }
-    await session.submit('POST', '/api/v1/auth/logout');
+    try {
+      await session.submit('POST', '/api/v1/auth/logout');
+    } catch (cause) {
+      // Seerr is set up, as Mediaplane's: that is done. The session is never kept, and
+      // runs out by itself (30 days), so a logout that fails fails nothing.
+      if (!(cause instanceof AppApiError)) throw cause;
+    }
     return undefined;
   },
 };

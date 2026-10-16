@@ -88,7 +88,8 @@ function withSecret(
 /**
  * Apply's bootstrap step (spec §5 step 9, §6.4): for each app the plan names, reach it over
  * the wiring network, without a key, and finish its first-run setup as the shared admin.
- * The key it makes goes into state/secrets.json at once (spec §5 step 4). Then the stack
+ * The key it makes goes into state/secrets.json at once (spec §5 step 4); a setup that
+ * makes none is recorded there (`setUp`) once it is Mediaplane's. Then the stack
  * starts again, publishing every app the plan started unpublished, but one whose setup
  * is still open: nobody else ever reaches an open setup.
  *
@@ -118,6 +119,17 @@ export async function bootstrapApps(
   const admin = await adminLogin(stack.config, options.home, options.store, options.env);
   const secrets = knownSecrets(options.values, options.store, admin);
   const found = options.found ?? foundSecrets();
+  // A key that Mediaplane chose, and the app takes from its environment (Seerr's), is
+  // carried: the setup asks an app that is set up already with it, never with the
+  // password. A key the setup makes isn't there yet, or may be stale.
+  const appKeys = Object.fromEntries(
+    apps.flatMap((app) => {
+      const own = options.store.apps[app.def.id];
+      return app.def.bootstrap?.secret === undefined && own !== undefined
+        ? [[app.def.id, own]]
+        : [];
+    }),
+  );
   let reached: Map<string, ReachedApp>;
   try {
     if ((await runtime.joinWiring()) === 'no-network') {
@@ -129,7 +141,7 @@ export async function bootstrapApps(
     reached = await reachApps(apps, {
       runtime,
       current: await runtime.containers(),
-      keys: {},
+      keys: appKeys,
       secrets,
       found,
       deadlineMs: APP_DEADLINE_MS,
@@ -170,6 +182,18 @@ export async function bootstrapApps(
       // At once: a key the app made, and Mediaplane lost, would need making again.
       await writeSecretStore(options.home, store);
       saved.push(`${app.def.id}.${secret}`);
+    }
+    if (
+      secret === undefined &&
+      result.failure === undefined &&
+      result.waiting === undefined &&
+      !result.open &&
+      !(store.setUp ?? []).includes(app.def.id)
+    ) {
+      // A setup with no key, finished by Mediaplane or found to be its own: the only
+      // record that says so (the plan takes the app as set up only with it). At once.
+      store = { ...store, setUp: [...(store.setUp ?? []), app.def.id] };
+      await writeSecretStore(options.home, store);
     }
     // The key it just made too, and what the run found: a failure after it may come from
     // the app's answer.
@@ -332,10 +356,14 @@ async function setUp(
  */
 async function claimed(app: ResolvedApp, refused: string, home: string): Promise<string> {
   const { name, id } = app.def;
+  if (app.def.bootstrap?.secret === undefined) {
+    // No key to tell: the app is set up, but Mediaplane can't show it is its own.
+    return `${refused}; ${name} is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. If you set it up yourself, sign in to ${name} with the shared admin's login (admin.username and admin.password) through the stack's own Jellyfin, then run apply again; if not, start it afresh first, as the runbook says`;
+  }
   const said = `${refused}; ${name}'s setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished`;
   const done = await appSetupDone(home, app);
   if (done === undefined) {
-    const file = `appdata/${id}/${app.def.bootstrap?.done.path ?? ''}`;
+    const file = `appdata/${id}/${app.def.bootstrap.done.path}`;
     return `${said}. Mediaplane can't read ${file}, which says whether it is set up, so this may be a ${name} you set up yourself: don't start it afresh. Make that file readable by Mediaplane, or set admin.username and admin.password to its login, then run apply again, as the runbook says`;
   }
   const next = done ? ', and the next apply would publish it' : '';

@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
@@ -145,7 +145,10 @@ describe('planBootstrap: a setup that makes no key', () => {
    * What plan finds of the stack, with Sonarr's FAKE_SIGN_IN and its signed-in.txt as
    * `file` says, and Jellyfin's setup done and its key kept.
    */
-  async function signInStack(file: { text: string } | 'absent' | 'unreadable') {
+  async function signInStack(
+    file: { text: string } | 'absent' | 'unreadable',
+    store: SecretStore = KEYED,
+  ) {
     const home = await tempDir('mediaplane-bootstrap-');
     const resolved = resolveStack(
       fixtureConfig(STACK),
@@ -159,20 +162,42 @@ describe('planBootstrap: a setup that makes no key', () => {
     await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
     if (file === 'unreadable') await mkdir(path);
     else if (file !== 'absent') await writeFile(path, file.text);
-    return inspectBootstrap(resolved.stack, KEYED);
+    const found = await inspectBootstrap(resolved.stack, store);
+    return { ...found, home };
   }
 
-  it('sets it up, unpublished, until its file says it is done: there is no key to say so', async () => {
-    expect((await signInStack('absent')).changes).toEqual([
+  /** Jellyfin's key, and Mediaplane's record that it set Sonarr up, or checked it. */
+  const RECORDED: SecretStore = { ...KEYED, setUp: ['sonarr'] };
+
+  it('sets it up, unpublished, until its file says it is done and Mediaplane knows the setup is its own', async () => {
+    expect((await signInStack('absent', RECORDED)).changes).toEqual([
       { app: 'sonarr', unpublished: true },
     ]);
-    expect((await signInStack({ text: 'no\n' })).changes).toEqual([
+    expect((await signInStack({ text: 'no\n' }, RECORDED)).changes).toEqual([
       { app: 'sonarr', unpublished: true },
     ]);
-    expect(await signInStack({ text: 'yes\n' })).toEqual({
+    const known = await signInStack({ text: 'yes\n' }, RECORDED);
+    expect({ changes: known.changes, diagnostics: known.diagnostics }).toEqual({
       changes: [],
       diagnostics: [],
     });
+  });
+
+  it("sets it up again, unpublished, when its file says it is done but nothing says the setup is Mediaplane's", async () => {
+    // Someone else's, or from before Mediaplane recorded it: the setup then checks it.
+    expect((await signInStack({ text: 'yes\n' })).changes).toEqual([
+      { app: 'sonarr', unpublished: true },
+    ]);
+    // A record of another app says nothing of this one.
+    expect(
+      (await signInStack({ text: 'yes\n' }, { ...KEYED, setUp: ['radarr'] })).changes,
+    ).toEqual([{ app: 'sonarr', unpublished: true }]);
+  });
+
+  it('reads the record and writes nothing', async () => {
+    const found = await signInStack({ text: 'yes\n' }, RECORDED);
+    expect(found.changes).toEqual([]);
+    expect(await readdir(found.home)).toEqual(['appdata']);
   });
 
   it("sets it up again, unpublished, and warns, when it can't read the file", async () => {

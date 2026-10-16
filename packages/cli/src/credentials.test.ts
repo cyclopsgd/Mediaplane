@@ -153,6 +153,26 @@ describe('mediaplane credentials', () => {
     expect(JSON.parse(shown.stdout())).toMatchObject({ password: PASSWORD });
   });
 
+  it("gives Seerr's login as still to come in JSON on a Plex stack", async () => {
+    const home = await makeHome({
+      stack: STACK.replace(
+        'media_server: jellyfin',
+        'media_server: plex\nplex: { token: { env: PLEX_TOKEN } }',
+      ),
+    });
+    const term = capture({ PLEX_TOKEN: 'fake-plex-token' });
+    expect(await run(['credentials', '--home', home, '--json'], term.io, deps)).toBe(0);
+    const apps = (JSON.parse(term.stdout()) as { apps: { app: string }[] }).apps;
+    expect(apps.find((entry) => entry.app === 'seerr')).toEqual({
+      app: 'seerr',
+      name: 'Seerr',
+      urls: ['http://127.0.0.1:5055'],
+      login: 'not-yet',
+      comingIn: 'Slice 7',
+    });
+    expect(term.stdout()).not.toContain('fake-plex-token');
+  });
+
   it('shows one app, and fails for one without a web login', async () => {
     const home = await makeHome();
     const one = capture();

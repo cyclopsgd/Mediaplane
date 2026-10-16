@@ -2066,6 +2066,9 @@ describe('apply: first-run setup before the ports are published', () => {
 });
 
 describe('apply: a first-run setup that makes no key, after another', () => {
+  /** What a claimed setup that makes no key says it is, and what to do. */
+  const CLAIMED =
+    "sonarr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. If you set it up yourself, sign in to sonarr with the shared admin's login (admin.username and admin.password) through the stack's own Jellyfin, then run apply again; if not, start it afresh first, as the runbook says";
   /**
    * The stack with Jellyfin's FAKE_SETUP and Sonarr's FAKE_SIGN_IN, after it, and a Docker
    * that notes, at each up, which apps it starts without their ports and where each setup
@@ -2191,8 +2194,8 @@ describe('apply: a first-run setup that makes no key, after another', () => {
     ]);
   });
 
-  it('fails one whose setup waits as a claimed one, unpublished, when someone else finished it meanwhile; the next apply then publishes it unchecked', async () => {
-    const { setup, ups, run } = await signInStack();
+  it('fails one whose setup waits as a claimed one, unpublished, when someone else finished it meanwhile, and again on the next apply, until it is shown to be its own', async () => {
+    const { home, setup, ups, run } = await signInStack();
     // Refused because someone inside the stack signed in first: the setup now looks done.
     setup.signIn.refuse = true;
     setup.signIn.claimant = true;
@@ -2201,8 +2204,7 @@ describe('apply: a first-run setup that makes no key, after another', () => {
     expect(waited.diagnostics.some((d) => d.code === 'bootstrap.waiting')).toBe(false);
     expect(waited.diagnostics.at(-1)).toMatchObject({
       code: 'apply.bootstrap-failed',
-      message:
-        "the first-run setup failed: sonarr at http://sonarr:8989 (127.0.0.1) can't sign in yet: Jellyfin refused the shared admin (POST /sign-in); sonarr's setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished: its setup was finished with another login while Mediaplane set it up, and the next apply would publish it. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says",
+      message: `the first-run setup failed: sonarr at http://sonarr:8989 (127.0.0.1) can't sign in yet: Jellyfin refused the shared admin (POST /sign-in); ${CLAIMED}`,
     });
     expect(waited.actions.find((a) => a.step === 'wire')?.result).toBe('skipped');
     expect(setup.signIn.done).toBe(true);
@@ -2211,14 +2213,91 @@ describe('apply: a first-run setup that makes no key, after another', () => {
       'jellyfin sonarr unpublished; jellyfin open, sonarr open',
       'sonarr unpublished; jellyfin done, sonarr done',
     ]);
-    // The limit of a setup that makes no key: its file now says it is done, so nothing
-    // asks who owns the app, and the next apply publishes it.
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
+    // Its file now says it is done, but Mediaplane doesn't know the setup is its own: the
+    // next apply starts it unpublished again, asks who signed in, and refuses it.
     setup.signIn.refuse = false;
-    const next = await run();
-    expect(next.outcome).toBe('success');
-    expect(next.plan.bootstrap).toEqual([]);
-    expect(ups.at(-1)).toBe('all published; jellyfin done, sonarr done');
+    for (const attempt of [2, 3]) {
+      const next = await run();
+      expect(next.outcome, `apply ${String(attempt)}`).toBe('failed');
+      expect(next.plan.bootstrap).toEqual([{ app: 'sonarr', unpublished: true }]);
+      expect(next.diagnostics.at(-1)).toMatchObject({
+        code: 'apply.bootstrap-failed',
+        message: `the first-run setup failed: sonarr at http://sonarr:8989 (127.0.0.1) was set up with another login (GET /signed-in/own); ${CLAIMED}`,
+      });
+      expect(next.actions.find((a) => a.step === 'wire')?.result).toBe('skipped');
+      expect(ups.at(-1)).toBe('sonarr unpublished; jellyfin done, sonarr done');
+    }
+    // It never signed in, and nothing was recorded.
     expect(setup.app.requests.filter((r) => r.path === '/sign-in')).toHaveLength(1);
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
+  });
+
+  it('checks, records and publishes an app set up before, signed in as the shared admin; the next apply changes nothing, and plan reads the record but writes nothing', async () => {
+    const { home, setup, ups, run } = await signInStack();
+    // As an older Mediaplane left it: set up, its file saying so, no record of it.
+    setup.signIn.done = true;
+    setup.signIn.signedIn.push({ user: 'admin', through: 'jellyfin' });
+    await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+    await writeFile(join(home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
+    const first = await run();
+    expect(first.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(first.outcome).toBe('success');
+    expect(first.plan.bootstrap).toEqual([
+      { app: 'jellyfin', unpublished: true },
+      { app: 'sonarr', unpublished: true },
+    ]);
+    expect(ups).toEqual([
+      'jellyfin sonarr unpublished; jellyfin open, sonarr done',
+      'all published; jellyfin done, sonarr done',
+    ]);
+    // Checked with the key, never signed in again.
+    expect(setup.app.requests.some((r) => r.path === '/sign-in')).toBe(false);
+    expect((await readSecretStore(home)).setUp).toEqual(['sonarr']);
+    const stored = await readFile(join(home, SECRETS_PATH), 'utf8');
+    const planned = await plan({
+      home,
+      catalog: SIGN_IN_CATALOG,
+      host: FIXTURE_HOST,
+      env: {},
+      runtime: fakeDocker(home, { addresses: setup.addresses }),
+      probe: fakeProbe(),
+      wiring: setup.seams,
+    });
+    expect(planned.bootstrap).toEqual([]);
+    expect(await readFile(join(home, SECRETS_PATH), 'utf8')).toBe(stored);
+    expect((await run()).outcome).toBe('no-changes');
+  });
+
+  it('keeps unpublished, and fails as a claimed one, an app set up before by someone else', async () => {
+    const { home, setup, ups, run } = await signInStack();
+    // Set up with another login: its file says so, and the shared admin never signed in.
+    setup.signIn.done = true;
+    await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+    await writeFile(join(home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
+    const failed = await run();
+    expect(failed.outcome).toBe('failed');
+    expect(failed.plan.bootstrap).toContainEqual({ app: 'sonarr', unpublished: true });
+    expect(failed.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message: `the first-run setup failed: sonarr at http://sonarr:8989 (127.0.0.1) was set up with another login (GET /signed-in/own); ${CLAIMED}`,
+    });
+    expect(ups).toEqual([
+      'jellyfin sonarr unpublished; jellyfin open, sonarr done',
+      'sonarr unpublished; jellyfin done, sonarr done',
+    ]);
+    expect(setup.app.requests.some((r) => r.path === '/sign-in')).toBe(false);
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
+  });
+
+  it('records an app it set up and signed out of, and none that waits', async () => {
+    const { home, setup, run } = await signInStack();
+    setup.signIn.refuse = true;
+    expect((await run()).outcome).toBe('failed');
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
+    setup.signIn.refuse = false;
+    expect((await run()).outcome).toBe('success');
+    expect((await readSecretStore(home)).setUp).toEqual(['sonarr']);
   });
 
   it('fails, unpublished, a setup that makes a key but gives none', async () => {
@@ -2251,8 +2330,9 @@ describe('apply: a first-run setup that makes no key, after another', () => {
 
   it("fails every apply at verify while a setup that makes no key can't read its file", async () => {
     const { home, setup, ups, run } = await signInStack();
-    // The app says it is set up; its file can't be read to say so.
+    // The app says it is set up, by the shared admin; its file can't be read to say so.
     setup.signIn.done = true;
+    setup.signIn.signedIn.push({ user: 'admin', through: 'jellyfin' });
     await mkdir(join(home, 'appdata', 'sonarr', 'signed-in.txt'), { recursive: true });
     for (const attempt of [1, 2]) {
       const result = await run();

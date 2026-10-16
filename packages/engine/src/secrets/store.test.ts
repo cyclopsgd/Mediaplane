@@ -151,6 +151,18 @@ describe('readSecretStore', () => {
   });
 });
 
+describe('readSecretStore: a store from before the setups were recorded', () => {
+  it('loads with no record of any setup', async () => {
+    const home = await tempDir('mediaplane-store-');
+    await mkdir(join(home, 'state'));
+    await writeFile(
+      join(home, SECRETS_PATH),
+      JSON.stringify({ version: 1, apps: { sonarr: { apiKey: '0'.repeat(32) } } }),
+    );
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
+  });
+});
+
 describe('writeSecretStore', () => {
   it('writes a sorted, private store that reads back', async () => {
     const home = await tempDir('mediaplane-store-');
@@ -183,6 +195,26 @@ describe('writeSecretStore', () => {
   it('writes no shared block when it holds nothing', async () => {
     const home = await tempDir('mediaplane-store-');
     await writeSecretStore(home, { version: 1, apps: {}, shared: {} });
+    expect(JSON.parse(await readFile(join(home, SECRETS_PATH), 'utf8'))).toEqual({
+      version: 1,
+      apps: {},
+    });
+  });
+
+  it('keeps the apps whose setup Mediaplane finished, sorted and once, and writes none when there are none', async () => {
+    const home = await tempDir('mediaplane-store-');
+    await writeSecretStore(home, {
+      version: 1,
+      apps: {},
+      setUp: ['seerr', 'radarr', 'seerr'],
+    });
+    expect(JSON.parse(await readFile(join(home, SECRETS_PATH), 'utf8'))).toEqual({
+      version: 1,
+      apps: {},
+      setUp: ['radarr', 'seerr'],
+    });
+    expect((await readSecretStore(home)).setUp).toEqual(['radarr', 'seerr']);
+    await writeSecretStore(home, { version: 1, apps: {}, setUp: [] });
     expect(JSON.parse(await readFile(join(home, SECRETS_PATH), 'utf8'))).toEqual({
       version: 1,
       apps: {},

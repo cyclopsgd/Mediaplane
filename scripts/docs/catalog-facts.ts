@@ -2,6 +2,7 @@ import {
   HEALTHCHECK_DEFAULTS,
   type AppDefinition,
   type SecretSource,
+  type StackConfig,
 } from '@mediaplane/engine';
 
 export const FACTS_START =
@@ -75,7 +76,10 @@ function api(def: AppDefinition): string {
       : key.scheme === 'mediabrowser'
         ? "in Jellyfin's `Authorization: MediaBrowser` header"
         : 'in the `X-Api-Key` header';
-  return `on its ${code(port)} port, which Mediaplane reaches over the stack's wiring network, with ${code(key.secret)} ${carried}`;
+  // An app not wired yet with Plex (`notWiredYet`) has no API there, until its slice.
+  const later = def.notWiredYet?.({ media_server: 'plex' } as StackConfig);
+  const unless = later === undefined ? '' : `; with Plex, none until ${later.comingIn}`;
+  return `on its ${code(port)} port, which Mediaplane reaches over the stack's wiring network, with ${code(key.secret)} ${carried}${unless}`;
 }
 
 /** What Mediaplane manages in the app, as override keys name it (spec §4.2, §6.3). */

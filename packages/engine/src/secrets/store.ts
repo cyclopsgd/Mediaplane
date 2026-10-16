@@ -22,6 +22,12 @@ const storeSchema = z.strictObject({
    * password goes into an app's file only hashed, so any characters will do.
    */
   shared: z.strictObject({ adminPassword: z.string().min(1).optional() }).optional(),
+  /**
+   * The apps whose first-run setup makes no key (Seerr's), and that Mediaplane finished
+   * itself, or checked and found to be its own. Added in Slice 6: older stores have none.
+   * Such an app counts as set up only when it is named here; names, not secrets.
+   */
+  setUp: z.array(z.string().min(1)).optional(),
 });
 
 /** Secrets Mediaplane generated, or apps created, per app, and the shared admin password. */
@@ -90,6 +96,7 @@ export async function writeSecretStore(home: string, store: SecretStore): Promis
   );
   await ensureDir(join(home, STATE_DIR), 0o700);
   const adminPassword = store.shared?.adminPassword;
+  const setUp = unique(store.setUp ?? []).sort(compare);
   await writeFileAtomic(
     join(home, SECRETS_PATH),
     `${JSON.stringify(
@@ -97,6 +104,8 @@ export async function writeSecretStore(home: string, store: SecretStore): Promis
         version: 1,
         apps,
         ...(adminPassword === undefined ? {} : { shared: { adminPassword } }),
+        // Only when there is one, so a store without any is written as it always was.
+        ...(setUp.length === 0 ? {} : { setUp }),
       },
       null,
       2,
