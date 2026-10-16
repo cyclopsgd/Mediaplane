@@ -2,7 +2,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { Bootstrap, Catalog } from '../catalog/types';
-import type { AppApi } from '../http/client';
+import { AppApiError, type AppApi } from '../http/client';
 import type { WiringSeams } from '../integrations/wiring';
 import { FIXTURE_API, fixtureCatalog } from './fixtures';
 import { fakeHttpApp, type FakeApp } from './http';
@@ -18,6 +18,8 @@ async function open(api: AppApi): Promise<boolean> {
 /**
  * A first-run setup shaped like Jellyfin's: open until a POST of /setup finishes it, as
  * the admin, which makes the app's key (GET /key) and writes setup.txt in its appdata.
+ * The admin signs in (POST /signin) before the key: a setup finished as someone else
+ * refuses it (401).
  */
 export const FAKE_SETUP: Bootstrap = {
   secret: 'apiKey',
@@ -25,6 +27,18 @@ export const FAKE_SETUP: Bootstrap = {
   open,
   async run(api, admin) {
     if (await open(api)) await api.submit('POST', '/setup', { user: admin.username });
+    const session = await api.signIn(
+      '/signin',
+      { user: admin.username, password: admin.password },
+      z.looseObject({ token: z.string() }),
+      [admin.password],
+    );
+    if (session === undefined) {
+      throw new AppApiError(
+        `${api.name} at ${api.where} refused the shared admin's sign-in (POST /signin)`,
+        { kind: 'auth', status: 401 },
+      );
+    }
     return (await api.get('/key', z.looseObject({ key: z.string() }))).key;
   },
 };
@@ -51,17 +65,19 @@ export interface FakeSetUpState {
   refuse: string;
   /** Fail GET /key, with a 500. */
   keyFails: boolean;
-  /** Who the setup was finished as. */
+  /** Who the setup was finished as: POST /signin refuses anyone else (401). */
   admin: string;
   /** Fail GET /setup, with a 500: the app can't say whether it is open. */
   openFails: boolean;
   /** Take the setup's POST, and make the key, but leave the app open all the same. */
   staysOpen: boolean;
+  /** Once it has a key, fail GET /setup with a 500 whose message holds the key. */
+  echoKey: boolean;
 }
 
 /**
  * The app behind FAKE_SETUP, as Jellyfin of the stack in `home`: /ready, /setup (its
- * state, and a POST that finishes it), /key, and /check, which takes only its key. A
+ * state, and a POST that finishes it), /signin, /key, and /check, which takes only its key. A
  * finished setup writes appdata/jellyfin/setup.txt, as Jellyfin writes its system.xml.
  * `addresses` put Jellyfin's fake container on the wiring network, and `seams` send its
  * calls here.
@@ -80,11 +96,15 @@ export async function fakeSetUpApp(home: string): Promise<{
     admin: '',
     openFails: false,
     staysOpen: false,
+    echoKey: false,
   };
   const app = await fakeHttpApp((request) => {
     const { method, path, headers } = request;
     if (path === '/ready') return { status: 200 };
     if (path === '/setup' && method === 'GET') {
+      if (state.echoKey && state.key !== '') {
+        return { status: 500, body: { message: `fake failure with ${state.key}` } };
+      }
       return state.openFails
         ? { status: 500, body: { message: 'fake failure' } }
         : { status: 200, body: { done: state.done } };
@@ -96,6 +116,12 @@ export async function fakeSetUpApp(home: string): Promise<{
       state.key = SET_UP_KEY;
       writeFileSync(join(home, 'appdata', 'jellyfin', 'setup.txt'), 'done\n');
       return { status: 204 };
+    }
+    if (path === '/signin' && method === 'POST') {
+      const { user } = JSON.parse(request.body) as { user: string };
+      return state.admin === '' || state.admin === user
+        ? { status: 200, body: { token: 'fake-session' } }
+        : { status: 401 };
     }
     if (path === '/key') {
       return state.keyFails

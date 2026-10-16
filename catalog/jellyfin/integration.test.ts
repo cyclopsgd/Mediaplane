@@ -387,6 +387,28 @@ describe("Jellyfin's admin", () => {
       "Jellyfin at http://jellyfin:8096 (127.0.0.1) has no user admin: Mediaplane makes Jellyfin's admin in its startup wizard, and no other user (GET /Users)",
     );
   });
+
+  it('sends no empty password: without one it signs in to nothing and sets nothing', async () => {
+    const { api, state, app } = await jellyfin(
+      setUp({ user: 'renamed', password: 'x' }),
+      true,
+    );
+    const desired = { ...wanted(admin), secrets: {} };
+    const held = {
+      id: FAKE_JELLYFIN_USER_ID,
+      name: 'admin',
+      fields: { username: 'renamed' },
+    };
+    await expect(admin.verify?.(api, desired, held)).rejects.toThrow(
+      'admin has no password to send',
+    );
+    await expect(admin.update(api, desired, held)).rejects.toThrow(
+      'admin has no password to send',
+    );
+    expect(state.password).toBe('x');
+    expect(calls(app)).not.toContain('POST /Users/AuthenticateByName');
+    expect(calls(app)).not.toContain(`POST /Users/${FAKE_JELLYFIN_USER_ID}/Password`);
+  });
 });
 
 describe("Jellyfin's libraries", () => {

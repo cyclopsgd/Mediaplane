@@ -5,6 +5,7 @@ import {
   type ResourceSpec,
 } from '@mediaplane/engine';
 import { z } from 'zod';
+import { secretOf } from '../_shared/secret';
 import { signIn } from './bootstrap';
 
 const user = z.looseObject({ Id: z.string(), Name: z.string() });
@@ -38,7 +39,7 @@ const admin: ResourceSpec = {
   async verify(api, desired) {
     const token = await signIn(api, {
       username: String(desired.fields.username),
-      password: desired.secrets.password ?? '',
+      password: secretOf(desired, 'password'),
     });
     if (token === undefined) return false;
     await api.withKey(token).submit('POST', '/Sessions/Logout');
@@ -53,15 +54,14 @@ const admin: ResourceSpec = {
       ),
     ),
   async update(api, desired, observed) {
+    const password = secretOf(desired, 'password');
     const path = `/Users/${String(observed.id)}`;
     // The user goes back as Jellyfin gave it, its policy and all: it refuses less.
     const held = await api.get(path, user);
     if (held.Name !== desired.fields.username) {
       await api.submit('POST', path, { ...held, Name: desired.fields.username });
     }
-    await api.submit('POST', `${path}/Password`, {
-      NewPw: desired.secrets.password ?? '',
-    });
+    await api.submit('POST', `${path}/Password`, { NewPw: password });
   },
 };
 

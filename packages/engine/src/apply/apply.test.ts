@@ -1810,6 +1810,137 @@ describe('apply: first-run setup before the ports are published', () => {
     expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
   });
 
+  it('keeps an app unpublished whose setup someone else finished while Mediaplane set it up, though it no longer looks open', async () => {
+    const { home, setup, ups, run } = await setUpStack();
+    // Open when apply started it (no setup.txt), then finished as another login before
+    // the bootstrap step reached it: the shared admin's sign-in is refused.
+    Object.assign(setup.state, { done: true, admin: 'someone-else', key: SET_UP_KEY });
+    const result = await run();
+    expect(result.outcome).toBe('failed');
+    expect(result.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
+    expect(result.actions.slice(-3).map((a) => [a.step, a.result])).toEqual([
+      ['bootstrap', 'failed'],
+      ['wire', 'skipped'],
+      ['verify', 'skipped'],
+    ]);
+    expect(result.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message:
+        "the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in (POST /signin); jellyfin's setup was open when apply started it, so it was finished with another login while Mediaplane set it up, and it stays unpublished. Its setup is now done, so the next apply would publish it: start it afresh first, as the runbook says",
+    });
+    // Whatever the app says now, nothing publishes it.
+    expect(ups).toEqual([
+      'jellyfin unpublished, setup done',
+      'jellyfin unpublished, setup done',
+    ]);
+    expect((await readSecretStore(home)).apps.jellyfin).toBeUndefined();
+  });
+
+  it('publishes as before a setup finished by hand before Mediaplane started it, when the shared admin is refused', async () => {
+    const { home, setup, ups, run } = await setUpStack();
+    // Finished by hand before this apply, as before Slice 5: its appdata says it is done.
+    await mkdir(join(home, 'appdata', 'jellyfin'), { recursive: true });
+    await writeFile(join(home, 'appdata', 'jellyfin', 'setup.txt'), 'done\n');
+    Object.assign(setup.state, { done: true, admin: 'someone-else', key: SET_UP_KEY });
+    const result = await run();
+    expect(result.outcome).toBe('failed');
+    expect(result.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: false }]);
+    expect(result.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message:
+        "the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in (POST /signin)",
+    });
+    // Only the start step's up, which published it: nobody can claim it.
+    expect(ups).toEqual(['all published, setup done']);
+    expect((await readSecretStore(home)).apps.jellyfin).toBeUndefined();
+  });
+
+  it('publishes a setup Mediaplane finished and signed in to, though making its key then failed', async () => {
+    const { setup, ups, run } = await setUpStack();
+    setup.state.keyFails = true;
+    const result = await run();
+    expect(result.outcome).toBe('failed');
+    expect(result.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
+    expect(setup.state.admin).toBe('admin');
+    expect(setup.app.requests.map((r) => `${r.method} ${r.path}`)).toContain(
+      'POST /signin',
+    );
+    expect(result.diagnostics.at(-1)?.message).toBe(
+      'the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) failed (HTTP 500): fake failure (GET /key)',
+    );
+    expect(ups).toEqual([
+      'jellyfin unpublished, setup open',
+      'all published, setup done',
+    ]);
+  });
+
+  it('says an app it had published is published, when it still looks open after its setup', async () => {
+    const { home, setup, ups, run } = await setUpStack();
+    // Its appdata says the setup is done, so it starts published, but it says it is open.
+    await mkdir(join(home, 'appdata', 'jellyfin'), { recursive: true });
+    await writeFile(join(home, 'appdata', 'jellyfin', 'setup.txt'), 'done\n');
+    setup.state.staysOpen = true;
+    const result = await run();
+    expect(result.outcome).toBe('failed');
+    expect(result.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: false }]);
+    expect(result.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message:
+        'the first-run setup failed: jellyfin\'s setup reported success, but the app still looks open (or can\'t be asked), and it is published: stop it ("docker stop mediaplane-jellyfin-1") and see the runbook',
+    });
+    expect(ups).toEqual(['all published, setup open']);
+    expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
+  });
+
+  it('redacts the key the setup just made from a failure that follows it', async () => {
+    const { home, setup, ups, run } = await setUpStack();
+    // The re-check before publishing fails, and its answer holds the new key.
+    setup.state.echoKey = true;
+    const result = await run();
+    expect(result.outcome).toBe('failed');
+    expect(result.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message:
+        "the first-run setup failed: jellyfin's setup reported success, but the app still looks open (or can't be asked), so it stays unpublished: jellyfin at http://jellyfin:8096 (127.0.0.1) failed (HTTP 500): fake failure with *** (GET /setup)",
+    });
+    const [record] = (await listRecords(home)).records;
+    expect(JSON.stringify([result, record])).not.toContain(SET_UP_KEY);
+    expect(ups).toEqual([
+      'jellyfin unpublished, setup open',
+      'jellyfin unpublished, setup done',
+    ]);
+    expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
+  });
+
+  it('publishes nothing, and fails the step, when joining the wiring network fails', async () => {
+    let inBootstrap = false;
+    const { home, setup, ups, run } = await setUpStack({
+      join: () => {
+        if (inBootstrap) throw new RuntimeError('fake: Docker stopped answering');
+        return 'not-needed';
+      },
+    });
+    const result = await run({
+      onStep: (event) => {
+        if (event.step === 'bootstrap') inBootstrap = true;
+      },
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.actions.slice(-3).map((a) => [a.step, a.result])).toEqual([
+      ['bootstrap', 'failed'],
+      ['wire', 'skipped'],
+      ['verify', 'skipped'],
+    ]);
+    expect(result.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message: 'fake: Docker stopped answering',
+    });
+    // Only the start step's up, which left it unpublished.
+    expect(ups).toEqual(['jellyfin unpublished, setup open']);
+    expect(setup.app.requests).toEqual([]);
+    expect((await readSecretStore(home)).apps.jellyfin).toBeUndefined();
+  });
+
   it("says why it couldn't step off the network to publish, publishes nothing, and keeps the key", async () => {
     const { home, docker, ups, runtime, extra } = await setUpStack();
     let leaves = 0;

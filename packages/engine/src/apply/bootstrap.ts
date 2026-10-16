@@ -25,6 +25,8 @@ export interface BootstrapOptions {
   values: Readonly<Record<string, string>>;
   env: NodeJS.ProcessEnv;
   runtime: Runtime;
+  /** The Compose project `runtime` manages: hints name its containers as Compose does. */
+  project: string;
   /** What apply's own plan said to set up. */
   pending: readonly BootstrapChange[];
   /**
@@ -108,7 +110,11 @@ export async function bootstrapApps(
   const failed: string[] = [];
   const stillOpen: string[] = [];
   for (const app of apps) {
-    const result = await setUp(app, reached.get(app.def.id), admin);
+    const change = options.pending.find((p) => p.app === app.def.id);
+    const result = await setUp(app, reached.get(app.def.id), admin, {
+      unpublished: change?.unpublished ?? true,
+      container: `${options.project}-${app.def.id}-1`,
+    });
     if (result.key !== undefined) {
       const secret = app.def.bootstrap?.secret ?? '';
       store = withSecret(store, app.def.id, secret, result.key);
@@ -117,8 +123,11 @@ export async function bootstrapApps(
       done.push(`${app.def.id}.${secret}`);
     }
     if (result.failure !== undefined) {
-      failed.push(redact(result.failure, redactionValues(secrets)));
-      if (result.open) stillOpen.push(app.def.id);
+      // The key it just made too: a failure after it may come from the app's answer.
+      const known = result.key === undefined ? secrets : [...secrets, result.key];
+      failed.push(redact(result.failure, redactionValues(known)));
+      // An app the plan started published isn't unpublished now: its failure says so.
+      if (result.open && change?.unpublished !== false) stillOpen.push(app.def.id);
     }
   }
   const unpublished = options.pending.filter((p) => p.unpublished).map((p) => p.app);
@@ -151,47 +160,70 @@ export async function bootstrapApps(
 interface SetUpResult {
   key?: string;
   failure?: string;
-  /** Whether the app still looks open to anyone (then it stays unpublished). */
+  /** Whether the app must stay unpublished: it still looks open, or was claimed. */
   open: boolean;
 }
 
-/** Whether `app` can still be claimed; one Mediaplane can't ask counts as open. */
-async function looksOpen(bootstrap: Bootstrap, api: AppApi): Promise<boolean> {
+/**
+ * Whether `app` can still be claimed; one Mediaplane can't ask counts as open, and `why`
+ * says what the asking met.
+ */
+async function looksOpen(
+  bootstrap: Bootstrap,
+  api: AppApi,
+): Promise<{ open: boolean; why?: string }> {
   try {
-    return await bootstrap.open(api);
+    return { open: await bootstrap.open(api) };
   } catch (cause) {
-    if (cause instanceof AppApiError) return true;
+    if (cause instanceof AppApiError) return { open: true, why: cause.message };
     throw cause;
   }
 }
 
 /**
- * Finish `app`'s setup: its new key, or why not and whether the setup is still open (then
- * it stays unpublished). One Mediaplane can't reach or ask counts as open. A setup that
- * says it is done is asked once more before the app is published: the engine, and not
- * each catalog entry, keeps an app that still looks open unpublished. It still gets its
- * key stored, since the app made it.
+ * Finish `app`'s setup: its new key, or why not and whether the app must stay unpublished.
+ * One Mediaplane can't reach or ask counts as open. A setup that says it is done is asked
+ * once more before the app is published: the engine, and not each catalog entry, keeps an
+ * app that still looks open unpublished. It still gets its key stored, since the app made
+ * it. An app the plan started unpublished, since its setup was open, whose shared admin is
+ * then refused (an `auth` failure) was claimed by someone else meanwhile: it stays
+ * unpublished, however done its setup now looks. One the plan started published was done
+ * before this run, by hand say, and nobody can claim it.
  */
 async function setUp(
   app: ResolvedApp,
   client: ReachedApp | undefined,
   admin: { username: string; password: string },
+  started: { unpublished: boolean; container: string },
 ): Promise<SetUpResult> {
   const { bootstrap, api } = app.def;
   if (client === undefined || bootstrap === undefined || api === undefined) {
     return { failure: notOnNetwork(app), open: true };
   }
+  const name = app.def.name;
   try {
     await client.api.ready(api.ready);
     const key = await bootstrap.run(client.api, admin);
-    if (!(await looksOpen(bootstrap, client.api))) return { key, open: false };
+    const after = await looksOpen(bootstrap, client.api);
+    if (!after.open) return { key, open: false };
+    const still = `${name}'s setup reported success, but the app still looks open (or can't be asked)`;
+    const failure = started.unpublished
+      ? `${still}, so it stays unpublished`
+      : `${still}, and it is published: stop it ("docker stop ${started.container}") and see the runbook`;
     return {
       key,
       open: true,
-      failure: `${app.def.name}'s setup reported success, but the app still looks open (or can't be asked), so it stays unpublished`,
+      failure: after.why === undefined ? failure : `${failure}: ${after.why}`,
     };
   } catch (cause) {
     if (!(cause instanceof AppApiError)) throw cause;
-    return { failure: cause.message, open: await looksOpen(bootstrap, client.api) };
+    const now = await looksOpen(bootstrap, client.api);
+    if (started.unpublished && cause.kind === 'auth' && !now.open) {
+      return {
+        failure: `${cause.message}; ${name}'s setup was open when apply started it, so it was finished with another login while Mediaplane set it up, and it stays unpublished. Its setup is now done, so the next apply would publish it: start it afresh first, as the runbook says`,
+        open: true,
+      };
+    }
+    return { failure: cause.message, open: now.open };
   }
 }

@@ -229,6 +229,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         runtime,
         pending: shown.bootstrap,
         publish: up,
+        project: options.project ?? PROJECT_NAME,
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });
       store = set.store;

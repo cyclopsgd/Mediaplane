@@ -10,6 +10,7 @@ import {
   type ResourceSpec,
 } from '@mediaplane/engine';
 import { z } from 'zod';
+import { secretOf } from './secret';
 
 /** When Sonarr, Radarr and Prowlarr ask for the login: everywhere, or not locally. */
 function authenticationRequired(ctx: AppContext): string {
@@ -69,8 +70,8 @@ export function servarrAdmin(version: 'v1' | 'v3'): ResourceSpec {
   // The whole settings object goes back, as the app's own UI sends it, with the login in
   // it. It holds the app's key and the old password's hash: it is never shown.
   const save = async (api: AppApi, desired: DesiredResource) => {
+    const password = secretOf(desired, 'password');
     const current = await api.get(path, hostSettings);
-    const password = desired.secrets.password ?? '';
     await api.put(`${path}/${String(current.id)}`, {
       ...current,
       username: desired.fields.username,
@@ -97,7 +98,7 @@ export function servarrAdmin(version: 'v1' | 'v3'): ResourceSpec {
     async verify(api, desired) {
       const signedIn = await api.login('/login', {
         username: String(desired.fields.username),
-        password: desired.secrets.password ?? '',
+        password: secretOf(desired, 'password'),
       });
       // It sends a login that works on to "/", and one that doesn't back to
       // /login?…loginFailed=true. The client redacts the redirect, so a password that is

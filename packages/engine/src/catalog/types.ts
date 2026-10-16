@@ -134,7 +134,8 @@ export interface Bootstrap {
   open(api: AppApi): Promise<boolean>;
   /**
    * Finish what is left of the setup as the shared admin, and give the secret it made, or
-   * the one the app already holds for Mediaplane. Throws AppApiError.
+   * the one the app already holds for Mediaplane. Throws AppApiError, of kind `auth` when
+   * the app refuses the shared admin: an app the plan started unpublished then stays so.
    */
   run(api: AppApi, admin: { username: string; password: string }): Promise<string>;
 }

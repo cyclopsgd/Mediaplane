@@ -141,6 +141,21 @@ describe('servarrAdmin', () => {
     expect((await admin.observe(api, undefined))?.fields).toEqual({ username: 'admin' });
   });
 
+  it('sends no empty password: without one it signs in to nothing and saves nothing', async () => {
+    const { api, app } = await sonarr({ ...HOST, username: 'admin' });
+    const none = { ...DESIRED, secrets: {} };
+    await expect(admin.verify?.(api, none, OBSERVED)).rejects.toThrow(
+      'admin has no password to send',
+    );
+    await expect(admin.create(api, none)).rejects.toThrow(
+      'admin has no password to send',
+    );
+    await expect(admin.update(api, none, OBSERVED)).rejects.toThrow(
+      'admin has no password to send',
+    );
+    expect(app.requests.filter((r) => r.method !== 'GET')).toEqual([]);
+  });
+
   it("uses Prowlarr's /api/v1", async () => {
     const app = await fakeHttpApp((request) =>
       request.path === '/api/v1/config/host'
