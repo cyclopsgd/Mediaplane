@@ -71,8 +71,9 @@ With Jellyfin as the media server (with Plex, see Not built yet):
   none), and stays yours after. Seerr shows the arr's key in clear; Mediaplane checks it
   with Seerr's own test of the server, which calls the arr with it, and keeps it out of
   all it prints and records, a key typed in Seerr by hand too. Mediaplane sends the arr's
-  key only to the arr's own address in the stack, never to a host read from Seerr. Seerr
-  is wired after Prowlarr, when the stack has it.
+  key only to the arr's own address in the stack, with no URL base, never to a host or
+  URL base read from Seerr: a server Seerr holds with TLS or a URL base counts as
+  changed, and `apply` puts it back. Seerr is wired after Prowlarr, when the stack has it.
 - **Its setup, finished** (`seerr.setup`): once its links are in place, Mediaplane sends
   Seerr's `initialize`, so it stops offering its admin the setup wizard.
 - **Its user.** Seerr's image runs as uid 1000, the `node` user. So before it starts,

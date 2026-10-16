@@ -450,6 +450,46 @@ describe.each([
     expect(await spec.verify?.(api, desired, observed)).toBe(true);
   });
 
+  it.each([
+    [
+      'a URL base to another host',
+      { baseUrl: '@203.0.113.9' },
+      `http://${arr}:${String(port)}@203.0.113.9`,
+    ],
+    ['TLS', { useSsl: true }, `https://${arr}:${String(port)}`],
+  ])(
+    "sees %s on the server as another address, and never sends the stack's key through it",
+    async (_what, change, seen) => {
+      const { api, apis, state } = await seerr();
+      const desired =
+        (await spec.resolve?.(api, wanted(spec), contextOf())) ?? wanted(spec);
+      await spec.create(api, desired);
+      const held = state.seerr[arr][0];
+      if (held === undefined) throw new Error('held');
+      // Changed by Seerr's admin, the stack's key left as it is.
+      Object.assign(held, change);
+      const before = apis.app.requests.length;
+      const observed = await spec.observe(api, undefined, desired);
+      expect(observed?.fields.hostname).toBe(seen);
+      if (observed === undefined) throw new Error('observed');
+      // Even asked to, the check sends the stack's key only to the stack's address.
+      await (spec.verify?.(api, desired, observed) ?? Promise.resolve()).catch(
+        () => undefined,
+      );
+      await spec.update(api, desired, observed);
+      const carrying = apis.app.requests
+        .slice(before)
+        .filter((r) => r.body.includes(key))
+        .map((r) => JSON.parse(r.body) as Record<string, unknown>);
+      expect(carrying.length).toBeGreaterThan(0);
+      for (const body of carrying) {
+        expect(body).toMatchObject({ hostname: arr, port, useSsl: false, baseUrl: '' });
+      }
+      expect(state.seerr[arr][0]).toMatchObject({ baseUrl: '', useSsl: false });
+      expect((await spec.observe(api, undefined, desired))?.fields.hostname).toBe(arr);
+    },
+  );
+
   it('puts back what was changed by hand: its profile, folder and default', async () => {
     const { api, state, sonarr, radarr } = await seerr();
     const desired =

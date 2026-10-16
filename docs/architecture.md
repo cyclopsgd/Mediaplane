@@ -551,9 +551,11 @@ mediaplane (the stack)
     profile is the one `apps.seerr.sonarr_profile` (or `radarr_profile`) names, else
     `HD-1080p`, else `Any`, else the arr's first: only the arr knows which it has, so
     Mediaplane asks it through Seerr's own test. Seerr shows a server's key in clear;
-    Mediaplane checks it with Seerr's test of the server it holds, never by comparing
-    it. A new Sonarr server uses season folders, as Sonarr's own default; a Radarr one
-    doesn't, since films have none. Each needs its arr's root folder in place.
+    Mediaplane checks it with Seerr's test of the server it holds, at the arr's own
+    address, never by comparing it. A server Seerr holds with TLS or a URL base reads
+    as changed, and is put back. A new Sonarr server uses season folders, as Sonarr's own
+    default; a Radarr one doesn't, since films have none. Each needs its arr's root folder
+    in place.
   - An arr's key, and Jellyfin's, go only to that app's own address in the stack, with no
     URL base, never to a host, port or URL base read from Seerr: anyone with Seerr's admin
     can change those. Every key Mediaplane reads from Seerr is kept out of its output: the

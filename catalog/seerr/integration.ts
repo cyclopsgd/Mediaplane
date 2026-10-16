@@ -198,10 +198,23 @@ const server = z.looseObject({
   hostname: z.string(),
   port: z.number(),
   apiKey: z.string(),
+  useSsl: z.boolean(),
+  baseUrl: z.string().optional(),
   activeProfileName: z.string(),
   activeDirectory: z.string(),
   isDefault: z.boolean(),
 });
+/**
+ * Where Seerr reaches a server's arr, as one host to compare: its `hostname`, or, with
+ * TLS or a URL base, the whole URL Seerr builds from them (`buildUrl`), which is never
+ * the stack's service.
+ */
+function serverHost(held: z.infer<typeof server>): string {
+  const base = held.baseUrl ?? '';
+  if (!held.useSsl && base === '') return held.hostname;
+  return `${held.useSsl ? 'https' : 'http'}://${held.hostname}:${String(held.port)}${base}`;
+}
+
 const offered = z.looseObject({
   profiles: z.array(z.looseObject({ id: z.number(), name: z.string() })),
 });
@@ -215,12 +228,15 @@ const offered = z.looseObject({
  *   has, so `resolve` asks it through Seerr's own test.
  * - Seerr shows each server's key in clear, the stack's or not: once read, each is kept
  *   out of what the run says. It is checked, never compared, with Seerr's own test of
- *   the server it holds: one that fails is tested again with the stack's key, at the
- *   stack's own address for the arr, with no URL base (never the host or base Seerr
- *   holds, which Seerr's admin can change), and only a pass then says the key was
- *   refused (an update); otherwise Seerr can't reach the arr, in its own words (500,
- *   "Failed to connect", probed, whatever the cause). A failing test logs a line in
- *   Seerr's log, and the arr one in its own, as from Seerr's web UI.
+ *   the server it holds, but at the stack's own address for the arr, with no URL base:
+ *   the key it holds may be the stack's, and goes nowhere else (never to the host or
+ *   base Seerr holds, which Seerr's admin can change). One that fails is tested again
+ *   with the stack's key, and only a pass then says the key was refused (an update);
+ *   otherwise Seerr can't reach the arr, in its own words (500, "Failed to connect",
+ *   probed, whatever the cause). A failing test logs a line in Seerr's log, and the arr
+ *   one in its own, as from Seerr's web UI.
+ * - With TLS or a URL base, `hostname` is observed as the URL Seerr calls, so the server
+ *   reads as changed, and the update puts it back at the stack's address.
  * - Seerr keeps a server whole, its id read-only: an update sends it back as Seerr gave
  *   it, without the id, so its other settings stay yours.
  * - It requires the arr's root folder, which it names, and Seerr comes after the arr.
@@ -239,15 +255,19 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
     }
   };
   /**
-   * Where the stack's key goes: the stack's own address for the arr, without TLS and with
-   * no URL base, since Seerr adds the base after the port (`@<host>` would be a host).
+   * The stack's own address for the arr, without TLS and with no URL base, since Seerr
+   * adds the base after the port (`@<host>` would be a host).
    */
-  const reach = (desired: DesiredResource) => ({
+  const stackAt = (desired: DesiredResource) => ({
     hostname: desired.fields.hostname,
     port: desired.fields.port,
-    apiKey: secretOf(desired, 'apiKey'),
     useSsl: false,
     baseUrl: '',
+  });
+  /** Where the stack's key goes: the stack's own address for the arr, and only there. */
+  const reach = (desired: DesiredResource) => ({
+    ...stackAt(desired),
+    apiKey: secretOf(desired, 'apiKey'),
   });
   const unreachable = (api: AppApi, at: string, how: string) =>
     new AppApiError(
@@ -344,7 +364,8 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
             id: found.id,
             name: found.name,
             fields: {
-              hostname: found.hostname,
+              // With TLS or a URL base, the URL Seerr calls: not the stack's host.
+              hostname: serverHost(found),
               port: found.port,
               activeProfile: found.activeProfileName,
               activeDirectory: found.activeDirectory,
@@ -354,9 +375,10 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
     },
     async verify(api, desired, observed) {
       const held = await heldOf(api, observed.id);
-      if ((await test(api, held)) !== undefined) return true;
-      // The stack's key goes only to the stack's own address for the arr, never to the
-      // host or URL base Seerr holds, which anyone who is Seerr's admin can change.
+      // The key Seerr holds may be the stack's: it is tested only at the stack's own
+      // address for the arr, never at the host or URL base Seerr holds, which anyone who
+      // is Seerr's admin can change (a server held elsewhere reads as changed anyway).
+      if ((await test(api, { ...held, ...stackAt(desired) })) !== undefined) return true;
       if ((await test(api, { ...held, ...reach(desired) })) !== undefined) return false;
       throw unreachable(
         api,

@@ -287,16 +287,13 @@ describe("Seerr's first-run setup", () => {
 });
 
 describe("Seerr's first-run setup: what it can't confirm is not Mediaplane's", () => {
-  const KINDS: AppApiErrorKind[] = [
-    'protocol',
-    'timeout',
-    'server',
-    'unreachable',
-    'rejected',
-  ];
+  /** A question that went unanswered: Mediaplane couldn't tell. */
+  const UNANSWERED: AppApiErrorKind[] = ['timeout', 'server', 'unreachable'];
+  /** One Seerr answered, in a way that doesn't show the setup is Mediaplane's. */
+  const ANSWERED: AppApiErrorKind[] = ['protocol', 'rejected'];
 
-  it.each(KINDS)(
-    'refuses as not shown to be its own, whatever the check fails with (%s)',
+  it.each(UNANSWERED)(
+    "refuses as one it couldn't tell is its own, when a question goes unanswered (%s)",
     async (kind) => {
       const { api, stack } = await seerrOf(fakeJellyfinSetUp(), SET_UP);
       for (const path of ['/api/v1/auth/me', '/api/v1/settings/jellyfin']) {
@@ -304,9 +301,26 @@ describe("Seerr's first-run setup: what it can't confirm is not Mediaplane's", (
           seerrBootstrap.run(failingAt(api, path, kind), ADMIN, stack),
         );
         expect(refused).toBeInstanceOf(AppApiError);
-        expect(refused).toMatchObject({ kind: 'auth' });
+        expect(refused).toMatchObject({ kind: 'auth', unsure: true });
         expect((refused as Error).message).toBe(
           `Seerr at http://seerr:5055 (127.0.0.1) is set up, and Mediaplane couldn't tell whether it is its own: fake ${kind} (GET ${path})`,
+        );
+      }
+    },
+  );
+
+  it.each(ANSWERED)(
+    "refuses as not its own, not as one it couldn't tell, when Seerr's answer doesn't show it is (%s)",
+    async (kind) => {
+      const { api, stack } = await seerrOf(fakeJellyfinSetUp(), SET_UP);
+      for (const path of ['/api/v1/auth/me', '/api/v1/settings/jellyfin']) {
+        const refused = await thrown(
+          seerrBootstrap.run(failingAt(api, path, kind), ADMIN, stack),
+        );
+        expect(refused).toBeInstanceOf(AppApiError);
+        expect(refused).toMatchObject({ kind: 'auth', unsure: false });
+        expect((refused as Error).message).toBe(
+          `Seerr at http://seerr:5055 (127.0.0.1) is set up, and its answers don't show that it is Mediaplane's: fake ${kind} (GET ${path})`,
         );
       }
     },
@@ -473,11 +487,12 @@ describe("Seerr's first-run setup, through the engine's bootstrap step", () => {
     const { home, state, published, run, store } = await stepOf({
       ...SET_UP,
       failing: ['/api/v1/settings/jellyfin'],
+      failStatus: 500,
     });
     const failed = await thrown(run(store));
     expect(failed).toBeInstanceOf(BootstrapFailed);
     expect((failed as Error).message).toContain(
-      "Seerr at http://seerr:5055 (127.0.0.1) is set up, and Mediaplane couldn't tell whether it is its own: Seerr at http://seerr:5055 (127.0.0.1) refused the request (HTTP 400): request/fake failure (GET /api/v1/settings/jellyfin); Seerr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. Run apply again first: a failure that was temporary clears, and Seerr, if it is Mediaplane's, is then recorded and published. If it fails again, see the runbook",
+      "Seerr at http://seerr:5055 (127.0.0.1) is set up, and Mediaplane couldn't tell whether it is its own: Seerr at http://seerr:5055 (127.0.0.1) failed (HTTP 500): fake failure (GET /api/v1/settings/jellyfin); Seerr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. Run apply again first: a failure that was temporary clears, and Seerr, if it is Mediaplane's, is then recorded and published. If it fails again, see the runbook",
     );
     expect((failed as Error).message).not.toContain('afresh');
     expect(published).toEqual([['seerr']]);
@@ -487,6 +502,29 @@ describe("Seerr's first-run setup, through the engine's bootstrap step", () => {
     const set = await run(store);
     expect(set.detail).toBe('set up seerr; published seerr');
     expect(set.store.setUp).toEqual(['seerr']);
+  });
+
+  it('keeps unpublished, with the claimed routes, a Seerr claimed through a port that takes it to another host', async () => {
+    // Seerr doesn't check the sign-in's port, and puts it into the URL as sent:
+    // http://jellyfin:8096@198.51.100.7.
+    const { home, published, run, store } = await stepOf({
+      claimant: { user: 'admin', jellyfin: 'jellyfin', port: '8096@198.51.100.7' },
+    });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const failed = await thrown(run(store));
+      expect(failed).toBeInstanceOf(BootstrapFailed);
+      const said = (failed as Error).message;
+      expect(said).toContain(
+        "Seerr at http://seerr:5055 (127.0.0.1) is set up, and its answers don't show that it is Mediaplane's",
+      );
+      expect(said).toContain(
+        'First: if the Jellyfin login it was set up with is yours, set admin.username and admin.password to it.',
+      );
+      expect(said).toContain('Last, if you did not set it up: start it afresh');
+      expect(said).not.toContain('Run apply again first');
+    }
+    expect(published).toEqual([['seerr'], ['seerr']]);
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
   });
 
   it('keeps a claimed Seerr unpublished, now and on every later apply, and a Seerr shown to be its own is published', async () => {

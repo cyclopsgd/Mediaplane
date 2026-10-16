@@ -376,7 +376,8 @@ differ, and a `reason` when it is `unknown`.
   is Mediaplane's.
 - **Seerr is set up, but Mediaplane can't show that it is its own**
   (`apply.bootstrap-failed`). The message says
-  `was set up with another login or another Jellyfin`, or
+  `was set up with another login or another Jellyfin`,
+  `its answers don't show that it is Mediaplane's`, or
   `is set up, and Mediaplane couldn't tell whether it is its own`. Seerr
   was already set up when Mediaplane came to it: it looked open when `apply` started it
   but was set up before its sign-in, or it is a Seerr from before Slice 6, or one
@@ -387,12 +388,15 @@ differ, and a `reason` when it is `unknown`.
   no URL base and no TLS (a URL base such as `@<host>` takes Seerr to another host).
   Otherwise Seerr stays unpublished, on every `apply` until Mediaplane can show that it
   is its own. What the message says decides what to do:
-  - **`couldn't tell whether it is its own`:** one of the two questions failed, and the
-    message says how. Run `apply` again first: a failure that was temporary clears the
+  - **`couldn't tell whether it is its own`:** one of the two questions went
+    unanswered (a timeout, an error of Seerr's, no connection), and the message says
+    how. Run `apply` again first: a failure that was temporary clears the
     next time, and Seerr, if it is Mediaplane's, is then recorded and published. If it
     fails again, read Seerr's log (check 3).
-  - **`was set up with another login or another Jellyfin`:** Seerr answered, and its
-    admin or its Jellyfin is not the stack's. Three ways out, the safe one first:
+  - **`was set up with another login or another Jellyfin`**, or
+    **`its answers don't show that it is Mediaplane's`:** Seerr answered, and its admin
+    or its Jellyfin is not the stack's, or its answer doesn't show they are (a port
+    that isn't a number, say). Three ways out, the safe one first:
     - If the Jellyfin login Seerr was set up with is yours, set `admin.username` and
       `admin.password` to it. This works only if Seerr's Jellyfin is already
       `jellyfin:8096`, with no URL base and no TLS.

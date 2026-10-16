@@ -1299,6 +1299,37 @@ describe('mediaplane apply: Seerr in the stack', () => {
     expect(await secretsFile()).toBe(stored);
   });
 
+  it("plans a server's URL base as a change, and never sends the stack's key through it", async () => {
+    const home = await seerrHome();
+    const docker = fakeDocker(home);
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(0);
+    const seerr = apis.apps.get('seerr')?.seerr;
+    const server = seerr?.sonarr[0];
+    if (server === undefined) throw new Error('no Sonarr server in Seerr');
+    // Seerr's admin points the server elsewhere, and leaves the stack's key in it.
+    server.baseUrl = '@203.0.113.9';
+    const key = (await readSecretStore(home)).apps.sonarr?.apiKey ?? '';
+    expect(key).not.toBe('');
+    const from = apis.app.requests.length;
+    const planned = capture();
+    expect(await run(['plan', '--home', home], planned.io, deps(docker))).toBe(2);
+    expect(planned.stdout()).toContain('seerr.server_sonarr');
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(0);
+    expect(seerr?.sonarr[0]).toMatchObject({ hostname: 'sonarr', baseUrl: '' });
+    const carrying = apis.app.requests
+      .slice(from)
+      .filter((r) => (r.headers.host ?? '').startsWith('seerr') && r.body.includes(key))
+      .map((r) => JSON.parse(r.body) as Record<string, unknown>);
+    expect(carrying.length).toBeGreaterThan(0);
+    for (const body of carrying) {
+      expect(body).toMatchObject({ hostname: 'sonarr', port: 8989, baseUrl: '' });
+    }
+  });
+
   it("keeps the keys Seerr shows in clear out of plan's warning, apply's failure and the change record", async () => {
     const home = await seerrHome();
     const docker = fakeDocker(home);

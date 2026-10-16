@@ -3,6 +3,7 @@ import {
   SetupWaiting,
   stackAddress,
   type AppApi,
+  type AppApiErrorKind,
   type Bootstrap,
 } from '@mediaplane/engine';
 import { z } from 'zod';
@@ -17,6 +18,13 @@ const SIGN_IN = '/api/v1/auth/jellyfin';
 
 const publicSettings = z.looseObject({ mediaServerType: z.number() });
 const me = z.looseObject({ jellyfinUsername: z.string().nullable().optional() });
+
+/** Failures of a question Seerr didn't answer: Mediaplane couldn't tell. */
+const UNANSWERED: ReadonlySet<AppApiErrorKind> = new Set([
+  'timeout',
+  'server',
+  'unreachable',
+]);
 
 /**
  * Whether Seerr's setup is open: until its first sign-in sets its media server, anyone
@@ -35,8 +43,10 @@ async function open(api: AppApi): Promise<boolean> {
  * the shared admin is easily made on a Jellyfin of one's own, which `@<host>` in the URL
  * base reaches). It is asked with the key, never by sending the password, which would
  * go to whatever Jellyfin Seerr was set up with. The Jellyfin key Seerr holds, which it
- * shows in clear, is kept out of what the run says. A question that fails is refused as
- * `unsure`: Mediaplane couldn't tell.
+ * shows in clear, is kept out of what the run says. A question that goes unanswered (a
+ * timeout, a 5xx, no connection) is refused as `unsure`: Mediaplane couldn't tell. An
+ * answer that doesn't show the setup is Mediaplane's (another shape, a 4xx) is refused
+ * as not its own: a claimant can shape one, as with a `port` of `8096@<host>`.
  */
 async function ownSetup(
   api: AppApi,
@@ -52,9 +62,15 @@ async function ownSetup(
     // Not shown to be Mediaplane's is not Mediaplane's: whatever the failure, Seerr
     // stays unpublished (the engine publishes an app that is set up, but for an `auth`).
     if (!(cause instanceof AppApiError) || cause.kind === 'auth') throw cause;
+    if (UNANSWERED.has(cause.kind)) {
+      throw new AppApiError(
+        `${api.name} at ${api.where} is set up, and Mediaplane couldn't tell whether it is its own: ${cause.message}`,
+        { kind: 'auth', unsure: true },
+      );
+    }
     throw new AppApiError(
-      `${api.name} at ${api.where} is set up, and Mediaplane couldn't tell whether it is its own: ${cause.message}`,
-      { kind: 'auth', unsure: true },
+      `${api.name} at ${api.where} is set up, and its answers don't show that it is Mediaplane's: ${cause.message}`,
+      { kind: 'auth' },
     );
   }
   api.addSecret(held.apiKey);

@@ -1492,7 +1492,9 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     sign-in, and Seerr then refuses a second Jellyfin (500). Any other is refused as
     claimed (`auth`), and stays unpublished. Those two questions fail closed: one that
     can't be answered (a timeout, a 5xx) is refused as `auth` too, with "couldn't tell
-    whether it is its own". A setup with no key that fails in any other way never
+    whether it is its own"; an answer that doesn't show the setup is Mediaplane's
+    (another shape, a 4xx) is refused as claimed, with "its answers don't show that it
+    is Mediaplane's". A setup with no key that fails in any other way never
     publishes its app either, whatever the app then looks like. A setup that waits keeps
     its app unpublished and is asked once more: if someone else finished it meanwhile, it
     fails with the claimed message and stays unpublished.
@@ -1531,13 +1533,16 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     name), `activeDirectory` (the arr's root folder) and `isDefault`; `apiKey` is a
     secret. Seerr shows the key in clear, but it is still checked, never compared, as
     §6.3 says, with Seerr's own test (`POST /api/v1/settings/<arr>/test`) of the server
-    it holds. Seerr's test fails with one 500 whatever the cause (probed), so a failure
-    is tested again with the stack's key, at the stack's address for the arr: a pass then
-    means the key was refused (an update); a second failure is Seerr not reaching the arr.
-    A server is saved whole, its id read-only (probed), and made with what Seerr's web UI
-    gives a new one, but with season folders on for Sonarr, Sonarr's own default; Radarr's
-    are off, as films have no seasons. Each key Seerr shows for a server is redacted once
-    read. Each requires its arr's root folder.
+    it holds, at the stack's address for the arr with no URL base, since the key it holds
+    may be the stack's. With TLS or a `baseUrl` held, `hostname` is observed as the URL
+    Seerr calls, so the server reads as changed and is put back. Seerr's test fails with
+    one 500 whatever the cause (probed), so a failure is tested again with the stack's
+    key, at the stack's address for the arr: a pass then means the key was refused (an
+    update); a second failure is Seerr not reaching the arr. A server is saved whole, its
+    id read-only (probed), and made with what Seerr's web UI gives a new one, but with
+    season folders on for Sonarr, Sonarr's own default; Radarr's are off, as films have no
+    seasons. Each key Seerr shows for a server is redacted once read. Each requires its
+    arr's root folder.
   - `seerr.setup`: `initialized`, set by `POST /api/v1/settings/initialize` while it is
     false, once Seerr's links are in place, which it requires. Seerr takes it again
     (probed), but it is sent once.

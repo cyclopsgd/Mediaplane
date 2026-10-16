@@ -46,7 +46,8 @@ export interface FakeSeerr {
    */
   jellyfin: {
     ip: string;
-    port: number;
+    /** A number, but as a first sign-in sent it: a string too. */
+    port: number | string;
     useSsl: boolean;
     urlBase: string;
     apiKey: string;
@@ -71,13 +72,22 @@ export interface FakeSeerr {
   echoKey: boolean;
   /** Paths it refuses (400), whatever is sent: as a request Seerr won't take. */
   failing: string[];
+  /** The status those paths answer with instead: 500, say, as Seerr failing. */
+  failStatus?: number;
   /**
    * Who signs in first, and through what Jellyfin (its host, at 8096, and its URL base
    * and TLS, none unless set), just before the next sign-in reaches a Seerr nobody has
    * set up: someone inside the stack, between Mediaplane's look at its setup and its own
    * sign-in. Unset: nobody.
    */
-  claimant?: { user: string; jellyfin: string; urlBase?: string; useSsl?: boolean };
+  claimant?: {
+    user: string;
+    jellyfin: string;
+    /** As sent: Seerr doesn't check its type, and puts it into the URL as it is. */
+    port?: number | string;
+    urlBase?: string;
+    useSsl?: boolean;
+  };
   /**
    * Where Seerr keeps settings.json (its appdata folder): the fake writes it there as
    * Seerr does, naming its media-server type, on each request it answers. Unset: nowhere.
@@ -199,8 +209,12 @@ export function fakeSeerr(
   peek: (service: string) => FakeAppState | undefined,
 ): FakeReply {
   const { seerr } = state;
+  const failed =
+    seerr.failStatus === undefined
+      ? invalid('fake failure')
+      : { status: seerr.failStatus, body: { message: 'fake failure' } };
   const reply = seerr.failing.includes(request.path.split('?')[0] ?? request.path)
-    ? invalid('fake failure')
+    ? failed
     : answer(request, state, peek);
   keepSettingsJson(seerr, state.key);
   if (!seerr.echoKey || reply.status < 400) return reply;
@@ -241,7 +255,7 @@ function answer(
       seerr.jellyfin = {
         ...seerr.jellyfin,
         ip: seerr.claimant.jellyfin,
-        port: 8096,
+        port: seerr.claimant.port ?? 8096,
         useSsl: seerr.claimant.useSsl ?? false,
         urlBase: seerr.claimant.urlBase ?? '',
         apiKey: 'fake-claimants-key',
