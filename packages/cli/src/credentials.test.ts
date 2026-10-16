@@ -84,11 +84,29 @@ describe('mediaplane credentials', () => {
         '',
         'Jellyfin     http://127.0.0.1:8096',
         'qBittorrent  http://127.0.0.1:8080',
-        'Seerr        http://127.0.0.1:5055  (its login arrives in Slice 6)',
+        'Seerr        http://127.0.0.1:5055',
         'Sonarr       http://127.0.0.1:8989',
         '',
       ].join('\n'),
     );
+  });
+
+  it("says Seerr's login arrives with Slice 7 on a Plex stack, as Plex's does", async () => {
+    const home = await makeHome({
+      stack: STACK.replace(
+        'media_server: jellyfin',
+        'media_server: plex\nplex: { token: { env: PLEX_TOKEN } }',
+      ),
+    });
+    const term = capture({ PLEX_TOKEN: 'fake-plex-token' });
+    expect(await run(['credentials', '--home', home], term.io, deps)).toBe(0);
+    expect(term.stdout().split('\n').slice(4)).toEqual([
+      'Plex         http://127.0.0.1:32400  (its login arrives in Slice 7)',
+      'qBittorrent  http://127.0.0.1:8080',
+      'Seerr        http://127.0.0.1:5055  (its login arrives in Slice 7)',
+      'Sonarr       http://127.0.0.1:8989',
+      '',
+    ]);
   });
 
   it('leaves the password out of JSON unless --reveal is given', async () => {
@@ -118,8 +136,7 @@ describe('mediaplane credentials', () => {
           app: 'seerr',
           name: 'Seerr',
           urls: ['http://127.0.0.1:5055'],
-          login: 'not-yet',
-          comingIn: 'Slice 6',
+          login: 'shared',
         },
         {
           app: 'sonarr',

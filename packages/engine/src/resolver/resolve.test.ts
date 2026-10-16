@@ -80,6 +80,49 @@ describe('resolveStack: which apps run', () => {
   });
 });
 
+describe('resolveStack: apps not wired yet', () => {
+  it('drops the API, integration and setup of an app not wired in this stack yet, and says when its login comes', () => {
+    const wired: Partial<AppDefinition> = {
+      api: {
+        port: 'web',
+        ready: '/ready',
+        key: { secret: 'apiKey', scheme: 'x-api-key' },
+        check: '/check',
+      },
+      integration: { after: [], resources: [] },
+      login: 'shared',
+      notWiredYet: (config) =>
+        config.media_server === 'plex' ? { comingIn: 'Slice 7' } : undefined,
+    };
+    const catalog = fixtureCatalog.map((def) =>
+      def.id === 'sonarr' ? { ...def, ...wired } : def,
+    );
+    const resolveWith = (server: string) =>
+      resolveStack(
+        fixtureConfig(
+          `${BASE.replace('media_server: jellyfin', server)}apps:\n  sonarr: {}\n  qbittorrent: {}\n`,
+        ),
+        catalog,
+        FIXTURE_HOST,
+        '/opt/mediaplane',
+      );
+    const withJellyfin = app(resolveWith('media_server: jellyfin'), 'sonarr')?.def;
+    expect(withJellyfin?.api).toBeDefined();
+    expect(withJellyfin?.integration).toBeDefined();
+    expect(withJellyfin?.login).toBe('shared');
+    const withPlex = app(
+      resolveWith('media_server: plex\nplex: { token: { env: PLEX_TOKEN } }'),
+      'sonarr',
+    )?.def;
+    expect(withPlex?.api).toBeUndefined();
+    expect(withPlex?.integration).toBeUndefined();
+    expect(withPlex?.bootstrap).toBeUndefined();
+    expect(withPlex?.login).toEqual({ comingIn: 'Slice 7' });
+    // Everything else stays as the catalog has it.
+    expect(withPlex?.ports).toEqual(withJellyfin?.ports);
+  });
+});
+
 describe('resolveStack: options and checks', () => {
   it('validates app-specific options', () => {
     expect(resolve('  qbittorrent: { vnp: true }\n').diagnostics).toContainEqual(

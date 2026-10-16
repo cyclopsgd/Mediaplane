@@ -183,6 +183,13 @@ export interface AppDefinition<Options = Record<string, unknown>> {
   integration?: Integration;
   /** First-run setup to finish through `api` before its ports are published. */
   bootstrap?: Bootstrap;
+  /**
+   * The slice that wires the app in a stack with `config`, while Mediaplane doesn't yet,
+   * else undefined: the resolver then leaves out its `api`, `integration` and
+   * `bootstrap`, so nothing calls it there, and its `login` says that slice. Seerr with
+   * Plex, until Slice 7.
+   */
+  notWiredYet?(config: StackConfig): { comingIn: string } | undefined;
   /** App-specific settings under apps.<id> in stack.yaml. */
   options?: z.ZodType<Options>;
   /** Apps this one needs, given its options (e.g. qBittorrent with a VPN needs Gluetun). */

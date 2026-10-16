@@ -1,5 +1,6 @@
 import { defineApp } from '@mediaplane/engine';
 import { z } from 'zod';
+import { seerrBootstrap } from './bootstrap';
 
 export default defineApp({
   id: 'seerr',
@@ -30,6 +31,17 @@ export default defineApp({
       'wget -qO- http://localhost:5055/api/v1/status > /dev/null || exit 1',
     ],
   },
+  // Its key does nothing until its first sign-in has made its admin (probed).
+  api: {
+    port: 'web',
+    ready: '/api/v1/settings/public',
+    key: { secret: 'apiKey', scheme: 'x-api-key' },
+    check: '/api/v1/auth/me',
+  },
+  bootstrap: seerrBootstrap,
+  // With Plex, it signs in with your Plex account, which comes in Slice 7.
+  notWiredYet: (config) =>
+    config.media_server === 'jellyfin' ? undefined : { comingIn: 'Slice 7' },
   options: z.strictObject({
     sonarr_profile: z
       .string()
@@ -48,6 +60,6 @@ export default defineApp({
   }),
   env: () => ({ LOG_LEVEL: 'info' }),
   extras: () => ({ init: true }),
-  login: { comingIn: 'Slice 6' },
+  login: 'shared',
   experimental: false,
 });

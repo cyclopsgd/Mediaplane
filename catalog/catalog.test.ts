@@ -1,6 +1,10 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { stackJsonSchema } from '@mediaplane/engine';
-import { undocumented, type DescribedSchema } from '@mediaplane/engine/testing';
+import {
+  undocumented,
+  wiringStack,
+  type DescribedSchema,
+} from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { catalog } from './index';
@@ -37,6 +41,7 @@ describe('catalog', () => {
       'prowlarr',
       'qbittorrent',
       'radarr',
+      'seerr',
       'sonarr',
     ]);
   });
@@ -56,15 +61,48 @@ describe('catalog', () => {
     });
   });
 
-  it('gives a first-run setup only to an app whose key it makes, and that its API carries', () => {
+  it('gives a first-run setup to the apps that open one to anyone, each with the key its API carries', () => {
     const set = catalog.filter((app) => app.bootstrap !== undefined);
-    expect(set.map((app) => app.id)).toEqual(['jellyfin']);
+    expect(set.map((app) => app.id)).toEqual(['jellyfin', 'seerr']);
     for (const app of set) {
-      const secret = app.bootstrap?.secret ?? '';
-      expect(app.secrets[secret]).toEqual({ createdBy: 'app' });
-      expect(app.api?.key.secret).toBe(secret);
+      const key = app.api?.key.secret ?? '';
+      const made = app.bootstrap?.secret;
+      // One whose setup makes its key names it; one that makes none has a key of
+      // Mediaplane's, which its done file can't stand in for.
+      if (made === undefined) expect(app.secrets[key]).toEqual({ generate: 'hex32' });
+      else {
+        expect(made).toBe(key);
+        expect(app.secrets[made]).toEqual({ createdBy: 'app' });
+      }
       expect(app.bootstrap?.done.path).not.toMatch(/^\/|\.\./);
     }
+  });
+
+  it("isn't wired with Plex yet, Seerr, whose login there comes with Slice 7", () => {
+    const seerr = (server: string) =>
+      wiringStack(
+        catalog,
+        `version: 1
+paths: { data: /srv/data }
+network: { bind: localhost }
+${server}
+apps:
+  sonarr: {}
+  qbittorrent: { vpn: false }
+  seerr: {}
+`,
+      ).apps.find((app) => app.def.id === 'seerr')?.def;
+    const plex = seerr('media_server: plex\nplex: { token: { env: PLEX_TOKEN } }');
+    expect([plex?.api, plex?.integration, plex?.bootstrap]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(plex?.login).toEqual({ comingIn: 'Slice 7' });
+    const jellyfin = seerr('media_server: jellyfin');
+    expect(jellyfin?.api).toBeDefined();
+    expect(jellyfin?.bootstrap).toBeDefined();
+    expect(jellyfin?.login).toBe('shared');
   });
 
   it("waits for Jellyfin's server itself: its /health says 200 Degraded at every start", () => {
@@ -94,7 +132,7 @@ describe('catalog', () => {
             : [[app.id, app.login.comingIn]],
         ),
       ),
-    ).toEqual({ plex: 'Slice 7', seerr: 'Slice 6' });
+    ).toEqual({ plex: 'Slice 7' });
   });
 
   it("gives each Cloudflare solver a health check, and its API on the port Prowlarr's proxy names", () => {

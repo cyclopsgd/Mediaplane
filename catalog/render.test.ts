@@ -172,6 +172,7 @@ describe('the real catalog', () => {
       'jellyfin default,wiring',
       'prowlarr default,wiring',
       'radarr default,wiring',
+      'seerr default,wiring',
       'sonarr default,wiring',
     ]);
     const direct = SPEC_EXAMPLE.replace(
@@ -293,6 +294,9 @@ describe('the real catalog', () => {
     const { compose } = render(source);
     expect(compose.services.plex?.environment).toMatchObject({ VERSION: 'docker' });
     expect(compose.services.jellyfin).toBeUndefined();
+    // Seerr isn't wired with Plex until Slice 7: nothing calls it, so it stays off the
+    // wiring network.
+    expect(compose.services.seerr?.networks).toBeUndefined();
   });
 });
 

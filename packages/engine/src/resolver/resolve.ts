@@ -57,6 +57,18 @@ interface EnabledApp {
 const NO_OPTIONS = z.strictObject({});
 const DEFAULT_SETTINGS: AppSettings = { enabled: true, env: {} };
 
+/**
+ * `def` as a stack with `config` runs it: without its API, integration and first-run
+ * setup, and with its login still to come, where Mediaplane doesn't wire it yet
+ * (`notWiredYet`).
+ */
+function wiredIn(def: AppDefinition, config: StackConfig): AppDefinition {
+  const later = def.notWiredYet?.(config);
+  if (later === undefined) return def;
+  const { api: _api, integration: _integration, bootstrap: _bootstrap, ...rest } = def;
+  return { ...rest, login: later };
+}
+
 /** "download-client:torrent" satisfies "download-client". */
 export function provides(def: AppDefinition, capability: string): boolean {
   return def.provides.some((p) => p === capability || p.startsWith(`${capability}:`));
@@ -103,7 +115,7 @@ export function resolveStack(
     };
     diagnostics.push(...checkApp(def, settings, context, host));
     return {
-      def,
+      def: wiredIn(def, config),
       settings,
       context,
       image: imageRef(def, settings, diagnostics),
