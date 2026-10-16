@@ -71,8 +71,10 @@ and Plex.
 
 - **`mediaplane apply` stops at the first-run setup step,** before the wiring. Jellyfin's
   startup wizard is finished there, before its port is published. A Jellyfin whose
-  wizard is still open stays unpublished; one whose wizard is done is published all the
-  same. The step's line, then its error (trimmed):
+  wizard is still open stays unpublished, and so does one whose wizard was open when
+  `apply` started it but was finished with another login. One whose wizard Mediaplane
+  finished, or that was done before `apply` started it, is published all the same. The
+  step's line, then its error (trimmed):
 
   ```console
   Finishing first-run setup before publishing the web UIs…
@@ -251,20 +253,25 @@ differ, and a `reason` when it is `unknown`.
     it: `refused the request (HTTP 400): Host: Unable to connect to qBittorrent`.
 - **`refused the shared admin's sign-in: its startup wizard was finished with another login`**
   (`apply.bootstrap-failed`). Jellyfin's startup wizard was finished with a login other
-  than the shared admin's: by hand, before Mediaplane set it up (from before Slice 5, say),
-  or by another container while Mediaplane set it up. Mediaplane can't tell these two
-  apart. In both, Jellyfin is published and belongs to whoever finished its wizard,
-  Mediaplane can't make its key, and until then, `apply` wires no app.
-  - If you finished the wizard, either set `admin.username`, and `admin.password` to a
-    file of your own, to Jellyfin's admin login, and run `apply` again (the other apps
-    take that login too), or start Jellyfin afresh, as below. With the login fixed, a
-    library of yours named Movies or Shows becomes Mediaplane's: `plan` shows its folders
-    changing, so rename it first to keep it.
-  - If you did not, or can't tell, start Jellyfin afresh: stop it
-    (`docker stop mediaplane-jellyfin-1`), remove `appdata/jellyfin` (with `sudo` if it
-    isn't yours), and run `apply`, which sets it up anew. That loses Jellyfin's database
-    and settings, but not your media. Check which container reaches Jellyfin, since one
-    inside the stack may have.
+  than the shared admin's. Mediaplane can't make Jellyfin's key, and until it can,
+  `apply` wires no app. What follows the message says when the wizard was finished:
+  - **Nothing follows it:** the wizard was done before this `apply` started Jellyfin,
+    by hand, from before Slice 5, say. Jellyfin is published and belongs to whoever
+    finished its wizard. If you finished it, either set `admin.username`, and
+    `admin.password` to a file of your own, to Jellyfin's admin login, and run `apply`
+    again (the other apps take that login too), or start Jellyfin afresh, as below.
+    With the login fixed, a library of yours named Movies or Shows becomes
+    Mediaplane's: `plan` shows its folders changing, so rename it first to keep it. If
+    you did not finish it, or can't tell, start Jellyfin afresh.
+  - **`Jellyfin's setup was open when apply started it, so it was finished with another login while Mediaplane set it up`**
+    follows it: the wizard was open when `apply` started Jellyfin, unpublished, and
+    something else reached it and finished it before Mediaplane could. That is a
+    container on the stack's networks, or a way in that an override opened. Jellyfin
+    stays unpublished. Its wizard is now done, so the next `apply` would publish it:
+    start Jellyfin afresh first, and find which container reached it.
+  - To start Jellyfin afresh, stop it (`docker stop mediaplane-jellyfin-1`), remove
+    `appdata/jellyfin` (with `sudo` if it isn't yours), and run `apply`, which sets it
+    up anew. That loses Jellyfin's database and settings, but not your media.
 - **`its startup wizard has a first user that Mediaplane did not set, so Mediaplane left the wizard open`**
   (`apply.bootstrap-failed`). Someone set Jellyfin's first user before Mediaplane could,
   so Mediaplane didn't complete the wizard for them, and Jellyfin stays unpublished.
@@ -289,9 +296,14 @@ differ, and a `reason` when it is `unknown`.
 - **`the app still looks open (or can't be asked), so it stays unpublished`**
   (`apply.bootstrap-failed`). The setup finished, and Mediaplane kept the key, but the
   re-check before publishing says Jellyfin's wizard is still open, or Jellyfin didn't
-  answer it. Jellyfin is not published. Read Jellyfin's log (check 3), check that it is
-  healthy (`mediaplane status jellyfin`), and run `apply` again. If its wizard stays
-  open, start Jellyfin afresh, as above.
+  answer it: then Jellyfin's own error follows. Jellyfin is not published. Read
+  Jellyfin's log (check 3), check that it is healthy (`mediaplane status jellyfin`),
+  and run `apply` again. If its wizard stays open, start Jellyfin afresh, as above.
+- **`the app still looks open (or can't be asked), and it is published`**
+  (`apply.bootstrap-failed`). The same re-check failed for a Jellyfin that `apply`
+  started published, since its `system.xml` said the wizard was done. Its wizard may be
+  open to anyone who reaches its port: stop it as the message says
+  (`docker stop mediaplane-jellyfin-1`), then start Jellyfin afresh, as above.
 - **`made no key named Mediaplane`** (`apply.bootstrap-failed`). Jellyfin's wizard is
   done and Mediaplane signed in, but Jellyfin's list of keys has none named `Mediaplane`
   after it made one. Jellyfin is published. Read its log (check 3), then run `apply`
@@ -303,8 +315,8 @@ differ, and a `reason` when it is `unknown`.
   `user:` only when you set them alike (`init` and the
   [deploy guide](../../deploy/README.md) both use your own user). Run Mediaplane as the
   user that owns the file, which is usually the stack's `user:`: set `MEDIAPLANE_UID` to
-  its uid. Or make the file readable by Mediaplane's own user. Then run `plan` again. Until then,
-  an emptied `appdata/jellyfin` isn't noticed.
+  its uid. Or make the file readable by Mediaplane's own user. Then run `plan` again.
+  Until then, an emptied `appdata/jellyfin` isn't noticed.
 - **`runs inside <app>'s network, which publishes its ports`** (`bootstrap.network-via`).
   Mediaplane can't keep an app unpublished while its setup is open when the app shares
   another app's network, because that app publishes the ports. Run the app in its own

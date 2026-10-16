@@ -174,8 +174,9 @@ ask the apps
 `plan` writes nothing. Its exit code is 0 when nothing would change, 2 when something
 would (or an app is still waiting for its health check), and 1 on an error. In the
 image, when an app is running and left as it is, it joins Mediaplane's container to the
-stack's wiring network, to ask that app; that changes no app and no file. What it finds
-shows under `Wiring:`, and as `wiring` in `--json` (see [The wiring](#the-wiring)).
+stack's wiring network, to ask that app. The join changes no app and no file; the
+questions can leave the marks named above. What it finds shows under `Wiring:`, and as
+`wiring` in `--json` (see [The wiring](#the-wiring)).
 
 **Which containers change** comes from Compose itself
 ([ADR 0010](adr/0010-predict-container-changes-with-compose-hashes.md)):
@@ -311,9 +312,9 @@ for what voids that):
 
 ```text
 plan
-  │ Jellyfin: no key stored,
-  │ or its system.xml says the
-  │ wizard isn't done
+  │ Jellyfin: its system.xml
+  │ doesn't say the wizard
+  │ is done
   ▼
 up --wait
   │ Jellyfin with no port
@@ -354,7 +355,9 @@ up --wait again
   whether its setup is still open, and publishes it only if it is not. If it still looks
   open, or can't be asked, the step fails and that app is not published. An app
   whose setup failed while it is still open stays unpublished; one whose setup is done
-  is published even when making its key failed.
+  is published even when making its key failed. But an app the plan started
+  unpublished, whose shared admin is then refused, stays unpublished whatever it says:
+  its wizard was finished with another login while Mediaplane set it up.
 - **No new Docker call:** the proxy allows nothing new.
 
 ## The wiring

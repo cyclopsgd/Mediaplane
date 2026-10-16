@@ -86,11 +86,11 @@ host network, read-only mounts
 - **The folder helper.** During `apply`, before Mediaplane adds a root folder to Sonarr or
   Radarr, or makes a library in Jellyfin, it runs
   `docker compose run --rm --no-deps -T --user <uid>:<gid> --entrypoint mkdir <app> -p -- <path>`.
-  A library's folder is made when the library is created, and again before an update
-  that adds a path. That is a container of the app's own image, with the app's own
-  settings from `compose.yaml` and `compose.override.yaml`, running `mkdir` as the
-  stack's `user:` to make the folder inside the data folder, where the app mounts it. It
-  is removed when `mkdir` exits. It uses the Docker API calls that the ownership helper
+  A library's folder is made when the library is created, and again before each update
+  of it. That is a container of the app's own image, with the app's own settings from
+  `compose.yaml` and `compose.override.yaml`, running `mkdir` as the stack's `user:` to
+  make the folder inside the data folder, where the app mounts it. It is removed when
+  `mkdir` exits. It uses the Docker API calls that the ownership helper
   and Mediaplane's own join of the wiring network already make, so the proxy allows
   nothing new for it. T5 says what its environment holds.
 - **The first-run setup.** An app whose setup anyone who reaches it could finish, which
@@ -599,9 +599,14 @@ Controls today:
 - Mediaplane signs in as the shared admin before it completes the wizard. If the first
   user isn't one the shared admin can sign in as, someone else set it, and Mediaplane
   leaves the wizard open, Jellyfin unpublished, and stops with what it found.
+- If the wizard was open when `apply` started Jellyfin, and the shared admin's sign-in
+  is then refused, someone else finished the wizard while Mediaplane set it up.
+  Jellyfin stays unpublished, whatever it now says of its wizard, and `apply` stops
+  with an error that says so.
 - Before it publishes an app, Mediaplane asks the app once more whether its setup is
   still open. It publishes the app only if it is not. If the app still looks open, or
-  can't be asked, the step fails and that app is not published.
+  can't be asked, the step fails and that app is not published. If `apply` started it
+  published, the error says so, and to stop it.
 - An app with a first-run setup can't run inside another app's network. That app would
   publish its ports, and Mediaplane could not hold them back, so `plan` fails with
   `bootstrap.network-via`. No app in the catalog does this today.
@@ -609,13 +614,18 @@ Controls today:
 What remains:
 
 - While the wizard is open, for the seconds Mediaplane takes, any container of the stack
-  can reach Jellyfin on the stack's networks. A compromised app could claim it first:
-  if it sets the first user and leaves the wizard open, Mediaplane's sign-in fails, and
-  `apply` stops, completing no wizard for it. If it also completes the wizard,
-  Mediaplane can't tell that from a wizard finished by hand: `apply` stops, but it
-  publishes Jellyfin, which belongs to whoever finished it. This needs a compromised
-  container already inside the stack, which T4 and the other threats here already treat
-  as serious.
+  can reach Jellyfin on the stack's networks. A compromised app could claim it first.
+  If it sets the first user and leaves the wizard open, Mediaplane's sign-in fails, and
+  `apply` stops, completing no wizard for it. If it also completes the wizard, `apply`
+  stops and keeps Jellyfin unpublished, but Jellyfin belongs to whoever finished it.
+  Its wizard is then done, so the next `apply` would publish it: start Jellyfin afresh
+  first, as the runbook says. This needs a compromised container already inside the
+  stack, which T4 and the other threats here already treat as serious.
+- A wizard finished by hand before `apply` started Jellyfin (from before Slice 5, say)
+  is done, so Jellyfin starts published, and nobody can claim it. If the shared admin
+  can't sign in to it, `apply` stops, and Jellyfin stays published: it belongs to
+  whoever finished its wizard. Mediaplane can't tell that from a wizard someone else
+  finished before `apply` ran.
 - An appdata Mediaplane can't read says nothing: with Jellyfin's key stored, Mediaplane
   takes the setup as done, and `plan` warns (`bootstrap.unreadable`) that it can't tell.
   Fix the file's ownership, or the user Mediaplane runs as.

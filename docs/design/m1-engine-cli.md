@@ -1371,6 +1371,10 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     (Compose 2.24 and later, the floor preflight checks), so the override's ports go too.
     `compose.yaml` itself always holds the ports, so the stack runs as written without
     Mediaplane.
+    - §6.4's guarantee holds while `apply` runs the stack. `!reset` covers `ports`
+      only, so an override that changes Jellyfin's network (`network_mode: host`, or a
+      network shared with a service that publishes), or the stack run outside
+      Mediaplane, voids it (threat model T16).
   - **The bootstrap step** is a new step, after `start`, run only when `plan` lists a
     setup. It reaches the app over the wiring network without a key, finishes its setup
     as the shared admin, and keeps the key it makes in `state/secrets.json` at once (§5
@@ -1379,11 +1383,15 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     ports. §5 step 9's and §6.4's "re-render with ports" is this second `up` of
     `compose.yaml` as written: nothing is rendered twice. An app whose setup failed while
     it is still open stays unpublished; one whose setup is done is published even when
-    making its key failed.
+    making its key failed. An app the plan started unpublished whose shared admin is
+    then refused (`Bootstrap.run` throws an `auth` failure) stays unpublished, whatever
+    it says of its setup: someone else finished it while Mediaplane set it up. One the
+    plan started published, done by hand before, is left published.
   - **The re-check, and two plan diagnostics.** Before publishing an app, the engine asks
     the app once more whether its setup is still open (`Bootstrap.open`), and publishes
     it only if it is not; if it still looks open, or can't be asked, the step fails and
-    that app stays unpublished, though it keeps the key it made. `plan` warns
+    that app stays unpublished, though it keeps the key it made. For an app the plan
+    started published, the error says that it is published, and to stop it. `plan` warns
     `bootstrap.unreadable` when it can't read the file that says the setup is done while
     a key is stored, since it can't tell whether the setup is open; and fails with
     `bootstrap.network-via` for an app with a setup that runs inside another app's

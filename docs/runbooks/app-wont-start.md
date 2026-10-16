@@ -67,7 +67,8 @@
   port while its first-run setup is open, and publishes it only once the setup is
   finished and Mediaplane has asked once more that it is. If `apply` failed at its
   first-run setup step, or `plan` lists Jellyfin under `First-run setup:`, see
-  [wiring failed](wiring-failed.md).
+  [wiring failed](wiring-failed.md). What this covers, and what voids it, is in
+  [T16](../security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
 - **A slow start.** With the health checks Mediaplane sets, failed checks don't count
   during an app's start period: 60 seconds, or 120 for Jellyfin and Plex. After that,
   five failed checks in a row, 30 seconds apart, mark the app unhealthy, and `apply`

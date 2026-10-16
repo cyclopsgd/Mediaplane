@@ -182,7 +182,8 @@ the S3c list, two S8 items and one unscheduled item. Slice 3c (2026-10-11) added
 item, five S8 items, an S9 item and an M2 item. Slice 4 (2026-10-15) added four S8 items,
 and its final review an S5 item, two S8 items, a probe in two others, two S9 test gaps
 and an S9 docs item. Slice 5 (2026-10-15) added an S6 item, six S8 items and an S9
-item, and extended one. Each slice plan must address the items for that slice.
+item, and extended one, and its final review an S8 item and three S9 items. Each slice
+plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -518,6 +519,10 @@ password, which are S3c's (and listed again below).
 - **A failed first-run setup stops all wiring** (S5): the bootstrap step's failure skips
   the wire step, as a failed start does. Let the wire step run past a failed first-run
   setup, with that app's resources failed so `requires` skips them (spec §5.1).
+- **A folder with a comma in its name, added by hand to a Jellyfin library** (S5), is
+  never removed, because `paths` is joined with ",": `apply` tries to remove the
+  pieces, which Jellyfin answers 404, so the library fails on every `apply`. Re-read
+  `Locations` in `update`, with Keep mine's change to how `paths` is held.
 
 **S9 (before going public):**
 
@@ -551,6 +556,12 @@ password, which are S3c's (and listed again below).
 - **A first-run setup that never gets ready waits twice its deadline** before it reports
   (S5): the `ready` wait, then the `open()` re-check. Give the re-check a short per-call
   deadline.
+- **The Jellyfin end-to-end test joins its container-ID claims** in one
+  `toEqual([true, true])` (S5), so a failure doesn't say which claim broke. Split them.
+- **The deploy end-to-end test restores the secret store after `plan`,** but not in a
+  `finally` (S5). Move the restore into one.
+- **Two wide tables** (S5): convert the README's capability table and the threat
+  model's asset table to lists.
 - **Pins outside the catalog.** Renovate must also bump the images pinned in:
   - `Dockerfile` (`node`, `docker:*-cli`);
   - `deploy/mediaplane.compose.yaml` (`wollomatic/socket-proxy`);

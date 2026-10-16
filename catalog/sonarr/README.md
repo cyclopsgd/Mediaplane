@@ -74,7 +74,8 @@ LinuxServer.io image, unmodified.
   - its host is `jellyfin`, at Jellyfin's own port, and it has Jellyfin update its
     library ("Update library");
   - it is made with the events on that change a file: an episode imported, upgraded or
-    renamed, or a series or an episode's file deleted. Which events it has after that is yours;
+    renamed, or a series or an episode's file deleted. Which events it has after that
+    is yours;
   - its key is Jellyfin's, which Sonarr shows masked. `plan` and `apply` check it with
     Sonarr's own test of the connection: a refused key is set again, and any other
     failure is Sonarr's own message, such as Jellyfin out of its reach. A test that
