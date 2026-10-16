@@ -17,7 +17,7 @@ Radarr. Mediaplane runs the upstream image, unmodified (see
 - **Health check:** `wget -qO- http://localhost:5055/api/v1/status > /dev/null || exit 1`, every 30s (timeout 10s, 5 retries, 60s to start)
 - **Secrets:** `apiKey`: 32 random hex characters, generated once and kept in `state/secrets.json`
 - **API:** on its `web` port, which Mediaplane reaches over the stack's wiring network, with `apiKey` in the `X-Api-Key` header; with Plex, none until Slice 7
-- **Managed in the app:** nothing yet
+- **Managed in the app:** `seerr.media_server`: fields `seerr.media_server.hostname`, `seerr.media_server.port`, `seerr.media_server.libraries`; the secret `apiKey`, checked and never shown. `seerr.server_sonarr`: fields `seerr.server_sonarr.hostname`, `seerr.server_sonarr.port`, `seerr.server_sonarr.activeProfile`, `seerr.server_sonarr.activeDirectory`, `seerr.server_sonarr.isDefault`; the secret `apiKey`, checked and never shown. `seerr.server_radarr`: fields `seerr.server_radarr.hostname`, `seerr.server_radarr.port`, `seerr.server_radarr.activeProfile`, `seerr.server_radarr.activeDirectory`, `seerr.server_radarr.isDefault`; the secret `apiKey`, checked and never shown. `seerr.setup`: fields `seerr.setup.initialized`
 - **Needs:** `media-server`, `pvr`
 - **Provides:** `requests`
 - **Also turns on:** nothing

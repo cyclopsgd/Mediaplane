@@ -149,7 +149,7 @@ apps:
   it('gives an integration to the apps Mediaplane wires so far', () => {
     expect(
       catalog.filter((app) => app.integration !== undefined).map((app) => app.id),
-    ).toEqual(['jellyfin', 'prowlarr', 'qbittorrent', 'radarr', 'sonarr']);
+    ).toEqual(['jellyfin', 'prowlarr', 'qbittorrent', 'radarr', 'seerr', 'sonarr']);
   });
 
   describe.each(

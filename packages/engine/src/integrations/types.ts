@@ -62,6 +62,18 @@ export interface ResourceSpec {
   /** What the stack wants, or undefined when it wants none. Pure. */
   desired(ctx: WiringContext): DesiredResource | undefined;
   /**
+   * What the stack wants that only the app can say, filled into `desired` before its
+   * managed fields are compared: Seerr's quality profile, the first of its preferences
+   * that the arr offers. Throws AppApiError. `plan` leaves it out, and the fields it fills
+   * uncompared, while a resource this one requires is still to be put in place, as it
+   * leaves the secrets unchecked.
+   */
+  resolve?(
+    api: AppApi,
+    desired: DesiredResource,
+    ctx: WiringContext,
+  ): Promise<DesiredResource>;
+  /**
    * What the app holds: by the id resources.json recorded (`known`), else by the exact
    * name Mediaplane gives it (spec §6.3), which `desired` holds where it comes from the
    * stack (Jellyfin's admin is the shared admin's user name). Undefined when it holds none.

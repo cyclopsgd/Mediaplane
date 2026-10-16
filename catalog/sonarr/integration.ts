@@ -15,6 +15,9 @@ export const JELLYFIN_TRIGGERS = [
   'onEpisodeFileDeleteForUpgrade',
 ] as const;
 
+/** Where Sonarr files series: its root folder, which Seerr's Sonarr server names too. */
+export const ROOT_FOLDER = '/data/media/tv';
+
 /**
  * What Mediaplane wires in Sonarr (spec §6.2): the shared admin login, qBittorrent as its
  * download client, filing under the `tv` category, the root folder /data/media/tv, and
@@ -26,7 +29,7 @@ export default servarrIntegration(
   ['jellyfin', 'qbittorrent'],
   [
     servarrDownloadClient({ category: 'tv', setting: 'tvCategory' }),
-    servarrRootFolder('/data/media/tv'),
+    servarrRootFolder(ROOT_FOLDER),
     servarrJellyfin(JELLYFIN_TRIGGERS),
   ],
 );

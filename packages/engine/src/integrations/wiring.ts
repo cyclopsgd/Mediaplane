@@ -251,7 +251,8 @@ export interface ExamineOptions {
   /**
    * false: leave them unchecked, because a resource this one requires is yet to be made
    * or changed. The check could use what isn't there yet: Sonarr's own test of its
-   * download client makes a missing qBittorrent category, with no save path.
+   * download client makes a missing qBittorrent category, with no save path. What only
+   * the app can say (`resolve`) is left out too, and the fields it fills uncompared.
    */
   verify?: boolean;
   /**
@@ -274,13 +275,23 @@ export async function examine(
   known: KnownResource | undefined,
   options: ExamineOptions = {},
 ): Promise<Examined | undefined> {
-  const desired = spec.desired(ctx);
-  if (desired === undefined) return undefined;
+  const wanted = spec.desired(ctx);
+  if (wanted === undefined) return undefined;
+  const desired =
+    options.verify !== false && spec.resolve !== undefined
+      ? await spec.resolve(api, wanted, ctx)
+      : wanted;
   const observed = await spec.observe(api, known, desired);
   if (observed === undefined) {
     return { desired, observed, action: 'create', changes: [] };
   }
-  const changes = spec.fields.filter(
+  // A field left to a `resolve` that wasn't run isn't known yet: it isn't compared.
+  // Every other field is, set or not.
+  const unresolved = spec.resolve !== undefined && options.verify === false;
+  const compared = unresolved
+    ? spec.fields.filter((field) => desired.fields[field] !== undefined)
+    : spec.fields;
+  const changes = compared.filter(
     (field) => observed.fields[field] !== desired.fields[field],
   );
   // A field that differs makes it an update, which sets the secrets too: checking them
@@ -297,7 +308,7 @@ export async function examine(
   if (changes.length > 0) return { desired, observed, action: 'update', changes };
   const recorded =
     known !== undefined &&
-    spec.fields.every((field) => known.fields[field] === desired.fields[field]);
+    compared.every((field) => known.fields[field] === desired.fields[field]);
   return { desired, observed, action: recorded ? 'unchanged' : 'adopt', changes };
 }
 

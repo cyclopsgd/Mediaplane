@@ -1135,6 +1135,153 @@ describe('mediaplane apply: Prowlarr in the stack', () => {
   });
 });
 
+describe('mediaplane apply: Seerr in the stack', () => {
+  const WITH_SEERR = STACK.replace('  qbittorrent: {}', '  qbittorrent: {}\n  seerr: {}');
+
+  /** The key Seerr made itself in the fake Jellyfin, which Seerr shows in clear. */
+  function seerrsOwn(): string {
+    const own = apis.apps
+      .get('jellyfin')
+      ?.apiKeys.find((k) => k.AppName === 'Seerr')?.AccessToken;
+    if (own === undefined) throw new Error('Seerr made no key in Jellyfin');
+    return own;
+  }
+
+  /** A home of the stack with Seerr, whose fake Seerr keeps its settings.json there. */
+  async function seerrHome(): Promise<string> {
+    const home = await makeHome(WITH_SEERR);
+    const seerr = { ...freshAppState() };
+    seerr.seerr.configDir = join(home, 'appdata', 'seerr');
+    apis.apps.set('seerr', seerr);
+    return home;
+  }
+
+  it('sets Seerr up through Jellyfin before publishing it, links it, initializes it, then leaves it as it is', async () => {
+    const home = await seerrHome();
+    const docker = fakeDocker(home);
+    const first = capture();
+    expect(await run(['apply', '--home', home, '--yes'], first.io, deps(docker))).toBe(0);
+    expect(first.stdout()).toContain(
+      '+ seerr (with no port published until it is done)\n',
+    );
+    expect(first.stdout()).toContain(
+      '  done    first-run setup: set up jellyfin, seerr and saved jellyfin.apiKey; published jellyfin, seerr\n',
+    );
+    for (const line of [
+      'seerr.media_server: updated libraries',
+      'seerr.server_sonarr: created',
+      'seerr.setup: updated initialized',
+    ]) {
+      expect(first.stdout()).toContain(`  done    wiring ${line}\n`);
+    }
+    const seerr = apis.apps.get('seerr')?.seerr;
+    expect(seerr).toMatchObject({
+      users: ['admin'],
+      initialized: true,
+      sessions: [],
+      jellyfin: { ip: 'jellyfin', port: 8096 },
+    });
+    expect(seerr?.sonarr).toMatchObject([
+      { name: 'Sonarr (Mediaplane)', hostname: 'sonarr', activeProfileName: 'HD-1080p' },
+    ]);
+    const known = await readResources(home);
+    expect(known['seerr.server_sonarr']).toMatchObject({
+      id: 0,
+      fields: {
+        hostname: 'sonarr',
+        port: 8989,
+        activeProfile: 'HD-1080p',
+        activeDirectory: '/data/media/tv',
+        isDefault: true,
+      },
+      secrets: ['apiKey'],
+    });
+    // Sonarr's key went to Seerr, and the admin password to Jellyfin through it; Seerr
+    // showed the key it made itself in Jellyfin.
+    const secrets = [...(await secretsIn(home)), seerrsOwn()];
+    expectNoSecrets(first.stdout() + first.stderr(), secrets);
+    expectNoSecrets(JSON.stringify(known), secrets);
+    const again = capture();
+    expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
+    expect(again.stdout()).toBe('No changes.\n');
+  });
+
+  it("keeps the keys Seerr shows in clear out of plan's warning, apply's failure and the change record", async () => {
+    const home = await seerrHome();
+    const docker = fakeDocker(home);
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(0);
+    // Seerr refuses its servers' list now, quoting every key it holds.
+    const seerr = apis.apps.get('seerr')?.seerr;
+    if (seerr === undefined) throw new Error('no Seerr faked');
+    Object.assign(seerr, { echoKey: true, failing: ['/api/v1/settings/sonarr'] });
+    const said =
+      'Seerr at http://seerr:5055 (127.0.0.1) refused the request (HTTP 400): fake failure, holding *** *** (GET /api/v1/settings/sonarr)';
+    const planned = capture();
+    await run(['plan', '--home', home], planned.io, deps(docker));
+    expect(planned.stderr()).toContain(`warning: ${said}\n`);
+    const applied = capture();
+    expect(await run(['apply', '--home', home, '--yes'], applied.io, deps(docker))).toBe(
+      1,
+    );
+    expect(applied.stdout()).toContain(`  failed  wiring seerr.server_sonarr: ${said}\n`);
+    const id = /Change record: (\S+)/.exec(applied.stderr())?.[1] ?? '';
+    const record = capture();
+    expect(await run(['history', id, '--home', home], record.io, deps(docker))).toBe(0);
+    expect(record.stdout()).toContain(said);
+    const secrets = [...(await secretsIn(home)), seerrsOwn()];
+    for (const output of [planned, applied, record]) {
+      expectNoSecrets(output.stdout() + output.stderr(), secrets);
+    }
+  });
+
+  it("waits for Jellyfin's admin, wiring the rest, when Jellyfin refuses Seerr's sign-in, then sets Seerr up", async () => {
+    // Jellyfin was set up before, its key kept, and its admin's password is another: the
+    // shared admin is refused until the wire step sets it.
+    const home = await seerrHome();
+    const key = '6'.repeat(32);
+    await mkdir(join(home, 'state'), { recursive: true });
+    await writeFile(
+      join(home, 'state', 'secrets.json'),
+      JSON.stringify({ version: 1, apps: { jellyfin: { apiKey: key } } }),
+    );
+    apis.apps.set('jellyfin', {
+      ...freshAppState(),
+      configDir: jellyfinConfig(home),
+      wizard: 'done',
+      user: 'admin',
+      password: 'fake-old-password',
+      apiKeys: [{ AccessToken: key, AppName: 'Mediaplane', DateCreated: AT }],
+    });
+    await mkdir(jellyfinConfig(home), { recursive: true });
+    await writeFile(
+      join(jellyfinConfig(home), 'system.xml'),
+      '<IsStartupWizardCompleted>true</IsStartupWizardCompleted>\n',
+    );
+    const docker = fakeDocker(home);
+    const waited = capture();
+    expect(await run(['apply', '--home', home, '--yes'], waited.io, deps(docker))).toBe(
+      1,
+    );
+    expect(waited.stdout()).toContain(
+      "  skipped wiring seerr.media_server: seerr's first-run setup waits\n",
+    );
+    expect(waited.stdout()).toContain(
+      '  done    wiring jellyfin.admin: updated password\n',
+    );
+    expect(waited.stderr()).toContain(
+      "warning: Seerr at http://seerr:5055 (127.0.0.1) can't sign in through Jellyfin yet: Jellyfin refused the shared admin's password (POST /api/v1/auth/jellyfin)\n",
+    );
+    expect(waited.stderr()).toContain('seerr (first-run setup)');
+    expect(apis.apps.get('seerr')?.seerr.users).toEqual([]);
+    // Jellyfin takes the shared admin now: the next apply sets Seerr up.
+    const then = capture();
+    expect(await run(['apply', '--home', home, '--yes'], then.io, deps(docker))).toBe(0);
+    expect(apis.apps.get('seerr')?.seerr.users).toEqual(['admin']);
+  });
+});
+
 describe('mediaplane status', () => {
   async function appliedHome() {
     const home = await makeHome();

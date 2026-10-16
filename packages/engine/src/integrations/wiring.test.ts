@@ -215,6 +215,101 @@ describe('planWiring', () => {
     expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(true);
   });
 
+  /**
+   * A login whose `profile`, a managed field, only the app can say (`resolve`): it wants
+   * "HD", and the app holds `held`. `asked` counts the resolutions.
+   */
+  function profiled(held: string, more: Partial<ResourceSpec> = {}) {
+    const asked: string[] = [];
+    const seen: unknown[] = [];
+    const spec: ResourceSpec = {
+      ...FAKE_LOGIN,
+      fields: ['user', 'profile'],
+      resolve: (_api, desired) => {
+        asked.push(desired.name);
+        return Promise.resolve({
+          ...desired,
+          fields: { ...desired.fields, profile: 'HD' },
+        });
+      },
+      observe: async (api, known, desired) => {
+        seen.push(desired?.fields);
+        const found = await FAKE_LOGIN.observe(api, known);
+        return found && { ...found, fields: { ...found.fields, profile: held } };
+      },
+      ...more,
+    };
+    return { spec, asked, seen };
+  }
+
+  /** resources.json, with the login recorded as wanted: its user, and the "HD" profile. */
+  const PROFILED: KnownResources = {
+    'sonarr.login': {
+      id: null,
+      name: 'login',
+      fields: { user: 'admin', profile: 'HD' },
+      secrets: ['password'],
+      appliedAt: '2026-10-10T12:00:00.000Z',
+    },
+  };
+
+  it('fills in what only the app can say before it compares, and looks the resource up with it', async () => {
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const same = profiled('HD');
+    expect(
+      (
+        await planWiring(
+          options(sonarr, { stack: sonarrWith([same.spec]), known: PROFILED }),
+        )
+      ).changes,
+    ).toEqual([{ resource: 'sonarr.login', action: 'unchanged' }]);
+    expect(same.asked).toEqual(['login']);
+    expect(same.seen).toEqual([{ user: 'admin', profile: 'HD' }]);
+    const other = profiled('SD');
+    expect(
+      (
+        await planWiring(
+          options(sonarr, { stack: sonarrWith([other.spec]), known: PROFILED }),
+        )
+      ).changes,
+    ).toEqual([{ resource: 'sonarr.login', action: 'update', changes: ['profile'] }]);
+  });
+
+  it('leaves it unfilled, and uncompared, while a resource it requires is yet to be made', async () => {
+    const first: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'first',
+      secrets: [],
+      observe: () => Promise.resolve(undefined),
+    };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const waiting = profiled('SD', { requires: ['sonarr.first'] });
+    expect(
+      (
+        await planWiring(
+          options(sonarr, { stack: sonarrWith([first, waiting.spec]), known: PROFILED }),
+        )
+      ).changes,
+    ).toEqual([
+      { resource: 'sonarr.first', action: 'create' },
+      // Only its user is compared, which resources.json records as wanted.
+      { resource: 'sonarr.login', action: 'unchanged' },
+    ]);
+    expect(waiting.asked).toEqual([]);
+    expect(waiting.seen).toEqual([{ user: 'admin' }]);
+  });
+
+  it('compares every field of a resource without `resolve`, one its desired() leaves out too', async () => {
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    // The app holds a profile; desired() gives none, and nothing resolves it.
+    const spec: ResourceSpec = { ...profiled('HD').spec };
+    delete spec.resolve;
+    expect(
+      (await planWiring(options(sonarr, { stack: sonarrWith([spec]), known: PROFILED })))
+        .changes,
+    ).toEqual([{ resource: 'sonarr.login', action: 'update', changes: ['profile'] }]);
+  });
+
   it('leaves the secrets unchecked while a resource they require is to be updated, or could not be looked at', async () => {
     // "sonarr.first" holds another user, so apply would update it; then the app refuses
     // it (404), so plan can't say. Either way it isn't in place yet.

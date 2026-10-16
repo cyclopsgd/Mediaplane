@@ -901,12 +901,12 @@
                   }
                 },
                 "sonarr_profile": {
-                  "description": "The Sonarr quality profile Seerr requests with. Not used yet (Slice 6).",
+                  "description": "The Sonarr quality profile Seerr requests with, by name. Unset: HD-1080p, else Any, else Sonarr's first.",
                   "type": "string",
                   "minLength": 1
                 },
                 "radarr_profile": {
-                  "description": "The Radarr quality profile Seerr requests with. Not used yet (Slice 6).",
+                  "description": "The Radarr quality profile Seerr requests with, by name. Unset: HD-1080p, else Any, else Radarr's first.",
                   "type": "string",
                   "minLength": 1
                 }

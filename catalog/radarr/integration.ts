@@ -15,6 +15,9 @@ export const JELLYFIN_TRIGGERS = [
   'onMovieFileDeleteForUpgrade',
 ] as const;
 
+/** Where Radarr files films: its root folder, which Seerr's Radarr server names too. */
+export const ROOT_FOLDER = '/data/media/movies';
+
 /**
  * What Mediaplane wires in Radarr (spec §6.2): the shared admin login, qBittorrent as its
  * download client, filing under the `movies` category, the root folder
@@ -27,7 +30,7 @@ export default servarrIntegration(
   ['jellyfin', 'qbittorrent'],
   [
     servarrDownloadClient({ category: 'movies', setting: 'movieCategory' }),
-    servarrRootFolder('/data/media/movies'),
+    servarrRootFolder(ROOT_FOLDER),
     servarrJellyfin(JELLYFIN_TRIGGERS),
   ],
 );

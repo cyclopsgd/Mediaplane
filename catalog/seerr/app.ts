@@ -1,6 +1,7 @@
 import { defineApp } from '@mediaplane/engine';
 import { z } from 'zod';
 import { seerrBootstrap } from './bootstrap';
+import integration from './integration';
 
 export default defineApp({
   id: 'seerr',
@@ -42,20 +43,21 @@ export default defineApp({
   // With Plex, it signs in with your Plex account, which comes in Slice 7.
   notWiredYet: (config) =>
     config.media_server === 'jellyfin' ? undefined : { comingIn: 'Slice 7' },
+  integration,
   options: z.strictObject({
     sonarr_profile: z
       .string()
       .min(1)
       .optional()
       .describe(
-        'The Sonarr quality profile Seerr requests with. Not used yet (Slice 6).',
+        "The Sonarr quality profile Seerr requests with, by name. Unset: HD-1080p, else Any, else Sonarr's first.",
       ),
     radarr_profile: z
       .string()
       .min(1)
       .optional()
       .describe(
-        'The Radarr quality profile Seerr requests with. Not used yet (Slice 6).',
+        "The Radarr quality profile Seerr requests with, by name. Unset: HD-1080p, else Any, else Radarr's first.",
       ),
   }),
   env: () => ({ LOG_LEVEL: 'info' }),
