@@ -29,6 +29,8 @@ import {
   FIXTURE_HOST,
   fakeDocker,
   fakeJellyfinSetUp,
+  FAKE_PLEX_ACCOUNT,
+  fakePlexTv,
   fakeProbe,
   fakeRuntime,
   fakeStackApis,
@@ -1602,6 +1604,40 @@ describe('mediaplane host-report', () => {
     } finally {
       if (real !== undefined) Object.defineProperty(process, 'arch', real);
     }
+  });
+});
+
+describe('mediaplane plex-tv', () => {
+  it('makes the plex.tv call its standard input asks for, and is not listed in --help', async () => {
+    const plexTv = await fakePlexTv();
+    const term = capture();
+    const io: Io = {
+      ...term.io,
+      stdin: () =>
+        Promise.resolve(
+          JSON.stringify({ op: 'account', token: FAKE_PLEX_ACCOUNT.token }),
+        ),
+    };
+    expect(await run(['plex-tv'], io, { plexTvDirect: () => plexTv.client })).toBe(0);
+    expect(JSON.parse(term.stdout())).toEqual({
+      schema: 'mediaplane.plex-tv/v1',
+      ok: true,
+      value: FAKE_PLEX_ACCOUNT.id,
+    });
+    expect(plexTv.state.calls).toEqual(['GET /api/v2/user']);
+    const help = capture();
+    expect(await run(['--help'], help.io)).toBe(0);
+    expect(help.stdout()).not.toContain('plex-tv');
+  });
+
+  it('refuses an empty standard input without a call', async () => {
+    const plexTv = await fakePlexTv();
+    const term = capture();
+    expect(await run(['plex-tv'], term.io, { plexTvDirect: () => plexTv.client })).toBe(
+      0,
+    );
+    expect(JSON.parse(term.stdout())).toMatchObject({ ok: false, kind: 'protocol' });
+    expect(plexTv.state.calls).toEqual([]);
   });
 });
 

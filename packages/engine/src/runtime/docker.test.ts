@@ -802,6 +802,80 @@ describe('createDockerRuntime', () => {
     ).rejects.toThrow('/mediaplane-host/0,readonly=false');
     expect(calls).toEqual([]);
   });
+
+  it('runs the plex.tv helper on the default bridge, locked down, with no mount', async () => {
+    const { exec, calls } = recorder(() => ok('{"schema":"mediaplane.plex-tv/v1"}\n'));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    const input = '{"op":"claim","token":"fake-plex-token-0001"}';
+    const result = await runtime.plexTvHelper(
+      'mediaplane:local',
+      input,
+      { uid: 1001, gid: 1002 },
+      90_000,
+    );
+    expect(result).toEqual({ ok: true, stdout: '{"schema":"mediaplane.plex-tv/v1"}\n' });
+    expect(calls[0]?.args).toEqual([
+      'run',
+      '--rm',
+      '--interactive',
+      '--init',
+      '--pull',
+      'never',
+      '--network',
+      'bridge',
+      '--user',
+      '1001:1002',
+      '--cap-drop',
+      'ALL',
+      '--security-opt',
+      'no-new-privileges',
+      '--read-only',
+      '--label',
+      'io.mediaplane.helper=plex-tv',
+      '--entrypoint',
+      'mediaplane',
+      'mediaplane:local',
+      'plex-tv',
+    ]);
+    // The token goes on its standard input, never on the command line.
+    expect(calls[0]?.options?.input).toBe(input);
+    expect(calls[0]?.args.join(' ')).not.toContain('fake-plex-token');
+    expect(calls[0]?.options?.timeoutMs).toBe(90_000);
+  });
+
+  it("reports a plex.tv helper that failed with docker's last lines", async () => {
+    const { exec } = recorder(() => ({
+      code: 125,
+      stdout: '',
+      stderr: 'docker: Error response from daemon: network bridge not found\n',
+    }));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    expect(
+      await runtime.plexTvHelper(
+        'mediaplane:local',
+        '{}',
+        { uid: 1000, gid: 1000 },
+        60_000,
+      ),
+    ).toEqual({
+      ok: false,
+      error: 'docker: Error response from daemon: network bridge not found',
+    });
+  });
+
+  it('explains a plex.tv helper that does not finish, with its own hint', async () => {
+    const exec: Exec = () =>
+      Promise.reject(Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }));
+    const runtime = createDockerRuntime({ home, project: 'mediaplane', exec });
+    const error = await runtime
+      .plexTvHelper('mediaplane:local', '{}', { uid: 1000, gid: 1000 }, 90_000)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(HelperError);
+    expect(error).toMatchObject({
+      message: 'the plex.tv helper did not finish within 90 s',
+      hint: "check that this host reaches plex.tv: the helper runs on Docker's default bridge network",
+    });
+  });
 });
 
 describe('the wiring network', () => {

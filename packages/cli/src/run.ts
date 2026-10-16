@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
+  answerPlexTvRequest,
   apply,
   collectHostReport,
   createDockerRuntime,
@@ -11,6 +12,7 @@ import {
   fetchEgress,
   helperEgress,
   helperHostFacts,
+  helperPlexTv,
   helperProbe,
   hostFactsOrFailure,
   invokingUser,
@@ -18,6 +20,7 @@ import {
   nodeProbe,
   parseHostRequest,
   plan,
+  plexTvClient,
   PROJECT_NAME,
   readRecord,
   status,
@@ -25,6 +28,7 @@ import {
   type EgressResult,
   type HostFacts,
   type HostProbe,
+  type PlexTv,
   type Runtime,
   type WiringSeams,
 } from '@mediaplane/engine';
@@ -57,6 +61,8 @@ export interface Io {
   ask?: (question: string) => Promise<string>;
   /** ask, for a secret: what is typed or pasted never shows. Absent with ask. */
   askSecret?: (question: string) => Promise<string>;
+  /** All of the standard input, once it ends: what the plex.tv helper is asked. */
+  stdin?: () => Promise<string>;
 }
 
 /** What the CLI talks to: the real host by default, fakes in tests. */
@@ -68,6 +74,10 @@ export interface CliDeps {
   probe: (runtime: Runtime, home: string) => HostProbe;
   /** Which address the host comes from, as the IP-echo service at a URL sees it. */
   egress: (runtime: Runtime) => (url: string) => Promise<EgressResult>;
+  /** plex.tv: called directly from source; through the plex.tv helper in the image. */
+  plexTv: (runtime: Runtime) => PlexTv;
+  /** plex.tv, called directly: what the plex.tv helper itself calls it with. */
+  plexTvDirect: () => PlexTv;
   /** For tests: where plan and apply reach the apps' APIs. */
   wiring?: WiringSeams;
   /** init's data folder: created where it can be (prepareDataFolder). */
@@ -187,6 +197,9 @@ export function defaultDeps(env: NodeJS.ProcessEnv): CliDeps {
                 env,
                 execArgv: process.execArgv,
               }),
+      // The host has a route out: spec §7.2(1) and ADR 0011 keep only the container off.
+      plexTv: () => plexTvClient(),
+      plexTvDirect: () => plexTvClient(),
       dataFolder: (path, home, user) => prepareDataFolder(path, home, false, user),
     };
   }
@@ -197,6 +210,9 @@ export function defaultDeps(env: NodeJS.ProcessEnv): CliDeps {
     runtime,
     probe: (docker, home) => helperProbe({ runtime: docker, image, user, home }),
     egress: (docker) => (url) => helperEgress({ runtime: docker, image, user }, url),
+    // The container has no route out (ADR 0011): a throwaway helper reaches plex.tv.
+    plexTv: (docker) => helperPlexTv({ runtime: docker, image, user }),
+    plexTvDirect: () => plexTvClient(),
     // The container sees the host's folders only inside the home.
     dataFolder: (path, home, owner) => prepareDataFolder(path, home, true, owner),
   };
@@ -485,6 +501,16 @@ export function createProgram(
     .action(async (request: string) => {
       const report = await collectHostReport(parseHostRequest(request));
       io.stdout(`${JSON.stringify(report)}\n`);
+    });
+
+  // What the plex.tv helper container runs (ADR 0011); not for people, so not in --help.
+  // The request, with any token in it, comes on the standard input, never as an argument.
+  program
+    .command('plex-tv', { hidden: true })
+    .description('Make the one plex.tv call that the standard input asks for')
+    .action(async () => {
+      const input = (await io.stdin?.()) ?? '';
+      io.stdout(await answerPlexTvRequest(input, deps.plexTvDirect()));
     });
 
   return program;

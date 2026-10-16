@@ -541,6 +541,52 @@ export function createDockerRuntime(options: DockerRuntimeOptions): Runtime {
         ...(missing === undefined ? {} : { missingSource: missing }),
       };
     },
+
+    async plexTvHelper(image, input, user, timeoutMs): Promise<HelperResult> {
+      const result = await docker(
+        'run (plex.tv helper)',
+        [
+          'run',
+          '--rm',
+          // Its standard input: the request, with any token in it.
+          '--interactive',
+          '--init',
+          '--pull',
+          'never',
+          // A route out, and none into the stack: the host network reaches the stack's
+          // networks, the default bridge doesn't.
+          '--network',
+          'bridge',
+          '--user',
+          `${String(user.uid)}:${String(user.gid)}`,
+          '--cap-drop',
+          'ALL',
+          '--security-opt',
+          'no-new-privileges',
+          '--read-only',
+          '--label',
+          `${HELPER_LABEL}=plex-tv`,
+          '--entrypoint',
+          'mediaplane',
+          image,
+          'plex-tv',
+        ],
+        {
+          input,
+          timeoutMs,
+          timeoutError: (cause) =>
+            new HelperError(
+              `the plex.tv helper did not finish within ${String(Math.round(timeoutMs / 1000))} s`,
+              {
+                cause,
+                hint: "check that this host reaches plex.tv: the helper runs on Docker's default bridge network",
+              },
+            ),
+        },
+      );
+      if (result.code === 0) return { ok: true, stdout: result.stdout };
+      return { ok: false, error: lastLines(result.stderr) };
+    },
   };
 }
 

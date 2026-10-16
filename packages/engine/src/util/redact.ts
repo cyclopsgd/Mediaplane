@@ -9,6 +9,11 @@ export function redact(text: string, values: Readonly<Record<string, string>>): 
     .reduce((redacted, value) => redacted.replaceAll(value, '***'), text);
 }
 
+/** `secrets` as redact() and the runtime take them, by position. */
+export function redactionValues(secrets: readonly string[]): Record<string, string> {
+  return Object.fromEntries(secrets.map((secret, i) => [String(i), secret]));
+}
+
 /**
  * The secrets a run comes to read in the apps' answers, which it didn't know of when it
  * started: Seerr's own Jellyfin key, say. A client that reads one adds it

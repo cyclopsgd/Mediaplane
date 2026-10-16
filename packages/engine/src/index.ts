@@ -52,3 +52,5 @@ export * from './credentials';
 export * from './vpn/egress';
 export * from './vpn/probe';
 export * from './vpn/check';
+export * from './plextv/client';
+export * from './plextv/helper';

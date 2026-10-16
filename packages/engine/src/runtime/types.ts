@@ -163,6 +163,22 @@ export interface Runtime {
     mounts: readonly HelperMount[],
     user: { uid: number; gid: number },
   ): Promise<HelperResult>;
+  /**
+   * Run the plex.tv helper (spec §6.1, ADR 0011): a throwaway container of Mediaplane's own
+   * `image` on Docker's default bridge network, which has a route out but doesn't reach
+   * the stack's networks, as `user`, with no capabilities, a read-only root and no mount,
+   * running `mediaplane plex-tv` with `input` on its standard input, where a token stays
+   * off every command line and out of the container's environment. It never pulls, and
+   * is stopped after `timeoutMs`. A helper that ran and failed is a `HelperResult`; this
+   * throws a `HelperError` when it doesn't finish in time, and a `RuntimeError` when docker
+   * can't be started.
+   */
+  plexTvHelper(
+    image: string,
+    input: string,
+    user: { uid: number; gid: number },
+    timeoutMs: number,
+  ): Promise<HelperResult>;
 }
 
 /** Docker is missing or unreachable; the message says which, in words for the user. */

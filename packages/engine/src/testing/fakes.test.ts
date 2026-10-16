@@ -124,6 +124,31 @@ describe('fakeRuntime().hostHelper', () => {
   });
 });
 
+describe('fakeRuntime().plexTvHelper', () => {
+  it('fails unless the test gives it an answer, and records each run', async () => {
+    const calls: string[] = [];
+    const user = { uid: 1000, gid: 1000 };
+    const none = fakeRuntime({ calls });
+    expect(await none.plexTvHelper('mediaplane:test', '{}', user, 60_000)).toEqual({
+      ok: false,
+      error: 'this fake Docker has no plex.tv helper',
+    });
+    const inputs: string[] = [];
+    const answering = fakeRuntime({
+      calls,
+      plexTvHelper: (input) => {
+        inputs.push(input);
+        return { ok: true, stdout: 'answer' };
+      },
+    });
+    expect(
+      await answering.plexTvHelper('mediaplane:test', 'asked', user, 60_000),
+    ).toEqual({ ok: true, stdout: 'answer' });
+    expect(inputs).toEqual(['asked']);
+    expect(calls).toEqual(['plex-tv-helper', 'plex-tv-helper']);
+  });
+});
+
 describe('fakeRuntime().run', () => {
   const command = {
     user: { uid: 65534, gid: 65534 },

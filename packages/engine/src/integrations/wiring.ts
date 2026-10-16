@@ -13,7 +13,7 @@ import { serviceAddress, serviceOf } from './address';
 import { JoinFailed, OwnContainerUnknown, WiringRefused } from '../runtime/docker';
 import type { ContainerState, RuntimeError, Runtime } from '../runtime/types';
 import type { SecretStore } from '../secrets/store';
-import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
+import { foundSecrets, redact, redactionValues, type FoundSecrets } from '../util/redact';
 import { compare } from '../util/sort';
 import type { KnownResource, KnownResources } from './resources';
 import type {
@@ -223,10 +223,7 @@ export function knownSecrets(
   return [...new Set(all)].filter((value) => value !== '');
 }
 
-/** `secrets` as redact() and the runtime take them, by position. */
-export function redactionValues(secrets: readonly string[]): Record<string, string> {
-  return Object.fromEntries(secrets.map((secret, i) => [String(i), secret]));
-}
+export { redactionValues };
 
 /** The app is up, and still takes Mediaplane's key (spec §6.3, "the source"). */
 export async function checkApp(reached: ReachedApp): Promise<void> {

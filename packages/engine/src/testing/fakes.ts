@@ -115,6 +115,12 @@ export interface FakeRuntimeOptions {
     mounts: readonly HelperMount[],
   ) => HelperResult | Promise<HelperResult>;
   /**
+   * Answers the plex.tv helper, given what goes on its standard input; without it, the
+   * helper fails. answerPlexTvRequest with a fake plex.tv's client is what the real one
+   * runs.
+   */
+  plexTvHelper?: (input: string) => HelperResult | Promise<HelperResult>;
+  /**
    * Each call is appended here, e.g. "pull", "chown seerr 1000:1000 /app/config" or
    * "run qbittorrent sh as 65534:65534".
    */
@@ -209,6 +215,14 @@ export function fakeRuntime(options: FakeRuntimeOptions = {}): Runtime {
         return { ok: false, error: 'this fake Docker has no host helper' };
       }
       return await options.hostHelper(JSON.parse(request) as HostRequest, mounts);
+    },
+    // async: a throwing callback rejects like a failed docker call.
+    plexTvHelper: async (_image, input) => {
+      record('plex-tv-helper');
+      if (options.plexTvHelper === undefined) {
+        return { ok: false, error: 'this fake Docker has no plex.tv helper' };
+      }
+      return await options.plexTvHelper(input);
     },
   };
 }

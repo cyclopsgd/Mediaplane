@@ -1,3 +1,4 @@
+import { text } from 'node:stream/consumers';
 import { terminalAsk, terminalAskSecret } from './prompt';
 import { run } from './run';
 
@@ -17,6 +18,7 @@ process.exitCode = await run(process.argv.slice(2), {
     process.stderr.write(text);
   },
   env: process.env,
+  stdin: () => text(process.stdin),
   ...(interactive
     ? {
         ask: terminalAsk(process.stdin, process.stdout),
