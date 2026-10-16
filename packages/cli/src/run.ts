@@ -36,6 +36,7 @@ import { Command, CommanderError, Option } from 'commander';
 import { printCredentials } from './credentials';
 import { prepareDataFolder, type DataFolder } from './folders';
 import { init, type InitOptions } from './init';
+import { plexLogin, PLEX_LOGIN_MAX_SECONDS } from './plex-login';
 import {
   printApply,
   printDiagnostics,
@@ -111,6 +112,10 @@ export const EXIT_CODES: Readonly<Record<string, readonly string[]>> = {
   init: [
     '0: stack.yaml and secrets/ were written',
     '1: an error; an existing stack.yaml is never overwritten',
+  ],
+  'plex-login': [
+    '0: signed in and saved your Plex token, or the saved one works',
+    '1: nobody signed in in time, the link ran out, or an error',
   ],
   'vpn-check': [
     '0: passed: qBittorrent reaches the internet only through the VPN',
@@ -438,6 +443,42 @@ export function createProgram(
       });
       setExitCode(printVpnCheck(result, { json: options.json === true }, io));
     });
+
+  program
+    .command('plex-login')
+    .description(
+      'Sign in to Plex in a browser, and save your Plex token where plex.token in stack.yaml says',
+    )
+    .option('--home <dir>', 'Mediaplane home directory', defaultHome)
+    .option('--force', 'sign in again, even though the saved token works')
+    .option(
+      '--timeout <seconds>',
+      `how long to wait for you to sign in (default: as long as the link lasts, ${String(PLEX_LOGIN_MAX_SECONDS / 60)} minutes)`,
+    )
+    .option('--json', 'print machine-readable JSON; the link still goes to stderr')
+    .addHelpText('after', exitCodesHelp('plex-login'))
+    .action(
+      async (options: {
+        home: string;
+        force?: boolean;
+        timeout?: string;
+        json?: boolean;
+      }) => {
+        const home = resolve(options.home);
+        setExitCode(
+          await plexLogin(
+            {
+              home,
+              json: options.json === true,
+              force: options.force === true,
+              ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
+            },
+            io,
+            deps.plexTv(deps.runtime(home, project)),
+          ),
+        );
+      },
+    );
 
   program
     .command('init')

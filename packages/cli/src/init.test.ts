@@ -226,7 +226,7 @@ describe('mediaplane init', () => {
     expect(config.vpn).toBeUndefined();
     expect(config.admin.password).toBeUndefined();
     expect(term.stdout()).toContain(
-      `Save your Plex token in ${join(home, 'secrets', 'plex-token')}.`,
+      `Run "mediaplane plex-login" to sign in to Plex: it saves your Plex token in ${join(home, 'secrets', 'plex-token')}.`,
     );
     expect(term.stdout()).toContain(
       'Then "mediaplane credentials" shows the admin login and where each app is.',

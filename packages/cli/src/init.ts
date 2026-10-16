@@ -93,7 +93,9 @@ export async function init(
       ? []
       : [`Put your VPN's WireGuard private key in ${keyPath}.`]),
     ...(answers.mediaServer === 'plex'
-      ? [`Save your Plex token in ${join(secrets, 'plex-token')}.`]
+      ? [
+          `Run "mediaplane plex-login" to sign in to Plex: it saves your Plex token in ${join(secrets, 'plex-token')}.`,
+        ]
       : []),
     ...(answers.adminPasswordFile === undefined
       ? []
@@ -326,7 +328,7 @@ async function gatherAnswers(
 export const NOTES = {
   mediaServer: [
     'Media server: jellyfin needs no account. plex needs a Plex',
-    "account; Mediaplane can't claim it for you until Slice 7.",
+    'account: run "mediaplane plex-login" once init is done.',
   ],
   dataPath: [
     'Data folder: one folder for downloads and your library,',

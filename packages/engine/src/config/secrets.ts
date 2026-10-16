@@ -60,6 +60,11 @@ export async function checkSecretRefs(
       diagnostics.push(
         error('secret.missing', `${path}: ${where} is missing, empty or unreadable`, {
           path,
+          ...(path === 'plex.token'
+            ? {
+                hint: 'run "mediaplane plex-login": it signs you in to Plex, and saves your token where plex.token says',
+              }
+            : {}),
         }),
       );
     } else if (path === ADMIN_PASSWORD_PATH && value.length < ADMIN_PASSWORD_MIN_LENGTH) {

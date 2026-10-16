@@ -130,6 +130,26 @@ Exit codes:
 - 1: a leak, or the VPN is down
 - 1: an error: stack.yaml, Docker unreachable, or the stack not applied yet
 
+## `mediaplane plex-login`
+
+Sign in to Plex in a browser, and save your Plex token where plex.token in stack.yaml says.
+
+```text
+mediaplane plex-login [options]
+```
+
+| Option                | Description                                                                          |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| `--home <dir>`        | Mediaplane home directory (default: "/opt/mediaplane")                               |
+| `--force`             | sign in again, even though the saved token works                                     |
+| `--timeout <seconds>` | how long to wait for you to sign in (default: as long as the link lasts, 30 minutes) |
+| `--json`              | print machine-readable JSON; the link still goes to stderr                           |
+
+Exit codes:
+
+- 0: signed in and saved your Plex token, or the saved one works
+- 1: nobody signed in in time, the link ran out, or an error
+
 ## `mediaplane init`
 
 Write a starter stack.yaml and a secrets/ folder, and create the data folder if it can (never overwrites).

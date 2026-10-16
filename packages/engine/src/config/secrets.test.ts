@@ -80,7 +80,11 @@ describe('secretRefs and checkSecretRefs', () => {
     ]);
     expect(await checkSecretRefs(plexConfig, await homeWith({}), {})).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: 'secret.missing', path: 'plex.token' }),
+        expect.objectContaining({
+          code: 'secret.missing',
+          path: 'plex.token',
+          hint: 'run "mediaplane plex-login": it signs you in to Plex, and saves your token where plex.token says',
+        }),
       ]),
     );
   });
