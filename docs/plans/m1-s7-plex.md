@@ -152,7 +152,9 @@ These are added or restated for this slice:
   `state/resources.json`, logs, human or JSON output, command lines, `compose.yaml`,
   `.env`, the public CI log or end-to-end failure messages. This slice adds:
   - **your Plex token**, a user secret read once per run, sent only in Plex's
-    `X-Plex-Token` header, in request bodies to the arrs and Seerr, and to plex.tv;
+    `X-Plex-Token` header once Plex is shown to be yours, in request bodies to the
+    arrs and Seerr, and to plex.tv. Of the secrets you give, only an app's key reaches
+    setups and resources; the VPN key is only redacted;
   - **claim tokens**, fetched by the `apply` that first starts Plex, passed to Compose
     through its environment, never in a file;
   - **Plex's own token** (`PlexOnlineToken` in its `Preferences.xml`), read only to ask
@@ -163,9 +165,11 @@ These are added or restated for this slice:
 - **No new socket-proxy permission.** `deploy/mediaplane.compose.yaml` and
   `deploy/deploy.test.ts` don't change.
 - **`plan` never calls plex.tv,** never claims Plex, and never signs Seerr in.
-- **plex.tv in tests.** Only two tests reach the real plex.tv: the deploy end-to-end test
-  asks it for one PIN, which needs no account, and the nightly job uses the test
-  account's token. Every other test uses the fake.
+- **plex.tv in tests.** Unit tests never reach the real plex.tv. Three end-to-end tests
+  do: the deploy test asks it for one PIN, which needs no account, and passes when
+  plex.tv is down too; the every-PR Plex test's real Plex image sends the fake plex.tv's
+  claim token to the real plex.tv, which refuses it, with no account involved; and the
+  nightly job uses the test account's token.
 - **Docker and Compose.** CI runs Docker 28 with Compose v2.38.2; the dev box runs Docker
   29.8 with Compose 5.5.1; the image bundles Compose 5.5.1. This slice adds no Compose
   flag; Compose now gets variables in its environment for the file on its standard input.
@@ -228,8 +232,13 @@ claimed was removed from the test account afterwards.
      publishing `up` recreates it. By then it is spent: one use, four minutes. The other
      way, Mediaplane sending `POST /myplex/claim` itself over the wiring network, would
      keep it out of the container, but isn't what §6.1 says; not taken.
-   - Without your token, or without a claim token (plex.tv refused your token, or didn't
-     answer), the start step fails before anything starts, with what to do.
+   - The claim token is fetched first in the start step, before Mediaplane leaves the
+     wiring network or stops the VPN's guests, so a failure changes nothing. Without
+     your token, or without a claim token (plex.tv refused your token, or didn't
+     answer), the step fails with what to do, and first stops each running app it was
+     for (`runtime.stop`, which the proxy allows): a Plex whose setup isn't done isn't
+     shown to be yours, and must not stay published, as one an `apply` before this
+     slice published unclaimed would (S6's README let it be).
 3. **(check) Whose Plex it is: plex.tv's answer for the token Plex's claim gave it**
    (Task 3). The review rule: an answer the app's admin can shape must not decide
    ownership. Probed:
@@ -249,6 +258,10 @@ claimed was removed from the test account afterwards.
    a 5xx, a 429, no connection) is `unsure`, and so is a claimed Plex whose file holds no
    token; the file unreadable, or your token refused, is `rejected`. Every one keeps Plex
    unpublished. Each has a test, the machine-identifier trick among them.
+   - Until then, Plex never gets your token: `/identity` needs none, and the setup asks
+     it without (`AppApi.until`'s `anonymous`), in `open`, the claim wait and the
+     re-check before publishing. A test checks that no request of the setup's carries
+     it before plex.tv has said Plex is yours.
 4. **The setup waits for the claim** (Task 3). Probed: with no `Preferences.xml`, the
    image starts Plex once for its config, unclaimed, and the container can be healthy
    then; after the claim, Plex restarts and says `claimed: false` for a moment. So the
@@ -282,7 +295,11 @@ claimed was removed from the test account afterwards.
    in no setting and in no file. It goes on standard input, as one line of JSON
    (`mediaplane.plex-tv/v1`), and the answer comes back as one line on standard output.
    The helper takes four strict requests (a PIN, the wait for its sign-in, a claim token,
-   the account a token is of), and fixes plex.tv's address. `docker run -i` uses
+   the account a token is of), and fixes plex.tv's address. A run's time limit covers
+   the client's own tries inside it: three of 30 seconds, 5 and 15 seconds between them,
+   and a minute for the container, 170 seconds (the wait for a sign-in, its seconds
+   more). A helper that runs out of time is `PlexTvError` `unreachable`, unsure, as the
+   client inside would have said. `docker run -i` uses
    `create`, `attach`, `start` and `wait`, which the allow-list has for the host helper:
    the deploy end-to-end test runs `plex-login` from the image, through the proxy (probed
    first with the allow-list as it is).
@@ -347,6 +364,17 @@ claimed was removed from the test account afterwards.
     on by default: through it, the accounts that may use your Plex reach it from outside.
     Mediaplane leaves it as Plex sets it, and the threat model says how to turn it off.
     The owner may prefer it off.
+    - Probed: while Plex is unclaimed, anyone who reaches it at an address can set
+      `allowedNetworks` over `PUT /:/prefs` (200, no token); `GET /:/prefs` reads it back
+      as a `text` setting, `''` by default; and a value set then survives the claim, in
+      Plex's answer and in `Preferences.xml`. So, once plex.tv has said Plex is yours,
+      and before its setup reports done (so before its first publish), the setup reads
+      Plex's preferences and requires `allowedNetworks` to be empty. Otherwise Plex stays
+      unpublished (`rejected`), and the message names the setting and the remedy: clear
+      it in `Preferences.xml` while Plex is stopped, then `apply`. It is checked in the
+      setup only, never on later applies, so one you set after the publish, on purpose,
+      is left alone. Remote access gives no access without a sign-in, so the threat
+      model only names it (T16).
 15. **Plex's libraries** (Task 4; §6.2). Probed on the pinned image: `POST
     /library/sections` needs `type`, `agent`, `scanner` and `language` (400 without), and
     takes a missing folder and a duplicate name; Plex's web UI gives a new library
@@ -408,12 +436,19 @@ claimed was removed from the test account afterwards.
     token it can never be claimed. So the every-PR test runs a Plex stack against a fake
     plex.tv whose claim tokens the real Plex can't use: Plex starts unpublished, never
     claims itself, and `apply` fails at its setup with Plex still unpublished, which is
-    the guarantee that matters most. The deploy test runs `plex-login` from the image,
-    through the proxy, against the real plex.tv: one PIN, which needs no account, then a
-    4-second timeout, and no helper left behind.
-21. **(check) The nightly Plex job** (Task 6; §8.1). `.github/workflows/plex.yml`, on a
-    schedule and by hand, only in this repository, never for a pull request, so a fork
-    never sees the secret. Without `PLEX_TOKEN` it does nothing. The secret is in the
+    the guarantee that matters most. Plex's image sends that claim token to the real
+    plex.tv, which refuses it: no account is involved. The deploy test runs `plex-login`
+    from the image, through the proxy, against the real plex.tv: one PIN, which needs no
+    account, then a 4-second timeout, and no helper left behind. A plex.tv that is down,
+    or refuses the PIN, gives "couldn't reach plex.tv" from inside the helper instead,
+    which takes the same path: the test accepts either, checks the link only when a PIN
+    was made, and an outage fails no pull request.
+21. **(check) The nightly Plex job** (Task 6; §8.1). `.github/workflows/plex.yml`, on
+    `main`: on a schedule, or by hand, by a maintainer, only in this repository, never
+    for a pull request, so a fork never sees the secret. A dispatch runs the chosen
+    branch's copy of the file, so the job checks `github.ref == 'refs/heads/main'` too;
+    the real control is a GitHub environment limited to `main` holding `PLEX_TOKEN`
+    (roadmap S9 item, for the owner). Without `PLEX_TOKEN` it does nothing. The secret is in the
     environment of the two steps that read it only, not of the install, and goes to a
     0600 file, never on a command line. The test claims a real Plex with the test
     account, wires the stack, checks each link, and hides each value it makes from the
@@ -438,11 +473,20 @@ claimed was removed from the test account afterwards.
     don't change.
 24. **The docs** (Task 7). The §9 set for what Tasks 1 to 6 built: the wiring-failed
     runbook; the architecture; the threat model (new assets, the helper, T2, T4, T5,
-    T14, T16); ADR 0012, and ADR 0011's consequence; the README; Plex's, Seerr's,
+    T14, T16); ADR 0012, and ADR 0011's and ADR 0006's consequences; the README; Plex's,
+    Seerr's,
     Sonarr's and Radarr's READMEs; the deploy guide, with `plex-login`; the spec (a "Slice
     7" entry in §11, and §5.2's `plan` and `plex-login` rows); the roadmap (S7 done, five
-    S8 items and three S9 items). The CLI reference is generated in Task 2.
+    S8 items and four S9 items). The CLI reference is generated in Task 2.
     `docs/how-its-built.md` states no fact this slice changes, so it stays.
+25. **Only an app's key reaches setups and resources** (Task 3; §6.3). `userSecrets` reads
+    every secret you give, so that each is redacted, the VPN key too. But `stackKeys`
+    puts into `keys` (a setup's context, each resource's `desired`, and `plan`'s) only
+    those an app's API takes as its key (`api.key.secret`): Plex's token today. The VPN
+    key never reaches a setup or a resource.
+26. **One redaction map** (Task 1). `redactionValues` moves to `util/redact`, so the
+    plex.tv client and helper use it rather than build their own; `integrations/wiring`
+    re-exports it, so its callers don't change.
 
 ## File structure (new and changed in this slice)
 
@@ -457,10 +501,14 @@ claimed was removed from the test account afterwards.
 - `catalog/types.ts`: `BootstrapContext`, `Bootstrap.firstStart`, `Bootstrap.claimedHint`,
   `run`'s context; `ApiSpec.started`; `AppLoginKind` with `{ own }`, `login` as a function,
   `webPath`; `notWiredYet` removed.
-- `http/client.ts` (+test): the `x-plex-token` key scheme; `AppApi.until`.
-- `secrets/values.ts` (+test): `userSecrets`, `stackKeys`.
+- `http/client.ts` (+test): the `x-plex-token` key scheme; `AppApi.until`, with
+  `anonymous`.
+- `secrets/values.ts` (+test): `userSecrets`, and `stackKeys`, which keys only an app's
+  API key of yours.
+- `util/redact.ts`: `redactionValues`, moved from `integrations/wiring.ts`.
 - `apply/apply.ts`, `apply/bootstrap.ts` (+test): `ApplyOptions.plexTv`; the start step's
-  `firstStartEnv`; the bootstrap step's context; a keyless claimed setup's hint.
+  `startVariables` (`firstStartEnv`, first, and a stop of what it was for when it
+  fails); the bootstrap step's context; a keyless claimed setup's hint.
 - `plan/plan.ts`, `integrations/wire.ts`, `integrations/wiring.ts` (+test): your secrets
   as keys; `started`.
 - `credentials.ts` (+test): your own logins, and web paths.
@@ -538,7 +586,9 @@ Decision: the fake plex.tv answers the shapes probed, no kinder (decision 22).
   `packages/engine/src/testing/plextv.ts`
 - Modify: `packages/engine/src/runtime/types.ts`, `packages/engine/src/runtime/docker.ts`,
   `packages/engine/src/testing/fakes.ts`, `packages/engine/src/testing/index.ts`,
-  `packages/engine/src/index.ts`, `packages/cli/src/run.ts`, `packages/cli/src/main.ts`
+  `packages/engine/src/index.ts`, `packages/engine/src/util/redact.ts`,
+  `packages/engine/src/integrations/wiring.ts`, `packages/cli/src/run.ts`,
+  `packages/cli/src/main.ts`
 - Test: `packages/engine/src/plextv/client.test.ts` (new),
   `packages/engine/src/plextv/helper.test.ts` (new),
   `packages/engine/src/runtime/docker.test.ts`, `packages/engine/src/testing/fakes.test.ts`,
@@ -546,8 +596,10 @@ Decision: the fake plex.tv answers the shapes probed, no kinder (decision 22).
 
 **Interfaces:**
 - **Consumes:** S2c's runtime (`HelperError`, `HelperResult`, `DOCKER_TIMEOUTS`, the
-  helper label), `redact`, `fakeHttpApp`, `fakeRuntime`.
+  helper label), `redact`, `redactionValues`, `fakeHttpApp`, `fakeRuntime`.
 - **Produces:**
+  - `redactionValues(secrets)` in `util/redact.ts`, which `integrations/wiring.ts`
+    re-exports;
   - from `@mediaplane/engine`: `PLEX_TV`, `PLEX_PRODUCT` (`'Mediaplane'`),
     `PLEX_CLIENT_ID` (`'mediaplane'`), `newClientId(): string` (`mediaplane-<uuid>`),
     `PLEX_TV_TIMEOUT_MS`, `PIN_POLL_MS`;
@@ -1021,7 +1073,7 @@ describe('helperPlexTv', () => {
     expect(JSON.parse(inputs[0] ?? '')).toEqual({ op: 'claim', token: TOKEN });
   });
 
-  it('gives the whole wait to one helper, with a minute more to finish', async () => {
+  it("gives each call the client's tries and a minute more, and the whole wait to one helper", async () => {
     const seen: number[] = [];
     const plexTv = await fakePlexTv();
     const runtime = fakeRuntime();
@@ -1039,7 +1091,25 @@ describe('helperPlexTv', () => {
     const pin = await helper.createPin(newClientId());
     plexTv.state.signIn = { token: TOKEN, afterReads: 0 };
     await helper.waitForPin(pin, 300);
-    expect(seen).toEqual([60_000, 360_000]);
+    // Three tries of 30 s, 5 s and 15 s between them, and a minute for the container.
+    expect(seen).toEqual([170_000, 470_000]);
+  });
+
+  it("says a helper whose time ran out couldn't reach plex.tv, as unsure, without the token", async () => {
+    const runtime = fakeRuntime({
+      plexTvHelper: () => {
+        throw new HelperError(`the plex.tv helper did not finish within 170 s ${TOKEN}`);
+      },
+    });
+    const helper = helperPlexTv({ runtime, image: 'mediaplane:test', user: USER });
+    const error = await caught(helper.claimToken(TOKEN));
+    expect(error).toBeInstanceOf(PlexTvError);
+    expect(error).toMatchObject({
+      kind: 'unreachable',
+      unsure: true,
+      message:
+        "the plex.tv helper did not finish within 170 s ***: check that this host reaches plex.tv from Docker's default bridge network",
+    });
   });
 
   it("throws plex.tv's refusal as the helper answered it", async () => {
@@ -1322,6 +1392,28 @@ index cf2fb7e..edbc025 100644
 +export * from './plextv/helper';
 ```
 
+**Change** `packages/engine/src/integrations/wiring.ts`:
+
+```diff
+diff --git a/packages/engine/src/integrations/wiring.ts b/packages/engine/src/integrations/wiring.ts
+index 426344e..f71e7c1 100644
+--- a/packages/engine/src/integrations/wiring.ts
++++ b/packages/engine/src/integrations/wiring.ts
+@@ -15,3 +15,3 @@ import type { ContainerState, RuntimeError, Runtime } from '../runtime/types';
+ import type { SecretStore } from '../secrets/store';
+-import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
++import { foundSecrets, redact, redactionValues, type FoundSecrets } from '../util/redact';
+ import { compare } from '../util/sort';
+@@ -225,6 +225,3 @@ export function knownSecrets(
+ 
+-/** `secrets` as redact() and the runtime take them, by position. */
+-export function redactionValues(secrets: readonly string[]): Record<string, string> {
+-  return Object.fromEntries(secrets.map((secret, i) => [String(i), secret]));
+-}
++export { redactionValues };
+ 
+```
+
 **Create** `packages/engine/src/plextv/client.ts`:
 
 ```ts
@@ -1330,7 +1422,7 @@ import { Agent as HttpAgent, request as httpRequest } from 'node:http';
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https';
 import { z } from 'zod';
 import { codeOf } from '../util/error-code';
-import { redact } from '../util/redact';
+import { redact, redactionValues } from '../util/redact';
 
 /** plex.tv, where Plex accounts, their sign-ins and their servers live. */
 export const PLEX_TV = 'https://plex.tv';
@@ -1563,9 +1655,8 @@ export function plexTvClient(options: PlexTvOptions = {}): PlexTv {
     details: ConstructorParameters<typeof PlexTvError>[1],
   ): PlexTvError {
     const path = call.path.split('?')[0] ?? call.path;
-    const values = Object.fromEntries(call.secrets.map((s, i) => [String(i), s]));
     return new PlexTvError(
-      redact(`plex.tv ${what} (${call.method} ${path})`, values),
+      redact(`plex.tv ${what} (${call.method} ${path})`, redactionValues(call.secrets)),
       details,
     );
   }
@@ -1710,8 +1801,14 @@ export function plexTvClient(options: PlexTvOptions = {}): PlexTv {
 import { z } from 'zod';
 import { DOCKER_TIMEOUTS } from '../runtime/docker';
 import { HelperError, type Runtime } from '../runtime/types';
-import { redact } from '../util/redact';
-import { PlexTvError, type PlexPin, type PlexTv, type PlexTvErrorKind } from './client';
+import { redact, redactionValues } from '../util/redact';
+import {
+  PLEX_TV_TIMEOUT_MS,
+  PlexTvError,
+  type PlexPin,
+  type PlexTv,
+  type PlexTvErrorKind,
+} from './client';
 
 /** The version of the plex.tv helper's request and answer: both sides share one image. */
 export const PLEX_TV_HELPER_SCHEMA = 'mediaplane.plex-tv/v1';
@@ -1793,7 +1890,7 @@ export async function answerPlexTvRequest(
     return reply({ ok: true, value: await call(request, client) });
   } catch (cause) {
     if (!(cause instanceof PlexTvError)) throw cause;
-    const values = Object.fromEntries(secretsOf(request).map((s, i) => [String(i), s]));
+    const values = redactionValues(secretsOf(request));
     return reply({
       ok: false,
       kind: cause.kind,
@@ -1850,13 +1947,26 @@ export function helperPlexTv(options: PlexTvHelperOptions): PlexTv {
         `the plex.tv helper image ${JSON.stringify(options.image)} is not an image name: it must not start with "-"`,
       );
     }
-    const values = Object.fromEntries(secretsOf(request).map((s, i) => [String(i), s]));
-    const result = await options.runtime.plexTvHelper(
-      options.image,
-      JSON.stringify(request),
-      options.user,
-      timeoutMs,
-    );
+    const values = redactionValues(secretsOf(request));
+    let result: Awaited<ReturnType<Runtime['plexTvHelper']>>;
+    try {
+      result = await options.runtime.plexTvHelper(
+        options.image,
+        JSON.stringify(request),
+        options.user,
+        timeoutMs,
+      );
+    } catch (cause) {
+      // Its time ran out: plex.tv didn't answer, as the client inside would have said.
+      if (!(cause instanceof HelperError)) throw cause;
+      throw new PlexTvError(
+        redact(
+          `${cause.message}: check that this host reaches plex.tv from Docker's default bridge network`,
+          values,
+        ),
+        { kind: 'unreachable' },
+      );
+    }
     if (!result.ok) {
       throw new PlexTvError(
         redact(`the plex.tv helper failed: ${result.error}`, values),
@@ -1888,7 +1998,9 @@ export function helperPlexTv(options: PlexTvHelperOptions): PlexTv {
     return answer.data.value;
   }
 
-  const query = DOCKER_TIMEOUTS.query;
+  // A call's time in the helper: the client's three tries, the waits between them, and
+  // the container's own start and end.
+  const oneShot = 3 * PLEX_TV_TIMEOUT_MS + 20_000 + DOCKER_TIMEOUTS.query;
   const as = <T>(value: unknown, check: (v: unknown) => v is T): T => {
     if (!check(value)) {
       throw new PlexTvError("the plex.tv helper's answer is not of the kind asked for", {
@@ -1900,7 +2012,7 @@ export function helperPlexTv(options: PlexTvHelperOptions): PlexTv {
   const isString = (v: unknown): v is string => typeof v === 'string';
   return {
     async createPin(clientId) {
-      const pin = pinSchema.safeParse(await ask({ op: 'pin', clientId }, query));
+      const pin = pinSchema.safeParse(await ask({ op: 'pin', clientId }, oneShot));
       if (!pin.success) {
         throw new PlexTvError("the plex.tv helper's answer is not a PIN", {
           kind: 'protocol',
@@ -1910,15 +2022,15 @@ export function helperPlexTv(options: PlexTvHelperOptions): PlexTv {
     },
     async waitForPin(pin, seconds) {
       // The helper asks plex.tv for the whole wait: a container per question would not do.
-      const value = await ask({ op: 'pin-wait', pin, seconds }, seconds * 1000 + query);
+      const value = await ask({ op: 'pin-wait', pin, seconds }, seconds * 1000 + oneShot);
       return value === null ? undefined : as(value, isString);
     },
     async claimToken(t) {
-      return as(await ask({ op: 'claim', token: t }, query), isString);
+      return as(await ask({ op: 'claim', token: t }, oneShot), isString);
     },
     async accountId(t) {
       return as(
-        await ask({ op: 'account', token: t }, query),
+        await ask({ op: 'account', token: t }, oneShot),
         (v): v is number => typeof v === 'number',
       );
     },
@@ -2268,6 +2380,23 @@ export async function fakePlexTv(state: FakePlexTvState = freshPlexTv()): Promis
 }
 ```
 
+**Change** `packages/engine/src/util/redact.ts`:
+
+```diff
+diff --git a/packages/engine/src/util/redact.ts b/packages/engine/src/util/redact.ts
+index 32dfcdf..d6ed575 100644
+--- a/packages/engine/src/util/redact.ts
++++ b/packages/engine/src/util/redact.ts
+@@ -11,2 +11,7 @@ export function redact(text: string, values: Readonly<Record<string, string>>):
+ 
++/** `secrets` as redact() and the runtime take them, by position. */
++export function redactionValues(secrets: readonly string[]): Record<string, string> {
++  return Object.fromEntries(secrets.map((secret, i) => [String(i), secret]));
++}
++
+ /**
+```
+
 - [ ] **Step 4: Run them to see them pass**
 
 Run: `pnpm vitest run packages/cli/src/run.test.ts packages/engine/src/plextv/client.test.ts packages/engine/src/plextv/helper.test.ts packages/engine/src/runtime/docker.test.ts packages/engine/src/testing/fakes.test.ts`
@@ -2281,7 +2410,7 @@ git add packages
 git commit -m "feat(engine): plex.tv from source, and through a short-lived helper on the default bridge in the image" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1786 tests pass in 85 files (1753 in 83 files before this slice).
+Expected: 1787 tests pass in 85 files (1753 in 83 files before this slice).
 
 ---
 
@@ -2917,7 +3046,7 @@ git add packages docs/reference
 git commit -m "feat(cli): mediaplane plex-login, which signs in to plex.tv with its PIN and saves your Plex token" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1798 tests pass in 86 files.
+Expected: 1799 tests pass in 86 files.
 
 ---
 
@@ -2934,6 +3063,10 @@ itself (decision 3), after a wait for the claim (decision 4).
 Decision: the remedies for a Plex claimed by another account, safe ones first
 (decision 5).
 Decision: `plan` never calls plex.tv (decision 11).
+Decision: Plex never gets your token before plex.tv says it is yours (decision 3); the
+claim token is asked for before anything changes, and a running Plex it was for is
+stopped when it can't be had (decision 2).
+Decision: of the secrets you give, only an app's key is a key (decision 25).
 
 **Files:**
 - Create: `catalog/plex/bootstrap.ts`, `packages/engine/src/testing/plex.ts`
@@ -2962,12 +3095,13 @@ Decision: `plan` never calls plex.tv (decision 11).
   Compose file on standard input that resets ports).
 - **Produces:**
   - `type KeyScheme = 'x-api-key' | 'bearer' | 'mediabrowser' | 'x-plex-token'`;
-    `AppApi.until<T>(path: string, schema: z.ZodType<T>, done: (answer: T) => boolean): Promise<T>`;
+    `AppApi.until<T>(path: string, schema: z.ZodType<T>, done: (answer: T) => boolean, options?: { anonymous?: boolean }): Promise<T>`;
   - `interface BootstrapContext { keys: Readonly<Record<string, Readonly<Record<string, string>>>>; plexTv: PlexTv }`;
     `Bootstrap.firstStart?(stack, ctx): Promise<Record<string, string>>`,
     `Bootstrap.run(api, admin, stack, ctx)`, `Bootstrap.claimedHint?(stack, container): string`;
-  - `NO_PLEX_TV: PlexTv`; `userSecrets(stack, env)`, `stackKeys(store, given)`;
-    `firstStartEnv(stack, pending, ctx)`; `ApplyOptions.plexTv`,
+  - `NO_PLEX_TV: PlexTv`; `userSecrets(stack, env)`, `stackKeys(stack, store, given)`;
+    `firstStartEnv(stack, pending, ctx)`,
+    `startVariables(stack, pending, ctx, runtime, values)`; `ApplyOptions.plexTv`,
     `BootstrapOptions.given` and `plexTv`;
   - `Runtime.up(waitSeconds, values, unpublished?, startEnv?)`,
     `startEnvName(service, variable)` (`MP_START_<SERVICE>_<VARIABLE>`);
@@ -3481,12 +3615,26 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
       });
       return { pending, env, ...set };
     };
-    return { home, state, plexTv, published, run, store, ctx, stack };
+    return { home, state, plexTv, published, run, store, ctx, stack, apis };
   }
 
   it('claims a fresh Plex with its claim token, records it, and publishes it', async () => {
-    const { home, state, published, run, store } = await stepOf();
+    const { home, state, published, run, store, apis } = await stepOf();
     const first = await run(store);
+    // Plex is asked whether it is claimed without your token, which it may not be yours
+    // to have: every question of the setup's, and the re-check before publishing.
+    const identity = apis.app.requests.filter(
+      (r) => r.headers.host?.startsWith('plex') === true && r.path === '/identity',
+    );
+    expect(identity.length).toBeGreaterThanOrEqual(3);
+    expect(identity.filter((r) => r.headers['x-plex-token'] !== undefined)).toEqual([]);
+    // Plex never got your token: nothing else was asked of it.
+    expect(
+      apis.app.requests
+        .filter((r) => r.headers.host?.startsWith('plex') === true)
+        .filter((r) => r.headers['x-plex-token'] !== undefined)
+        .map((r) => r.path),
+    ).toEqual([]);
     expect(first.pending).toEqual([{ app: 'plex', unpublished: true }]);
     expect(Object.keys(first.env)).toEqual(['plex']);
     expect(state.plex.owner).toBe(FAKE_PLEX_ACCOUNT.id);
@@ -3679,7 +3827,7 @@ index dd7dc04..b9f5320 100644
 
 ```diff
 diff --git a/packages/cli/src/run.test.ts b/packages/cli/src/run.test.ts
-index ab021d1..4a709bc 100644
+index ab021d1..c6aa73b 100644
 --- a/packages/cli/src/run.test.ts
 +++ b/packages/cli/src/run.test.ts
 @@ -1,2 +1,2 @@
@@ -3711,7 +3859,7 @@ index ab021d1..4a709bc 100644
      wiring: apis.seams,
 +    plexTv: () => plexTv.client,
    };
-@@ -1410,2 +1418,109 @@ describe('mediaplane apply: Seerr in the stack', () => {
+@@ -1410,2 +1418,131 @@ describe('mediaplane apply: Seerr in the stack', () => {
  
 +describe('mediaplane apply: Plex as the media server', () => {
 +  const PLEX_STACK = `version: 1
@@ -3802,6 +3950,28 @@ index ab021d1..4a709bc 100644
 +    expectNoSecrets(term.stdout() + term.stderr(), ['revoked-plex-token-0']);
 +  });
 +
++  it('stops a Plex that runs published, unclaimed, when plex.tv refuses your token, changing nothing else', async () => {
++    const { home, docker } = await plexHome('revoked-plex-token-0');
++    expect(
++      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
++    ).toBe(1);
++    // As an apply from before this slice left it, or a "docker compose up": Plex
++    // published, and unclaimed.
++    expect((await docker.up(60, {}, [])).ok).toBe(true);
++    docker.calls.length = 0;
++    const term = capture();
++    expect(await run(['apply', '--home', home, '--yes'], term.io, deps(docker))).toBe(1);
++    expect(term.stderr()).toContain(
++      "plex.tv refused the Plex token (HTTP 401) (GET /api/claim/token.json); Mediaplane stopped plex, which ran, but isn't shown to be yours, so that it isn't left published\n",
++    );
++    // Stopped, and nothing else: Mediaplane didn't leave the wiring network, nor stop or
++    // start anything more.
++    expect(docker.calls.filter((call) => /^(up|stop|leave-wiring)\b/.test(call))).toEqual(
++      ['stop plex'],
++    );
++    expectNoSecrets(term.stdout() + term.stderr(), ['revoked-plex-token-0']);
++  });
++
 +  it("keeps a Plex that didn't claim itself unpublished, and fails", async () => {
 +    const { home, plex, docker } = await plexHome(FAKE_PLEX_ACCOUNT.token, false);
 +    const term = capture();
@@ -3827,7 +3997,7 @@ index ab021d1..4a709bc 100644
 
 ```diff
 diff --git a/packages/engine/src/apply/apply.test.ts b/packages/engine/src/apply/apply.test.ts
-index a0f0144..83170e0 100644
+index a0f0144..86da7ff 100644
 --- a/packages/engine/src/apply/apply.test.ts
 +++ b/packages/engine/src/apply/apply.test.ts
 @@ -14,3 +14,3 @@ import { join } from 'node:path';
@@ -3848,7 +4018,7 @@ index a0f0144..83170e0 100644
 -    "sonarr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. First: if the Jellyfin login it was set up with is yours, set admin.username and admin.password to it. Or second: make its admin (its first user) the Jellyfin login that admin.username names. Either needs its Jellyfin already at jellyfin:8096, with no URL base and no TLS; then run apply again. Last, if you did not set it up: start it afresh, as the runbook says";
 +    "sonarr is set up, but Mediaplane can't show that it is its own, so it stays unpublished, on every apply until it can. First: sign in to mediaplane-sonarr-1 as the shared admin, then run apply again. Last: start it afresh";
    /**
-@@ -2473,2 +2475,122 @@ describe('apply: a first-run setup that makes no key, after another', () => {
+@@ -2473,2 +2475,125 @@ describe('apply: a first-run setup that makes no key, after another', () => {
    });
 +
 +  it('says to start it afresh if you did not set it up, when its setup gives no remedies of its own', async () => {
@@ -3925,12 +4095,13 @@ index a0f0144..83170e0 100644
 +    expect(calls).toContain('up unpublished jellyfin sonarr with sonarr.FIRST_START');
 +    // The publishing up keeps it only for an app still unpublished: none here.
 +    expect(given).toEqual([JSON.stringify({ sonarr: { FIRST_START: FIRST } }), '{}']);
-+    // The first start and the setup are given the stack's keys, those you give too, and
-+    // plex.tv as apply was given it.
++    // The first start and the setup are given the stack's keys, and plex.tv as apply was
++    // given it, but no secret you give that no app's API takes as its key: the VPN key.
 +    expect(seen).toHaveLength(2);
 +    for (const ctx of seen) {
 +      expect(ctx.plexTv).toBe(plexTv);
-+      expect(ctx.keys.gluetun?.wireguardKey).toBe('fake-wireguard-key-for-tests');
++      expect(ctx.keys.sonarr?.apiKey).toBeDefined();
++      expect(ctx.keys.gluetun?.wireguardKey).toBeUndefined();
 +    }
 +    // Never in a record or a result.
 +    expect(JSON.stringify(first)).not.toContain(FIRST);
@@ -3968,6 +4139,8 @@ index a0f0144..83170e0 100644
 +      hint: 'fake: sign in again',
 +    });
 +    expect(calls.some((call) => call.startsWith('up'))).toBe(false);
++    // Asked before anything changed: Mediaplane is still on the wiring network.
++    expect(calls).not.toContain('leave-wiring');
 +    expect(failed.actions.map((a) => `${a.step} ${a.result}`)).toContain('start failed');
 +  });
  });
@@ -3977,10 +4150,10 @@ index a0f0144..83170e0 100644
 
 ```diff
 diff --git a/packages/engine/src/http/client.test.ts b/packages/engine/src/http/client.test.ts
-index a4d56e7..a18b075 100644
+index a4d56e7..e310e72 100644
 --- a/packages/engine/src/http/client.test.ts
 +++ b/packages/engine/src/http/client.test.ts
-@@ -131,2 +131,54 @@ describe('createAppApi', () => {
+@@ -131,2 +131,58 @@ describe('createAppApi', () => {
  
 +  it('asks again until the answer says it is done, or the deadline passes, giving the last', async () => {
 +    let asked = 0;
@@ -4019,6 +4192,10 @@ index a4d56e7..a18b075 100644
 +      claimed: false,
 +    });
 +    expect(asked).toBe(-99);
++    // Without the key, when asked so: an app not shown to be yours never gets it.
++    await client(0).until('/identity', claimed, () => true, { anonymous: true });
++    expect(app.requests.at(-1)?.headers['x-plex-token']).toBeUndefined();
++    expect(app.requests.at(-2)?.headers['x-plex-token']).toBe(KEY);
 +  });
 +
 +  it("sends Plex's token in X-Plex-Token when the app takes one", async () => {
@@ -4141,7 +4318,7 @@ index 1ac04cd..7023443 100644
 
 ```diff
 diff --git a/packages/engine/src/secrets/values.test.ts b/packages/engine/src/secrets/values.test.ts
-index b48e036..629d95f 100644
+index b48e036..d02f2ef 100644
 --- a/packages/engine/src/secrets/values.test.ts
 +++ b/packages/engine/src/secrets/values.test.ts
 @@ -6,3 +6,9 @@ import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures
@@ -4155,15 +4332,38 @@ index b48e036..629d95f 100644
 +  userSecrets,
 +} from './values';
  import { tempDir } from '../testing/temp';
-@@ -104 +110,23 @@ describe('secretValues', () => {
+@@ -104 +110,46 @@ describe('secretValues', () => {
  });
 +
 +describe('userSecrets and stackKeys', () => {
-+  it('reads the secrets you give, by app, and adds them to the stored keys', async () => {
++  it("reads every secret you give, by app, and adds to the stored keys only an app's API key", async () => {
 +    const stack = await stackIn();
 +    const given = await userSecrets(stack, {});
++    // Every one is read, so that it is redacted: the VPN key too.
 +    expect(given).toEqual({ gluetun: { wireguardKey: 'fake-wireguard-key-for-tests' } });
-+    expect(stackKeys(stored, given)).toEqual({
++    // No app's API takes the VPN key, so no setup or resource gets it.
++    expect(stackKeys(stack, stored, given)).toEqual(stored.apps);
++    // One an app's API takes as its key, as Plex's takes your token, is a key.
++    const keyed: ResolvedStack = {
++      ...stack,
++      apps: stack.apps.map((app) =>
++        app.def.id === 'gluetun'
++          ? {
++              ...app,
++              def: {
++                ...app.def,
++                api: {
++                  port: 'control',
++                  ready: '/',
++                  key: { secret: 'wireguardKey', scheme: 'x-api-key' },
++                  check: '/',
++                },
++              },
++            }
++          : app,
++      ),
++    };
++    expect(stackKeys(keyed, stored, given)).toEqual({
 +      gluetun: {
 +        controlApiKey: '1'.repeat(32),
 +        wireguardKey: 'fake-wireguard-key-for-tests',
@@ -4199,7 +4399,7 @@ index 0893983..2fdabce 100644
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `pnpm vitest run catalog/catalog.test.ts catalog/jellyfin/integration.test.ts catalog/plex/bootstrap.test.ts catalog/seerr/bootstrap.test.ts catalog/seerr/integration.test.ts packages/cli/src/run.test.ts packages/engine/src/apply/apply.test.ts packages/engine/src/http/client.test.ts packages/engine/src/integrations/wire.test.ts packages/engine/src/plextv/client.test.ts packages/engine/src/runtime/docker.test.ts packages/engine/src/secrets/values.test.ts scripts/docs/catalog-facts.test.ts`
-Expected: FAIL. `catalog/plex/bootstrap.test.ts` doesn't load (`Cannot find module './bootstrap'`), and 20 tests fail in 9 more files, 634 pass: `catalog.test.ts` and `catalog-facts.test.ts` (Plex has no API or setup), `run.test.ts` (`Cannot set properties of undefined (setting 'configDir')`: no fake Plex), `apply.test.ts` (no start variables, no `claimedHint`), `http/client.test.ts` (`client(...).until is not a function`, and no `X-Plex-Token`), `wire.test.ts`, `plextv/client.test.ts` (no `NO_PLEX_TV`), `docker.test.ts` (no start variables) and `values.test.ts` (`userSecrets is not a function`).
+Expected: FAIL. `catalog/plex/bootstrap.test.ts` doesn't load (`Cannot find module './bootstrap'`), and 21 tests fail in 9 more files, 634 pass: `catalog.test.ts` and `catalog-facts.test.ts` (Plex has no API or setup), `run.test.ts` (`Cannot set properties of undefined (setting 'configDir')`: no fake Plex), `apply.test.ts` (no start variables, no `claimedHint`), `http/client.test.ts` (`client(...).until is not a function`, and no `X-Plex-Token`), `wire.test.ts`, `plextv/client.test.ts` (no `NO_PLEX_TV`), `docker.test.ts` (no start variables) and `values.test.ts` (`userSecrets is not a function`).
 
 - [ ] **Step 3: Write the claim, the context, the start variables and Plex's setup**
 
@@ -4255,9 +4455,13 @@ const identity = z.looseObject({
 
 type Identity = z.infer<typeof identity>['MediaContainer'];
 
-/** What Plex says of itself to anyone (`/identity`): whether it is claimed. */
+/**
+ * What Plex says of itself to anyone (`/identity`): whether it is claimed. Asked without
+ * your token, which goes to Plex only once it is shown to be yours.
+ */
 async function identityOf(api: AppApi): Promise<Identity> {
-  return (await api.get('/identity', identity)).MediaContainer;
+  return (await api.until('/identity', identity, () => true, { anonymous: true }))
+    .MediaContainer;
 }
 
 /** Your Plex token, which the setup claims Plex with, from the stack's keys. */
@@ -4369,8 +4573,11 @@ export const plexBootstrap: Bootstrap = {
       );
     }
     // As long as apply waits for an app, as Plex claims itself as it first starts.
-    const held = (await api.until('/identity', identity, (i) => i.MediaContainer.claimed))
-      .MediaContainer;
+    const held = (
+      await api.until('/identity', identity, (i) => i.MediaContainer.claimed, {
+        anonymous: true,
+      })
+    ).MediaContainer;
     if (!held.claimed) {
       throw new AppApiError(
         `${api.name} at ${api.where} didn't claim itself as it started, so it stays unpublished: its claim token may have run out, or it couldn't reach plex.tv; its log says which ("mediaplane status plex" names its container)`,
@@ -4456,7 +4663,7 @@ index 5d741f4..d0449d7 100644
 
 ```diff
 diff --git a/packages/engine/src/apply/apply.ts b/packages/engine/src/apply/apply.ts
-index 149a7f1..36c985a 100644
+index 149a7f1..90695c4 100644
 --- a/packages/engine/src/apply/apply.ts
 +++ b/packages/engine/src/apply/apply.ts
 @@ -16,2 +16,3 @@ import { COMPOSE_PATH, COMPOSE_PREV_PATH, ENV_PATH, STACK_PATH } from '../paths'
@@ -4471,7 +4678,7 @@ index 149a7f1..36c985a 100644
 @@ -37,3 +38,3 @@ import { compare } from '../util/sort';
  import { vpnCheck, VPN_RUNBOOK } from '../vpn/check';
 -import { bootstrapApps, BootstrapFailed } from './bootstrap';
-+import { bootstrapApps, BootstrapFailed, firstStartEnv } from './bootstrap';
++import { bootstrapApps, BootstrapFailed, startVariables } from './bootstrap';
  import {
 @@ -72,2 +73,7 @@ export interface ApplyOptions extends PlanOptions {
    project?: string;
@@ -4501,23 +4708,26 @@ index 149a7f1..36c985a 100644
 +    );
 +    const result = await runtime.up(wait, values, unpublished, env);
      if (!result.ok) throw new Error(await startFailure(runtime, result.error));
-@@ -211,3 +228,9 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
-     // An app whose first-run setup is open to anyone starts with no published port: the
--    // bootstrap step publishes it once it is set up (spec §6.4).
-+    // bootstrap step publishes it once it is set up (spec §6.4). One whose setup needs
-+    // something for its first start gets it now, as late as can be: Plex's claim token
-+    // lasts four minutes. One that can't be had stops the step before anything starts.
-+    startEnv = await firstStartEnv(stack, shown.bootstrap, {
-+      keys: stackKeys(store, given),
-+      plexTv,
-+    });
-     const unpublished = shown.bootstrap.filter((b) => b.unpublished).map((b) => b.app);
-@@ -236,2 +259,4 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+@@ -196,2 +213,13 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+   await steps.run('start', async () => {
++    // An app whose setup needs something for its first start gets it now, as late as can
++    // be (Plex's claim token lasts four minutes), but before anything changes: one that
++    // can't be had stops the step, and stops the app it was for if it runs, since it
++    // isn't shown to be yours.
++    startEnv = await startVariables(
++      stack,
++      shown.bootstrap,
++      { keys: stackKeys(stack, store, given), plexTv },
++      runtime,
++      values,
++    );
+     // Compose can't recreate the wiring network while another project's container is on
+@@ -236,2 +264,4 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
          values,
 +        given,
 +        plexTv,
          env: options.env,
-@@ -264,2 +289,3 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+@@ -264,2 +294,3 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
          values,
 +        given,
          env: options.env,
@@ -4527,7 +4737,7 @@ index 149a7f1..36c985a 100644
 
 ```diff
 diff --git a/packages/engine/src/apply/bootstrap.ts b/packages/engine/src/apply/bootstrap.ts
-index d6c9b97..e544008 100644
+index d6c9b97..63616c9 100644
 --- a/packages/engine/src/apply/bootstrap.ts
 +++ b/packages/engine/src/apply/bootstrap.ts
 @@ -1,2 +1,2 @@
@@ -4560,7 +4770,7 @@ index d6c9b97..e544008 100644
 -  // A key that Mediaplane chose, and the app takes from its environment (Seerr's), is
 -  // carried: the setup asks an app that is set up already with it, never with the
 -  // password. A key the setup makes isn't there yet, or may be stale.
-+  const allKeys = stackKeys(options.store, given);
++  const allKeys = stackKeys(stack, options.store, given);
 +  // A key that Mediaplane chose, and the app takes from its environment (Seerr's), or
 +  // one you give (Plex's token), is carried: the setup asks an app that is set up already
 +  // with it, never with the password. A key the setup makes isn't there yet, or may be
@@ -4610,7 +4820,7 @@ index d6c9b97..e544008 100644
 +      'If you did not set it up: start it afresh, as the runbook says';
 +    return `${said}. ${remedies}`;
    }
-@@ -413 +422,24 @@ async function claimed(
+@@ -413 +422,76 @@ async function claimed(
  }
 +
 +/**
@@ -4625,15 +4835,67 @@ index d6c9b97..e544008 100644
 +  ctx: BootstrapContext,
 +): Promise<Record<string, Record<string, string>>> {
 +  const env: Record<string, Record<string, string>> = {};
-+  for (const change of pending) {
-+    if (!change.unpublished) continue;
-+    const app = stack.apps.find((a) => a.def.id === change.app);
-+    const bootstrap = app?.def.bootstrap;
-+    if (app === undefined || bootstrap?.firstStart === undefined) continue;
-+    if ((await appSetupDone(stack.home, app)) === true) continue;
++  for (const app of await firstStartApps(stack, pending)) {
++    const bootstrap = app.def.bootstrap;
++    if (bootstrap?.firstStart === undefined) continue;
 +    env[app.def.id] = await bootstrap.firstStart(stack, ctx);
 +  }
 +  return env;
++}
++
++/** The apps firstStartEnv asks for start variables, in the plan's order. */
++async function firstStartApps(
++  stack: ResolvedStack,
++  pending: readonly BootstrapChange[],
++): Promise<ResolvedApp[]> {
++  const apps: ResolvedApp[] = [];
++  for (const change of pending) {
++    if (!change.unpublished) continue;
++    const app = stack.apps.find((a) => a.def.id === change.app);
++    if (app?.def.bootstrap?.firstStart === undefined) continue;
++    if ((await appSetupDone(stack.home, app)) === true) continue;
++    apps.push(app);
++  }
++  return apps;
++}
++
++/**
++ * firstStartEnv, for apply's start step, before it changes anything. When it throws, each
++ * app it was for that runs is stopped first: an app whose setup isn't done isn't shown to
++ * be yours (Plex, unclaimed or claimed by someone else, such as one an apply before
++ * Slice 7 published), so it must not stay published. A BootstrapFailed then says so.
++ */
++export async function startVariables(
++  stack: ResolvedStack,
++  pending: readonly BootstrapChange[],
++  ctx: BootstrapContext,
++  runtime: Runtime,
++  values: Readonly<Record<string, string>>,
++): Promise<Record<string, Record<string, string>>> {
++  try {
++    return await firstStartEnv(stack, pending, ctx);
++  } catch (cause) {
++    const apps = (await firstStartApps(stack, pending)).map((app) => app.def.id);
++    let running: string[];
++    try {
++      running = (await runtime.containers())
++        .filter((c) => apps.includes(c.service) && c.state === 'running')
++        .map((c) => c.service);
++    } catch {
++      // Not known to be stopped: stop them all.
++      running = apps;
++    }
++    if (running.length === 0) throw cause;
++    const stopped = await runtime.stop(running, { ...values });
++    if (!(cause instanceof BootstrapFailed)) throw cause;
++    const names = running.join(', ');
++    throw new BootstrapFailed(
++      stopped.ok
++        ? `${cause.message}; Mediaplane stopped ${names}, which ran, but isn't shown to be yours, so that it isn't left published`
++        : `${cause.message}; ${names} runs, isn't shown to be yours, and couldn't be stopped: ${stopped.error}. Stop it yourself`,
++      cause.hint,
++    );
++  }
 +}
 ```
 
@@ -4713,7 +4975,7 @@ index bcdd84c..a264164 100644
 
 ```diff
 diff --git a/packages/engine/src/http/client.ts b/packages/engine/src/http/client.ts
-index c6837fd..a2e401b 100644
+index c6837fd..ebbc20c 100644
 --- a/packages/engine/src/http/client.ts
 +++ b/packages/engine/src/http/client.ts
 @@ -73,6 +73,6 @@ export interface TestFailure {
@@ -4726,25 +4988,30 @@ index c6837fd..a2e401b 100644
 -export type KeyScheme = 'x-api-key' | 'bearer' | 'mediabrowser';
 +export type KeyScheme = 'x-api-key' | 'bearer' | 'mediabrowser' | 'x-plex-token';
  
-@@ -213,2 +213,9 @@ export interface AppApi {
+@@ -213,2 +213,14 @@ export interface AppApi {
    ready(path: string): Promise<void>;
 +  /**
-+   * GET `path` with the key, checked with `schema`, again and again until `done` says so
-+   * of the answer or the deadline passes, waiting a little longer each time, up to 2 s: the
-+   * last answer, either way. For what an app finishes by itself once it is ready, such as
-+   * Plex claiming itself as it first starts.
++   * GET `path` with the key (without it, when `anonymous`), checked with `schema`, again
++   * and again until `done` says so of the answer or the deadline passes, waiting a little
++   * longer each time, up to 2 s: the last answer, either way. For what an app finishes by
++   * itself once it is ready, such as Plex claiming itself as it first starts.
 +   */
-+  until<T>(path: string, schema: z.ZodType<T>, done: (answer: T) => boolean): Promise<T>;
++  until<T>(
++    path: string,
++    schema: z.ZodType<T>,
++    done: (answer: T) => boolean,
++    options?: { anonymous?: boolean },
++  ): Promise<T>;
    /**
-@@ -329,2 +336,3 @@ export function createAppApi(options: AppApiOptions): AppApi {
+@@ -329,2 +341,3 @@ export function createAppApi(options: AppApiOptions): AppApi {
          if (options.key?.scheme === 'bearer') headers.Authorization = `Bearer ${key}`;
 +        else if (options.key?.scheme === 'x-plex-token') headers['X-Plex-Token'] = key;
          else headers['X-Api-Key'] = key;
-@@ -682,2 +690,13 @@ export function createAppApi(options: AppApiOptions): AppApi {
+@@ -682,2 +695,13 @@ export function createAppApi(options: AppApiOptions): AppApi {
      },
-+    async until(path, schema, done) {
++    async until(path, schema, done, how = {}) {
 +      const start = retry.now();
-+      const call: Call = { method: 'GET', path };
++      const call: Call = { method: 'GET', path, anonymous: how.anonymous === true };
 +      for (let tries = 0; ; tries++) {
 +        const answer = parsed(call, await send(call, true), schema);
 +        if (done(answer)) return answer;
@@ -4760,7 +5027,7 @@ index c6837fd..a2e401b 100644
 
 ```diff
 diff --git a/packages/engine/src/integrations/wire.ts b/packages/engine/src/integrations/wire.ts
-index 55684de..2d34996 100644
+index 55684de..0e96656 100644
 --- a/packages/engine/src/integrations/wire.ts
 +++ b/packages/engine/src/integrations/wire.ts
 @@ -8,2 +8,3 @@ import { adminLogin } from '../secrets/admin';
@@ -4776,7 +5043,7 @@ index 55684de..2d34996 100644
    const admin = await adminLogin(stack.config, options.home, options.store, options.env);
 -  const secrets = knownSecrets(options.values, options.store, admin);
 +  const given = options.given ?? {};
-+  const keys = stackKeys(options.store, given);
++  const keys = stackKeys(stack, options.store, given);
 +  const secrets = knownSecrets(options.values, options.store, admin, given);
    const found = options.found ?? foundSecrets();
 @@ -109,3 +114,3 @@ export async function wire(options: WireOptions): Promise<string[]> {
@@ -4795,7 +5062,7 @@ index 55684de..2d34996 100644
 
 ```diff
 diff --git a/packages/engine/src/integrations/wiring.ts b/packages/engine/src/integrations/wiring.ts
-index 426344e..27d5e3e 100644
+index f71e7c1..9f67233 100644
 --- a/packages/engine/src/integrations/wiring.ts
 +++ b/packages/engine/src/integrations/wiring.ts
 @@ -207,5 +207,5 @@ export async function reachApps(
@@ -4821,7 +5088,7 @@ index 426344e..27d5e3e 100644
 
 ```diff
 diff --git a/packages/engine/src/plan/plan.ts b/packages/engine/src/plan/plan.ts
-index 48ae5e3..b95b617 100644
+index 48ae5e3..8874941 100644
 --- a/packages/engine/src/plan/plan.ts
 +++ b/packages/engine/src/plan/plan.ts
 @@ -35,3 +35,8 @@ import { withGeneratedSecrets } from '../secrets/generate';
@@ -4842,7 +5109,7 @@ index 48ae5e3..b95b617 100644
 @@ -251,5 +258,5 @@ export async function planStack(
          runtime: options.runtime,
 -        keys: preview.apps,
-+        keys: stackKeys(preview, given),
++        keys: stackKeys(stack, preview, given),
          admin,
 -        secrets: knownSecrets(values, preview, admin),
 +        secrets: knownSecrets(values, preview, admin, given),
@@ -4853,7 +5120,7 @@ index 48ae5e3..b95b617 100644
 
 ```diff
 diff --git a/packages/engine/src/plextv/client.ts b/packages/engine/src/plextv/client.ts
-index 250426e..f9252c5 100644
+index d9bd902..f9dc31d 100644
 --- a/packages/engine/src/plextv/client.ts
 +++ b/packages/engine/src/plextv/client.ts
 @@ -105,2 +105,19 @@ export interface PlexTv {
@@ -4973,10 +5240,10 @@ index d22ce93..0e8f088 100644
 
 ```diff
 diff --git a/packages/engine/src/secrets/values.ts b/packages/engine/src/secrets/values.ts
-index 1b5b91d..718d96e 100644
+index 1b5b91d..71a4db1 100644
 --- a/packages/engine/src/secrets/values.ts
 +++ b/packages/engine/src/secrets/values.ts
-@@ -41,2 +41,42 @@ export function secretsToGenerate(stack: ResolvedStack, store: SecretStore): str
+@@ -41,2 +41,49 @@ export function secretsToGenerate(stack: ResolvedStack, store: SecretStore): str
  
 +/**
 + * The secrets you give (`userProvided`), by app then name, read from their references in
@@ -5004,16 +5271,23 @@ index 1b5b91d..718d96e 100644
 +}
 +
 +/**
-+ * Every app's keys, by app then name: the store's, and the ones you give (userSecrets),
-+ * such as Plex's token, which is Plex's key to Mediaplane.
++ * Every app's keys, by app then name: the store's, and of the ones you give (userSecrets),
++ * only those an app's API takes as its key, such as Plex's token, which is Plex's key to
++ * Mediaplane. The others, such as the VPN key, are redacted, but never reach a setup or a
++ * resource.
 + */
 +export function stackKeys(
++  stack: ResolvedStack,
 +  store: SecretStore,
 +  given: Readonly<Record<string, Readonly<Record<string, string>>>>,
 +): Record<string, Record<string, string>> {
 +  const keys: Record<string, Record<string, string>> = { ...store.apps };
-+  for (const [app, secrets] of Object.entries(given)) {
-+    keys[app] = { ...keys[app], ...secrets };
++  for (const app of stack.apps) {
++    const name = app.def.api?.key.secret;
++    const value = name === undefined ? undefined : given[app.def.id]?.[name];
++    if (name !== undefined && value !== undefined) {
++      keys[app.def.id] = { ...keys[app.def.id], [name]: value };
++    }
 +  }
 +  return keys;
 +}
@@ -5406,7 +5680,7 @@ git add packages catalog scripts docs/reference
 git commit -m "feat: Plex claimed for your account before it is published, its claim token fetched as it first starts and passed as PLEX_CLAIM" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1828 tests pass in 87 files.
+Expected: 1830 tests pass in 87 files.
 
 ---
 
@@ -5420,10 +5694,13 @@ started (decision 15).
 Decision: one connection spec for Jellyfin and Plex, your token, the library it needs,
 and the stack's address only (decision 16).
 Decision: a new mark of `plan`'s: the arr among Plex's devices (decision 12).
+Decision: before its setup is done, a Plex of yours must let no network in without a
+sign-in (decision 14).
 
 **Files:**
 - Create: `catalog/plex/integration.ts`
-- Modify: `catalog/plex/app.ts`, `catalog/_shared/servarr-connection.ts`,
+- Modify: `catalog/plex/app.ts`, `catalog/plex/bootstrap.ts`,
+  `catalog/_shared/servarr-connection.ts`,
   `catalog/sonarr/integration.ts`, `catalog/radarr/integration.ts`,
   `packages/engine/src/catalog/types.ts`, `packages/engine/src/integrations/wiring.ts`,
   `packages/engine/src/testing/plex.ts`, `packages/engine/src/testing/jellyfin.ts`,
@@ -5431,7 +5708,7 @@ Decision: a new mark of `plan`'s: the arr among Plex's devices (decision 12).
   generated: `catalog/plex/README.md`, `catalog/sonarr/README.md`,
   `catalog/radarr/README.md`, `docs/reference/stack-yaml.md`,
   `docs/reference/stack.schema.json`
-- Test: `catalog/plex/integration.test.ts` (new),
+- Test: `catalog/plex/integration.test.ts` (new), `catalog/plex/bootstrap.test.ts`,
   `catalog/_shared/servarr-connection.test.ts`, `catalog/catalog.test.ts`,
   `packages/engine/src/integrations/wiring.test.ts`, `packages/cli/src/run.test.ts`,
   `scripts/docs/catalog-facts.test.ts`
@@ -5657,6 +5934,44 @@ index 38b3605..65abf5f 100644
    });
 ```
 
+**Change** `catalog/plex/bootstrap.test.ts`:
+
+```diff
+diff --git a/catalog/plex/bootstrap.test.ts b/catalog/plex/bootstrap.test.ts
+index c85e35e..c512c8e 100644
+--- a/catalog/plex/bootstrap.test.ts
++++ b/catalog/plex/bootstrap.test.ts
+@@ -168,2 +168,17 @@ describe("Plex's first-run setup", () => {
+ 
++  it('keeps a Plex of yours unpublished that lets a network in without a sign-in, naming the setting and what to do', async () => {
++    const { api, state, plexTv, ctx, stack } = await plexOf();
++    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
++    // Set while it was unclaimed, by whoever reached it: it survives the claim (probed).
++    state.plex.allowedNetworks = '192.0.2.0/255.255.255.0';
++    const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
++    expect(failed).toMatchObject({
++      kind: 'rejected',
++      message: `Plex at http://plex:32400 (127.0.0.1) is yours, but lets 192.0.2.0/255.255.255.0 in without a sign-in (allowedNetworks), which Mediaplane never sets: it may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it, clear allowedNetworks in appdata/plex/${PLEX_PREFERENCES}, then run apply again`,
++    });
++    // Cleared, it is taken.
++    state.plex.allowedNetworks = '';
++    expect(await plexBootstrap.run(api, ADMIN, stack, ctx)).toBeUndefined();
++  });
++
+   it("keeps a Plex that didn't claim itself unpublished, saying why", async () => {
+@@ -366,3 +381,4 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
+     expect(identity.filter((r) => r.headers['x-plex-token'] !== undefined)).toEqual([]);
+-    // Plex never got your token: nothing else was asked of it.
++    // Plex got your token only once plex.tv said it is yours: to check that it lets no
++    // network in without a sign-in.
+     expect(
+@@ -372,3 +388,3 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
+         .map((r) => r.path),
+-    ).toEqual([]);
++    ).toEqual(['/:/prefs']);
+     expect(first.pending).toEqual([{ app: 'plex', unpublished: true }]);
+```
+
 **Create** `catalog/plex/integration.test.ts`:
 
 ```ts
@@ -5664,7 +5979,6 @@ import { createAppApi, type ResourceSpec, type WiringContext } from '@mediaplane
 import {
   claimFakePlex,
   FAKE_PLEX_ACCOUNT,
-  FAKE_PLEX_HOSTNAME,
   fakePlexTv,
   fakeStackApis,
   freshAppState,
@@ -5756,7 +6070,6 @@ describe("Plex's name", () => {
       fields: { name: '' },
     });
     expect(plex.friendlyName).toBe('');
-    expect(FAKE_PLEX_HOSTNAME).not.toBe('');
     await spec.create(api, wanted('server'));
     expect(plex.friendlyName).toBe('Mediaplane');
     plex.friendlyName = 'Renamed by hand';
@@ -5923,7 +6236,7 @@ describe("Plex's libraries", () => {
 
 ```diff
 diff --git a/packages/cli/src/run.test.ts b/packages/cli/src/run.test.ts
-index 4a709bc..b55815f 100644
+index c6aa73b..2490147 100644
 --- a/packages/cli/src/run.test.ts
 +++ b/packages/cli/src/run.test.ts
 @@ -15,2 +15,3 @@ import {
@@ -6047,8 +6360,8 @@ index 2fdabce..ec9035a 100644
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `pnpm vitest run catalog/_shared/servarr-connection.test.ts catalog/catalog.test.ts catalog/plex/integration.test.ts packages/cli/src/run.test.ts packages/engine/src/integrations/wiring.test.ts scripts/docs/catalog-facts.test.ts`
-Expected: FAIL. `servarr-connection.test.ts` doesn't load (`TypeError: servarrPlex is not a function`), nor does `catalog/plex/integration.test.ts` (`Cannot find module './integration'`), and 3 tests fail, 273 pass: `catalog.test.ts` (Plex has no integration), `run.test.ts` (no `plex.server` wired) and `wiring.test.ts` (`started` isn't waited for: `expected +0 to be 3`).
+Run: `pnpm vitest run catalog/_shared/servarr-connection.test.ts catalog/catalog.test.ts catalog/plex/bootstrap.test.ts catalog/plex/integration.test.ts packages/cli/src/run.test.ts packages/engine/src/integrations/wiring.test.ts scripts/docs/catalog-facts.test.ts`
+Expected: FAIL. `servarr-connection.test.ts` doesn't load (`TypeError: servarrPlex is not a function`), nor does `catalog/plex/integration.test.ts` (`Cannot find module './integration'`), and 5 tests fail, 288 pass: `catalog.test.ts` (Plex has no integration), `catalog/plex/bootstrap.test.ts` (no `allowedNetworks` check: `expected undefined to match object { kind: 'rejected', … }`, and `expected [] to deeply equal [ '/:/prefs' ]`), `run.test.ts` (no `plex.server` wired) and `wiring.test.ts` (`started` isn't waited for: `expected +0 to be 3`).
 
 - [ ] **Step 3: Write Plex's integration and the shared connection**
 
@@ -6300,6 +6613,45 @@ index b585040..d9edd46 100644
 +      ),
 +  }),
    env: () => ({ VERSION: 'docker' }),
+```
+
+**Change** `catalog/plex/bootstrap.ts`:
+
+```diff
+diff --git a/catalog/plex/bootstrap.ts b/catalog/plex/bootstrap.ts
+index d5a494c..aac7b18 100644
+--- a/catalog/plex/bootstrap.ts
++++ b/catalog/plex/bootstrap.ts
+@@ -19,2 +19,8 @@ const SERVER_TOKEN = /\sPlexOnlineToken="([^"]+)"/;
+ 
++const prefs = z.looseObject({
++  MediaContainer: z.looseObject({
++    Setting: z.array(z.looseObject({ id: z.string(), value: z.unknown() })),
++  }),
++});
++
+ const identity = z.looseObject({
+@@ -108,2 +114,4 @@ async function accountOf(
+  *   5xx, no connection) is `unsure`, as is a claimed Plex whose file holds no token.
++ * - Before it is done, a Plex of yours must let no network in without a sign-in
++ *   (`allowedNetworks` empty): anyone could set that while it was unclaimed.
+  * - It is done once Preferences.xml holds a token (`PlexOnlineToken`), and Mediaplane's
+@@ -175,2 +183,15 @@ export const plexBootstrap: Bootstrap = {
+     }
++    // Yours, so it may have your token now. While it was unclaimed, anyone who reached it
++    // could change its settings, and they survive the claim (probed): a network let in
++    // without a sign-in would be open once it is published. Asked here only, so one you
++    // set later, on purpose, is left alone.
++    const allowed = (await api.get('/:/prefs', prefs)).MediaContainer.Setting.find(
++      (s) => s.id === 'allowedNetworks',
++    )?.value;
++    if (allowed !== '') {
++      throw new AppApiError(
++        `${api.name} at ${api.where} is yours, but lets ${typeof allowed === 'string' ? allowed : 'networks it does not name'} in without a sign-in (allowedNetworks), which Mediaplane never sets: it may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it, clear allowedNetworks in appdata/plex/${PREFERENCES}, then run apply again`,
++        { kind: 'rejected' },
++      );
++    }
+     return undefined;
 ```
 
 **Create** `catalog/plex/integration.ts`:
@@ -6618,13 +6970,13 @@ index 4fb6350..ed01499 100644
 
 ```diff
 diff --git a/packages/engine/src/integrations/wiring.ts b/packages/engine/src/integrations/wiring.ts
-index 27d5e3e..c8235dd 100644
+index 9f67233..a50b234 100644
 --- a/packages/engine/src/integrations/wiring.ts
 +++ b/packages/engine/src/integrations/wiring.ts
 @@ -1 +1,2 @@
 +import { z } from 'zod';
  import { error, warning, type Diagnostic } from '../diagnostics';
-@@ -232,3 +233,7 @@ export function redactionValues(secrets: readonly string[]): Record<string, stri
+@@ -229,3 +230,7 @@ export { redactionValues };
  
 -/** The app is up, and still takes Mediaplane's key (spec §6.3, "the source"). */
 +/**
@@ -6633,7 +6985,7 @@ index 27d5e3e..c8235dd 100644
 + * now, as one that doesn't answer is.
 + */
  export async function checkApp(reached: ReachedApp): Promise<void> {
-@@ -237,2 +242,11 @@ export async function checkApp(reached: ReachedApp): Promise<void> {
+@@ -234,2 +239,11 @@ export async function checkApp(reached: ReachedApp): Promise<void> {
    await reached.api.ready(spec.ready);
 +  if (spec.started !== undefined) {
 +    const { path, done } = spec.started;
@@ -7034,7 +7386,7 @@ index c164844..a2bc0d6 100644
 - [ ] **Step 4: Run them to see them pass, and regenerate the facts**
 
 ```bash
-pnpm vitest run catalog/_shared/servarr-connection.test.ts catalog/catalog.test.ts catalog/plex/integration.test.ts packages/cli/src/run.test.ts packages/engine/src/integrations/wiring.test.ts scripts/docs/catalog-facts.test.ts
+pnpm vitest run catalog/_shared/servarr-connection.test.ts catalog/catalog.test.ts catalog/plex/bootstrap.test.ts catalog/plex/integration.test.ts packages/cli/src/run.test.ts packages/engine/src/integrations/wiring.test.ts scripts/docs/catalog-facts.test.ts
 pnpm docs:generate
 ```
 
@@ -7050,7 +7402,7 @@ git add packages catalog scripts docs/reference
 git commit -m "feat(catalog): Plex named and given its Movies and TV Shows libraries, and Sonarr and Radarr connected to it with your token" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1846 tests pass in 88 files.
+Expected: 1849 tests pass in 88 files.
 
 ---
 
@@ -7554,7 +7906,7 @@ index 7d96797..eaf3bcc 100644
 
 ```diff
 diff --git a/packages/cli/src/run.test.ts b/packages/cli/src/run.test.ts
-index b55815f..ae77af9 100644
+index 2490147..47978bc 100644
 --- a/packages/cli/src/run.test.ts
 +++ b/packages/cli/src/run.test.ts
 @@ -1521,2 +1521,46 @@ apps:
@@ -7908,7 +8260,7 @@ index ec9035a..e0b00c1 100644
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `pnpm vitest run catalog/catalog.test.ts catalog/render.test.ts catalog/seerr/bootstrap.test.ts catalog/seerr/integration.test.ts packages/cli/src/credentials.test.ts packages/cli/src/run.test.ts packages/engine/src/credentials.test.ts packages/engine/src/resolver/resolve.test.ts packages/engine/src/testing/seerr.test.ts scripts/docs/catalog-facts.test.ts`
-Expected: FAIL. `catalog/seerr/integration.test.ts` doesn't load (`Seerr has no resource media_server_plex`), and 21 tests fail in 7 more files, 387 pass: Seerr's Plex sign-in in `bootstrap.test.ts` (`can't be set up: the stack runs no Jellyfin for it to sign in through`), the fake Seerr's Plex endpoints in `seerr.test.ts` (`expected { status: 401, … } to match object { status: 500, … }`), the logins in `catalog.test.ts`, `render.test.ts` and both `credentials.test.ts`, and `run.test.ts`'s Seerr on a Plex stack.
+Expected: FAIL. `catalog/seerr/integration.test.ts` doesn't load (`Seerr has no resource media_server_plex`), and 21 tests fail in 7 more files, 388 pass: Seerr's Plex sign-in in `bootstrap.test.ts` (`can't be set up: the stack runs no Jellyfin for it to sign in through`), the fake Seerr's Plex endpoints in `seerr.test.ts` (`expected { status: 401, … } to match object { status: 500, … }`), the logins in `catalog.test.ts`, `render.test.ts` and both `credentials.test.ts`, and `run.test.ts`'s Seerr on a Plex stack.
 
 - [ ] **Step 3: Write Seerr's Plex sign-in and link, the logins and the web path**
 
@@ -8790,7 +9142,7 @@ git add packages catalog scripts
 git commit -m "feat: Seerr signed in with your Plex account before it is published, and linked to Plex; logins of your own, and Plex's web path" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1862 tests pass in 88 files.
+Expected: 1865 tests pass in 88 files.
 
 ---
 
@@ -8799,7 +9151,9 @@ Expected: 1862 tests pass in 88 files.
 Decision: the every-PR test runs Plex against a fake plex.tv, so Plex never claims
 itself and must never be published; the deploy test runs `plex-login` from the image
 (decision 20).
-Decision: the nightly job, on `main` only, with `PLEX_TOKEN`, both architectures, every
+Decision: the deploy test passes whether plex.tv makes a PIN or can't be reached
+(decision 20).
+Decision: the nightly job, on `main` only (it checks its branch), with `PLEX_TOKEN`, both architectures, every
 derived value masked, and every server it claimed removed whatever happened (decision 21).
 
 **Files:**
@@ -8821,10 +9175,10 @@ derived value masked, and every server it claimed removed whatever happened (dec
 
 ```diff
 diff --git a/test/e2e/deploy.e2e.test.ts b/test/e2e/deploy.e2e.test.ts
-index b8d9f31..e34fc29 100644
+index b8d9f31..fa0737d 100644
 --- a/test/e2e/deploy.e2e.test.ts
 +++ b/test/e2e/deploy.e2e.test.ts
-@@ -485,2 +485,40 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
+@@ -485,2 +485,50 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
  
 +  it("reaches plex.tv for plex-login through its helper, on Docker's default bridge, through the proxy", async () => {
 +    // A home of its own, inside Mediaplane's, with a Plex stack: plex-login reads plex.token.
@@ -8842,17 +9196,27 @@ index b8d9f31..e34fc29 100644
 +      '4',
 +      '--json',
 +    );
-+    // A real PIN from plex.tv, asked for and waited on by the helper: nobody signs in.
++    // A real PIN from plex.tv, asked for and waited on by the helper: nobody signs in. A
++    // plex.tv that is down, or too busy, is said so, from inside the helper too: either
++    // way the path through the proxy and the default bridge was taken, and neither fails
++    // a pull request.
 +    expect(result.code, result.stderr).toBe(1);
-+    expect(result.stderr).toMatch(
-+      /https:\/\/app\.plex\.tv\/auth#\?clientID=mediaplane-[0-9a-f-]{36}&code=\w{25}&/,
-+    );
-+    expect(JSON.parse(result.stdout)).toEqual({
++    const said = (JSON.parse(result.stdout) as { error: { message: string } }).error
++      .message;
++    const waited =
++      'nobody signed in within 4 seconds; run plex-login again for a new link';
++    expect(
++      said === waited || said.startsWith("couldn't reach plex.tv: "),
++      `plex-login said: ${said}`,
++    ).toBe(true);
++    if (said === waited) {
++      expect(result.stderr).toMatch(
++        /https:\/\/app\.plex\.tv\/auth#\?clientID=mediaplane-[0-9a-f-]{36}&code=\w{25}&/,
++      );
++    }
++    expect(JSON.parse(result.stdout)).toMatchObject({
 +      schema: 'mediaplane.error/v1',
 +      ok: false,
-+      error: {
-+        message: 'nobody signed in within 4 seconds; run plex-login again for a new link',
-+      },
 +    });
 +    // Each helper ran, and is gone: none is left, by its label.
 +    const left = await nodeExec(
@@ -9338,8 +9702,8 @@ name: Plex (nightly)
 
 # Plex can't be signed in from a pull request's CI: this job claims a real Plex with a
 # plex.tv test account's token, kept as the PLEX_TOKEN secret (spec §8.1). It runs on main,
-# on a schedule or by hand, never for a pull request, so a fork's pull request never sees
-# the secret. Without the secret it does nothing.
+# on a schedule or by hand, by a maintainer, never for a pull request, so a fork's pull
+# request never sees the secret. Without the secret it does nothing.
 on:
   schedule:
     - cron: '23 3 * * *'
@@ -9357,7 +9721,9 @@ concurrency:
 jobs:
   plex:
     name: Plex end to end (${{ matrix.arch }})
-    if: github.repository == 'cyclopsgd/Mediaplane'
+    # This repository's main only: a dispatch runs the chosen branch's copy of this file,
+    # so the job checks the branch too. Only a maintainer can dispatch it.
+    if: github.repository == 'cyclopsgd/Mediaplane' && github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       matrix:
@@ -9559,7 +9925,7 @@ git add .github test/e2e
 git commit -m "test(e2e): Plex never published while it can't claim itself, plex-login through its helper from the image, and the nightly Plex job" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1862 tests pass in 88 files (the e2e files aren't among them).
+Expected: 1865 tests pass in 88 files (the e2e files aren't among them).
 
 ---
 
@@ -9570,7 +9936,7 @@ doc; the generated parts were regenerated in Tasks 2 to 5.
 
 - [ ] **Step 1: See the docs still promise Slice 7**
 
-Run: `grep -rnE "Slice 7|S7 \(Plex\)" README.md catalog/*/README.md deploy/README.md docs/architecture.md docs/security docs/runbooks | grep -vE "including Slice 7\.|and S7 \(Plex\)\."`
+Run: `grep -rnE "Slice 7|S7 \(Plex\)" README.md catalog/*/README.md deploy/README.md docs/architecture.md docs/security docs/runbooks | grep -vE "including Slice 7\.|and S7 \(Plex\)\.|before Slice 7 published"`
 Expected: 20 lines, in the README, Plex's, Seerr's, Sonarr's and Radarr's READMEs, the deploy guide, the architecture, the threat model and the runbook, such as `README.md:516:- **Next:** S7 (Plex).`
 
 - [ ] **Step 2: The runbook**
@@ -9579,7 +9945,7 @@ Expected: 20 lines, in the README, Plex's, Seerr's, Sonarr's and Radarr's README
 
 ```diff
 diff --git a/docs/runbooks/wiring-failed.md b/docs/runbooks/wiring-failed.md
-index 785067b..808b927 100644
+index 785067b..2af6d9d 100644
 --- a/docs/runbooks/wiring-failed.md
 +++ b/docs/runbooks/wiring-failed.md
 @@ -9,3 +9,6 @@ port is published, and the Movies and Shows libraries, and in Seerr, its first s
@@ -9590,19 +9956,24 @@ index 785067b..808b927 100644
 +libraries; Sonarr and Radarr get their connection to Plex, and Seerr signs in with your
 +Plex token, before its port is published, and links to Plex.
  
-@@ -100,2 +103,11 @@ Radarr, and its setup, finished. Slice 7 adds Plex.
+@@ -100,2 +103,16 @@ Radarr, and its setup, finished. Slice 7 adds Plex.
  
 +- **`mediaplane apply` stops at the containers step** on a Plex stack, before anything
-+  starts, with `Plex's first start needs a claim token from plex.tv, which Mediaplane
-+couldn't get, so nothing was started` or `Plex can't be claimed: Mediaplane has no Plex
-+token`. Plex starts unpublished, with a claim token of your plex.tv account that
-+  `apply` fetches the moment before, and here it had none to give.
++  changes, with `Plex's first start needs a claim token from plex.tv, which Mediaplane
++couldn't get, so nothing was started` or `Plex can't be claimed: Mediaplane has no
++Plex token`. Plex starts unpublished, with a claim token of your plex.tv account that
++  `apply` fetches the moment before, and here it had none to give. A Plex that was
++  running is stopped, and the message says so (`Mediaplane stopped plex, which ran, but
++isn't shown to be yours`): its setup isn't done, so it isn't shown to be yours, and it
++  must not stay published, as one an `apply` before Slice 7 published unclaimed would.
 +- **`mediaplane apply` stops at the first-run setup step** on a Plex stack, with Plex
-+  unpublished: `didn't claim itself as it started`, `is claimed by another plex.tv account
-+than yours`, or `is claimed, and Mediaplane couldn't tell whether by your plex.tv
-+account`. Plex is published only once plex.tv lists it among your account's servers.
++  unpublished: `didn't claim itself as it started`, `is claimed by another plex.tv
++account than yours`, `is claimed, and Mediaplane couldn't tell whether by your plex.tv
++account`, or `lets … in without a sign-in (allowedNetworks)`. Plex is published only
++  once plex.tv says the token its claim gave it is your account's, and it lets no
++  network in without a sign-in.
  - **`apply` stops at the same step** with a setup that reported success. Before
-@@ -232,3 +244,11 @@ differ, and a `reason` when it is `unknown`.
+@@ -232,3 +249,11 @@ differ, and a `reason` when it is `unknown`.
       `ls -ld appdata appdata/seerr` show whether the user Mediaplane runs as can read it;
 +   - for Plex, `docker port mediaplane-plex-1` likewise, and
 +     `grep -c PlexOnlineToken "appdata/plex/Library/Application Support/Plex Media Server/Preferences.xml"`
@@ -9614,34 +9985,59 @@ index 785067b..808b927 100644
 +   devices (in Plex's web app, Settings, Authorized Devices) list each Plex claimed for
 +   it, by the name Mediaplane gives it (`Mediaplane`, or `apps.plex.server_name`).
  
-@@ -376,2 +396,73 @@ differ, and a `reason` when it is `unknown`.
+@@ -376,2 +401,98 @@ differ, and a `reason` when it is `unknown`.
    is Mediaplane's.
 +- **`Plex can't be claimed: Mediaplane has no Plex token`.** The file `plex.token`
 +  points at is missing. Run `mediaplane plex-login`, which signs you in to plex.tv and
-+  saves your token there, then run `apply` again. Nothing was started.
++  saves your token there, then run `apply` again. Nothing was started, and a Plex that
++  ran is stopped (see Symptoms).
 +- **`needs a claim token from plex.tv, which Mediaplane couldn't get`.** Nothing was
-+  started. What follows the colon says why:
++  started, and a Plex that ran is stopped (see Symptoms); the next `apply` that gets a
++  claim token starts it again, unpublished. What follows the colon says why:
 +  - `plex.tv refused the Plex token`: it was revoked (signed out of every device, or
 +    the password changed), or it is not one. Run `mediaplane plex-login` to sign in
 +    again; it replaces a token plex.tv refuses. Then run `apply` again.
-+  - `plex.tv could not be reached` or `plex.tv did not answer within …`: this host can't reach plex.tv.
-+    In the image, the call goes from a short-lived helper on Docker's default `bridge`
-+    network: check that containers there reach the internet (a firewall, or
-+    `"bridge": "none"` in Docker's `daemon.json`, stops them), then run `apply` again.
++  - `plex.tv could not be reached`, `plex.tv did not answer within …` or `the plex.tv
++helper did not finish within …`: this host can't reach plex.tv. In the image, the
++    call goes from a short-lived helper on Docker's default `bridge` network: check that
++    containers there reach the internet (a firewall, or `"bridge": "none"` in Docker's
++    `daemon.json`, stops them), then run `apply` again.
 +- **`didn't claim itself as it started, so it stays unpublished`.** Plex had its claim
 +  token, but didn't trade it at plex.tv while `apply` waited: it couldn't reach plex.tv,
 +  or the token, which lasts four minutes, ran out first. Plex's log (check 3) says which.
 +  Run `apply` again: it fetches a new claim token, and starts Plex with it, unpublished.
 +- **`is claimed, and Mediaplane couldn't tell whether by your plex.tv account`.** plex.tv
 +  didn't answer (a timeout, an error of its own, no connection), or asked Mediaplane to
-+  wait (HTTP 429). Run `apply` again
-+  first: Plex stays unpublished until plex.tv says it is yours.
++  wait (HTTP 429). Run `apply` again first: Plex stays unpublished until plex.tv says it
++  is yours.
++- **`is claimed, and its Preferences.xml holds no token of its claim`.** Plex says it is
++  claimed, but its file doesn't hold the token its claim gave it, so nothing can tell
++  whose it is. Run `apply` again; if it says the same, follow the ways out of `is
++claimed by another plex.tv account than yours`, below, the safe ones first.
++- **`is claimed, and Mediaplane can't read appdata/plex/… (…) to tell by whose plex.tv
++account`.** First check who owns `appdata/plex` and the `Preferences.xml` in it
++  (`ls -ln`) against `user:` in `stack.yaml`: Plex writes the file 0600, as `user:`, so
++  Mediaplane must run as that user (in the image, `MEDIAPLANE_UID`). Give the folder
++  back to `user:`, or run Mediaplane as it, then run `apply` again.
++- **`plex.tv's answer doesn't say by whose account`.** plex.tv answered in a shape
++  Mediaplane doesn't understand. Run `apply` again; if it says the same, plex.tv may have
++  changed, and the ways out of `is claimed by another plex.tv account than yours`, below,
++  still apply.
++- **`is yours, but lets … in without a sign-in (allowedNetworks)`.** Plex is yours, but
++  its list of networks allowed without auth isn't empty. Mediaplane never sets it, and
++  anyone who reached Plex while it was unclaimed could have, so Plex stays unpublished,
++  on every `apply` until it is empty. Stop Plex (`docker stop mediaplane-plex-1`), remove
++  the value of `allowedNetworks` from
++  `appdata/plex/Library/Application Support/Plex Media Server/Preferences.xml`, then run
++  `apply`. Mediaplane checks this only before Plex is first published: one you set
++  afterwards, in Plex's settings, is left alone.
 +- **`plex.tv refused your Plex token when asked whose it is`.** Run
 +  `mediaplane plex-login` to sign in again, then run `apply` again.
-+- **`is claimed by another plex.tv account than yours`**, or **`is claimed by no plex.tv
-+account of yours`** (`apply.bootstrap-failed`). Plex holds a claim, and plex.tv says
-+  the token its claim gave it is another account's, or refuses it (as it does once the
-+  server is removed from its account). It stays unpublished, on every `apply` until it is yours. It was claimed
++- **`is claimed by another plex.tv account than yours`**, or **`is claimed by no
++plex.tv account of yours`** (`apply.bootstrap-failed`). Plex holds a claim, and
++  plex.tv says the token its claim gave it is another account's, or refuses it (as it
++  does once the server is removed from its account). It stays unpublished, on every
++  `apply` until it is yours. It was claimed
 +  before Mediaplane came to it: by someone who reached it while it was unclaimed, or by
 +  you, with another account, by hand. Three ways out, the safe ones first:
 +  - If that plex.tv account is yours too, run `mediaplane plex-login --force` and sign in
@@ -9688,7 +10084,7 @@ index 785067b..808b927 100644
 +    then run `apply` again.
 +  - Last, if you did not set Seerr up, start it afresh, as below.
  - **Seerr is set up, but Mediaplane can't show that it is its own**
-@@ -611,6 +702,10 @@ Then run `mediaplane apply`. It plans again and does only what is left
+@@ -611,6 +732,10 @@ Then run `mediaplane apply`. It plans again and does only what is left
    [T16](../security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
 -- **Let `apply` sign Seerr in,** on a Jellyfin stack: don't finish Seerr's setup page by
 -  hand. It goes through Jellyfin's admin, so keep that login the shared one.
@@ -9711,7 +10107,7 @@ index 785067b..808b927 100644
 
 ````diff
 diff --git a/docs/architecture.md b/docs/architecture.md
-index 8986e80..aab89dd 100644
+index 8986e80..604ab93 100644
 --- a/docs/architecture.md
 +++ b/docs/architecture.md
 @@ -3,3 +3,3 @@
@@ -9784,20 +10180,24 @@ index 8986e80..aab89dd 100644
 +in through a Jellyfin or a Plex account of their own, and be its admin. So `apply`
 +publishes none of them while it is open (see
  [T16](security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)
-@@ -360,4 +374,21 @@ up --wait again
+@@ -360,4 +374,25 @@ up --wait again
    `bootstrap.network-via`.
 +- **Plex** (spec §6.4). Its first start gets `PLEX_CLAIM`: a claim token of your plex.tv
 +  account, which `apply` fetches with your Plex token (`plex.token`) the moment before,
 +  through the plex.tv helper, since it lasts four minutes and works once. The extra file
 +  on Compose's standard input sets it, as `"${MP_START_PLEX_PLEX_CLAIM}"`, which Compose
-+  takes from its own environment, so it is in no file. Without a claim token, the start
-+  step fails before anything starts. The image trades it at plex.tv for a token of your
-+  account, which it saves in `Preferences.xml`. The setup waits, as long as `apply` waits
-+  for an app, until Plex says it is claimed, then asks plex.tv whose account the token
-+  in Plex's `Preferences.xml` is: it must be yours. That is plex.tv's answer, which
-+  Plex's admin can't shape: they can change Plex's machine identifier (probed), but not
-+  give Plex a token of your account. Plex is set up when `Preferences.xml` holds a token and
-+  Mediaplane's record names it. Its setup makes no key: Plex's key is your token.
++  takes from its own environment, so it is in no file. The start step asks for it before
++  it changes anything; without one, it fails, and stops a Plex that runs, since it isn't
++  shown to be yours. The image trades it at plex.tv for a token of your account, which it
++  saves in `Preferences.xml`. The setup waits, as long as `apply` waits for an app, until
++  Plex says it is claimed, asking `/identity` without your token, then asks plex.tv
++  whose account the token in Plex's `Preferences.xml` is: it must be yours. That is
++  plex.tv's answer, which Plex's admin can't shape: they can change Plex's machine
++  identifier (probed), but not give Plex a token of your account. Only then does Plex
++  get your token, and the setup checks that it lets no network in without a sign-in
++  (`allowedNetworks`), which anyone could set while it was unclaimed. Plex is set up
++  when `Preferences.xml` holds a token and Mediaplane's record names it. Its setup makes
++  no key: Plex's key is your token.
 +- **Seerr on a Plex stack** signs in with your Plex token (`POST /api/v1/auth/plex`),
 +  which makes your plex.tv account its admin, and Plex its media server type; then it
 +  signs out. A Seerr set up already is checked with its key: its admin's plex.tv account
@@ -9807,14 +10207,14 @@ index 8986e80..aab89dd 100644
 -  Jellyfin. A setup that can't run yet waits: Seerr's, while Jellyfin refuses the shared
 +  Jellyfin, or Plex. A setup that can't run yet waits: Seerr's, while Jellyfin refuses the shared
    admin's password, or after Jellyfin's own setup failed. The app stays as it was,
-@@ -408,3 +439,5 @@ client and root folder; the indexers: Prowlarr's links to Sonarr and Radarr, and
+@@ -408,3 +443,5 @@ client and root folder; the indexers: Prowlarr's links to Sonarr and Radarr, and
  indexer proxy; the media server: Jellyfin's libraries, and Sonarr's and Radarr's
 -connection to it; and the requests app: Seerr's links to Jellyfin, Sonarr and Radarr.
 +connection to it, or on a Plex stack, Plex's name and libraries, and Sonarr's and
 +Radarr's connection to it; and the requests app: Seerr's links to its media server,
 +Sonarr and Radarr.
  
-@@ -523,2 +556,36 @@ mediaplane (the stack)
+@@ -523,2 +560,37 @@ mediaplane (the stack)
  
 +- **The media server, on a Plex stack:**
 +
@@ -9848,17 +10248,18 @@ index 8986e80..aab89dd 100644
 +    requires that library. A connection held with TLS or a URL base reads as moved, so
 +    the token is never sent to an address read from the arr.
 +  - Mediaplane never sets Plex's remote access, nor the networks it lets in without a
-+    sign-in: Plex's defaults (off, none) stay.
++    sign-in: Plex's defaults (off, none) stay. Its first-run setup checks the second is
++    empty before Plex is first published (above).
 +
  - **The requests app:**
-@@ -567,2 +634,6 @@ mediaplane (the stack)
+@@ -567,2 +639,6 @@ mediaplane (the stack)
      tests stop at the links, and Seerr's own test of each.
 +  - On a Plex stack, its media server (`seerr.media_server_plex`) is Plex, at
 +    `plex:32400` without TLS (Seerr's Plex has no URL base), with the Movies and TV Shows
 +    libraries enabled. Seerr reaches Plex with its admin's token, yours, from its first
 +    sign-in: the link holds no secret of Mediaplane's.
  
-@@ -658,3 +729,2 @@ The [roadmap](plans/m1-roadmap.md) has the order:
+@@ -658,3 +734,2 @@ The [roadmap](plans/m1-roadmap.md) has the order:
  
 -- Plex (Slice 7);
  - drift detection (Slice 8);
@@ -9868,7 +10269,7 @@ index 8986e80..aab89dd 100644
 
 ````diff
 diff --git a/docs/security/threat-model.md b/docs/security/threat-model.md
-index b4efa61..3edf13c 100644
+index b4efa61..03a0af6 100644
 --- a/docs/security/threat-model.md
 +++ b/docs/security/threat-model.md
 @@ -2,3 +2,3 @@
@@ -9954,16 +10355,17 @@ index b4efa61..3edf13c 100644
 +    Seerr, and qBittorrent, through Gluetun with a VPN) are on the stack's wiring network
 +    too. It is internal: it gives them no way out, which they have on their own network.
    - Before an app's first start, Mediaplane writes the files it reads when it starts:
-@@ -199,3 +226,7 @@ Controls today:
+@@ -199,3 +226,8 @@ Controls today:
    that). Jellyfin asks for a login from everywhere. So does Seerr, which publishes no
 -  port until Mediaplane has signed it in through Jellyfin, as that admin.
 +  port until Mediaplane has signed it in through Jellyfin, as that admin, or on a Plex
 +  stack, with your Plex token. Plex publishes no port until it is claimed for your
 +  plex.tv account, and then asks for a sign-in with a plex.tv account it knows from
 +  everywhere: Mediaplane sets no network that may skip it (Plex's "List of IP addresses
-+  and networks that are allowed without auth", empty by default).
++  and networks that are allowed without auth", empty by default), and publishes Plex
++  only while that list is empty (T16).
  - With `login_on_lan: false`, qBittorrent lets only your LAN subnet skip its login, and
-@@ -211,5 +242,7 @@ What remains:
+@@ -211,5 +243,7 @@ What remains:
  - On a home network, `init` suggests `bind: lan`, which puts the web UIs on your LAN.
 -- With Plex, until Slice 7, Seerr's setup is open to whoever reaches it first, through
 -  a Jellyfin or a Plex account of their own. Complete it right after the first `apply`,
@@ -9974,7 +10376,7 @@ index b4efa61..3edf13c 100644
 +  outside when nothing else can. Turn it off in Plex (Settings, Network, "Enable Relay")
 +  if you don't want that.
  - With `login_on_lan: false`, anyone on a local address gets into Sonarr, Radarr and
-@@ -282,2 +315,8 @@ What remains:
+@@ -282,2 +316,8 @@ What remains:
    Seerr's key or the shared admin login.
 +- On a Plex stack, Sonarr and Radarr hold your Plex token, as their connection to Plex
 +  needs, and Seerr holds it as its admin's, from its first sign-in. Plex's own token is
@@ -9983,7 +10385,7 @@ index b4efa61..3edf13c 100644
 +  account. Use a plex.tv account of its own for the stack if that matters to you, and
 +  share your other servers with it as you need.
  - A link stays in Prowlarr when its arr leaves the stack, and keeps that arr's key,
-@@ -355,2 +394,22 @@ Controls today:
+@@ -355,2 +395,27 @@ Controls today:
    command line.
 +- Your Plex token goes to Plex only in its `X-Plex-Token` header, over the wiring network,
 +  and to Sonarr, Radarr and Seerr only in request bodies: the arrs' Plex connections,
@@ -9991,7 +10393,10 @@ index b4efa61..3edf13c 100644
 +  sign-in, whose session cookie stays in Mediaplane's memory for the one call that signs
 +  out. It goes to plex.tv itself only through the plex.tv helper's standard input, or
 +  from source, in the header plex.tv asks for. Mediaplane sends it only to the stack's own
-+  address for Plex, never to a host read from an app. `mediaplane plex-login` writes it
++  address for Plex, never to a host read from an app, and only once plex.tv says Plex is
++  yours: Plex's setup asks Plex whether it is claimed without it. Of the secrets you
++  give, only an app's key (your Plex token) reaches a setup or a resource; the others,
++  such as the VPN key, are only redacted. `mediaplane plex-login` writes it
 +  to `plex.token`'s file, 0600, inside a 0700 `secrets/`, never half-written, and prints
 +  only a link to sign in with, never the token.
 +- A claim token is fetched with your token by the `apply` that first starts Plex, the
@@ -9999,14 +10404,16 @@ index b4efa61..3edf13c 100644
 +  Compose's standard input names (`PLEX_CLAIM: "${…}"`), so it is in no file. Plex's
 +  first container holds it in its environment, which `docker inspect` shows, while it is
 +  unpublished: the image trades it at plex.tv within seconds, and a claim token works
-+  once, for four minutes. The container that publishes Plex is made without it.
++  once, for four minutes. The container that publishes Plex is made without it. It is
++  fetched before the start step changes anything: without one, the step fails, and stops
++  a Plex that runs.
 +- Plex's own token, which its claim makes, is in Plex's `Preferences.xml`, which Plex
 +  writes 0600. Mediaplane reads it there only to ask plex.tv whose account it is, once
 +  Plex is claimed, through the plex.tv helper's standard input, and keeps nothing of it.
 +- Every value that comes from plex.tv, and your Plex token, is replaced with `***` in
 +  errors, and kept out of change records, `state/resources.json` and `plan`'s output.
  - Gluetun's control key reaches vpn-check's probe on its standard input, and the probe
-@@ -591,2 +650,7 @@ What remains:
+@@ -591,2 +656,7 @@ What remains:
    host can.
 +- The plex.tv helper has a route out, as any container on Docker's default bridge does,
 +  for the second it runs. It runs Mediaplane's own code, for one call to plex.tv, and has
@@ -10014,7 +10421,7 @@ index b4efa61..3edf13c 100644
 +  Its answer can hold a token (`plex-login`'s, or a claim token), which `docker logs`
 +  shows while it runs, to whoever has Docker access.
  - Like any Docker network, the wiring network reaches the host at its gateway address,
-@@ -675,2 +739,20 @@ Controls today:
+@@ -675,2 +745,27 @@ Controls today:
    `bootstrap.network-via`. No app in the catalog does this today.
 +- An unclaimed Plex lets whoever reaches it at an address claim it for a plex.tv account
 +  of their own, with no sign-in (probed: Plex 1.43 answered `POST /myplex/claim` with
@@ -10026,8 +10433,15 @@ index b4efa61..3edf13c 100644
 +  unpublished, and `apply` stops. One that doesn't claim itself while `apply` waits for
 +  it (its claim token ran out, or it couldn't reach plex.tv) stays unpublished too.
 +  When Mediaplane can't fetch a claim token at all, the start step fails before it
-+  starts anything. Plex counts as set up only when its `Preferences.xml` holds a token
-+  (`PlexOnlineToken`) and Mediaplane's record names it.
++  changes anything, and stops a Plex that runs, published or not, since it isn't shown
++  to be yours: one an `apply` before Slice 7 published unclaimed, say. Plex counts as set
++  up only when its `Preferences.xml` holds a token (`PlexOnlineToken`) and Mediaplane's
++  record names it.
++- Before Plex's setup is done, so before Plex is first published, Mediaplane asks it
++  whether it lets any network in without a sign-in (`allowedNetworks`), and keeps it
++  unpublished while it does, with what to do. Anyone who reached Plex while it was
++  unclaimed could have set that, and it survives the claim (probed). It is checked only
++  then: a network you allow later, on purpose, is left alone.
 +- On a Plex stack, Seerr signs in with your Plex token, which makes your plex.tv account
 +  its admin. A Seerr set up already is checked with its key, never by signing in, which
 +  would give your token to whoever set it up: it is Mediaplane's only when its admin's
@@ -10035,7 +10449,7 @@ index b4efa61..3edf13c 100644
 +  stack's, with no TLS. Only your account's token signs in as your account, so Seerr's
 +  admin can't shape that either. Anything else stays unpublished.
  
-@@ -678,4 +760,12 @@ What remains:
+@@ -678,4 +773,17 @@ What remains:
  
 -- With Plex, Mediaplane doesn't set Seerr up until Slice 7: its setup is open on its
 -  published port from its first start (see T2).
@@ -10045,12 +10459,17 @@ index b4efa61..3edf13c 100644
 +  unpublished. The runbook's ways out come first, and keep what Plex holds: sign in to
 +  `plex-login` as that account, if it is yours, or take Plex's `PlexOnline` settings out
 +  of its `Preferences.xml` so the next `apply` claims it again.
++- In those seconds, such a container could also change Plex's settings without claiming
++  it, through `PUT /:/prefs`, and they survive the claim. Mediaplane checks the one that
++  would open Plex without a sign-in, `allowedNetworks` (above). Others, such as remote
++  access, give no access without a sign-in, and are not checked: look over Plex's
++  Network settings after the first `apply`.
 +- A Plex whose `Preferences.xml` keeps its token is taken as set up while Mediaplane's
 +  record names it, and starts published. One whose token was removed by hand is claimed
 +  again by the next `apply`, unpublished; run outside `apply`, it starts published and
 +  unclaimed.
  - While the wizard is open, for the seconds Mediaplane takes, any container of the stack
-@@ -722,5 +812,5 @@ What remains:
+@@ -722,5 +830,5 @@ What remains:
    override.
 -- Run outside Mediaplane (the ejectable command, or a restart of a published Jellyfin or
 -  Seerr whose appdata was emptied), the app starts published with its setup open: stop
@@ -10133,7 +10552,9 @@ And for the token:
   without it (`"bridge": "none"`); then the helper fails, saying the network was not
   found.
 - **Each call starts a container,** a second or so in the image. `plex-login` waits for
-  your sign-in in one run, asking plex.tv every two seconds.
+  your sign-in in one run, asking plex.tv every two seconds. A run may take as long as
+  the client's own tries, with a minute more; one that runs out of time counts as
+  plex.tv not answering.
 - **The helper's answer can hold a token:** `plex-login`'s, and a claim token. It is in
   the helper's output, which `docker logs` can show while the container runs, for a
   moment; `--rm` removes it with the container.
@@ -10159,16 +10580,32 @@ index 4bc4afc..8679494 100644
    internet traffic is unchanged.
 ```
 
+**Change** `docs/adr/0006-seerr-as-the-requests-app.md`:
+
+```diff
+diff --git a/docs/adr/0006-seerr-as-the-requests-app.md b/docs/adr/0006-seerr-as-the-requests-app.md
+index dfc9eab..21a1fa0 100644
+--- a/docs/adr/0006-seerr-as-the-requests-app.md
++++ b/docs/adr/0006-seerr-as-the-requests-app.md
+@@ -41,3 +41,5 @@ Seerr, version 3.5 or later, is M1's requests app (spec §2.1, §6.1, §6.5):
+   Slice 7 with Plex) starts with that first sign-in. Until then, Seerr's setup page is
+-  open to whoever reaches it first (see [Seerr's README](../../catalog/seerr/README.md)).
++  open to whoever reaches it first, so `apply` signs Seerr in before it publishes it,
++  through Jellyfin or with your Plex token (see
++  [Seerr's README](../../catalog/seerr/README.md)).
+ - **A fixed uid.** Seerr's image runs as uid 1000, so Mediaplane gives its appdata folder
+```
+
 - [ ] **Step 4: The READMEs and the deploy guide**
 
 **Change** `README.md`:
 
 ```diff
 diff --git a/README.md b/README.md
-index a1b5bcb..8dd1247 100644
+index a1b5bcb..1c607e4 100644
 --- a/README.md
 +++ b/README.md
-@@ -24,9 +24,11 @@ Compose and wires the apps together for you.**
+@@ -24,9 +24,12 @@ Compose and wires the apps together for you.**
  >   entry says what voids that), and links Seerr to Jellyfin, with both libraries, and to
 ->   Sonarr and Radarr, with a quality profile, ready for requests. `mediaplane vpn-check`
 ->   confirms that qBittorrent reaches the internet only through the VPN. Mediaplane runs
@@ -10181,19 +10618,20 @@ index a1b5bcb..8dd1247 100644
 +>   `mediaplane plex-login` signs you in to plex.tv and saves your Plex token; `apply`
 +>   claims Plex for your account before its web UI is published, names it, gives it
 +>   its Movies and TV Shows libraries, connects Sonarr and Radarr to it, and signs Seerr
-+>   in with your Plex account before Seerr is published, linked to Plex.
++>   in with your Plex account before Seerr is published, linked to Plex (when `apply`
++>   runs the stack; the same threat model entry says what voids that).
 +>   `mediaplane vpn-check` confirms that qBittorrent reaches the internet only through
 +>   the VPN. Mediaplane runs in its own hardened container, behind a Docker socket
 +>   proxy, and reaches the apps over a private network with no route out.
 +> - **Next:** drift detection: `plan` will report what was changed by hand.
  > - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
-@@ -75,3 +77,4 @@ Mediaplane does that part for you:
+@@ -75,3 +78,4 @@ Mediaplane does that part for you:
  | Sign Seerr in through Jellyfin before it is published, and link it                | Done         |
 -| Wire Plex, and Seerr with Plex                                                    | Planned      |
 +| Sign in to Plex (`plex-login`), and claim Plex before it is published             | Done         |
 +| Plex's libraries and links, and Seerr signed in with your Plex account            | Done         |
  | Detect manual changes and offer Re-apply or "Keep mine"                           | Planned      |
-@@ -118,4 +121,5 @@ the changes and touches nothing in your stack, apart from small marks that check
+@@ -118,4 +122,5 @@ the changes and touches nothing in your stack, apart from small marks that check
  or a password can leave in an app: a category in qBittorrent, a failure in an app's own
 -status of a client, link or connection, a sign-in in Jellyfin's activity log, and a line
 -in Seerr's log (and an arr's) for a check of Seerr's that fails. The
@@ -10201,7 +10639,7 @@ index a1b5bcb..8dd1247 100644
 +Seerr's log (and an arr's) for a check of Seerr's that fails, and an arr listed among
 +Plex's devices by its first test of its connection to Plex. The
  [threat model](docs/security/threat-model.md#what-runs-and-who-can-reach-it) says more.
-@@ -141,8 +145,9 @@ mediaplane apply
+@@ -141,8 +146,9 @@ mediaplane apply
    ├─ pulls images, starts the apps
 -  │  (Jellyfin and Seerr with no
 -  │  port, until they are set up)
@@ -10216,12 +10654,12 @@ index a1b5bcb..8dd1247 100644
 +  │  claimed for you; signs Seerr
 +  │  in; then publishes them
    ├─ wires the apps through their
-@@ -155,4 +160,2 @@ mediaplane apply
+@@ -155,4 +161,2 @@ mediaplane apply
  
 -Next, `apply` will wire Plex through the same APIs (Slice 7).
 -
  A few principles hold throughout:
-@@ -339,4 +342,5 @@ It changes nothing in your stack, apart from small marks that checking a key or
+@@ -339,4 +343,5 @@ It changes nothing in your stack, apart from small marks that checking a key or
  password can leave in an app: a category in qBittorrent, a failure in an app's own
 -status of a client, link or connection, a sign-in in Jellyfin's activity log, and a line
 -in Seerr's log (and an arr's) for a check of Seerr's that fails. The
@@ -10229,7 +10667,7 @@ index a1b5bcb..8dd1247 100644
 +Seerr's log (and an arr's) for a check of Seerr's that fails, and an arr listed among
 +Plex's devices by its first test of its connection to Plex. The
  [threat model](docs/security/threat-model.md#what-runs-and-who-can-reach-it) says more.
-@@ -424,5 +428,6 @@ The pipeline decides what the stack is, and Mediaplane does the stateful part. T
+@@ -424,5 +429,6 @@ The pipeline decides what the stack is, and Mediaplane does the stateful part. T
  that covers generating the keys, deploying, setting Jellyfin up and taking the key it
 -makes, signing Seerr in through it, setting the shared login in the apps, linking Sonarr
 -and Radarr to qBittorrent and Jellyfin, Prowlarr to them, and Seerr to all three, and
@@ -10239,20 +10677,21 @@ index a1b5bcb..8dd1247 100644
 +them, and Seerr to all three, and checking. Change detection is what is being built
 +next.
  
-@@ -448,3 +453,4 @@ and keep. What it adds is everything around the file:
+@@ -448,3 +454,5 @@ and keep. What it adds is everything around the file:
    [what voids them](docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup));
 -- next, Plex.
 +- or Plex, claimed for your plex.tv account by `apply` before its web UI is published,
-+  with its libraries and the same links, and Seerr signed in with your Plex account.
++  with its libraries and the same links, and Seerr signed in with your Plex account
++  (when `apply` runs the stack; the same threat model entry says what voids that).
  
-@@ -457,4 +463,4 @@ the apps to each other, with `plan` and `apply` and a history of what it did, an
+@@ -457,4 +465,4 @@ the apps to each other, with `plan` and `apply` and a history of what it did, an
  the rest of each app's settings to you. Today it sets the shared login, sets Jellyfin
 -and Seerr up, links Sonarr and Radarr to qBittorrent and Jellyfin, Prowlarr to them, and
 -Seerr to all three; Plex comes in Slice 7.
 +(or Plex) and Seerr up, links Sonarr and Radarr to qBittorrent and the media server,
 +Prowlarr to them, and Seerr to all three.
  
-@@ -514,5 +520,5 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
+@@ -514,5 +522,5 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
    test and `vpn-check`), S3b (the wiring framework), S3c (the download path), S4
 -  (indexers), S5 (Jellyfin) and S6 (requests).
 -- **Next:** S7 (Plex).
@@ -10267,10 +10706,10 @@ index a1b5bcb..8dd1247 100644
 
 ````diff
 diff --git a/catalog/plex/README.md b/catalog/plex/README.md
-index eab45f4..d31932c 100644
+index eab45f4..74a995e 100644
 --- a/catalog/plex/README.md
 +++ b/catalog/plex/README.md
-@@ -28,3 +28,72 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
+@@ -28,3 +28,74 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
  - **It runs Plex** whenever `media_server` is `plex`, listed under `apps` or not, with
 -  your data folder at `/data`. It publishes its web UI as `network.bind` says.
 +  your data folder at `/data`. It publishes its web UI as `network.bind` says, at
@@ -10315,8 +10754,10 @@ index eab45f4..d31932c 100644
 +  admin can change what Plex says of itself, its machine identifier too, but can't make
 +  it hold a token of your account. A Plex claimed by another account stays unpublished,
 +  and so does one plex.tv couldn't be asked about, or one that didn't claim itself while
-+  `apply` waited. When `apply` can't get a claim token at all,
-+  it starts nothing. Plex counts as set up when its `Preferences.xml` holds a token
++  `apply` waited. When `apply` can't get a claim token at all, it changes nothing, and
++  stops a Plex that runs, since it isn't shown to be yours. Before Plex is first
++  published, it must let no network in without a sign-in (`allowedNetworks` empty):
++  anyone could set that while it was unclaimed. Plex counts as set up when its `Preferences.xml` holds a token
 +  (`PlexOnlineToken`) and Mediaplane's record does (`setUp` in `state/secrets.json`).
 +  This holds when `apply` runs the stack; the threat model lists what voids it:
 +  [T16](../../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
@@ -10344,12 +10785,12 @@ index eab45f4..d31932c 100644
 +  [threat model](../../docs/security/threat-model.md#t2-someone-on-the-lan-reaches-an-app)
 +  says what it allows.
  - **Listing Jellyfin as well** is an error, unless Jellyfin says `enabled: false`.
-@@ -32,4 +101,2 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
+@@ -32,4 +103,2 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
    pinned image does.
 -- **Your token.** `plan` checks that `plex.token` points at a secret that exists, but the
 -  token is not used yet.
  
-@@ -37,8 +104,3 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
+@@ -37,8 +106,3 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
  
 -- **Slice 7:**
 -  - `mediaplane plex-login`, which signs in through plex.tv and saves your token;
@@ -10359,7 +10800,7 @@ index eab45f4..d31932c 100644
 -  - with Seerr in the stack, its sign-in with your token, and its link to Plex.
 +- **Slice 8:** drift detection and Keep mine for what it manages here.
  
-@@ -48,7 +110,9 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
+@@ -48,7 +112,9 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
  
 -- **In `stack.yaml`,** under `apps.plex`, you can set `port`, `version` and `env`. The
 -  media server that `media_server` names can't be turned off with `enabled: false`:
@@ -10373,7 +10814,7 @@ index eab45f4..d31932c 100644
 +- **What Mediaplane manages** (its name, and its libraries' names, kinds and folders) is
 +  put back by the next `apply` when changed in Plex. Keep mine comes in Slice 8.
  - **Anything else** goes in `compose.override.yaml` in the Mediaplane home. For example,
-@@ -65,13 +129,13 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
+@@ -65,13 +131,13 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
  
 -- **Plex starts unclaimed.** Until Slice 7 claims it for you, you can claim it yourself.
 -  Get a claim token at `https://plex.tv/claim`. It expires within four minutes, so save it
@@ -10636,7 +11077,7 @@ index 425e408..0bd2fa6 100644
 
 ```diff
 diff --git a/docs/design/m1-engine-cli.md b/docs/design/m1-engine-cli.md
-index 33d21c1..ebd194c 100644
+index 33d21c1..d84a34e 100644
 --- a/docs/design/m1-engine-cli.md
 +++ b/docs/design/m1-engine-cli.md
 @@ -542,3 +542,3 @@ in `compose.override.yaml` is therefore wired automatically.
@@ -10649,7 +11090,7 @@ index 33d21c1..ebd194c 100644
 -| `plex-login` | Run the plex.tv PIN flow and save the token to `secrets/plex-token` |
 +| `plex-login` | Run the plex.tv PIN flow and save the token where `plex.token` names a file (`secrets/plex-token`), through a short-lived helper in the image (§11, Slice 7) |
  | `vpn-check` | Check that qBittorrent reaches the internet only through the VPN: its network, Gluetun's state and the route into the tunnel, then its egress IP against the host's (`--no-egress` skips that) |
-@@ -1581 +1581,135 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
+@@ -1581 +1581,152 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
    Jellyfin's (§7.2(2)).
 +
 +### Slice 7: Plex (2026-10-16)
@@ -10665,9 +11106,11 @@ index 33d21c1..ebd194c 100644
 +  on its standard input (`mediaplane.plex-tv/v1`), never on a command line or in its
 +  environment, and its answer one line on its standard output. It takes four strict
 +  requests (a PIN, the wait for its sign-in, a claim token, and the account a token is
-+  of), and fixes the address: plex.tv's own. `docker run -i`
-+  uses `create`, `attach`, `start` and `wait`, which the allow-list has for the host
-+  helper. Run from source, the CLI calls plex.tv itself: ADR 0011 keeps only the
++  of), and fixes the address: plex.tv's own. Each run may take as long as the client's
++  three tries and the waits between them, with a minute more for the container (170 s);
++  a helper that runs out of time is plex.tv unanswered (`unreachable`, so unsure), as the
++  client would have said. `docker run -i` uses `create`, `attach`, `start` and `wait`,
++  which the allow-list has for the host helper. Run from source, the CLI calls plex.tv itself: ADR 0011 keeps only the
 +  container offline. The client has an HTTPS agent of its own, reads at most 1 MiB,
 +  tries a GET twice more after 5 and 15 seconds when plex.tv didn't answer, failed
 +  (5xx) or asked it to wait (429), never a POST, and its messages name the method and
@@ -10694,10 +11137,14 @@ index 33d21c1..ebd194c 100644
 +    reaches Plex as `PLEX_CLAIM`, in the extra Compose file on standard input, as
 +    `"${MP_START_PLEX_PLEX_CLAIM}"`, which Compose takes from its environment (Compose
 +    2.38.2 and 5.5.1, probed); the publishing `up` doesn't pass it. It is redacted in
-+    `up`'s errors. With no token, or no claim token, the start step fails before
-+    anything starts.
++    `up`'s errors. It is fetched before the start step changes anything (before
++    Mediaplane leaves the wiring network, and before the VPN's guests are stopped). With
++    no token, or no claim token, the step fails, and stops a running app it was for: a
++    Plex whose setup isn't done isn't shown to be yours, and must not stay published, as
++    one an `apply` before this slice published unclaimed would.
 +  - **The setup** waits, as long as `apply` waits for an app (`AppApi.until`), until
-+    `/identity` says `claimed`: the image starts Plex once for its config, unclaimed,
++    `/identity`, asked without your token (`until`'s `anonymous`, as `open` and the
++    re-check before publishing ask it), says `claimed`: the image starts Plex once for its config, unclaimed,
 +    and the container can be healthy then (probed). Then plex.tv is asked whose account
 +    (`GET /api/v2/user`) the token in Plex's `Preferences.xml` (`PlexOnlineToken`) is,
 +    which plex.tv answers with the server's owner (probed), and whose your token is. Not
@@ -10708,7 +11155,11 @@ index 33d21c1..ebd194c 100644
 +    probed) is claimed too; plex.tv unanswered (a timeout, a 5xx, a 429, no connection)
 +    is `unsure`, as is a claimed Plex whose file holds no token; your token refused, or
 +    the file unreadable, is `rejected`. All keep Plex unpublished, as any failure of a
-+    keyless setup does.
++    keyless setup does. Only then does Plex get your token: the setup reads its
++    preferences (`GET /:/prefs`), and refuses (`rejected`) a Plex whose
++    `allowedNetworks` isn't empty, which anyone could set over `PUT /:/prefs` while it was
++    unclaimed, and which survives the claim (probed). It is checked in the setup only,
++    so a value set later, on purpose, stays.
 +    One that never says `claimed` stays unpublished, and the next `apply` fetches a new
 +    claim token.
 +  - **Done** is `Preferences.xml` holding `PlexOnlineToken`, and `setUp` naming Plex.
@@ -10733,7 +11184,8 @@ index 33d21c1..ebd194c 100644
 +    waits for that.
 +  - **Never set:** remote access (`PublishServerOnPlexOnlineKey`, off by default) and
 +    the networks allowed without auth (`allowedNetworks`, none by default): Plex's
-+    defaults stay (probed). Its relay (`RelayEnabled`, on) is left to you.
++    defaults stay (probed), the second checked empty by the setup. Its relay
++    (`RelayEnabled`, on) is left to you.
 +- **Sonarr's and Radarr's connections to Plex** (§6.2): `<arr>.connection_plex`, `Plex
 +  (Mediaplane)`, a `PlexServer` connection at `plex:32400`, without TLS or a URL base,
 +  with `updateLibrary` and the Jellyfin connection's events, and `authToken`: your Plex
@@ -10770,15 +11222,21 @@ index 33d21c1..ebd194c 100644
 +  among Plex's devices (probed), as a test from its web UI does. `plan` never calls
 +  plex.tv, never claims Plex and never signs Seerr in: a claim token works once.
 +- **Secrets** (§6.3, §7): your Plex token is a user secret, read once per run
-+  (`userSecrets`), redacted everywhere, and sent only in Plex's `X-Plex-Token` header
++  (`userSecrets`), redacted everywhere, and sent only in Plex's `X-Plex-Token` header,
++  once Plex is shown to be yours,
 +  (a new key scheme, `x-plex-token`), in request bodies to the arrs and Seerr, and to
 +  plex.tv. Claim tokens, plex.tv's answers and Seerr's cookie are redacted too. None is
-+  in `compose.yaml`, `.env`, a record, `resources.json` or the output.
-+- **Tests** (§8). The every-PR end-to-end test runs Plex against a fake plex.tv that
-+  never gives a token, and checks that Plex, unclaimable, is never published, and that
-+  `plex-login` runs through its helper from the image. A real plex.tv needs a real
-+  account's token, which fork PRs must never get. The nightly job
-+  (`.github/workflows/plex.yml`), on `main` only, with the `PLEX_TOKEN` secret, does
++  in `compose.yaml`, `.env`, a record, `resources.json` or the output. Every secret you
++  give is redacted, but only those an app's API takes as its key (`api.key.secret`)
++  reach setups and resources as keys (`stackKeys`): the VPN key never does.
++- **Tests** (§8). The every-PR end-to-end test runs Plex against a fake plex.tv, whose
++  claim token Plex's image sends to the real plex.tv, which refuses it (no account is
++  involved), and checks that Plex, unclaimable, is never published. The deploy test
++  runs `plex-login` through its helper from the image: one PIN from the real plex.tv,
++  or, when plex.tv is down, its "couldn't reach plex.tv", so an outage fails no pull
++  request. A real claim needs a real account's token, which fork PRs must never get.
++  The nightly job (`.github/workflows/plex.yml`), on `main` (on a schedule, or by hand,
++  by a maintainer; the job checks the branch), with the `PLEX_TOKEN` secret, does
 +  nothing without it, masks each value it derives (`::add-mask::`), runs on amd64 and
 +  arm64, claims a Plex with the real plex.tv, and removes every server it noted from
 +  the account in a last step that runs whatever happened (`DELETE
@@ -10791,7 +11249,7 @@ index 33d21c1..ebd194c 100644
 
 ```diff
 diff --git a/docs/plans/m1-roadmap.md b/docs/plans/m1-roadmap.md
-index c360c92..8f2fa39 100644
+index c360c92..ba920d5 100644
 --- a/docs/plans/m1-roadmap.md
 +++ b/docs/plans/m1-roadmap.md
 @@ -24,2 +24,3 @@ Detailed plans so far:
@@ -10807,25 +11265,26 @@ index c360c92..8f2fa39 100644
 +- **Next:** S8 (drift detection).
 +- **After that:** S9.
  
-@@ -187,3 +188,4 @@ item, and extended one, and its final review an S8 item and four S9 items. Slice
+@@ -187,3 +188,5 @@ item, and extended one, and its final review an S8 item and four S9 items. Slice
  (2026-10-16) added an S7 item and changed one, added five S8 items and changed one, and
 -added an S9 item and changed one, and its final review an S8 item and an S9 item. Each
 +added an S9 item and changed one, and its final review an S8 item and an S9 item. Slice 7
-+(2026-10-16) marked the S7 items done, and added five S8 items and three S9 items. Each
++(2026-10-16) marked the S7 items done, and added five S8 items and three S9 items, and
++its conflict check an S9 item. Each
  slice plan must address the items for that slice.
-@@ -418,2 +420,6 @@ password, which are S3c's (and listed again below).
+@@ -418,2 +421,6 @@ password, which are S3c's (and listed again below).
    threat model.
 +  - **Done in S7:** each plex.tv call is a throwaway container of Mediaplane's image on
 +    Docker's default bridge network, which reaches none of the stack's networks, with
 +    the request on its standard input (ADR 0012, threat model T14). The proxy allows
 +    nothing new.
  - **A login of your own for Plex, and for Seerr on Plex.** Plex's login is always
-@@ -426,2 +432,4 @@ password, which are S3c's (and listed again below).
+@@ -426,2 +433,4 @@ password, which are S3c's (and listed again below).
    Slice 7: remove that once Seerr's Plex sign-in is built.
 +  - **Done in S7:** `login` may be `{ own: 'Plex' }`, or a function of the stack; Plex's
 +    is your own, and Seerr's is too on a Plex stack. `notWiredYet` is gone.
  - **Seerr's Plex sign-in is open too** (S6, from Seerr 3.5's code). Before its first
-@@ -430,4 +438,7 @@ password, which are S3c's (and listed again below).
+@@ -430,4 +439,7 @@ password, which are S3c's (and listed again below).
    published, as S6 made the Jellyfin one, and give Seerr's resources a Plex media server.
 +  - **Done in S7:** Seerr signs in with your token before it is published, and
 +    `seerr.media_server_plex` links it to Plex.
@@ -10833,7 +11292,7 @@ index c360c92..8f2fa39 100644
    for every app, so give the catalog a per-app web path.
 +  - **Done in S7:** `webPath`, which `credentials` adds.
  
-@@ -435,2 +446,20 @@ password, which are S3c's (and listed again below).
+@@ -435,2 +447,20 @@ password, which are S3c's (and listed again below).
  
 +- **Seerr keeps the Plex token it signed in with** (S7). After `plex-login` saves a new
 +  token, Seerr still holds the old one, which it uses to reach Plex, and Mediaplane can't
@@ -10854,13 +11313,16 @@ index c360c92..8f2fa39 100644
 +  settings were removed by hand while it runs, which then looks unclaimed to it.
 +
  - Override field names are case-sensitive, so the managed-field comparison must
-@@ -568,2 +597,14 @@ password, which are S3c's (and listed again below).
+@@ -568,2 +598,17 @@ password, which are S3c's (and listed again below).
  
 +- **The nightly Plex job** (S7) needs the repo secret `PLEX_TOKEN`, a token of a plex.tv
 +  account kept for tests (owner). Until it is set, the job does nothing. It claims a
 +  server each night on each architecture, and removes it in its last step; a run killed
 +  before that step leaves one on the account, which the next run doesn't remove. Decide
 +  whether a weekly sweep removes every server of the test account.
++- **Keep `PLEX_TOKEN` in a GitHub environment limited to `main`** (S7, owner): the
++  nightly job checks its branch, but only an environment stops a branch's own copy of
++  the workflow from reading the secret, for whoever can push a branch.
 +- **A 429 from plex.tv counts as "couldn't tell"** (S7): it is retried after 5 and 15
 +  seconds, and still fails closed, but its error says to run `apply` again rather than
 +  that plex.tv refused. Revisit if plex.tv's limits bite.
@@ -10874,13 +11336,13 @@ index c360c92..8f2fa39 100644
 - [ ] **Step 6: Check the docs rules, and commit**
 
 ```bash
-grep -rnE "Slice 7|S7 \(Plex\)" README.md catalog/*/README.md deploy/README.md docs/architecture.md docs/security docs/runbooks | grep -vE "including Slice 7\.|and S7 \(Plex\)\."
+grep -rnE "Slice 7|S7 \(Plex\)" README.md catalog/*/README.md deploy/README.md docs/architecture.md docs/security docs/runbooks | grep -vE "including Slice 7\.|and S7 \(Plex\)\.|before Slice 7 published"
 pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check
 git add README.md catalog deploy/README.md docs
 git commit -m "docs: Plex, plex-login and the plex.tv helper, in the threat model, ADR 0012, the runbook, the READMEs, the spec and the roadmap" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: the `grep` prints nothing. The check passes (1862 tests pass in 88 files). Every `text` block in the changed
+Expected: the `grep` prints nothing. The check passes (1865 tests pass in 88 files). Every `text` block in the changed
 docs is at most 40 columns wide.
 
 ## Slice 7 completion checklist
@@ -10889,18 +11351,18 @@ docs is at most 40 columns wide.
   sudo modprobe wireguard`), this passes:
   `pnpm format && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm docs:check && pnpm test:e2e`.
   Coverage stays at or above 90% on lines, functions, branches and statements. When this
-  plan was replayed: 98.56% of statements, 93.63% of branches, 98.25% of functions and 99.49% of lines, with 1862 tests in 88 files.
+  plan was replayed: 98.44% of statements, 93.5% of branches, 98.25% of functions and 99.46% of lines, with 1865 tests in 88 files.
 - [ ] `pnpm test:e2e` passes with Compose 2.38.2 as the host plugin too, and leaves no
   `mediaplane-e2e-*` container or network, no new volume, and no `mediaplane-e2e-*`
   folder. When this plan was replayed, alone on the dev box, warm, without the plex.tv
   token (so the nightly test was skipped):
-  - with Compose 5.5.1, 10 files and 25 tests (one skipped: the nightly test) in 811 s
+  - with Compose 5.5.1, 10 files and 25 tests (one skipped: the nightly test) in 797 s
     (Slice 6's suite took 669 s; the Plex file alone takes under four minutes);
-  - with Compose 2.38.2, the same in 884 s (Slice 6's: 719 s).
+  - with Compose 2.38.2, the same in 893 s (Slice 6's: 719 s).
 
   CI's e2e job allows 60 minutes, so `ci.yml` keeps its timeout.
 - [ ] The nightly test passes with the test account's token, once (Task 6, Step 4), and
-  the account lists no server afterwards. When this plan was replayed: 2 tests in 211 s, one server claimed and removed.
+  the account lists no server afterwards. When this plan was replayed: 2 tests in 188 s, one server claimed and removed.
 - [ ] The socket proxy's allow-list is unchanged: `git diff e83f86f --
   deploy/mediaplane.compose.yaml deploy/deploy.test.ts` prints nothing (decision 23).
   `e83f86f` is `main` after S6.
@@ -10908,8 +11370,13 @@ docs is at most 40 columns wide.
   while it is unclaimed, after `apply` fails at its setup; the unit tests keep it
   unpublished when another account claimed it, when it says a machine identifier of a
   Plex of yours, when plex.tv refuses its token or can't be asked, and when its file
-  holds no token or can't be read. Seerr on a Plex stack is never published while its
-  sign-in is open, nor when its admin isn't your account.
+  holds no token or can't be read, and when it lets a network in without a sign-in. A
+  Plex that runs published and unclaimed is stopped when no claim token can be had (the
+  CLI test), and the start step changes nothing else first. Seerr on a Plex stack is
+  never published while its sign-in is open, nor when its admin isn't your account.
+- [ ] Plex never gets your token before plex.tv says it is yours: the step-level test of
+  Plex's setup finds no `/identity` request with `X-Plex-Token`, and only `/:/prefs`,
+  after the ownership check, with it.
 - [ ] No secret shows: the tests that check it pass (your Plex token, claim tokens and
   Plex's own token in neither `compose.yaml`, `.env`, `state/`, a change record nor the
   CLI's output; `plex-login` never prints the token; the helper's and the client's
@@ -10933,8 +11400,9 @@ docs is at most 40 columns wide.
     Plex sets it), 16 (the Jellyfin connection now reads TLS or a URL base as moved too),
     18 (`seerr.media_server_plex`), 20 (the every-PR e2e) and 21 (the nightly job on
     both architectures);
-  - for the owner: set the `PLEX_TOKEN` repository secret, a token of a plex.tv account
-    kept for tests, never your own (until then the nightly job does nothing); the first
+  - for the owner: set the `PLEX_TOKEN` secret, a token of a plex.tv account kept for
+    tests, never your own, in a GitHub environment limited to `main` (until then the
+    nightly job does nothing); the first
     nightly run on `main` confirms it on Docker 28 and Compose 2.38.2, on amd64 and
     arm64;
   - for the owner's manual-steps list: run `mediaplane plex-login` once, before the first
