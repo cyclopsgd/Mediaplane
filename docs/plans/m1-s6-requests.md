@@ -16,7 +16,9 @@ their root folder and `isDefault`; then its setup is finished with `initialize`.
   `API_KEY`), setups run in the order of the apps' integrations, and a setup that can wait
   (`SetupWaiting`) without failing the step, so the wire step still runs.
 - **The typed client** gains a sign-in whose session lives in a cookie (`session`), to
-  sign out of Seerr at once.
+  sign out of Seerr at once, and the run's found secrets (`FoundSecrets`,
+  `AppApi.addSecret`): a key Mediaplane reads in clear in an answer is redacted from
+  then on, wherever the run's messages go.
 - **Seerr in the catalog** (`catalog/seerr/`): its API, its setup (`bootstrap.ts`), an
   integration of four resources (`seerr.media_server`, `seerr.server_sonarr`,
   `seerr.server_radarr`, `seerr.setup`), and `notWiredYet`, so that on a Plex stack it
@@ -136,10 +138,13 @@ These are added or restated for this slice:
   environments, `docker inspect` or the public CI log. This slice adds:
   - **Seerr's key**, generated, in `API_KEY`, among the secrets every client redacts;
   - **the arrs' keys in Seerr**, sent in request bodies, which Seerr shows in clear:
-    read back only to hand to Seerr's own test, never compared, kept or shown;
+    read back only to hand to Seerr's own test, never compared or kept, and redacted
+    from the moment they are read, one typed in Seerr by hand too;
   - **Jellyfin's keys in Seerr**: the one Seerr makes itself, which Mediaplane reads in
-    Seerr's answer and leaves there, and Mediaplane's, given only when Seerr's is
-    refused;
+    Seerr's answer, never keeps, and redacts in every message of the run from the moment
+    it reads it; and Mediaplane's, given only when Seerr's is refused;
+  - **the keys Jellyfin lists** (`GET /Auth/Keys`, Seerr's among them), each redacted
+    once read;
   - **the admin password**, sent to Seerr only in its first sign-in, and never to a Seerr
     that is set up already;
   - **Seerr's session cookie**, kept out of every message, used only to sign out at once,
@@ -214,8 +219,9 @@ was read from Seerr's own code in the image (`/app/server`).
    0644, so Mediaplane's user reads it, through `appdata/` (0700). A file Mediaplane
    can't read says nothing, and no key can decide, so the app starts unpublished and is
    set up again on every `apply`, with `bootstrap.unreadable`; its setup then finds Seerr
-   set up and only checks it (decision 4). That fails safe, at the cost of two recreates
-   per `apply` while the file stays unreadable (roadmap S8 item).
+   set up and only checks it (decision 4). That fails safe, at a cost on every `apply`
+   while the file stays unreadable: two recreates, and `apply` failing at verify (exit
+   1), because verify's plan lists the setup again (roadmap S8 item).
 3. **(check) Setups in order, and a setup that waits** (Task 2; the roadmap's S6 item).
    - The bootstrap step sets the apps up in the order of their integrations' `after`
      (`wiringOrder`), so Jellyfin's wizard is finished before Seerr signs in through it.
@@ -227,6 +233,16 @@ was read from Seerr's own code in the image (`/app/server`).
      resources (and what requires them), and verify fails, listing the setup left to do
      (`seerr (first-run setup)`). A failed setup still fails the step and skips the wire
      step, as in S5.
+   - A setup that waits keeps its app out of the publishing `up` without asking again
+     whether it is open. Seerr's sign-in may be refused because someone else signed in
+     first: the re-check would then find the setup done and publish the claimant's
+     Seerr. S5's rule for a claimed setup is the same: an app the plan started
+     unpublished stays so.
+   - S6 brings the second app with a setup. So a Jellyfin `apply` started published,
+     whose re-check still says its wizard is open, keeps its ports in the publishing `up`
+     that Seerr's setup brings: S5's behaviour, now reachable, and nothing new is
+     exposed, since it was published already. Its error says so, and the roadmap's S9
+     item says to take the ports away.
    - Why the wire step must run: a stack whose `admin.password` changed, with a new
      Seerr, has Seerr's sign-in refused by Jellyfin until `jellyfin.admin` sets the new
      password, which only the wire step does. Failing the step there would skip the wire
@@ -253,8 +269,14 @@ was read from Seerr's own code in the image (`/app/server`).
    with its key, never with the password, which Seerr would pass to whatever Jellyfin it
    was set up with: it is Mediaplane's only if its admin is the shared admin
    (`GET /api/v1/auth/me`) and its Jellyfin the stack's (`GET /api/v1/settings/jellyfin`);
-   anything else is refused as `auth`, so S5's claimed rule keeps it unpublished. A stack
-   with no Jellyfin fails the setup. `Bootstrap.run` gets the resolved stack, for
+   anything else is refused as `auth`, so S5's claimed rule keeps it unpublished. The
+   same check follows a sign-in that fails: someone inside the stack may have signed in
+   between Mediaplane's look and its sign-in, and Seerr then refuses a second `hostname`
+   (500, a `server` failure, which S5's rule wouldn't catch). So the setup looks again,
+   and a Seerr set up since is refused as `auth` unless it is Mediaplane's; one that is
+   (its own sign-in, whose answer was lost) is taken as done. The check reads the
+   Jellyfin key Seerr holds, which joins the run's redaction (decision 5). A stack with
+   no Jellyfin fails the setup. `Bootstrap.run` gets the resolved stack, for
    Jellyfin's address. S5's `claimed` message says "its setup was finished", not "its
    wizard", now that it serves two apps.
 5. **The client's session** (Task 2). `AppApi.session(path, fields, cookie, secrets)` posts
@@ -264,6 +286,17 @@ was read from Seerr's own code in the image (`/app/server`).
    The cookie, and the sign-in's secrets, are kept out of every message of the session
    client. `signIn`'s and `session`'s fields may be of any JSON type (Seerr's sign-in has
    a port and a boolean).
+
+   **(check) The run's found secrets.** Seerr shows keys in clear that Mediaplane didn't
+   know when the run started: the one Seerr made itself in Jellyfin, and the arrs' keys
+   in its servers, one typed by hand included; Jellyfin's `GET /Auth/Keys` lists every
+   key in full, Seerr's among them. A key Mediaplane reads that way joins the redaction
+   set at once: `AppApi.addSecret(value)` adds it to the run's `FoundSecrets`, which the
+   client reads each time it writes a message. Every client of the run shares it
+   (`reachApps`, and the clients `session` and `withKey` make), and so do `planWiring`'s
+   diagnostics and the bootstrap and wire steps' failures, which go into the change
+   record. Each `plan` has its own; `apply` shares one between its bootstrap and wire
+   steps. A key is redacted only once it has been read in that run.
 6. **(check) Plex: Seerr isn't wired until Slice 7** (Task 3; the roadmap's S7 item). On a
    Plex stack, Seerr's sign-in is Plex's (§6.1), which Slice 7 brings. Giving Seerr an API
    would have every Plex stack's `apply` fail on Seerr's key, which does nothing until a
@@ -300,7 +333,10 @@ was read from Seerr's own code in the image (`/app/server`).
    So its fields are `hostname` (Seerr's `ip`) and `port`, Jellyfin's service and
    container port, and `libraries`: which of Mediaplane's Movies and Shows are enabled,
    in order (a library you enable is yours). `apiKey` is its secret: the key Seerr holds
-   for Jellyfin, checked by using it (the users list), never compared (§6.3). Seerr keeps
+   for Jellyfin, checked by using it (the users list), never compared (§6.3). `observe`
+   reads it, never keeps it, and adds it to the run's redaction at once (decision 5), so
+   a later failure that quotes it, in the client, `plan` or the wire step, shows `***`.
+   Seerr keeps
    the key it made while it works; Mediaplane gives Seerr its own Jellyfin key only when
    Seerr's is refused, or Jellyfin moved. That leaves no unused key behind in Jellyfin,
    as replacing Seerr's would. An update syncs the libraries, then enables what is
@@ -321,12 +357,16 @@ was read from Seerr's own code in the image (`/app/server`).
    `hostname`, `port`, `activeProfile` (the profile's name), `activeDirectory` (the arr's
    root folder, now exported as `ROOT_FOLDER`) and `isDefault`; `apiKey` is its secret.
    Though Seerr shows the key, it is checked, never compared (§6.3): Seerr's own test of
-   the server it holds (§6.2's secret check). That test fails with one 500 whatever the
+   the server it holds (§6.2's secret check). Each key Seerr shows for a server, the
+   stack's or one typed by hand, joins the run's redaction as soon as it is read
+   (decision 5). That test fails with one 500 whatever the
    cause, so a failure is tested again with the stack's key: a pass means the key was
    refused (an update), a second failure is Seerr not reaching the arr, in Seerr's words.
-   A server is made with what Seerr's web UI gives a new one (no tags, no season folders,
-   standard series, every new episode monitored, films "released") and updated by sending
-   it back whole without its id. Each requires its arr's root folder.
+   A server is made with what Seerr's web UI gives a new one (no tags, standard series,
+   every new episode monitored, films "released"), but with season folders on for
+   Sonarr, Sonarr's own default; Radarr's stay off, since Seerr requires the field and
+   films have no seasons. It is updated by sending it back whole without its id. Each
+   requires its arr's root folder.
 10. **(check) The profile, and `resolve`** (Task 4; §6.2). The default profile is "the first
     match from a preference list (`HD-1080p`, then `Any`), or else the first profile",
     and only the arr knows its profiles, while `desired` is pure. So a resource may now
@@ -335,8 +375,9 @@ was read from Seerr's own code in the image (`/app/server`).
     Seerr's test, with the stack's key, and take `apps.seerr.<arr>_profile` when it is
     set: a name the arr lacks fails, listing those it has. `plan` leaves it unresolved,
     and the fields it fills uncompared, while a resource it requires is still to be put in
-    place, as it leaves the secrets unchecked: the arr may not be up. A field left
-    undefined is never compared, for `update` nor for `adopt`.
+    place, as it leaves the secrets unchecked: the arr may not be up. Only then is a
+    field left undefined uncompared, for `update` and for `adopt`: a resource without
+    `resolve`, or one whose `resolve` ran, compares every field as before.
 11. **`seerr.setup`** (Task 4; §6.1's "finishes with `initialize`"). Probed:
     `POST /api/v1/settings/initialize` answers `{"initialized":true}`, and again when sent
     twice. A singleton resource, `initialized`, read from Seerr's public settings, and
@@ -363,7 +404,11 @@ was read from Seerr's own code in the image (`/app/server`).
     reaches the arr only by its service and port, without TLS or a URL base, with its
     key, and fails with one 500, logging a line; `initialize` taken twice; and
     `settings.json` kept as Seerr writes it. The fake arrs gain their six quality
-    profiles. A shared `callFake` replaces the Jellyfin test's own request helper.
+    profiles. A shared `callFake` replaces the Jellyfin test's own request helper. The
+    fake Seerr can also quote every key it holds in its refusals (`echoKey`), have
+    someone sign in first, just before the next sign-in (`claimant`), and refuse given
+    paths (`failing`). One fixture, `fakeJellyfinSetUp`, is the Jellyfin that Mediaplane
+    sets up, and `thrown` gives what a call threw; the Seerr tests share both.
 14. **(check) The end-to-end test, and where it stops** (Task 5). A new
     `test/e2e/requests.e2e.test.ts`, from source, on the whole stack of the other e2e
     tests (`stackFor`: Jellyfin, Sonarr, Radarr, Prowlarr with Byparr, qBittorrent
@@ -401,7 +446,8 @@ was read from Seerr's own code in the image (`/app/server`).
     example's output from a real run of the same stack with this slice); Seerr's,
     Jellyfin's, Sonarr's and Radarr's READMEs; the deploy guide; the spec (a "Slice 6"
     entry in §11, and §5.2's `plan` row); the roadmap (S6 done, the S6 item done, an S7
-    item added and one changed, five S8 items added and one changed, and an S9 item).
+    item added and one changed, five S8 items added and one changed, and an S9 item
+    added and one changed).
     `docs/how-its-built.md` states no fact this slice changes, so it stays.
 
 ## File structure (new and changed in this slice)
@@ -409,21 +455,25 @@ was read from Seerr's own code in the image (`/app/server`).
 `packages/engine/src/`:
 
 - `http/client.ts` (+test): `AppApi.session`, `AppApiOptions.cookie`; `signIn`'s fields
-  of any JSON type.
+  of any JSON type; `AppApi.addSecret` and `AppApiOptions.found`.
+- `util/redact.ts`: `FoundSecrets`, `foundSecrets()`.
 - `catalog/types.ts`: `Bootstrap.secret?`, `Bootstrap.run(api, admin, stack)` giving
   `string | undefined`; `AppDefinition.notWiredYet`.
 - `plan/bootstrap.ts` (+test): a setup that makes no key.
 - `apply/bootstrap.ts`, `apply/apply.ts` (+test): `SetupWaiting`, `WaitingSetup`, setups
-  in order, waiting; the start step's detail for two apps; verify names a setup left.
-- `integrations/wire.ts` (+test): `WireOptions.waiting`.
+  in order, waiting; the start step's detail for two apps; verify names a setup left;
+  `BootstrapOptions.found`, one `FoundSecrets` for apply's bootstrap and wire steps.
+- `integrations/wire.ts` (+test): `WireOptions.waiting`, `WireOptions.found`.
 - `integrations/types.ts`, `integrations/wiring.ts` (+test): `ResourceSpec.resolve`;
-  fields left undefined aren't compared.
+  fields a `resolve` that wasn't run leaves undefined aren't compared; `reachApps`'s and
+  `planWiring`'s `found`.
 - `resolver/resolve.ts` (+test): `notWiredYet`.
 - `testing/`: `seerr.ts` (+test), new: `fakeSeerr`, `freshSeerr`, `FakeSeerr`,
-  `FakeSeerrServer`, `FakeSeerrLibrary`, `SEERR_JELLYFIN`, `SEERR_NOT_CONFIGURED`;
+  `FakeSeerrServer`, `FakeSeerrLibrary`, `SEERR_JELLYFIN`, `SEERR_NOT_CONFIGURED`,
+  `fakeJellyfinSetUp`, `SET_UP_JELLYFIN`, `thrown`;
   `http.ts`: `callFake`; `jellyfin.ts`: `makeApiKey`, `libraryId`; `wiring.ts`: Seerr's and
   the arrs' profiles in `FakeAppState`, `SERVARR_PROFILES`; `bootstrap.ts`: `FAKE_SIGN_IN`,
-  `SIGN_IN_CATALOG`, `FakeSignInState`.
+  `SIGN_IN_CATALOG`, `FakeSignInState` (with `claimant`).
 
 `catalog/`:
 
@@ -431,6 +481,7 @@ was read from Seerr's own code in the image (`/app/server`).
   profile options' descriptions; `seerr/bootstrap.ts` (+test) and
   `seerr/integration.ts` (+test), new.
 - `sonarr/integration.ts`, `radarr/integration.ts`: `ROOT_FOLDER`.
+- `jellyfin/bootstrap.ts`: every key Jellyfin lists joins the run's redaction.
 - `catalog.test.ts`, `render.test.ts`, `jellyfin/integration.test.ts`: what changes.
 - The generated facts in Seerr's README; the hand-written parts of Seerr's, Jellyfin's,
   Sonarr's and Radarr's READMEs (Task 6).
@@ -475,6 +526,9 @@ tests and `initialize` as decisions 1, 4, 8, 9 and 11 found them, and keeps
 Decision: the fake arrs keep Sonarr's and Radarr's six quality profiles; Seerr's sign-in
 makes a key named `Seerr` in the fake Jellyfin, through the fake's own `makeApiKey`
 (decision 4).
+Decision: the fake Seerr can quote the keys it holds (`echoKey`), be claimed just before
+a sign-in (`claimant`) and refuse paths (`failing`); `fakeJellyfinSetUp` and `thrown` are
+shared fixtures (decision 13).
 
 **Files:**
 - Create: `packages/engine/src/testing/seerr.ts`
@@ -492,8 +546,10 @@ makes a key named `Seerr` in the fake Jellyfin, through the fake's own `makeApiK
   - `fakeStackApis()` answers `Host: seerr` with `fakeSeerr`, and lists `fake-seerr` in
     `addresses`;
   - from `@mediaplane/engine/testing`: `fakeSeerr(request, state, peek)`, `freshSeerr()`,
-    `interface FakeSeerr { mediaServerType: number; users: string[]; jellyfin: { ip: string; port: number; apiKey: string; libraries: FakeSeerrLibrary[]; [setting: string]: unknown }; sonarr: FakeSeerrServer[]; radarr: FakeSeerrServer[]; initialized: boolean; sessions: string[]; errors: string[]; configDir?: string }`,
+    `interface FakeSeerr { mediaServerType: number; users: string[]; jellyfin: { ip: string; port: number; apiKey: string; libraries: FakeSeerrLibrary[]; [setting: string]: unknown }; sonarr: FakeSeerrServer[]; radarr: FakeSeerrServer[]; initialized: boolean; sessions: string[]; errors: string[]; echoKey: boolean; failing: string[]; claimant?: { user: string; jellyfin: string }; configDir?: string }`,
     `FakeSeerrServer`, `FakeSeerrLibrary`, `SEERR_JELLYFIN` (2), `SEERR_NOT_CONFIGURED` (4);
+  - `fakeJellyfinSetUp(more?: Partial<FakeAppState>): FakeAppState`,
+    `SET_UP_JELLYFIN` (`{ password, key }`) and `thrown(call: Promise<unknown>): Promise<unknown>`;
   - `callFake(port, path, init?)` giving `{ status, body, cookie }`;
     `makeApiKey(state, app)` and `libraryId(library)` from the fake Jellyfin.
 
@@ -506,14 +562,19 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { callFake } from './http';
-import { SEERR_JELLYFIN, SEERR_NOT_CONFIGURED } from './seerr';
+import {
+  fakeJellyfinSetUp,
+  SEERR_JELLYFIN,
+  SEERR_NOT_CONFIGURED,
+  SET_UP_JELLYFIN,
+} from './seerr';
 import { tempDir } from './temp';
-import { fakeStackApis, freshAppState, type FakeAppState } from './wiring';
+import { fakeStackApis, freshAppState } from './wiring';
 
 const SEERR_KEY = '5'.repeat(32);
 const SONARR_KEY = '1'.repeat(32);
-const JELLYFIN_KEY = '7'.repeat(32);
-const PASSWORD = 'fake-admin-password';
+const JELLYFIN_KEY = SET_UP_JELLYFIN.key;
+const PASSWORD = SET_UP_JELLYFIN.password;
 
 /** One call to the fake Seerr, or to the fake app `init.host` names. */
 const call = (port: number, path: string, init: Parameters<typeof callFake>[2] = {}) =>
@@ -522,24 +583,13 @@ const call = (port: number, path: string, init: Parameters<typeof callFake>[2] =
 /** A stack's fakes: a Jellyfin set up with the admin and a key, Seerr fresh, Sonarr keyed. */
 async function stack() {
   const apis = await fakeStackApis();
-  const jellyfin: FakeAppState = {
-    ...freshAppState(),
-    wizard: 'done',
-    user: 'admin',
-    password: PASSWORD,
-    apiKeys: [
-      {
-        AccessToken: JELLYFIN_KEY,
-        AppName: 'Mediaplane',
-        DateCreated: '2026-10-15T12:00:00.000Z',
-      },
-    ],
+  const jellyfin = fakeJellyfinSetUp({
     libraries: [
       { Name: 'Movies', CollectionType: 'movies', Locations: [], LibraryOptions: {} },
       { Name: 'Shows', CollectionType: 'tvshows', Locations: [], LibraryOptions: {} },
       { Name: 'Music', CollectionType: 'music', Locations: [], LibraryOptions: {} },
     ],
-  };
+  });
   apis.apps.set('jellyfin', jellyfin);
   const seerr = { ...freshAppState(), key: SEERR_KEY };
   apis.apps.set('seerr', seerr);
@@ -762,6 +812,57 @@ describe("fakeStackApis' Seerr", () => {
     expect(await written()).toContain('"mediaServerType": 2');
   });
 
+  it('is set up by a claimant who signs in first, through the Jellyfin they name', async () => {
+    const { port, seerr } = await stack();
+    seerr.seerr.claimant = { user: 'someone', jellyfin: 'claimants-jellyfin' };
+    expect((await call(port, '/api/v1/auth/jellyfin', { body: FIRST })).body).toEqual({
+      error: 'Jellyfin hostname already configured',
+    });
+    expect(seerr.seerr).toMatchObject({
+      mediaServerType: SEERR_JELLYFIN,
+      users: ['someone'],
+      jellyfin: { ip: 'claimants-jellyfin' },
+    });
+  });
+
+  it('quotes every key it holds in its refusals while echoKey is set, as an app may', async () => {
+    const { port, seerr } = await stack();
+    await call(port, '/api/v1/auth/jellyfin', { body: FIRST });
+    await call(port, '/api/v1/settings/sonarr', {
+      body: {
+        name: 'Sonarr (Mediaplane)',
+        hostname: 'sonarr',
+        port: 8989,
+        apiKey: SONARR_KEY,
+        useSsl: false,
+        activeProfileId: 4,
+        activeProfileName: 'HD-1080p',
+        activeDirectory: '/data/media/tv',
+        is4k: false,
+        enableSeasonFolders: true,
+        isDefault: true,
+      },
+      headers: keyed,
+    });
+    const own = seerr.seerr.jellyfin.apiKey;
+    expect((await call(port, '/api/v1/nosuch', { headers: keyed })).body).toBe('');
+    seerr.seerr.echoKey = true;
+    expect(await call(port, '/api/v1/nosuch', { headers: keyed })).toEqual({
+      status: 404,
+      body: { message: `fake failure, holding ${own} ${SONARR_KEY}` },
+      cookie: undefined,
+    });
+    // A passing answer is left as it is.
+    expect((await call(port, '/api/v1/auth/me', { headers: keyed })).status).toBe(200);
+    // A path it is told to fail is refused, whatever is sent.
+    seerr.seerr.echoKey = false;
+    seerr.seerr.failing = ['/api/v1/auth/me'];
+    expect(await call(port, '/api/v1/auth/me?x=1', { headers: keyed })).toMatchObject({
+      status: 400,
+      body: { message: 'request/fake failure' },
+    });
+  });
+
   it('is initialized by initialize, which it takes again', async () => {
     const { port } = await stack();
     await call(port, '/api/v1/auth/jellyfin', { body: FIRST });
@@ -979,7 +1080,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FakeReply, FakeRequest } from './http';
 import { libraryId, makeApiKey } from './jellyfin';
-import type { FakeAppState } from './wiring';
+import { freshAppState, type FakeAppState } from './wiring';
 
 /** Seerr's media-server types (its `MediaServerType`): Jellyfin is 2, none yet 4. */
 export const SEERR_JELLYFIN = 2;
@@ -1033,6 +1134,19 @@ export interface FakeSeerr {
   /** What it logged as errors: a check that fails logs a line, as Seerr does. */
   errors: string[];
   /**
+   * Have each refusal and failure it answers quote every key it holds, in clear: its
+   * Jellyfin key and its servers', as an app may echo a secret back.
+   */
+  echoKey: boolean;
+  /** Paths it refuses (400), whatever is sent: as a request Seerr won't take. */
+  failing: string[];
+  /**
+   * Who signs in first, and through what Jellyfin (its host), just before the next
+   * sign-in reaches a Seerr nobody has set up: someone inside the stack, between
+   * Mediaplane's look at its setup and its own sign-in. Unset: nobody.
+   */
+  claimant?: { user: string; jellyfin: string };
+  /**
    * Where Seerr keeps settings.json (its appdata folder): the fake writes it there as
    * Seerr does, naming its media-server type, on each request it answers. Unset: nowhere.
    */
@@ -1064,6 +1178,8 @@ export function freshSeerr(): FakeSeerr {
     initialized: false,
     sessions: [],
     errors: [],
+    echoKey: false,
+    failing: [],
   };
 }
 
@@ -1130,16 +1246,27 @@ function sessionCookie(header: string | undefined): string | undefined {
  *   by its service, at its port, without TLS, with its key (`state.key` of the arr, any
  *   when empty); a failing test is a 500, and logs a line;
  * - `initialize`, which can be sent again.
- * It keeps settings.json in `seerr.configDir`, when that is set, as Seerr does.
+ * It keeps settings.json in `seerr.configDir`, when that is set, as Seerr does, and
+ * quotes the keys it holds in each refusal while `seerr.echoKey` is set. A `claimant`
+ * signs in first, and each path in `failing` is refused.
  */
 export function fakeSeerr(
   request: FakeRequest,
   state: FakeAppState,
   peek: (service: string) => FakeAppState | undefined,
 ): FakeReply {
-  const reply = answer(request, state, peek);
-  keepSettingsJson(state.seerr);
-  return reply;
+  const { seerr } = state;
+  const reply = seerr.failing.includes(request.path.split('?')[0] ?? request.path)
+    ? invalid('fake failure')
+    : answer(request, state, peek);
+  keepSettingsJson(seerr);
+  if (!seerr.echoKey || reply.status < 400) return reply;
+  const servers = [...seerr.sonarr, ...seerr.radarr];
+  const held = [seerr.jellyfin.apiKey, ...servers.map((s) => s.apiKey)];
+  return {
+    ...reply,
+    body: { message: `fake failure, holding ${held.filter((k) => k !== '').join(' ')}` },
+  };
 }
 
 /** fakeSeerr's answer to `request`. */
@@ -1165,6 +1292,15 @@ function answer(
     };
   }
   if (path === '/api/v1/auth/jellyfin' && method === 'POST') {
+    if (seerr.claimant !== undefined && seerr.users.length === 0) {
+      seerr.mediaServerType = SEERR_JELLYFIN;
+      seerr.users = [seerr.claimant.user];
+      seerr.jellyfin = {
+        ...seerr.jellyfin,
+        ip: seerr.claimant.jellyfin,
+        apiKey: 'fake-claimants-key',
+      };
+    }
     return signIn(body(), seerr, peek('jellyfin'));
   }
   const cookie = sessionCookie(request.headers.cookie);
@@ -1434,6 +1570,41 @@ function fakeSeerrServers(
   }
   return undefined;
 }
+
+/** The shared admin's password, and the key, of the Jellyfin fakeJellyfinSetUp gives. */
+export const SET_UP_JELLYFIN = {
+  password: 'fake-admin-password',
+  key: '7'.repeat(32),
+} as const;
+
+/**
+ * A fake Jellyfin as Mediaplane sets one up: its wizard done, the shared admin (`admin`,
+ * SET_UP_JELLYFIN's password), and its key, named `Mediaplane`; `more` changes it.
+ */
+export function fakeJellyfinSetUp(more: Partial<FakeAppState> = {}): FakeAppState {
+  return {
+    ...freshAppState(),
+    wizard: 'done',
+    user: 'admin',
+    password: SET_UP_JELLYFIN.password,
+    apiKeys: [
+      {
+        AccessToken: SET_UP_JELLYFIN.key,
+        AppName: 'Mediaplane',
+        DateCreated: '2026-10-15T12:00:00.000Z',
+      },
+    ],
+    ...more,
+  };
+}
+
+/** What `call` threw, or undefined when it didn't throw. */
+export async function thrown(call: Promise<unknown>): Promise<unknown> {
+  return call.then(
+    () => undefined,
+    (cause: unknown) => cause,
+  );
+}
 ```
 
 **Change** `packages/engine/src/testing/wiring.ts`:
@@ -1526,7 +1697,7 @@ git add packages/engine/src/testing
 git commit -m "test(engine): a fake Seerr, and the arrs' quality profiles, as the pinned images answer" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1621 tests pass in 81 files (1614 in 80 before this slice).
+Expected: 1623 tests pass in 81 files (1614 in 80 before this slice).
 
 ---
 
@@ -1546,14 +1717,20 @@ that failed or waits waits too; verify names the setup left (decision 3).
 Decision: `Bootstrap.run` gets the resolved stack (decision 4).
 Decision: `AppApi.session` signs in and gives a client carrying the session's cookie
 (decision 5).
+Decision: a key read in clear joins the run's redaction (`FoundSecrets`), which the
+clients, `plan` and the bootstrap and wire steps share; Jellyfin's setup adds each key it
+lists (decision 5).
+Decision: a setup that waits stays unpublished without asking again (decision 3).
 
 **Files:**
-- Modify: `packages/engine/src/http/client.ts`, `packages/engine/src/catalog/types.ts`,
-  `packages/engine/src/plan/bootstrap.ts`, `packages/engine/src/apply/bootstrap.ts`,
-  `packages/engine/src/apply/apply.ts`, `packages/engine/src/integrations/wire.ts`,
-  `packages/engine/src/testing/bootstrap.ts`
+- Modify: `packages/engine/src/http/client.ts`, `packages/engine/src/util/redact.ts`,
+  `packages/engine/src/catalog/types.ts`, `packages/engine/src/plan/bootstrap.ts`,
+  `packages/engine/src/apply/bootstrap.ts`, `packages/engine/src/apply/apply.ts`,
+  `packages/engine/src/integrations/wiring.ts`, `packages/engine/src/integrations/wire.ts`,
+  `packages/engine/src/testing/bootstrap.ts`, `catalog/jellyfin/bootstrap.ts`
 - Test: `packages/engine/src/http/client.test.ts`,
   `packages/engine/src/plan/bootstrap.test.ts`, `packages/engine/src/apply/apply.test.ts`,
+  `packages/engine/src/integrations/wiring.test.ts`,
   `packages/engine/src/integrations/wire.test.ts`, `catalog/jellyfin/integration.test.ts`
 
 **Interfaces:**
@@ -1567,10 +1744,17 @@ Decision: `AppApi.session` signs in and gives a client carrying the session's co
   - `class SetupWaiting extends Error`, `interface WaitingSetup { app: string; reason: string }`,
     and `bootstrapApps()` giving `{ store, detail, waiting: WaitingSetup[] }`;
   - `WireOptions.waiting?: readonly string[]`;
+  - the run's found secrets: `interface FoundSecrets { add(value: string): void; readonly values: readonly string[] }`
+    and `foundSecrets()` (`util/redact.ts`); `AppApi.addSecret(value: string): void`;
+    `AppApiOptions.found?: FoundSecrets`, read whenever a message is written, and passed
+    on by `session` and `withKey`; `found` in `reachApps`'s options (required),
+    `PlanWiringOptions`, `WireOptions` and `BootstrapOptions` (optional: the step's own
+    when absent); `apply` passes one to its bootstrap and wire steps;
   - diagnostics `bootstrap.waiting` (a warning), and `bootstrap.unreadable` for a setup
     that makes no key;
-  - from `@mediaplane/engine/testing`: `FAKE_SIGN_IN`, `SIGN_IN_CATALOG`, `FakeSignInState`,
-    and `fakeSetUpApp()` giving `signIn` too.
+  - from `@mediaplane/engine/testing`: `FAKE_SIGN_IN`, `SIGN_IN_CATALOG`, `FakeSignInState`
+    (whose `claimant` has a refused sign-in find the setup done), and `fakeSetUpApp()`
+    giving `signIn` too.
 
 - [ ] **Step 1: Write the failing tests, and the fixture they use**
 
@@ -1581,7 +1765,7 @@ The fixture first: a setup shaped like Seerr's, on the fixture Sonarr, served by
 
 ```diff
 diff --git a/packages/engine/src/testing/bootstrap.ts b/packages/engine/src/testing/bootstrap.ts
-index 41317f9..13b732b 100644
+index 41317f9..8da455a 100644
 --- a/packages/engine/src/testing/bootstrap.ts
 +++ b/packages/engine/src/testing/bootstrap.ts
 @@ -3,2 +3,3 @@ import { join } from 'node:path';
@@ -1593,7 +1777,7 @@ index 41317f9..13b732b 100644
 -import { fakeHttpApp, type FakeApp } from './http';
 +import { fakeHttpApp, type FakeApp, type FakeReply, type FakeRequest } from './http';
  
-@@ -57,2 +58,103 @@ export const SET_UP_CATALOG: Catalog = fixtureCatalog.map((def) =>
+@@ -57,2 +58,114 @@ export const SET_UP_CATALOG: Catalog = fixtureCatalog.map((def) =>
  
 +/** Whether FAKE_SIGN_IN's app can still be claimed. */
 +async function signInOpen(api: AppApi): Promise<boolean> {
@@ -1650,6 +1834,11 @@ index 41317f9..13b732b 100644
 +  done: boolean;
 +  /** Refuse the sign-in (401), as Jellyfin refusing the shared admin makes Seerr. */
 +  refuse: boolean;
++  /**
++   * With `refuse`: someone else signs in first, so the setup is done (signed-in.txt
++   * written) by the time the sign-in is refused.
++   */
++  claimant: boolean;
 +  /** Its sessions' cookies, until signed out. */
 +  sessions: string[];
 +  /** Who signed in, as each sign-in named them, and through what. */
@@ -1669,7 +1858,13 @@ index 41317f9..13b732b 100644
 +  if (path === '/ready') return { status: 200 };
 +  if (path === '/signed-in') return { status: 200, body: { done: state.done } };
 +  if (path === '/sign-in' && method === 'POST') {
-+    if (state.refuse) return { status: 401 };
++    if (state.refuse) {
++      if (state.claimant) {
++        state.done = true;
++        writeFileSync(join(home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
++      }
++      return { status: 401 };
++    }
 +    const { user, through } = JSON.parse(request.body) as {
 +      user: string;
 +      through: string;
@@ -1697,7 +1892,7 @@ index 41317f9..13b732b 100644
 +}
 +
  /** What the app behind FAKE_SETUP holds; a test may change it between calls. */
-@@ -81,5 +183,6 @@ export interface FakeSetUpState {
+@@ -81,5 +194,6 @@ export interface FakeSetUpState {
   * key. A finished setup writes appdata/jellyfin/setup.txt, as Jellyfin writes its
 - * system.xml.
 - * `addresses` put Jellyfin's fake container on the wiring network, and `seams` send its
@@ -1707,30 +1902,31 @@ index 41317f9..13b732b 100644
 + * `addresses` put Jellyfin's and Sonarr's fake containers on the wiring network, and
 + * `seams` send their calls here.
   */
-@@ -88,2 +191,3 @@ export async function fakeSetUpApp(home: string): Promise<{
+@@ -88,2 +202,3 @@ export async function fakeSetUpApp(home: string): Promise<{
    state: FakeSetUpState;
 +  signIn: FakeSignInState;
    seams: WiringSeams;
-@@ -91,2 +195,8 @@ export async function fakeSetUpApp(home: string): Promise<{
+@@ -91,2 +206,9 @@ export async function fakeSetUpApp(home: string): Promise<{
  }> {
 +  const signIn: FakeSignInState = {
 +    done: false,
 +    refuse: false,
++    claimant: false,
 +    sessions: [],
 +    signedIn: [],
 +  };
    const state: FakeSetUpState = {
-@@ -103,2 +213,5 @@ export async function fakeSetUpApp(home: string): Promise<{
+@@ -103,2 +225,5 @@ export async function fakeSetUpApp(home: string): Promise<{
      const { method, path, headers } = request;
 +    if ((headers.host ?? '').startsWith('sonarr:')) {
 +      return fakeSignInApp(request, signIn, home);
 +    }
      if (path === '/ready') return { status: 200 };
-@@ -141,2 +254,3 @@ export async function fakeSetUpApp(home: string): Promise<{
+@@ -141,2 +266,3 @@ export async function fakeSetUpApp(home: string): Promise<{
      state,
 +    signIn,
      seams: {
-@@ -145,3 +259,3 @@ export async function fakeSetUpApp(home: string): Promise<{
+@@ -145,3 +271,3 @@ export async function fakeSetUpApp(home: string): Promise<{
      },
 -    addresses: { 'fake-jellyfin': '127.0.0.1' },
 +    addresses: { 'fake-jellyfin': '127.0.0.1', 'fake-sonarr': '127.0.0.1' },
@@ -1741,10 +1937,14 @@ index 41317f9..13b732b 100644
 
 ```diff
 diff --git a/packages/engine/src/http/client.test.ts b/packages/engine/src/http/client.test.ts
-index 3da2f62..8c4fa64 100644
+index 3da2f62..cf2681d 100644
 --- a/packages/engine/src/http/client.test.ts
 +++ b/packages/engine/src/http/client.test.ts
-@@ -1252 +1252,89 @@ describe("createAppApi: Jellyfin's ways", () => {
+@@ -7,2 +7,3 @@ import { z } from 'zod';
+ import { closedPort, fakeHttpApp, type FakeHandler } from '../testing/http';
++import { foundSecrets } from '../util/redact';
+ import {
+@@ -1252 +1253,129 @@ describe("createAppApi: Jellyfin's ways", () => {
  });
 +
 +describe("createAppApi: Seerr's session", () => {
@@ -1834,6 +2034,46 @@ index 3da2f62..8c4fa64 100644
 +    expect(app.requests).toHaveLength(1);
 +  });
 +});
++
++describe('createAppApi: a secret read in an answer', () => {
++  /** A key an app holds in clear, which the run didn't know of when it started. */
++  const HELD = 'e'.repeat(32);
++  const quoting = () => ({ status: 500, body: { message: `fake failure near ${HELD}` } });
++
++  it('is redacted from then on, by every client of the run that shares its FoundSecrets', async () => {
++    const found = foundSecrets();
++    const { api } = await sonarr(quoting, { found });
++    const { api: other } = await sonarr(quoting, { found });
++    // Not one of the run's secrets yet: nothing tells the client it is one.
++    expect((await failure(api.check('/api/v3/system/status'))).message).toContain(HELD);
++    api.addSecret(HELD);
++    expect(found.values).toEqual([HELD]);
++    for (const client of [api, other, api.withKey('d'.repeat(32))]) {
++      const said = await failure(client.check('/api/v3/system/status'));
++      expect(said.message).toBe(
++        'Sonarr at http://sonarr:8989 (127.0.0.1) failed (HTTP 500): fake failure near *** (GET /api/v3/system/status)',
++      );
++    }
++    // In each form an app may echo it in, and in a call that sends secrets of its own.
++    const { api: escaped } = await sonarr(
++      () => ({ status: 500, body: `fake failure near ${encodeURIComponent(PW)}` }),
++      { found },
++    );
++    found.add(PW);
++    expect((await failure(escaped.submit('POST', '/x'))).message).toContain('near ***');
++    expect(
++      (await failure(escaped.session('/x', {}, 'connect.sid', ['fake-other']))).message,
++    ).toContain('near ***');
++  });
++
++  it("is kept by a client without the run's FoundSecrets, and shared with the clients it makes", async () => {
++    const { api } = await sonarr(quoting);
++    api.withKey('d'.repeat(32)).addSecret(HELD);
++    expect((await failure(api.check('/api/v3/system/status'))).message).toContain(
++      'near ***',
++    );
++  });
++});
 ```
 
 **Change** `packages/engine/src/plan/bootstrap.test.ts`:
@@ -1905,7 +2145,7 @@ index bfac68f..0da3cfd 100644
 
 ```diff
 diff --git a/packages/engine/src/apply/apply.test.ts b/packages/engine/src/apply/apply.test.ts
-index 1abdece..f1cfe54 100644
+index 1abdece..0d5cec1 100644
 --- a/packages/engine/src/apply/apply.test.ts
 +++ b/packages/engine/src/apply/apply.test.ts
 @@ -30,3 +30,8 @@ import { RuntimeError, type ContainerState, type Runtime } from '../runtime/type
@@ -1928,7 +2168,7 @@ index 1abdece..f1cfe54 100644
 -      "the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in (POST /signin); jellyfin's setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished: its wizard was finished with another login while Mediaplane set it up, and the next apply would publish it. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says",
 +      "the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in (POST /signin); jellyfin's setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished: its setup was finished with another login while Mediaplane set it up, and the next apply would publish it. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says",
      );
-@@ -2012 +2017,161 @@ describe('apply: first-run setup before the ports are published', () => {
+@@ -2012 +2017,178 @@ describe('apply: first-run setup before the ports are published', () => {
  });
 +
 +describe('apply: a first-run setup that makes no key, after another', () => {
@@ -2057,6 +2297,23 @@ index 1abdece..f1cfe54 100644
 +    ]);
 +  });
 +
++  it('keeps one whose setup waits unpublished, though someone else finished it meanwhile', async () => {
++    const { setup, ups, run } = await signInStack();
++    // Refused because someone inside the stack signed in first: the setup now looks done.
++    setup.signIn.refuse = true;
++    setup.signIn.claimant = true;
++    const waited = await run();
++    expect(waited.outcome).toBe('failed');
++    expect(waited.diagnostics).toContainEqual(
++      expect.objectContaining({ code: 'bootstrap.waiting' }),
++    );
++    expect(setup.signIn.done).toBe(true);
++    expect(ups).toEqual([
++      'jellyfin sonarr unpublished; jellyfin open, sonarr open',
++      'sonarr unpublished; jellyfin done, sonarr done',
++    ]);
++  });
++
 +  it('keeps unpublished, and fails, an app with a setup but no API to finish it through', async () => {
 +    const catalog = SET_UP_CATALOG.map((def) =>
 +      def.id === 'jellyfin' ? { ...def, api: undefined } : def,
@@ -2092,11 +2349,61 @@ index 1abdece..f1cfe54 100644
 +});
 ```
 
+**Change** `packages/engine/src/integrations/wiring.test.ts`:
+
+```diff
+diff --git a/packages/engine/src/integrations/wiring.test.ts b/packages/engine/src/integrations/wiring.test.ts
+index 207b7a2..6416b14 100644
+--- a/packages/engine/src/integrations/wiring.test.ts
++++ b/packages/engine/src/integrations/wiring.test.ts
+@@ -17,2 +17,3 @@ import {
+ } from '../testing/wiring';
++import { foundSecrets } from '../util/redact';
+ import type { KnownResources } from './resources';
+@@ -414,2 +415,32 @@ describe('planWiring', () => {
+ 
++  it('keeps a secret a resource read in an answer out of every warning after it', async () => {
++    const HELD = 'e'.repeat(32);
++    // One reads a key the app holds in clear, then fails in its own words, quoting it;
++    // the next quotes it too.
++    const reads: ResourceSpec = {
++      ...FAKE_LOGIN,
++      name: 'first',
++      observe: (api) => {
++        api.addSecret(HELD);
++        return Promise.reject(
++          new AppApiError(`Sonarr holds ${HELD}`, { kind: 'rejected' }),
++        );
++      },
++    };
++    const quotes: ResourceSpec = {
++      ...FAKE_LOGIN,
++      observe: () =>
++        Promise.reject(new AppApiError(`still ${HELD}`, { kind: 'rejected' })),
++    };
++    const sonarr = await fakeSonarr({ key: KEY });
++    const planned = await planWiring(
++      options(sonarr, { stack: sonarrWith([reads, quotes]) }),
++    );
++    expect(planned.diagnostics.map((d) => d.message)).toEqual([
++      'Sonarr holds ***',
++      'still ***',
++    ]);
++    expect(JSON.stringify(planned)).not.toContain(HELD);
++  });
++
+   it('says a managed field that holds a secret is one apply would refuse, and asks nothing of it', async () => {
+@@ -670,2 +701,3 @@ describe('reachApps', () => {
+         secrets: [],
++        found: foundSecrets(),
+         deadlineMs: 0,
+```
+
 **Change** `packages/engine/src/integrations/wire.test.ts`:
 
 ```diff
 diff --git a/packages/engine/src/integrations/wire.test.ts b/packages/engine/src/integrations/wire.test.ts
-index abefb20..a183233 100644
+index abefb20..7ea644b 100644
 --- a/packages/engine/src/integrations/wire.test.ts
 +++ b/packages/engine/src/integrations/wire.test.ts
 @@ -11,2 +11,3 @@ import { RuntimeError, type OneOffCommand } from '../runtime/types';
@@ -2153,15 +2460,55 @@ index abefb20..a183233 100644
 +  });
 +
    it('says so when there is no wiring network after the start, and asks no app', async () => {
+@@ -608,2 +656,38 @@ describe('wire', () => {
+ 
++  it('keeps a secret a resource read in an answer out of every failure after it, and out of the change record', async () => {
++    const HELD = 'e'.repeat(32);
++    const reads: ResourceSpec = {
++      ...FAKE_LOGIN,
++      name: 'first',
++      observe: (api) => {
++        api.addSecret(HELD);
++        return Promise.reject(
++          new AppApiError(`Sonarr holds ${HELD}`, { kind: 'rejected' }),
++        );
++      },
++    };
++    // An error that isn't the app's stops the step: its message is redacted too.
++    const bug: ResourceSpec = {
++      ...FAKE_LOGIN,
++      observe: () => Promise.reject(new Error(`a bug, near ${HELD}`)),
++    };
++    const sonarr = await fakeSonarr({ key: KEY });
++    const { run, actions } = await wireWith(sonarr, {
++      stack: stackOf(
++        WIRED_CATALOG.map((def) =>
++          def.id === 'sonarr'
++            ? { ...def, integration: { after: [], resources: [reads, bug] } }
++            : def,
++        ),
++      ),
++    });
++    const failure = await run.catch((thrown: unknown) => thrown);
++    expect((failure as WiringFailed).message).toBe('a bug, near ***');
++    expect((failure as WiringFailed).diagnostics.map((d) => d.message)).toEqual([
++      'Sonarr holds ***',
++    ]);
++    expect(actions.map((a) => a.error)).toEqual(['Sonarr holds ***', 'a bug, near ***']);
++    expect(JSON.stringify([failure, actions])).not.toContain(HELD);
++  });
++
+   it('makes no folder for a resource the app already holds', async () => {
 ```
 
-Jellyfin's setup now gets the stack, as `run` takes it:
+Jellyfin's setup now gets the stack, as `run` takes it, and keeps the keys it lists out
+of what it says:
 
 **Change** `catalog/jellyfin/integration.test.ts`:
 
 ```diff
 diff --git a/catalog/jellyfin/integration.test.ts b/catalog/jellyfin/integration.test.ts
-index 20ce1fa..e5aa6ed 100644
+index 20ce1fa..52ad95f 100644
 --- a/catalog/jellyfin/integration.test.ts
 +++ b/catalog/jellyfin/integration.test.ts
 @@ -160,3 +160,3 @@ describe("Jellyfin's first-run setup", () => {
@@ -2212,19 +2559,42 @@ index 20ce1fa..e5aa6ed 100644
 +      '2'.repeat(32),
 +    );
      expect(state.apiKeys).toHaveLength(4);
-@@ -273,3 +281,5 @@ describe("Jellyfin's first-run setup", () => {
+@@ -263,2 +271,22 @@ describe("Jellyfin's first-run setup", () => {
+ 
++  it("keeps every key Jellyfin lists out of what it says after, another app's too", async () => {
++    const seerrs = '3'.repeat(32);
++    const { api } = await throughProxy(
++      setUp({
++        apiKeys: [
++          { AccessToken: KEY, AppName: KEY_NAME, DateCreated: '2026-10-15T12:00:00Z' },
++          { AccessToken: seerrs, AppName: 'Seerr', DateCreated: '2026-10-15T12:01:00Z' },
++        ],
++      }),
++      (request) =>
++        callOf(request) === 'POST /Sessions/Logout'
++          ? { status: 500, body: { message: `fake failure near ${seerrs}` } }
++          : undefined,
++    );
++    const failed = await failure(jellyfinBootstrap.run(api, ADMIN, contextOf().stack));
++    expect(failed.message).toBe(
++      'Jellyfin at http://jellyfin:8096 (127.0.0.1) failed (HTTP 500): fake failure near *** (POST /Sessions/Logout)',
++    );
++  });
++
+   it('takes the first of two keys made at the same moment', async () => {
+@@ -273,3 +301,5 @@ describe("Jellyfin's first-run setup", () => {
      );
 -    expect(await jellyfinBootstrap.run(api, ADMIN)).toBe('8'.repeat(32));
 +    expect(await jellyfinBootstrap.run(api, ADMIN, contextOf().stack)).toBe(
 +      '8'.repeat(32),
 +    );
    });
-@@ -284,3 +294,3 @@ describe("Jellyfin's first-run setup", () => {
+@@ -284,3 +314,3 @@ describe("Jellyfin's first-run setup", () => {
      );
 -    const made = await jellyfinBootstrap.run(api, ADMIN);
 +    const made = await jellyfinBootstrap.run(api, ADMIN, contextOf().stack);
      expect(made).not.toBe(KEY);
-@@ -293,3 +303,3 @@ describe("Jellyfin's first-run setup", () => {
+@@ -293,3 +323,3 @@ describe("Jellyfin's first-run setup", () => {
      );
 -    const failed = await failure(jellyfinBootstrap.run(api, ADMIN));
 +    const failed = await failure(jellyfinBootstrap.run(api, ADMIN, contextOf().stack));
@@ -2233,46 +2603,106 @@ index 20ce1fa..e5aa6ed 100644
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `pnpm vitest run packages/engine/src/http packages/engine/src/plan/bootstrap.test.ts packages/engine/src/apply packages/engine/src/integrations/wire.test.ts catalog/jellyfin`
-Expected: FAIL. 12 tests fail in 4 files:
-- `client.test.ts`, 3: `api.session is not a function`;
+Run: `pnpm vitest run packages/engine/src/http packages/engine/src/plan/bootstrap.test.ts packages/engine/src/apply packages/engine/src/integrations/wiring.test.ts packages/engine/src/integrations/wire.test.ts catalog/jellyfin`
+Expected: FAIL. 19 tests fail in 6 files:
+- `client.test.ts`, 5: `api.session is not a function` (3), `foundSecrets is not a
+  function`, and `api.withKey(...).addSecret is not a function`;
 - `plan/bootstrap.test.ts`, 2: a setup without a key is planned from a key it can't
   have: its file says it is done, and it is listed all the same
   (`expected { changes: [ { …(2) } ], …(1) } to deeply equal { changes: [], diagnostics: [] }`),
   and an unreadable file draws no warning (`expected [] to have a length of 1 but got +0`);
-- `apply.test.ts`, 6: the two claimed-setup messages still say `its wizard was finished`;
+- `apply.test.ts`, 7: the two claimed-setup messages still say `its wizard was finished`;
   the fixture's sign-in is run without the stack (`stack.apps` of undefined), so the step
   fails (`expected [ { severity: 'error', …(3) } ] to deeply equal []`, and `'failed'` for
-  `'success'`); the setup that waits fails the step, so the wire step is skipped
+  `'success'`), the setup claimed while it waits among them; the setup that waits fails
+  the step, so the wire step is skipped
   (`expected [ [ 'keys', '', 'done' ], …(7) ] to deeply equal [ …(8) ]`); and a failure
   doesn't say the setup after it waits;
-- `wire.test.ts`, 1: the waiting app's resources are wired
-  (`expected [ 'sonarr.login created', …(2) ] to deeply equal [ 'jellyfin.free created' ]`).
+- `wiring.test.ts`, 2: `api.addSecret is not a function`, and `foundSecrets is not a
+  function`;
+- `wire.test.ts`, 2: the waiting app's resources are wired
+  (`expected [ 'sonarr.login created', …(2) ] to deeply equal [ 'jellyfin.free created' ]`),
+  and `api.addSecret is not a function` stops the step;
+- `catalog/jellyfin/integration.test.ts`, 1: a key Jellyfin lists for another app shows
+  in a failure after it, unredacted.
 
 "keeps unpublished, and fails, an app with a setup but no API to finish it through"
 passes before Step 3: it pins S5's behaviour, which the new ordering must keep (such an
-app goes last, and fails, unpublished).
+app goes last, and fails, unpublished). "keeps one whose setup waits unpublished, though
+someone else finished it meanwhile" fails here as its neighbours do. Against Step 3's
+code with one change, a setup that waits asked again whether it is open, it fails as
+`expected 'success' to be 'failed'`: the claimant's app is published.
 
-- [ ] **Step 3: Write the client, the contract, plan, the bootstrap step and the wire step**
+- [ ] **Step 3: Write the found secrets, the client, the contract, plan, the bootstrap step and the wire step**
+
+**Change** `packages/engine/src/util/redact.ts`:
+
+```diff
+diff --git a/packages/engine/src/util/redact.ts b/packages/engine/src/util/redact.ts
+index e83d8f0..32dfcdf 100644
+--- a/packages/engine/src/util/redact.ts
++++ b/packages/engine/src/util/redact.ts
+@@ -10 +10,26 @@ export function redact(text: string, values: Readonly<Record<string, string>>):
+ }
++
++/**
++ * The secrets a run comes to read in the apps' answers, which it didn't know of when it
++ * started: Seerr's own Jellyfin key, say. A client that reads one adds it
++ * (AppApi.addSecret), and from then on the run redacts it as it does the secrets it
++ * started with: in the clients' messages, plan's diagnostics, and the bootstrap and wire
++ * steps' failures, which go into the change record.
++ */
++export interface FoundSecrets {
++  /** Redact `value` from now on; an empty one is ignored. */
++  add(value: string): void;
++  /** What was added so far, each once. */
++  readonly values: readonly string[];
++}
++
++/** A new FoundSecrets, with nothing in it: one per plan, and one per apply. */
++export function foundSecrets(): FoundSecrets {
++  const values: string[] = [];
++  return {
++    add(value) {
++      if (value !== '' && !values.includes(value)) values.push(value);
++    },
++    values,
++  };
++}
+```
 
 **Change** `packages/engine/src/http/client.ts`:
 
 ```diff
 diff --git a/packages/engine/src/http/client.ts b/packages/engine/src/http/client.ts
-index 3470650..59bfa3c 100644
+index 3470650..4f50725 100644
 --- a/packages/engine/src/http/client.ts
 +++ b/packages/engine/src/http/client.ts
+@@ -3,3 +3,3 @@ import type { z } from 'zod';
+ import { codeOf } from '../util/error-code';
+-import { redact } from '../util/redact';
++import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
+ 
 @@ -106,2 +106,4 @@ export interface AppApiOptions {
    key?: { scheme: KeyScheme; value?: string };
 +  /** A session's cookie, sent in place of the key: what a session client carries. */
 +  cookie?: { name: string; value: string };
    /**
-@@ -179,3 +181,3 @@ export interface AppApi {
+@@ -112,2 +114,8 @@ export interface AppApiOptions {
+   secrets: readonly string[];
++  /**
++   * The run's FoundSecrets: a secret any of its clients reads in an answer is redacted by
++   * this one too, from the moment it is added. Without it, the client keeps its own,
++   * which the clients it makes (`session`, `withKey`) share.
++   */
++  found?: FoundSecrets;
+   timeoutMs?: number;
+@@ -179,3 +187,3 @@ export interface AppApi {
      path: string,
 -    fields: Readonly<Record<string, string>>,
 +    fields: Readonly<Record<string, unknown>>,
      schema: z.ZodType<T>,
-@@ -183,2 +185,15 @@ export interface AppApi {
+@@ -183,2 +191,15 @@ export interface AppApi {
    ): Promise<T | undefined>;
 +  /**
 +   * POST `fields` as JSON, without the key, to an app's own sign-in that keeps its session
@@ -2288,30 +2718,63 @@ index 3470650..59bfa3c 100644
 +    secrets: readonly string[],
 +  ): Promise<AppApi | undefined>;
    /** Wait, until the deadline, for `path` to answer 200 without the key. */
-@@ -205,2 +220,4 @@ interface Answer {
+@@ -190,2 +211,8 @@ export interface AppApi {
+   withKey(value: string): AppApi;
++  /**
++   * Treat `value`, a secret read in the app's answer (a key it holds in clear), as one
++   * of the run's: from now on, it is replaced with *** in every message of the run,
++   * this client's and the others' that share its FoundSecrets.
++   */
++  addSecret(value: string): void;
+ }
+@@ -205,2 +232,4 @@ interface Answer {
    location: string | undefined;
 +  /** Each Set-Cookie header, as it came. */
 +  cookies: readonly string[];
    body: string;
-@@ -254,3 +271,6 @@ export function createAppApi(options: AppApiOptions): AppApi {
+@@ -254,10 +283,25 @@ export function createAppApi(options: AppApiOptions): AppApi {
    // What the client sends is redacted whether or not the caller listed it.
 -  const sent = options.key?.value === undefined ? [] : [options.key.value];
+-  const cleanAlways = redactor([...options.secrets, ...sent]);
 +  const sent = [
 +    ...(options.key?.value === undefined ? [] : [options.key.value]),
 +    ...(options.cookie === undefined ? [] : [options.cookie.value]),
 +  ];
-   const cleanAlways = redactor([...options.secrets, ...sent]);
-@@ -280,2 +300,5 @@ export function createAppApi(options: AppApiOptions): AppApi {
++  const found = options.found ?? foundSecrets();
++  // Made again only once the run has found another secret.
++  let always = { found: 0, clean: redactor([...options.secrets, ...sent]) };
+ 
+-  /** Redacts `call`'s messages: the options' secrets, and the ones this call sends. */
++  /**
++   * Redacts `call`'s messages: the options' secrets, the ones this call sends, and those
++   * the run has found by now.
++   */
+   function cleanFor(call: Call): (text: string) => string {
+-    return call.secrets === undefined
+-      ? cleanAlways
+-      : redactor([...options.secrets, ...sent, ...call.secrets]);
++    if (call.secrets !== undefined) {
++      return redactor([...options.secrets, ...sent, ...found.values, ...call.secrets]);
++    }
++    if (always.found !== found.values.length) {
++      always = {
++        found: found.values.length,
++        clean: redactor([...options.secrets, ...sent, ...found.values]),
++      };
++    }
++    return always.clean;
+   }
+@@ -280,2 +324,5 @@ export function createAppApi(options: AppApiOptions): AppApi {
        }
 +      if (options.cookie !== undefined && !call.anonymous) {
 +        headers.Cookie = `${options.cookie.name}=${options.cookie.value}`;
 +      }
        if (call.body !== undefined) {
-@@ -315,2 +338,3 @@ export function createAppApi(options: AppApiOptions): AppApi {
+@@ -315,2 +362,3 @@ export function createAppApi(options: AppApiOptions): AppApi {
                  location: res.headers.location,
 +                cookies: res.headers['set-cookie'] ?? [],
                  body: Buffer.concat(chunks).toString('utf8'),
-@@ -587,2 +611,29 @@ export function createAppApi(options: AppApiOptions): AppApi {
+@@ -587,2 +635,30 @@ export function createAppApi(options: AppApiOptions): AppApi {
      },
 +    async session(path, fields, cookie, secrets) {
 +      const call: Call = {
@@ -2335,13 +2798,24 @@ index 3470650..59bfa3c 100644
 +      }
 +      return createAppApi({
 +        ...options,
++        found,
 +        secrets: [...options.secrets, ...sent, ...secrets],
 +        key: { scheme: options.key?.scheme ?? 'x-api-key' },
 +        cookie: { name: cookie, value },
 +      });
 +    },
      async ready(path) {
-@@ -605,2 +656,15 @@ export function createAppApi(options: AppApiOptions): AppApi {
+@@ -598,2 +674,3 @@ export function createAppApi(options: AppApiOptions): AppApi {
+         ...options,
++        found,
+         // The key it replaces stays out of what it says too.
+@@ -602,2 +679,5 @@ export function createAppApi(options: AppApiOptions): AppApi {
+       }),
++    addSecret: (value) => {
++      found.add(value);
++    },
+   };
+@@ -605,2 +685,15 @@ export function createAppApi(options: AppApiOptions): AppApi {
  
 +/** The value of the cookie `name` among Set-Cookie headers, if one sets it to something. */
 +function cookieOf(headers: readonly string[], name: string): string | undefined {
@@ -2456,14 +2930,24 @@ index 292be5f..054c1b4 100644
 
 ```diff
 diff --git a/packages/engine/src/apply/bootstrap.ts b/packages/engine/src/apply/bootstrap.ts
-index b329bc3..3ff8db4 100644
+index b329bc3..132b6ef 100644
 --- a/packages/engine/src/apply/bootstrap.ts
 +++ b/packages/engine/src/apply/bootstrap.ts
 @@ -9,2 +9,3 @@ import {
    WIRING_RUNBOOK,
 +  wiringOrder,
    type ReachedApp,
-@@ -39,2 +40,19 @@ export interface BootstrapOptions {
+@@ -17,3 +18,3 @@ import { adminLogin } from '../secrets/admin';
+ import { writeSecretStore, type SecretStore } from '../secrets/store';
+-import { redact } from '../util/redact';
++import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
+ 
+@@ -36,2 +37,4 @@ export interface BootstrapOptions {
+   publish: (unpublished: readonly string[]) => Promise<void>;
++  /** What the run finds in the apps' answers (FoundSecrets); the step's own, by default. */
++  found?: FoundSecrets;
+   seams?: WiringSeams;
+@@ -39,2 +42,19 @@ export interface BootstrapOptions {
  
 +/**
 + * A first-run setup that can't run yet, because another app it goes through isn't ready
@@ -2483,7 +2967,7 @@ index b329bc3..3ff8db4 100644
 +}
 +
  /** The first-run setup failed: what it said, and what to do. It keeps no cause. */
-@@ -72,5 +90,10 @@ function withSecret(
+@@ -72,5 +92,10 @@ function withSecret(
   * starts again, publishing every app the plan started unpublished, but one whose setup
 - * is still open: nobody else ever reaches an open setup. Returns the store with the new
 - * keys and what it did; throws BootstrapFailed when a setup failed, once it has published
@@ -2497,7 +2981,7 @@ index b329bc3..3ff8db4 100644
 + * Returns the store with the new keys, what it did, and the apps whose setup waits;
 + * throws BootstrapFailed when a setup failed, once it has published what it can.
   */
-@@ -78,8 +101,16 @@ export async function bootstrapApps(
+@@ -78,10 +103,19 @@ export async function bootstrapApps(
    options: BootstrapOptions,
 -): Promise<{ store: SecretStore; detail: string }> {
 +): Promise<{ store: SecretStore; detail: string; waiting: WaitingSetup[] }> {
@@ -2519,7 +3003,14 @@ index b329bc3..3ff8db4 100644
 +    })
 +    .sort((a, b) => rank(a) - rank(b));
    const admin = await adminLogin(stack.config, options.home, options.store, options.env);
-@@ -108,4 +139,7 @@ export async function bootstrapApps(
+   const secrets = knownSecrets(options.values, options.store, admin);
++  const found = options.found ?? foundSecrets();
+   let reached: Map<string, ReachedApp>;
+@@ -99,2 +133,3 @@ export async function bootstrapApps(
+       secrets,
++      found,
+       deadlineMs: APP_DEADLINE_MS,
+@@ -108,4 +143,7 @@ export async function bootstrapApps(
    let store = options.store;
 -  const done: string[] = [];
 +  const saved: string[] = [];
@@ -2528,7 +3019,7 @@ index b329bc3..3ff8db4 100644
 +  /** The apps whose setup failed or waits: one that comes after them waits too. */
 +  const unfinished: ResolvedApp[] = [];
    const stillOpen: string[] = [];
-@@ -113,9 +147,19 @@ export async function bootstrapApps(
+@@ -113,9 +151,19 @@ export async function bootstrapApps(
      const change = options.pending.find((p) => p.app === app.def.id);
 -    const result = await setUp(app, reached.get(app.def.id), admin, {
 -      unpublished: change?.unpublished ?? true,
@@ -2555,16 +3046,21 @@ index b329bc3..3ff8db4 100644
 +    const secret = app.def.bootstrap?.secret;
 +    if (result.key !== undefined && secret !== undefined) {
        store = withSecret(store, app.def.id, secret, result.key);
-@@ -123,8 +167,16 @@ export async function bootstrapApps(
+@@ -123,10 +171,24 @@ export async function bootstrapApps(
        await writeSecretStore(options.home, store);
 -      done.push(`${app.def.id}.${secret}`);
 +      saved.push(`${app.def.id}.${secret}`);
 +    }
-+    // The key it just made too: a failure after it may come from the app's answer.
++    // The key it just made too, and what the run found: a failure after it may come from
++    // the app's answer.
 +    const clean = (said: string) =>
 +      redact(
 +        said,
-+        redactionValues(result.key === undefined ? secrets : [...secrets, result.key]),
++        redactionValues([
++          ...secrets,
++          ...found.values,
++          ...(result.key === undefined ? [] : [result.key]),
++        ]),
 +      );
 +    if (result.failure !== undefined) failed.push(clean(result.failure));
 +    if (result.waiting !== undefined) {
@@ -2574,10 +3070,15 @@ index b329bc3..3ff8db4 100644
 -      // The key it just made too: a failure after it may come from the app's answer.
 -      const known = result.key === undefined ? secrets : [...secrets, result.key];
 -      failed.push(redact(result.failure, redactionValues(known)));
+-      // An app the plan started published isn't unpublished now: its failure says so.
+-      // With a second app to set up, it would keep its ports in the publishing up.
 +    if (result.failure !== undefined || result.waiting !== undefined) {
 +      unfinished.push(app);
-       // An app the plan started published isn't unpublished now: its failure says so.
-@@ -147,6 +199,12 @@ export async function bootstrapApps(
++      // An app the plan started published isn't unpublished now: its failure says so,
++      // and it keeps its ports in the publishing up that another app's setup brings, as
++      // Jellyfin does when Seerr is set up after it.
+       if (result.open && change?.unpublished !== false) stillOpen.push(app.def.id);
+@@ -147,6 +209,12 @@ export async function bootstrapApps(
    }
 +  const waits = waiting.map((w) => `${w.app} waits: ${w.reason}`);
    if (failed.length > 0) {
@@ -2591,7 +3092,7 @@ index b329bc3..3ff8db4 100644
    const published = unpublished.filter((app) => !stillOpen.includes(app));
 +  const keys = saved.length === 0 ? '' : ` and saved ${saved.join(', ')}`;
    return {
-@@ -154,5 +212,7 @@ export async function bootstrapApps(
+@@ -154,5 +222,7 @@ export async function bootstrapApps(
      detail: [
 -      `set up ${apps.map((a) => a.def.id).join(', ')} and saved ${done.join(', ')}`,
 +      ...(finished.length === 0 ? [] : [`set up ${finished.join(', ')}${keys}`]),
@@ -2600,7 +3101,7 @@ index b329bc3..3ff8db4 100644
      ].join('; '),
 +    waiting,
    };
-@@ -160,3 +220,6 @@ export async function bootstrapApps(
+@@ -160,3 +230,6 @@ export async function bootstrapApps(
  
 -/** What `setUp` found: the key it made, and/or why the setup isn't finished or safe. */
 +/**
@@ -2608,17 +3109,17 @@ index b329bc3..3ff8db4 100644
 + * why it waits.
 + */
  interface SetUpResult {
-@@ -164,2 +227,3 @@ interface SetUpResult {
+@@ -164,2 +237,3 @@ interface SetUpResult {
    failure?: string;
 +  waiting?: string;
    /** Whether the app must stay unpublished: it still looks open, or was claimed. */
-@@ -192,3 +256,4 @@ async function looksOpen(
+@@ -192,3 +266,4 @@ async function looksOpen(
   * done its setup now looks (see `claimed`). One the plan started published was done
 - * before this run, by hand say, and nobody can claim it.
 + * before this run, by hand say, and nobody can claim it. A setup that waits leaves the
-+ * app as it was.
++ * app as it was, unpublished if the plan started it so.
   */
-@@ -198,3 +263,8 @@ async function setUp(
+@@ -198,3 +273,8 @@ async function setUp(
    admin: { username: string; password: string },
 -  started: { unpublished: boolean; container: string; home: string },
 +  started: {
@@ -2628,21 +3129,18 @@ index b329bc3..3ff8db4 100644
 +    stack: ResolvedStack;
 +  },
  ): Promise<SetUpResult> {
-@@ -207,3 +277,3 @@ async function setUp(
+@@ -207,3 +287,3 @@ async function setUp(
      await client.api.ready(api.ready);
 -    const key = await bootstrap.run(client.api, admin);
 +    const key = await bootstrap.run(client.api, admin, started.stack);
      const after = await looksOpen(bootstrap, client.api);
-@@ -220,2 +290,8 @@ async function setUp(
+@@ -220,2 +300,5 @@ async function setUp(
    } catch (cause) {
-+    if (cause instanceof SetupWaiting) {
-+      return {
-+        waiting: cause.message,
-+        open: (await looksOpen(bootstrap, client.api)).open,
-+      };
-+    }
++    // Unpublished, without asking again: its setup isn't Mediaplane's, and may have been
++    // finished by someone else meanwhile, as a claimed one is.
++    if (cause instanceof SetupWaiting) return { waiting: cause.message, open: true };
      if (!(cause instanceof AppApiError)) throw cause;
-@@ -244,3 +320,3 @@ async function claimed(app: ResolvedApp, refused: string, home: string): Promise
+@@ -244,3 +327,3 @@ async function claimed(app: ResolvedApp, refused: string, home: string): Promise
    const next = done ? ', and the next apply would publish it' : '';
 -  return `${said}: its wizard was finished with another login while Mediaplane set it up${next}. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says`;
 +  return `${said}: its setup was finished with another login while Mediaplane set it up${next}. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says`;
@@ -2653,14 +3151,18 @@ index b329bc3..3ff8db4 100644
 
 ```diff
 diff --git a/packages/engine/src/apply/apply.ts b/packages/engine/src/apply/apply.ts
-index 95aec62..a9f4a66 100644
+index 95aec62..a27e447 100644
 --- a/packages/engine/src/apply/apply.ts
 +++ b/packages/engine/src/apply/apply.ts
-@@ -212,2 +212,3 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+@@ -33,2 +33,3 @@ import { codeOf } from '../util/error-code';
+ import { readIfExists } from '../util/fs';
++import { foundSecrets } from '../util/redact';
+ import { compare } from '../util/sort';
+@@ -212,2 +213,3 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
      await up(unpublished);
 +    const [its, it] = unpublished.length === 1 ? ['its', 'it'] : ['their', 'them'];
      return [
-@@ -217,5 +218,9 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+@@ -217,5 +219,11 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
          ? []
 -        : [`started ${unpublished.join(', ')} without its ports, to set it up first`]),
 +        : [
@@ -2670,8 +3172,14 @@ index 95aec62..a9f4a66 100644
    });
 +  /** The apps whose first-run setup waits: the wire step skips their resources. */
 +  let waiting: string[] = [];
++  /** The secrets the bootstrap and wire steps read in the apps' answers. */
++  const found = foundSecrets();
    if (shown.bootstrap.length > 0) {
-@@ -235,2 +240,11 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+@@ -232,2 +240,3 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+         project: options.project ?? PROJECT_NAME,
++        found,
+         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
+@@ -235,2 +244,11 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
        store = set.store;
 +      waiting = set.waiting.map((w) => w.app);
 +      // The step goes on: the wire step may make the app ready, as the next apply finds.
@@ -2683,32 +3191,111 @@ index 95aec62..a9f4a66 100644
 +        );
 +      }
        return set.detail;
-@@ -252,2 +266,3 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
+@@ -252,2 +270,4 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
          planned: shown.wiring,
 +        waiting,
++        found,
          ...(options.wiring === undefined ? {} : { seams: options.wiring }),
-@@ -513,2 +528,3 @@ function remaining(result: PlanResult): string {
+@@ -513,2 +533,3 @@ function remaining(result: PlanResult): string {
      ...result.unhealthy,
 +    ...result.bootstrap.map((b) => `${b.app} (first-run setup)`),
      // An unknown one says why: its reason names the app and what failed, redacted.
+```
+
+**Change** `packages/engine/src/integrations/wiring.ts`:
+
+```diff
+diff --git a/packages/engine/src/integrations/wiring.ts b/packages/engine/src/integrations/wiring.ts
+index abb8e4e..f82eaef 100644
+--- a/packages/engine/src/integrations/wiring.ts
++++ b/packages/engine/src/integrations/wiring.ts
+@@ -15,3 +15,3 @@ import type { ContainerState, RuntimeError, Runtime } from '../runtime/types';
+ import type { SecretStore } from '../secrets/store';
+-import { redact } from '../util/redact';
++import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
+ import { compare } from '../util/sort';
+@@ -156,2 +156,4 @@ export async function reachApps(
+     secrets: readonly string[];
++    /** What the run finds: every client shares it. */
++    found: FoundSecrets;
+     deadlineMs: number;
+@@ -192,2 +194,3 @@ export async function reachApps(
+         secrets: options.secrets,
++        found: options.found,
+         ...(options.seams?.timeoutMs === undefined
+@@ -381,2 +384,4 @@ export interface PlanWiringOptions {
+   secrets: readonly string[];
++  /** What the run finds in the apps' answers (FoundSecrets); plan's own, by default. */
++  found?: FoundSecrets;
+   known: KnownResources;
+@@ -397,6 +402,10 @@ export async function planWiring(
+     : [];
+-  const reached = await reachApps(ready, { ...options, deadlineMs: PLAN_DEADLINE_MS });
++  const found = options.found ?? foundSecrets();
++  const reached = await reachApps(ready, {
++    ...options,
++    found,
++    deadlineMs: PLAN_DEADLINE_MS,
++  });
+   const changes: WiringChange[] = [];
+   const diagnostics: Diagnostic[] = [];
+-  const values = redactionValues(options.secrets);
+   /**
+@@ -490,3 +499,6 @@ export async function planWiring(
+         // can write its own message, which the client never saw: it is redacted here.
+-        const said = redact(cause.message, values);
++        const said = redact(
++          cause.message,
++          redactionValues([...options.secrets, ...found.values]),
++        );
+         diagnostics.push(
 ```
 
 **Change** `packages/engine/src/integrations/wire.ts`:
 
 ```diff
 diff --git a/packages/engine/src/integrations/wire.ts b/packages/engine/src/integrations/wire.ts
-index 9e19d21..5b2c0fb 100644
+index 9e19d21..39af3da 100644
 --- a/packages/engine/src/integrations/wire.ts
 +++ b/packages/engine/src/integrations/wire.ts
-@@ -49,2 +49,7 @@ export interface WireOptions {
+@@ -8,3 +8,3 @@ import { adminLogin } from '../secrets/admin';
+ import type { SecretStore } from '../secrets/store';
+-import { redact } from '../util/redact';
++import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
+ import { readResources, writeResources, type KnownResources } from './resources';
+@@ -49,2 +49,9 @@ export interface WireOptions {
    planned?: readonly WiringChange[];
 +  /**
 +   * Apps whose first-run setup waits (the bootstrap step's SetupWaiting): their resources
 +   * are skipped, and so is what requires them.
 +   */
 +  waiting?: readonly string[];
++  /** What the run finds in the apps' answers (FoundSecrets); the step's own, by default. */
++  found?: FoundSecrets;
    seams?: WiringSeams;
-@@ -146,2 +151,14 @@ export async function wire(options: WireOptions): Promise<string[]> {
+@@ -89,2 +96,3 @@ export async function wire(options: WireOptions): Promise<string[]> {
+   const secrets = knownSecrets(options.values, options.store, admin);
++  const found = options.found ?? foundSecrets();
+   let reached: Map<string, ReachedApp>;
+@@ -103,2 +111,3 @@ export async function wire(options: WireOptions): Promise<string[]> {
+       secrets,
++      found,
+       deadlineMs: APP_DEADLINE_MS,
+@@ -121,5 +130,6 @@ export async function wire(options: WireOptions): Promise<string[]> {
+   // Every failure's message is redacted once, here, whoever wrote it: the client, a
+-  // resource's own error, mkdir or Docker.
++  // resource's own error, mkdir or Docker; with the secrets the step has found by then.
++  const redacting = () => redactionValues([...secrets, ...found.values]);
+   const fail = (resource: string, said: string, code: string) => {
+-    const message = redact(said, values);
++    const message = redact(said, redacting());
+     failed.push(resource);
+@@ -137,3 +147,3 @@ export async function wire(options: WireOptions): Promise<string[]> {
+     const said = cause instanceof Error ? cause.message : String(cause);
+-    const message = redact(`${before}${said}`, values);
++    const message = redact(`${before}${said}`, redacting());
+     for (const resource of resources) {
+@@ -146,2 +156,14 @@ export async function wire(options: WireOptions): Promise<string[]> {
      const targets = wiringTargets(ctx);
 +    if (options.waiting?.includes(app.def.id) === true) {
 +      for (const target of targets) {
@@ -2725,6 +3312,27 @@ index 9e19d21..5b2c0fb 100644
      const client = reached.get(app.def.id);
 ```
 
+**Change** `catalog/jellyfin/bootstrap.ts`:
+
+```diff
+diff --git a/catalog/jellyfin/bootstrap.ts b/catalog/jellyfin/bootstrap.ts
+index 54c60c8..0034ab1 100644
+--- a/catalog/jellyfin/bootstrap.ts
++++ b/catalog/jellyfin/bootstrap.ts
+@@ -41,3 +41,6 @@ export async function signIn(
+ 
+-/** The newest key named KEY_NAME that Jellyfin holds, listed in full, or undefined. */
++/**
++ * The newest key named KEY_NAME that Jellyfin holds, listed in full, or undefined. Every
++ * key it lists, another app's too (Seerr's own), is kept out of what the run says.
++ */
+ async function heldKey(api: AppApi): Promise<string | undefined> {
+@@ -46,2 +49,3 @@ async function heldKey(api: AppApi): Promise<string | undefined> {
+   for (const key of Items) {
++    api.addSecret(key.AccessToken);
+     if (key.AppName !== KEY_NAME) continue;
+```
+
 - [ ] **Step 4: Run them to see them pass**
 
 Run: the same command as Step 2.
@@ -2734,11 +3342,11 @@ Expected: PASS.
 
 ```bash
 pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check
-git add packages catalog/jellyfin/integration.test.ts
+git add packages catalog/jellyfin
 git commit -m "feat(engine): first-run setups that make no key, run after the apps they sign in through, and can wait; a sign-in session in the typed client" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1632 tests pass in 81 files.
+Expected: 1640 tests pass in 81 files.
 
 ---
 
@@ -2753,6 +3361,9 @@ Decision: on a Plex stack the resolver drops Seerr's API, integration and setup,
 login says Slice 7; on a Jellyfin stack it is `'shared'` (decision 6).
 Decision: its API is ready at `/api/v1/settings/public` and checked at `/api/v1/auth/me`
 (decision 7).
+Decision: a sign-in that fails is followed by a second look, and a Seerr set up since must
+be Mediaplane's; the identity check adds the Jellyfin key Seerr holds to the run's
+redaction (decisions 4, 5).
 
 **Files:**
 - Create: `catalog/seerr/bootstrap.ts`
@@ -2763,8 +3374,9 @@ Decision: its API is ready at `/api/v1/settings/public` and checked at `/api/v1/
   `packages/cli/src/credentials.test.ts`
 
 **Interfaces:**
-- **Consumes:** Task 1's fake Seerr; Task 2's `Bootstrap`, `SetupWaiting` and
-  `AppApi.session`; S5's `serviceAddress`.
+- **Consumes:** Task 1's fake Seerr, `fakeJellyfinSetUp` and `thrown`; Task 2's
+  `Bootstrap`, `SetupWaiting`, `AppApi.session` and `AppApi.addSecret`; S5's
+  `serviceAddress`.
 - **Produces:**
   - `AppDefinition.notWiredYet?(config: StackConfig): { comingIn: string } | undefined`,
     applied by `resolveStack`;
@@ -2784,9 +3396,12 @@ import {
   type ResolvedStack,
 } from '@mediaplane/engine';
 import {
+  fakeJellyfinSetUp,
   fakeStackApis,
   freshAppState,
   SEERR_JELLYFIN,
+  SET_UP_JELLYFIN,
+  thrown,
   wiringStack,
   type FakeAppState,
   type FakeRequest,
@@ -2795,10 +3410,12 @@ import { describe, expect, it } from 'vitest';
 import { catalog } from '../index';
 import { seerrBootstrap } from './bootstrap';
 
-const PASSWORD = 'fake-admin-password';
+const PASSWORD = SET_UP_JELLYFIN.password;
 const ADMIN = { username: 'admin', password: PASSWORD };
-const JELLYFIN_KEY = '7'.repeat(32);
+const JELLYFIN_KEY = SET_UP_JELLYFIN.key;
 const SEERR_KEY = '5'.repeat(32);
+/** The key Seerr made itself in Jellyfin, which the client isn't told of. */
+const SEERRS_OWN = '6'.repeat(32);
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -2810,27 +3427,9 @@ apps:
   seerr: {}
 `;
 
-/** A Jellyfin that Mediaplane set up: its wizard done, the shared admin, and its key. */
-function jellyfinSetUp(more: Partial<FakeAppState> = {}): FakeAppState {
-  return {
-    ...freshAppState(),
-    wizard: 'done',
-    user: 'admin',
-    password: PASSWORD,
-    apiKeys: [
-      {
-        AccessToken: JELLYFIN_KEY,
-        AppName: 'Mediaplane',
-        DateCreated: '2026-10-15T12:00:00.000Z',
-      },
-    ],
-    ...more,
-  };
-}
-
 /** The stack's fakes, Seerr as it first starts unless `seerr` says, and a client of it. */
 async function seerrOf(
-  jellyfin: FakeAppState = jellyfinSetUp(),
+  jellyfin: FakeAppState = fakeJellyfinSetUp(),
   seerr: Partial<FakeAppState['seerr']> = {},
 ) {
   const apis = await fakeStackApis();
@@ -2853,14 +3452,6 @@ async function seerrOf(
 
 /** "METHOD /path" of a request. */
 const callOf = ({ method, path }: FakeRequest) => `${method} ${path}`;
-
-/** What the call threw. */
-async function thrown(call: Promise<unknown>): Promise<unknown> {
-  return call.then(
-    () => undefined,
-    (cause: unknown) => cause,
-  );
-}
 
 /** Seerr as its first sign-in left it: the admin, and Jellyfin at its service. */
 const SET_UP = {
@@ -2901,7 +3492,7 @@ describe("Seerr's first-run setup", () => {
 
   it("waits while Jellyfin refuses the shared admin's password, leaving Seerr open", async () => {
     const { api, state, stack } = await seerrOf(
-      jellyfinSetUp({ password: 'fake-other-password' }),
+      fakeJellyfinSetUp({ password: 'fake-other-password' }),
     );
     const waited = await thrown(seerrBootstrap.run(api, ADMIN, stack));
     expect(waited).toBeInstanceOf(SetupWaiting);
@@ -2913,7 +3504,7 @@ describe("Seerr's first-run setup", () => {
   });
 
   it("fails, in Seerr's words and without the password, when Seerr can't reach Jellyfin", async () => {
-    const { api, stack } = await seerrOf(jellyfinSetUp({ up: false }));
+    const { api, stack } = await seerrOf(fakeJellyfinSetUp({ up: false }));
     const failed = await thrown(seerrBootstrap.run(api, ADMIN, stack));
     expect(failed).toBeInstanceOf(AppApiError);
     expect((failed as AppApiError).message).toBe(
@@ -2922,7 +3513,7 @@ describe("Seerr's first-run setup", () => {
   });
 
   it("takes as done a Seerr set up with the shared admin and the stack's Jellyfin, asked with the key, never the password", async () => {
-    const { api, calls, stack } = await seerrOf(jellyfinSetUp(), SET_UP);
+    const { api, calls, stack } = await seerrOf(fakeJellyfinSetUp(), SET_UP);
     expect(await seerrBootstrap.run(api, ADMIN, stack)).toBeUndefined();
     expect(calls()).toEqual([
       'GET /api/v1/settings/public',
@@ -2936,11 +3527,56 @@ describe("Seerr's first-run setup", () => {
     ['another Jellyfin', { jellyfin: { ...SET_UP.jellyfin, ip: 'elsewhere' } }],
     ['no admin at all', { users: [] }],
   ])('refuses as not its own a Seerr set up with %s', async (_what, more) => {
-    const { api, calls, stack } = await seerrOf(jellyfinSetUp(), { ...SET_UP, ...more });
+    const { api, calls, stack } = await seerrOf(fakeJellyfinSetUp(), {
+      ...SET_UP,
+      ...more,
+    });
     const refused = await thrown(seerrBootstrap.run(api, ADMIN, stack));
     expect(refused).toBeInstanceOf(AppApiError);
     expect(refused).toMatchObject({ kind: 'auth' });
     expect(calls()).not.toContain('POST /api/v1/auth/jellyfin');
+  });
+
+  it('refuses a Seerr someone else signed in to between its look and its sign-in, and signs in once', async () => {
+    const { api, calls, stack } = await seerrOf(fakeJellyfinSetUp(), {
+      claimant: { user: 'someone', jellyfin: 'jellyfin' },
+    });
+    const refused = await thrown(seerrBootstrap.run(api, ADMIN, stack));
+    expect(refused).toBeInstanceOf(AppApiError);
+    expect(refused).toMatchObject({
+      kind: 'auth',
+      message:
+        'Seerr at http://seerr:5055 (127.0.0.1) was set up with another login or another Jellyfin (GET /api/v1/auth/me, GET /api/v1/settings/jellyfin)',
+    });
+    expect(calls()).toEqual([
+      'GET /api/v1/settings/public',
+      'POST /api/v1/auth/jellyfin',
+      'GET /api/v1/settings/public',
+      'GET /api/v1/auth/me',
+      'GET /api/v1/settings/jellyfin',
+    ]);
+  });
+
+  it('takes as done a Seerr found set up as its own once the sign-in fails, as when its answer was lost', async () => {
+    // Set up as Mediaplane's sign-in sets it up, and then the sign-in fails (500).
+    const { api, calls, stack } = await seerrOf(fakeJellyfinSetUp(), {
+      claimant: { user: 'admin', jellyfin: 'jellyfin' },
+    });
+    expect(await seerrBootstrap.run(api, ADMIN, stack)).toBeUndefined();
+    expect(calls().filter((c) => c === 'POST /api/v1/auth/jellyfin')).toHaveLength(1);
+  });
+
+  it('keeps the Jellyfin key Seerr holds out of what it says after', async () => {
+    const { api, state, stack } = await seerrOf(fakeJellyfinSetUp(), {
+      ...SET_UP,
+      jellyfin: { ...SET_UP.jellyfin, apiKey: SEERRS_OWN },
+    });
+    expect(await seerrBootstrap.run(api, ADMIN, stack)).toBeUndefined();
+    state.seerr.echoKey = true;
+    expect(await thrown(api.check('/api/v1/nosuch'))).toMatchObject({
+      message:
+        'Seerr at http://seerr:5055 (127.0.0.1) refused the request (HTTP 404): fake failure, holding *** (GET /api/v1/nosuch)',
+    });
   });
 
   it('fails in a stack with no Jellyfin to sign in through', async () => {
@@ -3250,7 +3886,11 @@ const SIGN_IN = '/api/v1/auth/jellyfin';
 
 const publicSettings = z.looseObject({ mediaServerType: z.number() });
 const me = z.looseObject({ jellyfinUsername: z.string().nullable().optional() });
-const jellyfinSettings = z.looseObject({ ip: z.string(), port: z.number() });
+const jellyfinSettings = z.looseObject({
+  ip: z.string(),
+  port: z.number(),
+  apiKey: z.string(),
+});
 
 /**
  * Whether Seerr's setup is open: until its first sign-in sets its media server, anyone
@@ -3264,6 +3904,32 @@ async function open(api: AppApi): Promise<boolean> {
 }
 
 /**
+ * Refuse (`auth`) a Seerr that is set up but not Mediaplane's: its admin isn't the shared
+ * admin, or its Jellyfin isn't the stack's. It is asked with the key, never by sending the
+ * password, which would go to whatever Jellyfin Seerr was set up with. The Jellyfin key
+ * Seerr holds, which it shows in clear, is kept out of what the run says.
+ */
+async function ownSetup(
+  api: AppApi,
+  admin: { username: string },
+  jellyfin: { host: string; port: number },
+): Promise<void> {
+  const { jellyfinUsername } = await api.get('/api/v1/auth/me', me);
+  const held = await api.get('/api/v1/settings/jellyfin', jellyfinSettings);
+  api.addSecret(held.apiKey);
+  if (
+    jellyfinUsername !== admin.username ||
+    held.ip !== jellyfin.host ||
+    held.port !== jellyfin.port
+  ) {
+    throw new AppApiError(
+      `${api.name} at ${api.where} was set up with another login or another Jellyfin (GET /api/v1/auth/me, GET /api/v1/settings/jellyfin)`,
+      { kind: 'auth', status: 403 },
+    );
+  }
+}
+
+/**
  * Seerr's first-run setup (spec §6.1, §6.4): its first sign-in, through Jellyfin, as the
  * shared admin that Jellyfin's setup made. That makes the shared admin Seerr's admin, and
  * sets Jellyfin, at its service and container port, as Seerr's media server. Mediaplane's
@@ -3271,10 +3937,11 @@ async function open(api: AppApi): Promise<boolean> {
  * of at once. The setup makes no key: Mediaplane chose Seerr's.
  * - Jellyfin refusing the shared admin's password (401) makes the setup wait
  *   (SetupWaiting): the wire step sets Jellyfin's admin, and the next apply signs in.
- * - Done already, as when Mediaplane couldn't read settings.json, it is Mediaplane's only
- *   when Seerr's admin is the shared admin and its Jellyfin the stack's: it is asked with
- *   the key, never by sending the password, which would go to whatever Jellyfin Seerr was
- *   set up with. Anything else is refused (`auth`), and Seerr stays unpublished.
+ * - Done already, as when Mediaplane couldn't read settings.json, it must be Mediaplane's
+ *   (`ownSetup`); so must one found set up when the sign-in fails, since someone inside
+ *   the stack may have signed in first, between the look and the sign-in (Seerr then
+ *   refuses a second Jellyfin, 500). Anything else is refused (`auth`), and Seerr stays
+ *   unpublished.
  * - It is done once settings.json names a media server, which Seerr writes as the sign-in
  *   sets it.
  */
@@ -3293,34 +3960,32 @@ export const seerrBootstrap: Bootstrap = {
       );
     }
     if (!(await open(api))) {
-      const { jellyfinUsername } = await api.get('/api/v1/auth/me', me);
-      const held = await api.get('/api/v1/settings/jellyfin', jellyfinSettings);
-      if (
-        jellyfinUsername !== admin.username ||
-        held.ip !== jellyfin.host ||
-        held.port !== jellyfin.port
-      ) {
-        throw new AppApiError(
-          `${api.name} at ${api.where} was set up with another login or another Jellyfin (GET /api/v1/auth/me, GET /api/v1/settings/jellyfin)`,
-          { kind: 'auth', status: 403 },
-        );
-      }
+      await ownSetup(api, admin, jellyfin);
       return undefined;
     }
-    const session = await api.session(
-      SIGN_IN,
-      {
-        username: admin.username,
-        password: admin.password,
-        hostname: jellyfin.host,
-        port: jellyfin.port,
-        useSsl: false,
-        urlBase: '',
-        serverType: JELLYFIN,
-      },
-      'connect.sid',
-      [admin.password],
-    );
+    let session: AppApi | undefined;
+    try {
+      session = await api.session(
+        SIGN_IN,
+        {
+          username: admin.username,
+          password: admin.password,
+          hostname: jellyfin.host,
+          port: jellyfin.port,
+          useSsl: false,
+          urlBase: '',
+          serverType: JELLYFIN,
+        },
+        'connect.sid',
+        [admin.password],
+      );
+    } catch (cause) {
+      // Set up since the look: by someone else, unless it is Mediaplane's own sign-in
+      // that reached Seerr before the answer was lost.
+      if (!(cause instanceof AppApiError) || (await open(api))) throw cause;
+      await ownSetup(api, admin, jellyfin);
+      return undefined;
+    }
     if (session === undefined) {
       throw new SetupWaiting(
         `${api.name} at ${api.where} can't sign in through Jellyfin yet: Jellyfin refused the shared admin's password (POST ${SIGN_IN})`,
@@ -3381,7 +4046,7 @@ git add catalog packages
 git commit -m "feat(catalog): Seerr set up before its port is published, signed in through Jellyfin as the shared admin, and not wired with Plex until Slice 7" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1645 tests pass in 82 files.
+Expected: 1656 tests pass in 82 files.
 
 ---
 
@@ -3393,11 +4058,15 @@ profile, their root folder and `isDefault`, then `initialize`. The profile needs
 contract's new `resolve`.
 
 Decision: `seerr.media_server` keeps the key Seerr made while it works, checked through
-Seerr's list of Jellyfin's users, and never sends `hostname` (decision 8).
+Seerr's list of Jellyfin's users, and never sends `hostname`; that key joins the run's
+redaction once read (decisions 5, 8).
 Decision: the servers' key is checked with Seerr's own test of what it holds, tested
-again with the stack's key to tell a refused key from an arr out of reach (decision 9).
+again with the stack's key to tell a refused key from an arr out of reach; each key
+Seerr shows joins the run's redaction; a new Sonarr server has season folders on
+(decisions 5, 9).
 Decision: a resource may `resolve` what only the app can say; the profile comes from the
-arr through Seerr's test (decision 10).
+arr through Seerr's test; only a resource whose `resolve` wasn't run leaves its undefined
+fields uncompared (decision 10).
 Decision: `seerr.setup` sends `initialize` once the links are in place (decision 11).
 Decision: a CLI-level `apply` with Seerr shows the whole flow, and a setup that waits for
 Jellyfin's admin (decision 3).
@@ -3413,11 +4082,12 @@ Jellyfin's admin (decision 3).
   `packages/engine/src/integrations/wiring.test.ts`, `packages/cli/src/run.test.ts`
 
 **Interfaces:**
-- **Consumes:** Tasks 1 to 3; S5's `LIBRARIES`, `secretOf`, `serviceAddress`; S3c's root
-  folders.
+- **Consumes:** Tasks 1 to 3 (`AppApi.addSecret`, and the fake Seerr's `echoKey` and
+  `failing`); S5's `LIBRARIES`, `secretOf`, `serviceAddress`; S3c's root folders.
 - **Produces:**
   - `ResourceSpec.resolve?(api: AppApi, desired: DesiredResource, ctx: WiringContext): Promise<DesiredResource>`,
-    which `examine` runs unless its options say `verify: false`;
+    which `examine` runs unless its options say `verify: false`, and only then leaves
+    the fields `desired` doesn't set uncompared;
   - `ROOT_FOLDER` from `catalog/sonarr/integration.ts` (`/data/media/tv`) and
     `catalog/radarr/integration.ts` (`/data/media/movies`);
   - `PREFERRED_PROFILES` (`['HD-1080p', 'Any']`) and Seerr's integration: after
@@ -3437,9 +4107,12 @@ import {
   type WiringContext,
 } from '@mediaplane/engine';
 import {
+  fakeJellyfinSetUp,
   fakeStackApis,
   freshAppState,
   SERVARR_PROFILES,
+  SET_UP_JELLYFIN,
+  thrown,
   wiringStack,
   type FakeAppState,
   type FakeRequest,
@@ -3449,9 +4122,9 @@ import { catalog } from '../index';
 import { seerrBootstrap } from './bootstrap';
 import integration from './integration';
 
-const PASSWORD = 'fake-admin-password';
+const PASSWORD = SET_UP_JELLYFIN.password;
 const ADMIN = { username: 'admin', password: PASSWORD };
-const JELLYFIN_KEY = '7'.repeat(32);
+const JELLYFIN_KEY = SET_UP_JELLYFIN.key;
 const SEERR_KEY = '5'.repeat(32);
 const SONARR_KEY = '1'.repeat(32);
 const RADARR_KEY = '2'.repeat(32);
@@ -3502,23 +4175,12 @@ function wanted(spec: ResourceSpec, ctx = contextOf()): DesiredResource {
  */
 async function seerr() {
   const apis = await fakeStackApis();
-  const jellyfin: FakeAppState = {
-    ...freshAppState(),
-    wizard: 'done',
-    user: 'admin',
-    password: PASSWORD,
-    apiKeys: [
-      {
-        AccessToken: JELLYFIN_KEY,
-        AppName: 'Mediaplane',
-        DateCreated: '2026-10-15T12:00:00.000Z',
-      },
-    ],
+  const jellyfin = fakeJellyfinSetUp({
     libraries: [
       { Name: 'Movies', CollectionType: 'movies', Locations: [], LibraryOptions: {} },
       { Name: 'Shows', CollectionType: 'tvshows', Locations: [], LibraryOptions: {} },
     ],
-  };
+  });
   apis.apps.set('jellyfin', jellyfin);
   const arr = (key: string, path: string): FakeAppState => ({
     ...freshAppState(),
@@ -3544,14 +4206,6 @@ async function seerr() {
   const calls = (from = 0) =>
     apis.app.requests.slice(from).map((r: FakeRequest) => `${r.method} ${r.path}`);
   return { api, apis, jellyfin, sonarr, radarr, state, calls };
-}
-
-/** What the call threw. */
-async function thrown(call: Promise<unknown>): Promise<unknown> {
-  return call.then(
-    () => undefined,
-    (cause: unknown) => cause,
-  );
 }
 
 describe("Seerr's media server", () => {
@@ -3696,7 +4350,7 @@ describe.each([
     );
   });
 
-  it("is made as Seerr's web UI makes one, found by id, else by name, and its key checked with Seerr's own test", async () => {
+  it("is made as Seerr's web UI makes one, but with season folders for shows, found by id, else by name, and its key checked with Seerr's own test", async () => {
     const { api, state, calls } = await seerr();
     const desired =
       (await spec.resolve?.(api, wanted(spec), contextOf())) ?? wanted(spec);
@@ -3716,6 +4370,7 @@ describe.each([
         activeDirectory: folder,
         is4k: false,
         isDefault: true,
+        enableSeasonFolders: arr === 'sonarr',
       }),
     ]);
     const observed = await spec.observe(api, undefined, desired);
@@ -3808,6 +4463,31 @@ describe.each([
   });
 });
 
+describe('The keys Seerr shows in clear', () => {
+  it("are kept out of what it says once read: its own Jellyfin key, and each server's, typed by hand too", async () => {
+    const { api, state, jellyfin } = await seerr();
+    const sonarr = resource('server_sonarr');
+    const desired =
+      (await sonarr.resolve?.(api, wanted(sonarr), contextOf())) ?? wanted(sonarr);
+    await sonarr.create(api, desired);
+    const typed = '3'.repeat(32);
+    const held = state.seerr.sonarr[0];
+    if (held !== undefined) held.apiKey = typed;
+    const media = resource('media_server');
+    await media.observe(api, undefined, wanted(media));
+    await sonarr.observe(api, undefined, desired);
+    state.seerr.echoKey = true;
+    const said = await thrown(api.check('/api/v1/nosuch'));
+    expect(said).toMatchObject({
+      message:
+        'Seerr at http://seerr:5055 (127.0.0.1) refused the request (HTTP 404): fake failure, holding *** *** (GET /api/v1/nosuch)',
+    });
+    const own = jellyfin.apiKeys.find((k) => k.AppName === 'Seerr')?.AccessToken;
+    expect(own).toBeDefined();
+    expect(JSON.stringify(said)).not.toMatch(new RegExp(`${own ?? ''}|${typed}`));
+  });
+});
+
 describe("Seerr's setup", () => {
   const spec = resource('setup');
 
@@ -3849,10 +4529,10 @@ index 4985541..7d746d3 100644
 
 ```diff
 diff --git a/packages/engine/src/integrations/wiring.test.ts b/packages/engine/src/integrations/wiring.test.ts
-index 207b7a2..c82e54a 100644
+index 6416b14..10ad771 100644
 --- a/packages/engine/src/integrations/wiring.test.ts
 +++ b/packages/engine/src/integrations/wiring.test.ts
-@@ -216,2 +216,86 @@ describe('planWiring', () => {
+@@ -217,2 +217,97 @@ describe('planWiring', () => {
  
 +  /**
 +   * A login whose `profile`, a managed field, only the app can say (`resolve`): it wants
@@ -3938,6 +4618,17 @@ index 207b7a2..c82e54a 100644
 +    expect(waiting.seen).toEqual([{ user: 'admin' }]);
 +  });
 +
++  it('compares every field of a resource without `resolve`, one its desired() leaves out too', async () => {
++    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
++    // The app holds a profile; desired() gives none, and nothing resolves it.
++    const spec: ResourceSpec = { ...profiled('HD').spec };
++    delete spec.resolve;
++    expect(
++      (await planWiring(options(sonarr, { stack: sonarrWith([spec]), known: PROFILED })))
++        .changes,
++    ).toEqual([{ resource: 'sonarr.login', action: 'update', changes: ['profile'] }]);
++  });
++
    it('leaves the secrets unchecked while a resource they require is to be updated, or could not be looked at', async () => {
 ```
 
@@ -3945,13 +4636,22 @@ index 207b7a2..c82e54a 100644
 
 ```diff
 diff --git a/packages/cli/src/run.test.ts b/packages/cli/src/run.test.ts
-index 4b24680..7aada64 100644
+index 4b24680..d187aa0 100644
 --- a/packages/cli/src/run.test.ts
 +++ b/packages/cli/src/run.test.ts
-@@ -1137,2 +1137,109 @@ describe('mediaplane apply: Prowlarr in the stack', () => {
+@@ -1137,2 +1137,149 @@ describe('mediaplane apply: Prowlarr in the stack', () => {
  
 +describe('mediaplane apply: Seerr in the stack', () => {
 +  const WITH_SEERR = STACK.replace('  qbittorrent: {}', '  qbittorrent: {}\n  seerr: {}');
++
++  /** The key Seerr made itself in the fake Jellyfin, which Seerr shows in clear. */
++  function seerrsOwn(): string {
++    const own = apis.apps
++      .get('jellyfin')
++      ?.apiKeys.find((k) => k.AppName === 'Seerr')?.AccessToken;
++    if (own === undefined) throw new Error('Seerr made no key in Jellyfin');
++    return own;
++  }
 +
 +  /** A home of the stack with Seerr, whose fake Seerr keeps its settings.json there. */
 +  async function seerrHome(): Promise<string> {
@@ -4002,13 +4702,44 @@ index 4b24680..7aada64 100644
 +      },
 +      secrets: ['apiKey'],
 +    });
-+    // Sonarr's key went to Seerr, and the admin password to Jellyfin through it.
-+    const secrets = await secretsIn(home);
++    // Sonarr's key went to Seerr, and the admin password to Jellyfin through it; Seerr
++    // showed the key it made itself in Jellyfin.
++    const secrets = [...(await secretsIn(home)), seerrsOwn()];
 +    expectNoSecrets(first.stdout() + first.stderr(), secrets);
 +    expectNoSecrets(JSON.stringify(known), secrets);
 +    const again = capture();
 +    expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
 +    expect(again.stdout()).toBe('No changes.\n');
++  });
++
++  it("keeps the keys Seerr shows in clear out of plan's warning, apply's failure and the change record", async () => {
++    const home = await seerrHome();
++    const docker = fakeDocker(home);
++    expect(
++      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
++    ).toBe(0);
++    // Seerr refuses its servers' list now, quoting every key it holds.
++    const seerr = apis.apps.get('seerr')?.seerr;
++    if (seerr === undefined) throw new Error('no Seerr faked');
++    Object.assign(seerr, { echoKey: true, failing: ['/api/v1/settings/sonarr'] });
++    const said =
++      'Seerr at http://seerr:5055 (127.0.0.1) refused the request (HTTP 400): fake failure, holding *** *** (GET /api/v1/settings/sonarr)';
++    const planned = capture();
++    await run(['plan', '--home', home], planned.io, deps(docker));
++    expect(planned.stderr()).toContain(`warning: ${said}\n`);
++    const applied = capture();
++    expect(await run(['apply', '--home', home, '--yes'], applied.io, deps(docker))).toBe(
++      1,
++    );
++    expect(applied.stdout()).toContain(`  failed  wiring seerr.server_sonarr: ${said}\n`);
++    const id = /Change record: (\S+)/.exec(applied.stderr())?.[1] ?? '';
++    const record = capture();
++    expect(await run(['history', id, '--home', home], record.io, deps(docker))).toBe(0);
++    expect(record.stdout()).toContain(said);
++    const secrets = [...(await secretsIn(home)), seerrsOwn()];
++    for (const output of [planned, applied, record]) {
++      expectNoSecrets(output.stdout() + output.stderr(), secrets);
++    }
 +  });
 +
 +  it("waits for Jellyfin's admin, wiring the rest, when Jellyfin refuses Seerr's sign-in, then sets Seerr up", async () => {
@@ -4064,14 +4795,17 @@ index 4b24680..7aada64 100644
 
 Run: `pnpm vitest run catalog packages/engine/src/integrations/wiring.test.ts packages/cli/src/run.test.ts`
 Expected: FAIL. `catalog/seerr/integration.test.ts` doesn't load
-(`Cannot find module './integration'`), and 5 tests fail in 3 files:
+(`Cannot find module './integration'`), and 6 tests fail in 3 files:
 - `catalog.test.ts`, 1: Seerr has no integration;
 - `wiring.test.ts`, 2: `resolve` is never run, so the profile is compared as undefined
   (`expected [ { resource: 'sonarr.login', …(2) } ] to deeply equal [ { resource: 'sonarr.login', …(1) } ]`),
   and a field left to resolve is compared while what it requires waits;
-- `run.test.ts`, 2: Seerr is set up, but none of its resources is wired
+- `run.test.ts`, 3: Seerr is set up, but none of its resources is wired
   (`… to contain '  done    wiring seerr.media_server: …'`), nor skipped while its setup
-  waits.
+  waits, and `plan` gives no warning for a Seerr that refuses its servers' list.
+
+"compares every field of a resource without `resolve`, one its desired() leaves out too"
+passes before Step 3: it pins what `examine` did before `resolve`, which Step 3 must keep.
 
 - [ ] **Step 3: Write `resolve`, the root folders and Seerr's integration**
 
@@ -4103,16 +4837,16 @@ index 4baf544..d980637 100644
 
 ```diff
 diff --git a/packages/engine/src/integrations/wiring.ts b/packages/engine/src/integrations/wiring.ts
-index abb8e4e..24778c2 100644
+index f82eaef..426344e 100644
 --- a/packages/engine/src/integrations/wiring.ts
 +++ b/packages/engine/src/integrations/wiring.ts
-@@ -250,3 +250,4 @@ export interface ExamineOptions {
+@@ -253,3 +253,4 @@ export interface ExamineOptions {
     * or changed. The check could use what isn't there yet: Sonarr's own test of its
 -   * download client makes a missing qBittorrent category, with no save path.
 +   * download client makes a missing qBittorrent category, with no save path. What only
 +   * the app can say (`resolve`) is left out too, and the fields it fills uncompared.
     */
-@@ -273,4 +274,8 @@ export async function examine(
+@@ -276,4 +277,8 @@ export async function examine(
  ): Promise<Examined | undefined> {
 -  const desired = spec.desired(ctx);
 -  if (desired === undefined) return undefined;
@@ -4123,14 +4857,18 @@ index abb8e4e..24778c2 100644
 +      ? await spec.resolve(api, wanted, ctx)
 +      : wanted;
    const observed = await spec.observe(api, known, desired);
-@@ -279,3 +284,5 @@ export async function examine(
+@@ -282,3 +287,9 @@ export async function examine(
    }
 -  const changes = spec.fields.filter(
-+  // A field left to resolve isn't known yet: it isn't compared.
-+  const compared = spec.fields.filter((field) => desired.fields[field] !== undefined);
++  // A field left to a `resolve` that wasn't run isn't known yet: it isn't compared.
++  // Every other field is, set or not.
++  const unresolved = spec.resolve !== undefined && options.verify === false;
++  const compared = unresolved
++    ? spec.fields.filter((field) => desired.fields[field] !== undefined)
++    : spec.fields;
 +  const changes = compared.filter(
      (field) => observed.fields[field] !== desired.fields[field],
-@@ -296,3 +303,3 @@ export async function examine(
+@@ -299,3 +310,3 @@ export async function examine(
      known !== undefined &&
 -    spec.fields.every((field) => known.fields[field] === desired.fields[field]);
 +    compared.every((field) => known.fields[field] === desired.fields[field]);
@@ -4203,6 +4941,7 @@ const library = z.looseObject({ id: z.string(), name: z.string(), enabled: z.boo
 const jellyfinSettings = z.looseObject({
   ip: z.string(),
   port: z.number(),
+  apiKey: z.string(),
   libraries: z.array(library),
 });
 
@@ -4271,10 +5010,10 @@ async function enableLibraries(api: AppApi): Promise<void> {
  * Seerr's media server (spec §6.2): Jellyfin, at its service and container port, with its
  * Movies and Shows libraries enabled.
  * - Seerr's first sign-in sets it (bootstrap.ts), with a key Seerr makes itself in
- *   Jellyfin ("Seerr"), which Seerr shows in clear. That key stays while it works: the
- *   secret is checked by using it (Seerr's list of Jellyfin's users), never compared.
- *   Mediaplane gives Seerr its own Jellyfin key only when Seerr's is refused, or Jellyfin
- *   moves.
+ *   Jellyfin ("Seerr"), which Seerr shows in clear: once read, it is kept out of what
+ *   the run says. That key stays while it works: the secret is checked by using it
+ *   (Seerr's list of Jellyfin's users), never compared. Mediaplane gives Seerr its own
+ *   Jellyfin key only when Seerr's is refused, or Jellyfin moves.
  * - `libraries` lists which of Mediaplane's are enabled; a library you enable is yours.
  * - It requires Jellyfin's admin and libraries, and Seerr comes after Jellyfin.
  */
@@ -4301,6 +5040,7 @@ const mediaServer: ResourceSpec = {
   },
   async observe(api) {
     const held = await api.get(`${SETTINGS}/jellyfin`, jellyfinSettings);
+    api.addSecret(held.apiKey);
     return held.ip === ''
       ? undefined
       : {
@@ -4339,13 +5079,14 @@ const ARRS = {
     name: 'Sonarr',
     folder: TV,
     option: 'sonarr_profile',
-    // What Seerr's web UI gives a new server: standard series, anime as anime, every new
-    // episode monitored, and no season folders. They stay yours after.
+    // As Seerr's web UI gives a new server, but season folders on, Sonarr's own default:
+    // standard series, anime as anime, and every new episode monitored. They stay yours
+    // after.
     extra: {
       seriesType: 'standard',
       animeSeriesType: 'anime',
       animeTags: [],
-      enableSeasonFolders: false,
+      enableSeasonFolders: true,
       monitorNewItems: 'all',
     },
   },
@@ -4353,6 +5094,7 @@ const ARRS = {
     name: 'Radarr',
     folder: MOVIES,
     option: 'radarr_profile',
+    // Seerr requires season folders of a Radarr server too: films have none.
     extra: { minimumAvailability: 'released', enableSeasonFolders: false },
   },
 } as const;
@@ -4378,7 +5120,8 @@ const offered = z.looseObject({
  * - The profile is the one `apps.seerr.<arr>_profile` names, else the first of
  *   PREFERRED_PROFILES that the arr has, else its first: only the arr can say which it
  *   has, so `resolve` asks it through Seerr's own test.
- * - Seerr shows the key in clear. It is checked, never compared, with Seerr's own test of
+ * - Seerr shows each server's key in clear, the stack's or not: once read, each is kept
+ *   out of what the run says. It is checked, never compared, with Seerr's own test of
  *   the server it holds: one that fails is tested again with the stack's key, and only a
  *   pass then says the key was refused (an update); otherwise Seerr can't reach the arr,
  *   in its own words (500, "Failed to connect", probed, whatever the cause). A failing
@@ -4432,9 +5175,15 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
     }
     return profile;
   };
+  /** The servers Seerr holds, each key in them kept out of what the run says. */
+  const servers = async (api: AppApi) => {
+    const held = await api.get(path, z.array(server));
+    for (const s of held) api.addSecret(s.apiKey);
+    return held;
+  };
   /** The server Seerr holds as `id`, without its id, which Seerr won't take back. */
   const heldOf = async (api: AppApi, id: unknown) => {
-    const found = (await api.get(path, z.array(server))).find((s) => s.id === id);
+    const found = (await servers(api)).find((s) => s.id === id);
     if (found === undefined) {
       throw new AppApiError(
         `${api.name} at ${api.where} has no ${spec.name} server ${String(id)} (GET ${path})`,
@@ -4490,7 +5239,7 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
       return { ...desired, fields: { ...desired.fields, activeProfile: chosen } };
     },
     async observe(api, known) {
-      const held = await api.get(path, z.array(server));
+      const held = await servers(api);
       const found =
         held.find((s) => known !== undefined && s.id === known.id) ??
         held.find((s) => s.name === name);
@@ -4641,7 +5390,7 @@ git add catalog packages docs/reference
 git commit -m "feat(catalog): Seerr linked to Jellyfin with its libraries, and to Sonarr and Radarr with a default profile, then initialized" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1666 tests pass in 83 files.
+Expected: 1680 tests pass in 83 files.
 
 ---
 
@@ -5233,7 +5982,7 @@ git add test/e2e
 git commit -m "test(e2e): the whole stack wired with no clicking, Seerr signed in through Jellyfin before it is published, and its hand changes put back" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1666 tests pass in 83 files (the e2e files aren't among them).
+Expected: 1680 tests pass in 83 files (the e2e files aren't among them).
 
 ---
 
@@ -5255,7 +6004,7 @@ guide, the architecture and the threat model, such as
 
 ```diff
 diff --git a/docs/runbooks/wiring-failed.md b/docs/runbooks/wiring-failed.md
-index 4357f49..2fc268d 100644
+index 4357f49..107f366 100644
 --- a/docs/runbooks/wiring-failed.md
 +++ b/docs/runbooks/wiring-failed.md
 @@ -6,5 +6,6 @@ and its `tv` and `movies` categories, in Sonarr and Radarr, qBittorrent as their
@@ -5283,32 +6032,33 @@ index 4357f49..2fc268d 100644
 +  ```
 +
  - **`apply` stops at the same step** with a setup that reported success. Before
-@@ -166,3 +179,6 @@ In `--json` output, each `diagnostics` entry has a `code`:
+@@ -166,3 +179,7 @@ In `--json` output, each `diagnostics` entry has a `code`:
  - `bootstrap.unreadable` (a warning): Mediaplane can't read an app's setup-done file
 -  while its key is stored, so it can't tell whether the setup is open.
 +  while its key is stored, so it can't tell whether the setup is open. For Seerr, whose
-+  key Mediaplane makes, the file alone says: it starts unpublished and is set up again.
++  key Mediaplane makes, the file alone says: it starts unpublished and is set up again,
++  and `apply` fails at verify (exit 1) on every run, until the file is readable.
 +- `bootstrap.waiting` (a warning): an app's first-run setup waits for another app, as
 +  Seerr's waits for Jellyfin to take the shared admin; the rest is wired without it.
  - `bootstrap.network-via` (an error): an app with a first-run setup runs inside another
-@@ -199,2 +215,5 @@ differ, and a `reason` when it is `unknown`.
+@@ -199,2 +216,5 @@ differ, and a `reason` when it is `unknown`.
       read it (`MEDIAPLANE_UID` in the image, or your own user from source);
 +   - for Seerr, `docker port mediaplane-seerr-1` likewise, and
 +     `grep mediaServerType appdata/seerr/settings.json` says `2` (Jellyfin) once its
 +     first sign-in is done, `4` before;
     - `mediaplane history <id>` shows the first-run setup step's result and error.
-@@ -224,2 +243,5 @@ differ, and a `reason` when it is `unknown`.
+@@ -224,2 +244,5 @@ differ, and a `reason` when it is `unknown`.
      connections, whose own test refuses the old one (`updated apiKey`).
 +  - **Seerr** takes the stored key from its environment at every start, whatever its
 +    `settings.json` says, so a key made anew in its web UI lasts only until Seerr
 +    restarts: `docker restart mediaplane-seerr-1` puts the stored one back.
    - Slice 8 restores a key at its source for you, and makes Jellyfin's anew.
-@@ -274,3 +296,3 @@ differ, and a `reason` when it is `unknown`.
+@@ -274,3 +297,3 @@ differ, and a `reason` when it is `unknown`.
        again.
 -    - **`its wizard was finished with another login while Mediaplane set it up`:** the
 +    - **`its setup was finished with another login while Mediaplane set it up`:** the
        wizard was open when `apply` started Jellyfin, and something else reached it and
-@@ -320,2 +342,49 @@ differ, and a `reason` when it is `unknown`.
+@@ -320,2 +343,50 @@ differ, and a `reason` when it is `unknown`.
    again: it signs in as the shared admin and tries again.
 +- **`can't sign in through Jellyfin yet: Jellyfin refused the shared admin's password`**
 +  (`bootstrap.waiting`). Seerr's first sign-in goes through Jellyfin, as the shared
@@ -5327,7 +6077,8 @@ index 4357f49..2fc268d 100644
 +  run `apply` again. Seerr stays unpublished.
 +- **`was set up with another login or another Jellyfin`** (`apply.bootstrap-failed`).
 +  Seerr's setup looked open when `apply` started it, unpublished, but Seerr was set up
-+  when Mediaplane came to it, and not as the shared admin through the stack's Jellyfin.
++  when Mediaplane came to it, or in the moment before its sign-in, and not as the shared
++  admin through the stack's Jellyfin.
 +  Mediaplane never sends the password to such a Seerr, which would pass it on to its
 +  Jellyfin; it asks with Seerr's key. Seerr stays unpublished, and what follows the
 +  message says which of two causes it is, as for Jellyfin above. Check the safe one
@@ -5358,7 +6109,7 @@ index 4357f49..2fc268d 100644
 +  library is in Jellyfin's dashboard, as `jellyfin.library_shows` keeps it, then run
 +  `apply` again.
  - **`Mediaplane can't read the file in Jellyfin's appdata`** (`bootstrap.unreadable`).
-@@ -492,4 +561,7 @@ Then run `mediaplane apply`. It plans again and does only what is left
+@@ -492,4 +563,7 @@ Then run `mediaplane apply`. It plans again and does only what is left
    [T16](../security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
 -- **Keep `appdata/jellyfin` readable** by the user Mediaplane runs as, so `plan` can tell
 -  whether Jellyfin's setup is open.
@@ -5397,7 +6148,7 @@ index 4b5144c..e74f3d7 100644
 
 ````diff
 diff --git a/docs/architecture.md b/docs/architecture.md
-index 4fbb697..806f578 100644
+index 4fbb697..9923d18 100644
 --- a/docs/architecture.md
 +++ b/docs/architecture.md
 @@ -15,5 +15,6 @@ You describe the stack you want in one file, `stack.yaml`. Mediaplane then works
@@ -5457,7 +6208,7 @@ index 4fbb697..806f578 100644
 -  Jellyfin published
 +  both published
  ```
-@@ -340,5 +347,14 @@ up --wait again
+@@ -340,5 +347,15 @@ up --wait again
    runs the setup. A file Mediaplane can't read says nothing: with the key stored, the
 -  key decides, and `plan` warns (`bootstrap.unreadable`) that it can't tell. An app with
 -  a setup can't run inside another app's network, which would publish its ports: `plan`
@@ -5465,7 +6216,8 @@ index 4fbb697..806f578 100644
 +  key decides, and `plan` warns (`bootstrap.unreadable`) that it can't tell. Seerr's
 +  setup makes no key (Mediaplane makes Seerr's, in `API_KEY`), so its `settings.json`
 +  alone says: one Mediaplane can't read has Seerr start unpublished, and set up again,
-+  on every `apply`, with that warning. An app with a setup can't run inside another
++  on every `apply`, with that warning, and each such `apply` fails at verify (exit 1),
++  until the file is readable. An app with a setup can't run inside another
 +  app's network, which would publish its ports: `plan` fails with
 +  `bootstrap.network-via`.
 +- **In order.** The setups go in the order of the apps' integrations: Seerr comes after
@@ -5475,7 +6227,7 @@ index 4fbb697..806f578 100644
 +  skips its resources, and verify fails with the setup left to do. The next `apply` sets
 +  it up, once the wire step has set Jellyfin's admin.
  - **No port at all.** The file Compose gets on its standard input, after
-@@ -350,4 +366,9 @@ up --wait again
+@@ -350,4 +367,10 @@ up --wait again
    [T16](security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)).
 -- **The setup** reaches the app on the wiring network without a key, finishes its
 -  wizard, and keeps the key it makes in `state/secrets.json` at once. Then Mediaplane
@@ -5485,26 +6237,27 @@ index 4fbb697..806f578 100644
 +  service and port), as the shared admin: that makes it Seerr's admin, and Jellyfin
 +  Seerr's media server. Seerr's key works from then on, so the session is signed out of
 +  at once. A Seerr that is set up already is checked with its key, never by sending the
-+  password, which it would pass to whatever Jellyfin it was set up with. Then Mediaplane
++  password, which it would pass to whatever Jellyfin it was set up with; so is one found
++  set up when the sign-in fails, since someone may have signed in first. Then Mediaplane
    steps off the wiring network, `up` runs again, without the extra file, and Compose
-@@ -359,3 +380,3 @@ up --wait again
+@@ -359,3 +382,3 @@ up --wait again
    unpublished, whose shared admin is then refused, stays unpublished whatever it says:
 -  its wizard was finished with another login while Mediaplane set it up. Its appdata,
 +  its setup was finished with another login while Mediaplane set it up. Its appdata,
    read again, tells that from a setup done by hand whose file Mediaplane can't read,
-@@ -370,4 +391,4 @@ download path: qBittorrent's settings and categories, and Sonarr's and Radarr's
+@@ -370,4 +393,4 @@ download path: qBittorrent's settings and categories, and Sonarr's and Radarr's
  client and root folder; the indexers: Prowlarr's links to Sonarr and Radarr, and its
 -indexer proxy; and the media server: Jellyfin's libraries, and Sonarr's and Radarr's
 -connection to it.
 +indexer proxy; the media server: Jellyfin's libraries, and Sonarr's and Radarr's
 +connection to it; and the requests app: Seerr's links to Jellyfin, Sonarr and Radarr.
  
-@@ -381,3 +402,3 @@ mediaplane (the stack)
+@@ -381,3 +404,3 @@ mediaplane (the stack)
    sonarr, radarr, prowlarr,
 -  jellyfin
 +  jellyfin, seerr
    gluetun ─ qbittorrent
-@@ -486,2 +507,36 @@ mediaplane (the stack)
+@@ -486,2 +509,36 @@ mediaplane (the stack)
  
 +- **The requests app:**
 +
@@ -5541,13 +6294,13 @@ index 4fbb697..806f578 100644
 +    tests stop at the links, and Seerr's own test of each.
 +
  - **Each resource** is one of:
-@@ -501,3 +556,4 @@ mediaplane (the stack)
+@@ -501,3 +558,4 @@ mediaplane (the stack)
  - **The wire step** waits until each app is ready (`/ping` for Sonarr, Radarr and
 -  Prowlarr, `/System/Info/Public` for Jellyfin), checks that its key still works, then
 +  Prowlarr, `/System/Info/Public` for Jellyfin, `/api/v1/settings/public` for Seerr),
 +  checks that its key still works, then
    makes each resource what the stack
-@@ -575,3 +631,3 @@ The [roadmap](plans/m1-roadmap.md) has the order:
+@@ -575,3 +633,3 @@ The [roadmap](plans/m1-roadmap.md) has the order:
  
 -- the rest of the wiring, app by app: the requests app (Slice 6) and Plex (Slice 7);
 +- Plex (Slice 7);
@@ -5558,7 +6311,7 @@ index 4fbb697..806f578 100644
 
 ```diff
 diff --git a/docs/security/threat-model.md b/docs/security/threat-model.md
-index ed817fe..a32cf53 100644
+index ed817fe..1aed457 100644
 --- a/docs/security/threat-model.md
 +++ b/docs/security/threat-model.md
 @@ -20,3 +20,5 @@ that power. None of them removes it.
@@ -5632,7 +6385,13 @@ index ed817fe..a32cf53 100644
 +  compromised Seerr can drive Sonarr, Radarr and Jellyfin, and so can whoever has
 +  Seerr's key or the shared admin login.
  - A link stays in Prowlarr when its arr leaves the stack, and keeps that arr's key,
-@@ -308,2 +323,16 @@ Controls today:
+@@ -293,2 +308,5 @@ Controls today:
+   with `***`, and never includes what was sent: a request body is never shown or kept.
++  So is every key Mediaplane reads in clear in an app's answer, from the moment it
++  reads it: the keys Jellyfin lists, the key Seerr made itself in Jellyfin, and the
++  arrs' keys that Seerr shows for its servers, one typed in Seerr by hand too.
+   That holds for each form an app may echo a secret in: as it is, JSON-escaped,
+@@ -308,2 +326,17 @@ Controls today:
    password, sent with its key.
 +- Seerr's key is generated, and reaches Seerr in its environment (`API_KEY`), which it
 +  takes at every start; Seerr also writes it into its `settings.json`. Sonarr's and
@@ -5640,7 +6399,8 @@ index ed817fe..a32cf53 100644
 +  them in clear afterwards: Mediaplane reads them back only to hand them to Seerr's own
 +  test of the server it holds, and never compares, keeps or shows them. The key Seerr
 +  made itself in Jellyfin, which it also shows in clear, Mediaplane reads in Seerr's
-+  answer and leaves there: it is never kept or shown, nor sent anywhere. When Jellyfin
++  answer and leaves there: it is never kept, nor sent anywhere, and it is replaced with
++  `***` in every message, as the stack's own secrets are, once read. When Jellyfin
 +  refuses it, Mediaplane gives Seerr the Jellyfin key it holds itself, in a request
 +  body, as it gives the arrs.
 +- The admin password goes to Seerr only once, in its first sign-in's request body,
@@ -5649,18 +6409,18 @@ index ed817fe..a32cf53 100644
 +  once. Mediaplane never signs in to a Seerr that is set up already: it would pass the
 +  password to whatever Jellyfin it was set up with.
  - The admin password goes to qBittorrent only in request bodies: its preferences, sent
-@@ -325,3 +354,4 @@ Controls today:
+@@ -325,3 +358,4 @@ Controls today:
    records hold only their paths.
 -- `appdata/` holds credentials too: the apps' keys, and qBittorrent's password hash.
 +- `appdata/` holds credentials too: the apps' keys, qBittorrent's password hash, and
 +  Seerr's `settings.json`, with Sonarr's, Radarr's and a Jellyfin key in clear.
    The apps rewrite their own files readable by every user on the host (0644), so
-@@ -412,3 +442,3 @@ What remains:
+@@ -412,3 +446,3 @@ What remains:
  - One password opens every app that uses it: qBittorrent, Sonarr, Radarr, Prowlarr and
 -  Jellyfin. A leak from one is a leak for all.
 +  Jellyfin, and Seerr, which asks Jellyfin. A leak from one is a leak for all.
  - `plan` and `apply` check Jellyfin's password by signing in. Jellyfin doesn't lock its
-@@ -595,2 +625,13 @@ Controls today:
+@@ -595,2 +629,15 @@ Controls today:
    this is under "What remains".
 +- The same holds for Seerr, on a Jellyfin stack: until its first sign-in, anyone who
 +  reaches it can sign in through a Jellyfin of their own and be its admin, as Seerr 3.5
@@ -5668,13 +6428,15 @@ index ed817fe..a32cf53 100644
 +  Jellyfin as the shared admin, which makes that its admin and Jellyfin its media
 +  server; only then does it publish Seerr. Its `settings.json` says whether its setup is
 +  done; one Mediaplane can't read has Seerr start unpublished, and set up again, on
-+  every `apply`.
++  every `apply`, and each such `apply` fails at verify (exit 1), until the file is
++  readable.
 +- A Seerr that is set up when Mediaplane comes to it, though its file didn't say so when
-+  `apply` started it, is Mediaplane's only when its admin is the shared admin and its
-+  Jellyfin the stack's. Mediaplane asks with Seerr's key, and never sends the password,
++  `apply` started it, or that someone signed in to in the moment before Mediaplane's
++  sign-in, is Mediaplane's only when its admin is the shared admin and its Jellyfin the
++  stack's. Mediaplane asks with Seerr's key, and never sends the password,
 +  which Seerr would pass to its Jellyfin. Any other stays unpublished.
  - Before an app starts, Mediaplane reads its appdata (Jellyfin's `system.xml`) to see
-@@ -615,4 +656,7 @@ What remains:
+@@ -615,4 +662,7 @@ What remains:
  
 +- With Plex, Mediaplane doesn't set Seerr up until Slice 7: its setup is open on its
 +  published port from its first start (see T2).
@@ -5683,17 +6445,17 @@ index ed817fe..a32cf53 100644
 +  can reach Jellyfin on the stack's networks, and Seerr likewise until its first sign-in.
 +  A compromised app could claim either first.
    If it sets the first user and leaves the wizard open, Mediaplane's sign-in fails, and
-@@ -626,2 +670,9 @@ What remains:
+@@ -626,2 +676,9 @@ What remains:
    already treat as serious.
-+- A Seerr claimed that way is set up when Mediaplane comes to it, with an admin that
-+  isn't the shared admin, or a Jellyfin that isn't the stack's: it stays unpublished, and
-+  `apply` stops. One claimed through the stack's own Jellyfin, as its admin, needed the
-+  shared admin's password already.
++- A Seerr claimed that way, before Mediaplane comes to it or between its look and its
++  sign-in, has an admin that isn't the shared admin, or a Jellyfin that isn't the
++  stack's: it stays unpublished, and `apply` stops. One claimed through the stack's own
++  Jellyfin, as its admin, needed the shared admin's password already.
 +- A Seerr set up by hand before Slice 6, as its README then advised, is done, so it
 +  starts published, and nobody can claim it. Mediaplane wires it with its key, whoever
 +  its admin is.
  - A wizard finished by hand before `apply` started Jellyfin (from before Slice 5, say)
-@@ -634,11 +685,11 @@ What remains:
+@@ -634,11 +691,11 @@ What remains:
    Fix the file's ownership, or the user Mediaplane runs as.
 -- `compose.override.yaml` can void the guarantee that Jellyfin is set up before it is
 -  published. Mediaplane resets Jellyfin's `ports`, so ports the override adds to Jellyfin
@@ -5724,7 +6486,7 @@ stack as the e2e tests'), from source on an arm64 VM, trimmed where it says.
 
 ```diff
 diff --git a/README.md b/README.md
-index 4bf9b74..f431b74 100644
+index 4bf9b74..34f6446 100644
 --- a/README.md
 +++ b/README.md
 @@ -12,4 +12,4 @@ Compose and wires the apps together for you.**
@@ -5734,7 +6496,7 @@ index 4bf9b74..f431b74 100644
 +>   healthy, and sets one admin login in qBittorrent, Sonarr, Radarr, Prowlarr, Jellyfin
 +>   and Seerr (`mediaplane credentials` shows it). It sets Jellyfin up before its web UI
  >   is published, with its Movies and Shows libraries, when `apply` runs the stack (the
-@@ -20,8 +20,11 @@ Compose and wires the apps together for you.**
+@@ -20,8 +20,13 @@ Compose and wires the apps together for you.**
  >   add in Prowlarr reach both, with Byparr as Prowlarr's proxy for indexers behind
 ->   Cloudflare. `mediaplane vpn-check` confirms that qBittorrent reaches the internet
 ->   only through the VPN. Mediaplane runs in its own hardened container, behind a Docker
@@ -5743,33 +6505,35 @@ index 4bf9b74..f431b74 100644
 ->   need setting up by hand. Seerr's setup is open to anyone who can reach it until you
 ->   complete it, so complete it first.
 +>   Cloudflare. It signs Seerr in through Jellyfin, as the same admin, before Seerr's web
-+>   UI is published, and links Seerr to Jellyfin, with both libraries, and to Sonarr and
-+>   Radarr, with a quality profile, ready for requests. `mediaplane vpn-check` confirms
-+>   that qBittorrent reaches the internet only through the VPN. Mediaplane runs in its
-+>   own hardened container, behind a Docker socket proxy, and reaches the apps over a
-+>   private network with no route out.
++>   UI is published, again when `apply` runs the stack (the same
++>   [threat model](docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)
++>   entry says what voids that), and links Seerr to Jellyfin, with both libraries, and to
++>   Sonarr and Radarr, with a quality profile, ready for requests. `mediaplane vpn-check`
++>   confirms that qBittorrent reaches the internet only through the VPN. Mediaplane runs
++>   in its own hardened container, behind a Docker socket proxy, and reaches the apps
++>   over a private network with no route out.
 +> - **Next:** Plex. Until that lands, a Plex stack still needs setting up by hand, Seerr
 +>   included: its setup is open to anyone who can reach it until you complete it, so
 +>   complete it first.
  > - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
-@@ -61,3 +64,3 @@ Mediaplane does that part for you:
+@@ -61,3 +66,3 @@ Mediaplane does that part for you:
  | Write a starter `stack.yaml` (`init`)                                             | Done         |
 -| One admin login for qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin            | Done         |
 +| One admin login for qBittorrent, Sonarr, Radarr, Prowlarr, Jellyfin and Seerr     | Done         |
  | Reach the apps' APIs over a private network with no route out                     | Done         |
-@@ -69,3 +72,4 @@ Mediaplane does that part for you:
+@@ -69,3 +74,4 @@ Mediaplane does that part for you:
  | Set up Jellyfin before it is published, with its libraries and links              | Done         |
 -| Wire the rest together (requests, Plex)                                           | Planned      |
 +| Sign Seerr in through Jellyfin before it is published, and link it                | Done         |
 +| Wire Plex, and Seerr with Plex                                                    | Planned      |
  | Detect manual changes and offer Re-apply or "Keep mine"                           | Planned      |
-@@ -112,3 +116,4 @@ the changes and touches nothing in your stack, apart from small marks that check
+@@ -112,3 +118,4 @@ the changes and touches nothing in your stack, apart from small marks that check
  or a password can leave in an app: a category in qBittorrent, a failure in an app's own
 -status of a client, link or connection, and a sign-in in Jellyfin's activity log. The
 +status of a client, link or connection, a sign-in in Jellyfin's activity log, and a line
 +in Seerr's log (and an arr's) for a check of Seerr's that fails. The
  [threat model](docs/security/threat-model.md#what-runs-and-who-can-reach-it) says more.
-@@ -134,11 +139,12 @@ mediaplane apply
+@@ -134,11 +141,12 @@ mediaplane apply
    ├─ pulls images, starts the apps
 -  │  (Jellyfin with no port, until
 -  │  it is set up)
@@ -5788,21 +6552,21 @@ index 4bf9b74..f431b74 100644
 +  │  download path, indexers, the
 +  │  media server and requests
    ├─ plans again: nothing left to do
-@@ -147,3 +153,3 @@ mediaplane apply
+@@ -147,3 +155,3 @@ mediaplane apply
  
 -Next, `apply` will wire the rest of the apps through the same APIs (Slices 6 and 7).
 +Next, `apply` will wire Plex through the same APIs (Slice 7).
  
-@@ -171,3 +177,3 @@ Most of this is real output from a run on an arm64 VM, trimmed where marked. The
+@@ -171,3 +179,3 @@ Most of this is real output from a run on an arm64 VM, trimmed where marked. The
  lines, the first-run setup's and the last apply's came later, from a run of the same
 -stack with Slice 5. The stack is
 +stack with Slice 6. The stack is
  the example above without the VPN, which is why `plan` warns about qBittorrent, and with
-@@ -203,2 +209,3 @@ First-run setup:
+@@ -203,2 +211,3 @@ First-run setup:
    + jellyfin (with no port published until it is done)
 +  + seerr (with no port published until it is done)
  Wiring:
-@@ -223,3 +230,7 @@ Wiring:
+@@ -223,3 +232,7 @@ Wiring:
    > after start prowlarr.indexer_proxy
 -Plan: 6 files to write, 7 containers to change, 6 secrets to generate, 1 app to set up, 19 wiring checks after the start.
 +  > after start seerr.media_server
@@ -5811,7 +6575,7 @@ index 4bf9b74..f431b74 100644
 +  > after start seerr.setup
 +Plan: 6 files to write, 7 containers to change, 6 secrets to generate, 2 apps to set up, 23 wiring checks after the start.
  
-@@ -233,5 +244,5 @@ Pulling images (the first time can take several minutes)…
+@@ -233,5 +246,5 @@ Pulling images (the first time can take several minutes)…
  Starting containers and waiting until every app is healthy…
 -  done    containers: every app is running and healthy; started jellyfin without its ports, to set it up first
 +  done    containers: every app is running and healthy; started jellyfin, seerr without their ports, to set them up first
@@ -5819,7 +6583,7 @@ index 4bf9b74..f431b74 100644
 -  done    first-run setup: set up jellyfin and saved jellyfin.apiKey; published jellyfin
 +  done    first-run setup: set up jellyfin, seerr and saved jellyfin.apiKey; published jellyfin, seerr
  Wiring the apps…
-@@ -256,6 +267,10 @@ Wiring the apps…
+@@ -256,6 +269,10 @@ Wiring the apps…
    done    wiring prowlarr.indexer_proxy: created
 -  done    wiring: jellyfin.admin adopted; jellyfin.library_movies created; … prowlarr.indexer_proxy created
 +  done    wiring seerr.media_server: updated libraries
@@ -5832,29 +6596,29 @@ index 4bf9b74..f431b74 100644
 -Apply complete. Change record: 20261015T182931Z-ed479e70
 +Apply complete. Change record: 20261016T030144Z-2bc6267e
  
-@@ -275,3 +290,3 @@ seerr        running  healthy
+@@ -275,3 +292,3 @@ seerr        running  healthy
  sonarr       running  healthy
 -Last apply: 2026-10-15T18:29:31.294Z, success (20261015T182931Z-ed479e70)
 +Last apply: 2026-10-16T03:01:44.032Z, success (20261016T030144Z-2bc6267e)
  
-@@ -286,3 +301,3 @@ qBittorrent  http://127.0.0.1:8080
+@@ -286,3 +303,3 @@ qBittorrent  http://127.0.0.1:8080
  Radarr       http://127.0.0.1:7878
 -Seerr        http://127.0.0.1:5055  (its login arrives in Slice 6)
 +Seerr        http://127.0.0.1:5055
  Sonarr       http://127.0.0.1:8989
-@@ -311,4 +326,4 @@ Then follow [`deploy/README.md`](deploy/README.md) to start it and run
+@@ -311,4 +328,4 @@ Then follow [`deploy/README.md`](deploy/README.md) to start it and run
  - the secrets it would generate;
 -- the first-run setup it would finish, under `First-run setup:`: Jellyfin's, with no
 -  port published until it is done;
 +- the first-run setups it would finish, under `First-run setup:`: Jellyfin's, and
 +  Seerr's first sign-in through it, each with no port published until it is done;
  - the wiring it would do in the apps, under `Wiring:`, such as setting the admin login or
-@@ -366,3 +381,3 @@ This starts real containers on this machine, with the web UIs on `localhost`. Th
+@@ -366,3 +383,3 @@ This starts real containers on this machine, with the web UIs on `localhost`. Th
  command shows the admin login, which qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin
 -use, and each app's address.
 +use, and Seerr through Jellyfin, and each app's address.
  The first `apply` downloads several GB of images, so it can take a while. To remove the
-@@ -403,5 +418,5 @@ The pipeline decides what the stack is, and Mediaplane does the stateful part. T
+@@ -403,5 +420,5 @@ The pipeline decides what the stack is, and Mediaplane does the stateful part. T
  that covers generating the keys, deploying, setting Jellyfin up and taking the key it
 -makes, setting the shared login in the apps, linking Sonarr and Radarr to qBittorrent and
 -Jellyfin and Prowlarr to them, and checking. The rest of the wiring and change detection
@@ -5863,21 +6627,21 @@ index 4bf9b74..f431b74 100644
 +and Radarr to qBittorrent and Jellyfin, Prowlarr to them, and Seerr to all three, and
 +checking. Plex and change detection are what is being built next.
  
-@@ -423,3 +438,5 @@ and keep. What it adds is everything around the file:
+@@ -423,3 +440,5 @@ and keep. What it adds is everything around the file:
    libraries, and told of each import by Sonarr and Radarr;
 -- next, the rest of the wiring between the apps.
-+- Seerr signed in through Jellyfin before it is published, and linked to Jellyfin,
-+  Sonarr and Radarr;
++- Seerr signed in through Jellyfin by `apply` before its web UI is published, and
++  linked to Jellyfin, Sonarr and Radarr;
 +- next, Plex.
  
-@@ -432,4 +449,4 @@ the apps to each other, with `plan` and `apply` and a history of what it did, an
+@@ -432,4 +451,4 @@ the apps to each other, with `plan` and `apply` and a history of what it did, an
  the rest of each app's settings to you. Today it sets the shared login, sets Jellyfin
 -up, links Sonarr and Radarr to qBittorrent and Jellyfin, and Prowlarr to them; Seerr and
 -Plex come in Slices 6 and 7.
 +and Seerr up, links Sonarr and Radarr to qBittorrent and Jellyfin, Prowlarr to them, and
 +Seerr to all three; Plex comes in Slice 7.
  
-@@ -489,5 +506,5 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
+@@ -489,5 +508,5 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
    test and `vpn-check`), S3b (the wiring framework), S3c (the download path), S4
 -  (indexers) and S5 (Jellyfin).
 -- **Next:** S6 (requests).
@@ -5886,7 +6650,7 @@ index 4bf9b74..f431b74 100644
 +- **Next:** S7 (Plex).
 +- **After that:** S8 and S9: drift detection, and the release.
  
-@@ -513,4 +530,5 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
+@@ -513,4 +532,5 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
  - **[Runbook: wiring failed](docs/runbooks/wiring-failed.md):** an app refused Mediaplane's
 -  key or a change, Jellyfin's first-run setup failed, an arr can't reach qBittorrent or
 -  Jellyfin, Prowlarr can't make its proxy, or Mediaplane can't reach an app.
@@ -5900,10 +6664,10 @@ index 4bf9b74..f431b74 100644
 
 ```diff
 diff --git a/catalog/seerr/README.md b/catalog/seerr/README.md
-index 9c9b07b..2144c0f 100644
+index 9c9b07b..9179829 100644
 --- a/catalog/seerr/README.md
 +++ b/catalog/seerr/README.md
-@@ -28,4 +28,33 @@ Radarr. Mediaplane runs the upstream image, unmodified (see
+@@ -28,4 +28,38 @@ Radarr. Mediaplane runs the upstream image, unmodified (see
  
 -- **Its API key.** Generated once, and passed in `API_KEY`. It does nothing until Seerr
 -  has its first user.
@@ -5915,7 +6679,10 @@ index 9c9b07b..2144c0f 100644
 +  through Jellyfin as the shared admin: that makes the shared admin Seerr's admin, and
 +  Jellyfin, at `jellyfin:8096`, its media server. It signs out again at once, and only
 +  then publishes Seerr. `plan` lists it under `First-run setup:`; Seerr's `settings.json`
-+  says when it is done (`mediaServerType`).
++  says when it is done (`mediaServerType`). A Seerr someone else signed in to first,
++  even in the moment before Mediaplane's sign-in, stays unpublished, and `apply` stops.
++  This holds when `apply` runs the stack; the threat model lists what voids it:
++  [T16](../../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
 +- **Its login** is Jellyfin's: on Seerr's sign-in page, choose Jellyfin and use the
 +  shared admin login (`mediaplane credentials`). It follows Jellyfin's, so a change of
 +  `admin.password` reaches Seerr once it reaches Jellyfin. Seerr makes a user for anyone
@@ -5927,24 +6694,26 @@ index 9c9b07b..2144c0f 100644
 +  the Movies and Shows libraries enabled. A library you enable in Seerr stays yours.
 +  Seerr uses the key it made itself in Jellyfin as it signed in (named `Seerr` in
 +  Jellyfin's dashboard): Mediaplane checks that it works, and gives Seerr its own
-+  Jellyfin key only when Jellyfin refuses Seerr's.
++  Jellyfin key only when Jellyfin refuses Seerr's. Seerr shows that key in clear:
++  Mediaplane keeps it out of all it prints and records.
 +- **Its Sonarr and Radarr servers** (`seerr.server_sonarr`, `seerr.server_radarr`), each
 +  while the stack runs the arr, named `Sonarr (Mediaplane)` and `Radarr (Mediaplane)`:
 +  the arr at its service and port, with its key, its root folder, a quality profile,
 +  and set as the default, so requests go there. The profile is `HD-1080p`, else `Any`,
 +  else the arr's first, unless you name one (below). The rest is what Seerr's own web UI
-+  gives a new server, such as no season folders, and stays yours after. Seerr shows the
-+  arr's key in clear; Mediaplane checks it with Seerr's own test of the server, which
-+  calls the arr with it.
++  gives a new server, but with season folders for Sonarr, as Sonarr's own default, and
++  stays yours after. Seerr shows the arr's key in clear; Mediaplane checks it with
++  Seerr's own test of the server, which calls the arr with it, and keeps it out of all
++  it prints and records, a key typed in Seerr by hand too.
 +- **Its setup, finished** (`seerr.setup`): once its links are in place, Mediaplane sends
 +  Seerr's `initialize`, so it stops offering its admin the setup wizard.
  - **Its user.** Seerr's image runs as uid 1000, the `node` user. So before it starts,
-@@ -37,3 +66,3 @@ Radarr. Mediaplane runs the upstream image, unmodified (see
+@@ -37,3 +71,3 @@ Radarr. Mediaplane runs the upstream image, unmodified (see
  - **`LOG_LEVEL=info`.**
 -- **Its web UI,** published as `network.bind` says.
 +- **Its web UI,** published as `network.bind` says, once it is set up.
  
-@@ -41,8 +70,6 @@ Radarr. Mediaplane runs the upstream image, unmodified (see
+@@ -41,8 +75,6 @@ Radarr. Mediaplane runs the upstream image, unmodified (see
  
 -- **Slice 6:**
 -  - Seerr's first sign-in, as the Jellyfin admin;
@@ -5957,7 +6726,7 @@ index 9c9b07b..2144c0f 100644
 +  `mediaplane credentials` says its login arrives in Slice 7.
 +- **Slice 8:** drift detection and Keep mine for what it manages here.
  
-@@ -55,2 +82,8 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
+@@ -55,2 +87,8 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
    about it. See the [`stack.yaml` reference](../../docs/reference/stack-yaml.md).
 +- **The quality profiles** it requests with: `apps.seerr.sonarr_profile` and
 +  `apps.seerr.radarr_profile`, each a profile's name, as the arr shows it. A name the
@@ -5966,7 +6735,7 @@ index 9c9b07b..2144c0f 100644
 +  changed in Seerr: its Jellyfin, its libraries, and each server's host, port, profile,
 +  root folder and default. Keep mine comes in Slice 8.
  - **Anything else** goes in `compose.override.yaml` in the Mediaplane home.
-@@ -59,5 +92,13 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
+@@ -59,5 +97,13 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
  
 -- **Setup is open.** Until Slice 6 (Slice 7 with Plex), Seerr's setup page is open to
 -  whoever reaches it first. Finish it yourself as soon as `apply` is done, or keep
@@ -5988,19 +6757,21 @@ index 9c9b07b..2144c0f 100644
 
 ```diff
 diff --git a/catalog/jellyfin/README.md b/catalog/jellyfin/README.md
-index e1f0ab1..8b31ad5 100644
+index e1f0ab1..1c85e39 100644
 --- a/catalog/jellyfin/README.md
 +++ b/catalog/jellyfin/README.md
-@@ -81,2 +81,8 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
+@@ -81,2 +81,10 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
    [Sonarr's](../sonarr/README.md) and [Radarr's](../radarr/README.md) READMEs).
 +- **Seerr signs in through it.** With Seerr in the stack, once Jellyfin is set up,
-+  `apply` signs Seerr in through Jellyfin as the shared admin, before Seerr is published,
++  `apply` signs Seerr in through Jellyfin as the shared admin, before Seerr is published
++  (when `apply` runs the stack: see
++  [T16](../../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)),
 +  and links Seerr to it with both libraries enabled (see
 +  [Seerr's README](../seerr/README.md)). That sign-in leaves Jellyfin a key named
 +  `Seerr`, and a device of Seerr's, which Seerr uses: leave them. Seerr's sign-in page
 +  then checks the shared admin login against Jellyfin.
  - **A health check that waits for the server.** In the first seconds of every start,
-@@ -90,3 +96,2 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
+@@ -90,3 +98,2 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
  
 -- **Slice 6:** Seerr's link to Jellyfin, signing in as its admin.
  - **Slice 8:** drift: reporting a setting changed by hand, rather than putting it back,
@@ -6118,7 +6889,7 @@ index 04b3bc9..839c555 100644
 
 ```diff
 diff --git a/docs/design/m1-engine-cli.md b/docs/design/m1-engine-cli.md
-index 5511ca9..27a12f6 100644
+index 5511ca9..fb26abf 100644
 --- a/docs/design/m1-engine-cli.md
 +++ b/docs/design/m1-engine-cli.md
 @@ -542,3 +542,3 @@ in `compose.override.yaml` is therefore wired automatically.
@@ -6126,7 +6897,7 @@ index 5511ca9..27a12f6 100644
 -| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key or password check can leave a mark in an app: §11, Slices 3c, 4 and 5); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
 +| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key or password check can leave a mark in an app: §11, Slices 3c, 4, 5 and 6); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
  | `apply` | Converge on `stack.yaml` (§5) |
-@@ -1458 +1458,80 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
+@@ -1458 +1458,97 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
    and give it to the arrs' connections; Slice 8 automates that, with key recovery.
 +
 +### Slice 6: requests (2026-10-16)
@@ -6136,18 +6907,26 @@ index 5511ca9..27a12f6 100644
 +  in through a Jellyfin of their own choosing (`POST /api/v1/auth/jellyfin` with a
 +  `hostname`) and be its admin, and its key does nothing (403) until that admin exists
 +  (probed). So Seerr has a `bootstrap`, as Jellyfin does, and starts unpublished.
++  - §6.4's guarantee holds for Seerr as it does for Jellyfin: while `apply` runs the
++    stack. An override that changes Seerr's network, or the stack run outside
++    Mediaplane, voids it (threat model T16).
 +  - **Done** is its `settings.json` naming a media server (`mediaServerType` 1 to 3; 4
 +    is none). Its key is Mediaplane's (`API_KEY`), so a setup may make no key: such a
 +    setup's `done` file alone says, and one Mediaplane can't read has the app start
-+    unpublished, and set up again, on every `apply` (`bootstrap.unreadable`).
++    unpublished, and set up again, on every `apply` (`bootstrap.unreadable`), and each
++    such `apply` fails at verify (exit 1), until the file is readable.
 +  - **The setup** signs in through Jellyfin, at Jellyfin's service and container port,
 +    as the shared admin, which makes it Seerr's admin and Jellyfin Seerr's media server,
 +    then signs out (`POST /api/v1/auth/logout`, with the session's cookie, which the
 +    typed client keeps out of every message). A Seerr found set up when its setup runs,
 +    though its file didn't say so when `apply` started it, is Mediaplane's only when its
 +    admin is the shared admin and its Jellyfin the stack's, asked with its key: the
-+    password is never sent to it, since Seerr would pass it to its own Jellyfin. Any
-+    other is refused as claimed (`auth`), and stays unpublished.
++    password is never sent to it, since Seerr would pass it to its own Jellyfin. So is
++    one found set up when the sign-in fails: someone inside the stack may have signed in
++    between the look and the sign-in, and Seerr then refuses a second Jellyfin (500).
++    Any other is refused as claimed (`auth`), and stays unpublished. A setup that waits
++    keeps its app unpublished, without asking again: someone may have finished it
++    meanwhile.
 +  - **Order, and waiting** (the roadmap's S6 item). The setups run in the order of the
 +    apps' integrations, so Seerr's comes after Jellyfin's. A setup may wait
 +    (`SetupWaiting`): Seerr's, while Jellyfin refuses the shared admin's password, and
@@ -6166,7 +6945,8 @@ index 5511ca9..27a12f6 100644
 +    Seerr's settings `ip` and `port`), with the Movies and Shows libraries enabled
 +    (`libraries`, those of Mediaplane's that are enabled; one you enable is yours). Its
 +    `apiKey` is the key Seerr holds for Jellyfin, which Seerr made itself in its first
-+    sign-in and shows in clear: it is checked by using it, never compared, through
++    sign-in and shows in clear: once read, it is redacted for the rest of the run, as
++    the stack's own secrets are. It is checked by using it, never compared, through
 +    Seerr's list of Jellyfin's users, which fails (500) while Jellyfin refuses it
 +    (probed). Mediaplane gives Seerr its own Jellyfin key only when Seerr's is refused, or
 +    Jellyfin's address changes. `hostname` is never sent: it is the sign-in's field, which
@@ -6181,8 +6961,10 @@ index 5511ca9..27a12f6 100644
 +    it holds. Seerr's test fails with one 500 whatever the cause (probed), so a failure
 +    is tested again with the stack's key: a pass then means the key was refused (an
 +    update); a second failure is Seerr not reaching the arr. A server is saved whole, its
-+    id read-only (probed), and made with what Seerr's web UI gives a new one. Each
-+    requires its arr's root folder.
++    id read-only (probed), and made with what Seerr's web UI gives a new one, but with
++    season folders on for Sonarr, Sonarr's own default; Radarr's are off, as films have
++    no seasons. Each key Seerr shows for a server is redacted once read. Each requires
++    its arr's root folder.
 +  - `seerr.setup`: `initialized`, set by `POST /api/v1/settings/initialize` while it is
 +    false, once Seerr's links are in place, which it requires. Seerr takes it again
 +    (probed), but it is sent once.
@@ -6191,7 +6973,8 @@ index 5511ca9..27a12f6 100644
 +  the servers ask the arr through Seerr's test. `apps.seerr.sonarr_profile` and
 +  `radarr_profile` name a profile; one the arr lacks fails, listing those it has. `plan`
 +  leaves it unresolved, and those fields uncompared, while a resource it requires is
-+  still to be put in place, as it leaves secrets unchecked.
++  still to be put in place, as it leaves secrets unchecked. Every other field, and every
++  field of a resource without `resolve`, is compared as before.
 +- **`plan`'s marks** (§5.2): Seerr's checks leave nothing in its settings, but each that
 +  fails logs a line in Seerr's log, and a test with a key the arr refuses logs one in the
 +  arr's (probed). A passing check logs nothing.
@@ -6205,6 +6988,11 @@ index 5511ca9..27a12f6 100644
 +  Seerr's own test, a second `apply` with no changes, and hand changes put back.
 +- **The typed HTTP client** gains a sign-in whose session lives in a cookie, kept out of
 +  every message, and a sign-in's fields of any JSON type.
++- **Secrets read in an answer** (§6.3): a key Mediaplane reads in clear, which it didn't
++  know when the run started, joins the run's redaction from then on
++  (`AppApi.addSecret`): the clients', `plan`'s diagnostics, and the bootstrap and wire
++  steps' failures, which go into the change record. Those are the keys Jellyfin lists,
++  the key Seerr made itself in Jellyfin, and the keys Seerr shows for its servers.
 +- **No new Docker API call:** Seerr's setup is the same unpublished `up` and recreate as
 +  Jellyfin's (§7.2(2)).
 ```
@@ -6213,7 +7001,7 @@ index 5511ca9..27a12f6 100644
 
 ```diff
 diff --git a/docs/plans/m1-roadmap.md b/docs/plans/m1-roadmap.md
-index 9287f11..d4ba70a 100644
+index 9287f11..346787f 100644
 --- a/docs/plans/m1-roadmap.md
 +++ b/docs/plans/m1-roadmap.md
 @@ -23,2 +23,3 @@ Detailed plans so far:
@@ -6262,7 +7050,7 @@ index 9287f11..d4ba70a 100644
 +  admin, as its Jellyfin sign-in does. Make it a first-run setup before Seerr is
 +  published, as S6 made the Jellyfin one, and give Seerr's resources a Plex media server.
  - **Plex's web UI is at `/web`.** `credentials` prints `http://<address>:<port>`
-@@ -520,3 +535,22 @@ password, which are S3c's (and listed again below).
+@@ -520,3 +535,24 @@ password, which are S3c's (and listed again below).
    the wire step, as a failed start does. Let the wire step run past a failed first-run
 -  setup, with that app's resources failed so `requires` skips them (spec §5.1).
 +  setup, with that app's resources failed so `requires` skips them (spec §5.1). S6 did
@@ -6273,12 +7061,14 @@ index 9287f11..d4ba70a 100644
 +  Seerr's log, and a refused key one in the arr's. Decide how often scheduled drift may
 +  run them.
 +- **Seerr keeps its own Jellyfin key** (S6): the one its first sign-in made, named
-+  `Seerr` in Jellyfin, which Mediaplane checks by using and never holds, so it can't be
-+  rotated or redacted. Mediaplane gives Seerr its own Jellyfin key only when Seerr's is
-+  refused. Decide whether drift should replace it, and remove the one Seerr made.
++  `Seerr` in Jellyfin, which Mediaplane checks by using and never keeps, so it can't be
++  rotated; it is redacted only once Mediaplane has read it in that run. Mediaplane gives
++  Seerr its own Jellyfin key only when Seerr's is refused. Decide whether drift should
++  replace it, and remove the one Seerr made.
 +- **A Seerr whose `settings.json` Mediaplane can't read** is set up again, unpublished,
-+  on every `apply` (S6): two recreates each time, with a warning. Decide whether drift
-+  reports it, or asks Seerr over the wiring network instead.
++  on every `apply` (S6): two recreates each time, with a warning, and `apply` fails at
++  verify (exit 1) each time, until the file is readable. Decide whether drift reports
++  it, or asks Seerr over the wiring network instead.
 +- **Seerr's libraries are enabled by name, from Seerr's last sync** (S6). A library made
 +  anew in Jellyfin has a new id; `plan` reads Seerr's last sync, which `apply` refreshes
 +  only when the libraries differ. Decide whether drift syncs them, which writes to Seerr.
@@ -6286,7 +7076,17 @@ index 9287f11..d4ba70a 100644
 +  clears a default of yours of the same kind, and a profile changed in Seerr is put back.
 +  Keep mine must cover the servers' fields, and Seerr's libraries.
  - **A folder with a comma in its name, added by hand to a Jellyfin library** (S5), is
-@@ -586,2 +620,7 @@ password, which are S3c's (and listed again below).
+@@ -564,4 +600,7 @@ password, which are S3c's (and listed again below).
+   model's asset table to lists.
+-- **A second app with a first-run setup** (S5): a published app whose wizard still
+-  looks open would keep its ports in the publishing `up`. Take them away, and say so.
++- **A second app with a first-run setup** (S5): S6 brought it, Seerr. So a Jellyfin
++  `apply` started published, whose re-check still says its wizard is open, keeps its
++  ports in the publishing `up` that Seerr's setup brings: its error says that it is
++  published, and to stop it. Nothing new is exposed, since it was published already.
++  Take the ports away, and say so.
+ - **Pins outside the catalog.** Renovate must also bump the images pinned in:
+@@ -586,2 +625,7 @@ password, which are S3c's (and listed again below).
    instead of build.
 +- **Registry rate limits in CI** (S6). S5's first arm64 run failed on
 +  `toomanyrequests` during `docker compose pull`, after apply's four tries: the runners
@@ -6305,7 +7105,7 @@ git add README.md catalog deploy/README.md docs
 git commit -m "docs: Seerr signed in through Jellyfin before it is published and linked to Jellyfin, Sonarr and Radarr; Slice 6 in the spec, the roadmap, the runbooks and the threat model" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: the `grep` prints nothing, and the check passes (1666 tests). Every `text`
+Expected: the `grep` prints nothing, and the check passes (1680 tests). Every `text`
 block in the changed docs is at most 40 columns wide.
 
 ## Slice 6 completion checklist
@@ -6314,13 +7114,13 @@ block in the changed docs is at most 40 columns wide.
   sudo modprobe wireguard`), this passes:
   `pnpm format && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm docs:check && pnpm test:e2e`.
   Coverage stays at or above 90% on lines, functions, branches and statements. When this
-  plan was replayed: 98.64% of statements, 93.6% of branches, 98.8% of functions and 99.59% of lines, with 1666 tests in 83 files.
+  plan was replayed: 98.65% of statements, 93.6% of branches, 98.81% of functions and 99.6% of lines, with 1680 tests in 83 files.
 - [ ] `pnpm test:e2e` passes with Compose 2.38.2 as the host plugin too (Task 5, Step 4),
   and leaves no `mediaplane-e2e-*` container or network, and no new volume or
   `mediaplane-e2e-*` folder. When this plan was replayed, alone on the dev box, warm:
-  - with Compose 5.5.1, 9 files and 23 tests in 681 s (Slice 5's suite took 592 s; the
+  - with Compose 5.5.1, 9 files and 23 tests in 669 s (Slice 5's suite took 592 s; the
     requests file alone takes about a minute);
-  - with Compose 2.38.2, the same in 718 s (Slice 5's: 635 s).
+  - with Compose 2.38.2, the same in 719 s (Slice 5's: 635 s).
 
   CI's e2e job allows 60 minutes, so `ci.yml` keeps its timeout.
 - [ ] The socket proxy's allow-list is unchanged: `git diff 6c72fa3 --
@@ -6332,7 +7132,11 @@ block in the changed docs is at most 40 columns wide.
 - [ ] No secret shows: the tests that check it pass (Seerr's, the arrs', Jellyfin's and
   Seerr's own Jellyfin key, and the admin password, in neither `state/resources.json` nor
   `apply`'s result; the session cookie and the password out of the client's messages;
-  `expectNoSecrets` over the CLI's output with Seerr in the stack).
+  `expectNoSecrets` over the CLI's output with Seerr in the stack, Seerr's own Jellyfin
+  key among them). A key read in clear is `***` from then on: in the client's error,
+  `plan`'s warning, the wire step's failure and the change record (the found-secrets
+  tests of the client, `planWiring`, `wire`, Jellyfin's and Seerr's setups, Seerr's
+  integration and the CLI).
 - [ ] `plan` never runs a first-run setup and never sends `initialize` (S5's "names the
   setup in plan, and never runs it there"; the requests e2e's first `plan`). Its marks in
   the apps are the four the spec, the threat model and the architecture name.
@@ -6347,7 +7151,8 @@ block in the changed docs is at most 40 columns wide.
 - [ ] Nothing has been pushed. Report to the controller:
   - the (check) decisions, for the controller and the owner to confirm or reverse, in
     particular 1 (Seerr's sign-in as a first-run setup, not a resource that requires
-    `jellyfin.admin`), 3 (a setup that waits, so the wire step runs), 6 (`notWiredYet` for
+    `jellyfin.admin`), 3 (a setup that waits, so the wire step runs), 5 (the run's found
+    secrets), 6 (`notWiredYet` for
     Seerr with Plex), 8 (Seerr keeps the Jellyfin key it made while it works), 9 (the
     servers' keys, shown in clear, still checked by Seerr's own test, not compared), 10
     (`resolve` in the contract) and 14 (the e2e stops at the links, since a request needs
