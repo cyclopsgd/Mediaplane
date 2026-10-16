@@ -9,6 +9,7 @@ import {
   plan,
   readSecretStore,
   type ApplyOptions,
+  type ApplyResult,
   type Runtime,
 } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
@@ -122,6 +123,33 @@ async function seerrState(runtime: Runtime): Promise<{ id: string; state: string
   };
 }
 
+/** That none of `secrets` is in `text`: a yes/no check, which never prints either. */
+function expectNoSecret(what: string, text: string, secrets: readonly string[]): void {
+  for (const secret of secrets.filter((s) => s !== '')) {
+    expect(text.includes(secret), `${what} holds a secret`).toBe(false);
+  }
+}
+
+/**
+ * An apply that found nothing to do. A failure names what changed, and how: resources,
+ * services, actions and field names, never a value.
+ */
+function expectNoChanges(result: ApplyResult): void {
+  expect(
+    result.plan.wiring
+      .filter((w) => w.action !== 'unchanged')
+      .map((w) => `${w.resource} ${w.action} ${(w.changes ?? []).join(',')}`),
+    'wiring changed',
+  ).toEqual([]);
+  expect(
+    result.plan.containers
+      .filter((c) => c.action !== 'unchanged')
+      .map((c) => `${c.service} ${c.action}`),
+    'containers changed',
+  ).toEqual([]);
+  expect(result.outcome).toBe('no-changes');
+}
+
 describe('the whole stack, wired with no clicking', () => {
   it('signs Seerr in through Jellyfin before it is published, and links it to Jellyfin, Sonarr and Radarr', async () => {
     const home = await makeHome();
@@ -166,7 +194,8 @@ describe('the whole stack, wired with no clicking', () => {
         confirm: () => Promise.resolve(true),
       };
 
-      // plan names both setups, and runs neither.
+      // Before anything is started, plan names both setups, each app to start
+      // unpublished: apply finishes each before it publishes the app.
       expect((await plan(options)).bootstrap).toEqual([
         { app: 'jellyfin', unpublished: true },
         { app: 'seerr', unpublished: true },
@@ -203,17 +232,30 @@ describe('the whole stack, wired with no clicking', () => {
       expect(wired(first.actions).map(([resource]) => resource)).toEqual(WIRED);
 
       const store = await readSecretStore(home);
+      // Mediaplane recorded Seerr's setup as its own (a list of names, no secret), so a
+      // later plan finds no setup left to do.
+      expect(
+        store.setUp?.includes('seerr') === true,
+        'Seerr recorded as set up by Mediaplane',
+      ).toBe(true);
+      expect((await plan(options)).bootstrap).toEqual([]);
       const keyOf = (app: string) => store.apps[app]?.apiKey ?? '';
       const password = store.shared?.adminPassword ?? '';
       // Seerr's key is the one Mediaplane made, as its own settings.json keeps it. The
-      // file holds keys, so a failure says only what failed.
+      // file holds keys, so a failure says only what failed: a failed read its own code
+      // (EACCES, ENOENT) and path, and a failed parse nothing of the parser's message,
+      // which would quote the file.
+      const file = await readFile(
+        join(home, 'appdata', 'seerr', 'settings.json'),
+        'utf8',
+      );
       let settings: { main?: { apiKey?: unknown } };
       try {
-        settings = JSON.parse(
-          await readFile(join(home, 'appdata', 'seerr', 'settings.json'), 'utf8'),
-        ) as typeof settings;
+        settings = JSON.parse(file) as typeof settings;
       } catch {
-        throw new Error("Seerr's settings.json could not be read as JSON");
+        throw new Error(
+          `Seerr's settings.json isn't JSON (${String(file.length)} characters)`,
+        );
       }
       expect(keyOf('seerr') !== '', 'no Seerr key stored').toBe(true);
       expect(
@@ -237,15 +279,9 @@ describe('the whole stack, wired with no clicking', () => {
         password,
         seerrsOwn,
       ];
-      const resources = await readFile(join(home, 'state', 'resources.json'), 'utf8');
-      for (const [what, text] of [
-        ['resources.json', resources],
-        ["apply's result", JSON.stringify(first)],
-      ] as const) {
-        for (const secret of secrets) {
-          expect(text.includes(secret), `${what} holds a secret`).toBe(false);
-        }
-      }
+      const resourcesFile = join(home, 'state', 'resources.json');
+      expectNoSecret('resources.json', await readFile(resourcesFile, 'utf8'), secrets);
+      expectNoSecret("apply's result", JSON.stringify(first), secrets);
 
       // The shared admin signs in to Seerr's published web UI through Jellyfin, as its
       // admin; another password doesn't.
@@ -312,6 +348,30 @@ describe('the whole stack, wired with no clicking', () => {
         });
         return tested.status === 200 ? 'passes' : await servarrFailure(tested, secrets);
       };
+      // The id of the arr's profile of that name, from Seerr's own test of the server it
+      // holds, which lists the arr's profiles.
+      const profileId = async (arr: string, held: Server, name: string) => {
+        const { id: _id, ...sent } = held;
+        const tested = await api(SEERR, `/api/v1/settings/${arr}/test`, seerrKey, {
+          method: 'POST',
+          body: JSON.stringify(sent),
+          type: 'application/json',
+          timeoutMs: 60_000,
+        });
+        expect(tested.status, `Seerr's test of ${arr}`).toBe(200);
+        const { profiles } = await jsonBody<{ profiles: { id: number; name: string }[] }>(
+          tested,
+          `Seerr's test of ${arr}`,
+        );
+        const profile = profiles.find((p) => p.name === name);
+        if (profile === undefined) throw new Error(`${arr} has no ${name} profile`);
+        return profile.id;
+      };
+      const serverOf = async (arr: string) => {
+        const [held] = await serversOf(arr);
+        if (held === undefined) throw new Error(`no ${arr} server in Seerr`);
+        return held;
+      };
       for (const arr of ARRS) {
         const servers = await serversOf(arr.app);
         // Only what is compared is printed: the server holds the arr's key in clear.
@@ -354,15 +414,16 @@ describe('the whole stack, wired with no clicking', () => {
         ...options,
         confirm: () => Promise.reject(new Error('nothing should need confirming')),
       });
-      expect(again.outcome).toBe('no-changes');
+      expectNoChanges(again);
 
       // Changed by hand in Seerr: Shows turned off, a wrong key in its Radarr server, and
       // the Any profile in its Sonarr server. apply puts each back, and nothing else
       // changes.
       const shows = linked.libraries.find((l) => l.name === 'Shows');
+      if (shows === undefined) throw new Error("no Shows library in Seerr's Jellyfin");
       const off = await api(
         SEERR,
-        `/api/v1/settings/jellyfin/library/${shows?.id ?? 'missing'}`,
+        `/api/v1/settings/jellyfin/library/${shows.id}`,
         seerrKey,
         {
           method: 'PUT',
@@ -372,9 +433,7 @@ describe('the whole stack, wired with no clicking', () => {
       );
       expect(off.status, 'Shows turned off by hand').toBe(200);
       const change = async (arr: string, edit: (held: Server) => Server) => {
-        const [held] = await serversOf(arr);
-        if (held === undefined) throw new Error(`no ${arr} server`);
-        const { id, ...rest } = edit(held);
+        const { id, ...rest } = edit(await serverOf(arr));
         const saved = await api(
           SEERR,
           `/api/v1/settings/${arr}/${String(id)}`,
@@ -393,9 +452,7 @@ describe('the whole stack, wired with no clicking', () => {
         activeProfileId: 1,
         activeProfileName: 'Any',
       }));
-      expect(
-        await testServer('radarr', (await serversOf('radarr'))[0] as Server),
-      ).not.toBe('passes');
+      expect(await testServer('radarr', await serverOf('radarr'))).not.toBe('passes');
       const restored = await apply(options);
       expect(restored.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
       expect(restored.outcome).toBe('success');
@@ -404,12 +461,40 @@ describe('the whole stack, wired with no clicking', () => {
         { resource: 'seerr.server_sonarr', action: 'update', changes: ['activeProfile'] },
         { resource: 'seerr.server_radarr', action: 'update', changes: ['apiKey'] },
       ]);
-      expect(restored.plan.containers.every((c) => c.action === 'unchanged')).toBe(true);
+      expect(
+        restored.plan.containers
+          .filter((c) => c.action !== 'unchanged')
+          .map((c) => `${c.service} ${c.action}`),
+        'containers changed',
+      ).toEqual([]);
+      // The restore read the Radarr server's key back from Seerr, the wrong one, and
+      // tested the stack's: neither, nor any other key, is kept or shown.
+      const restoredSecrets = [
+        ...secrets,
+        ...Object.values((await readSecretStore(home)).apps).flatMap((held) =>
+          Object.values(held),
+        ),
+        WRONG_KEY,
+      ];
+      expectNoSecret(
+        'resources.json, restored',
+        await readFile(resourcesFile, 'utf8'),
+        restoredSecrets,
+      );
+      expectNoSecret(
+        "the restoring apply's result",
+        JSON.stringify(restored),
+        restoredSecrets,
+      );
       expect(enabled(await jellyfinOf())).toEqual(['Movies', 'Shows']);
       for (const arr of ARRS) {
-        const [held] = await serversOf(arr.app);
-        if (held === undefined) throw new Error(`no ${arr.app} server`);
-        expect(held.activeProfileName).toBe('HD-1080p');
+        const held = await serverOf(arr.app);
+        // Seerr sends requests with the profile's id, so the id is put back as well as
+        // the name.
+        expect(
+          [held.activeProfileName, held.activeProfileId],
+          `Seerr's ${arr.app} profile`,
+        ).toEqual(['HD-1080p', await profileId(arr.app, held, 'HD-1080p')]);
         expect(await testServer(arr.app, held), `Seerr's test of ${arr.app}`).toBe(
           'passes',
         );
@@ -418,7 +503,7 @@ describe('the whole stack, wired with no clicking', () => {
         ...options,
         confirm: () => Promise.reject(new Error('nothing should need confirming')),
       });
-      expect(settled.outcome).toBe('no-changes');
+      expectNoChanges(settled);
     } catch (failure) {
       // The body's own failure is the one to show: a removal that fails too is only logged.
       await removeAll().catch((also: unknown) => {
