@@ -59,6 +59,20 @@ function token(state: FakeAppState): { value: string; count: number } {
 }
 
 /**
+ * Make an API key named `app` in the Jellyfin `state`, as `POST /Auth/Keys?app=<app>`
+ * does, and give it: Seerr makes one so as it first signs in.
+ */
+export function makeApiKey(state: FakeAppState, app: string): string {
+  const key = token(state);
+  state.apiKeys.push({
+    AccessToken: key.value,
+    AppName: app,
+    DateCreated: new Date(Date.UTC(2026, 9, 15, 12, 0, key.count)).toISOString(),
+  });
+  return key.value;
+}
+
+/**
  * The fields of a `MediaBrowser` Authorization header (Client, Device, DeviceId, Version,
  * Token), or undefined for another header. Jellyfin 12 takes a token only there: its
  * legacy headers (X-Emby-Token, X-MediaBrowser-Token) and `?api_key=` are off.
@@ -183,11 +197,19 @@ function availableOptions(type: string) {
   };
 }
 
+/**
+ * A library's id in Jellyfin (its `ItemId`), which follows its name here: Jellyfin's
+ * follows its folder, which a rename changes.
+ */
+export function libraryId(library: Pick<FakeLibrary, 'Name'>): string {
+  return Buffer.from(library.Name).toString('hex').padEnd(32, '0').slice(0, 32);
+}
+
 /** A library as /Library/VirtualFolders lists it. */
 function shown(library: FakeLibrary) {
   return {
     ...library,
-    ItemId: Buffer.from(library.Name).toString('hex').padEnd(32, '0').slice(0, 32),
+    ItemId: libraryId(library),
     RefreshStatus: 'Idle',
     LibraryOptions: {
       ...library.LibraryOptions,
@@ -317,12 +339,7 @@ export function fakeJellyfin(request: FakeRequest, state: FakeAppState): FakeRep
   if (path === '/Auth/Keys' && method === 'POST') {
     const app = url.searchParams.get('app');
     if (app === null || app === '') return { status: 400, body: UNEXPLAINED };
-    const key = token(state);
-    state.apiKeys.push({
-      AccessToken: key.value,
-      AppName: app,
-      DateCreated: new Date(Date.UTC(2026, 9, 15, 12, 0, key.count)).toISOString(),
-    });
+    makeApiKey(state, app);
     return { status: 204 };
   }
   return fakeJellyfinLibrary(request, url, state, body) ?? { status: 404 };

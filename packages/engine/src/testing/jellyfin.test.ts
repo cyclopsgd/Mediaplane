@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
-import { request } from 'node:http';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { callFake } from './http';
 import { FAKE_JELLYFIN_USER_ID } from './jellyfin';
 import { tempDir } from './temp';
 import { fakeStackApis, freshAppState, type FakeAppState } from './wiring';
@@ -13,50 +13,9 @@ const CLIENT =
 /** A token in Jellyfin's MediaBrowser header, with the client fields. */
 const withToken = (token: string) => `${CLIENT}, Token="${token}"`;
 
-/** One call to a fake app as `host`: its status, and its body (as JSON when it is). */
-function call(
-  port: number,
-  path: string,
-  init: {
-    method?: string;
-    body?: unknown;
-    headers?: Record<string, string>;
-    host?: string;
-  } = {},
-): Promise<{ status: number; body: unknown }> {
-  const text = init.body === undefined ? undefined : JSON.stringify(init.body);
-  return new Promise((resolve, reject) => {
-    const sent = request(
-      {
-        host: '127.0.0.1',
-        port,
-        path,
-        method: init.method ?? (text === undefined ? 'GET' : 'POST'),
-        headers: {
-          host: init.host ?? 'jellyfin:8096',
-          ...(text === undefined ? {} : { 'content-type': 'application/json' }),
-          ...init.headers,
-        },
-      },
-      (reply) => {
-        const chunks: Buffer[] = [];
-        reply.on('data', (chunk: Buffer) => chunks.push(chunk));
-        reply.on('end', () => {
-          const raw = Buffer.concat(chunks).toString('utf8');
-          let body: unknown = raw;
-          try {
-            body = JSON.parse(raw) as unknown;
-          } catch {
-            // Plain text, as Jellyfin's own refusals are.
-          }
-          resolve({ status: reply.statusCode ?? 0, body });
-        });
-      },
-    );
-    sent.on('error', reject);
-    sent.end(text);
-  });
-}
+/** One call to the fake Jellyfin, or to the fake app `init.host` names. */
+const call = (port: number, path: string, init: Parameters<typeof callFake>[2] = {}) =>
+  callFake(port, path, { host: 'jellyfin:8096', ...init });
 
 /** The fake Jellyfin's state, as `apis` holds it. */
 function jellyfinOf(apis: Awaited<ReturnType<typeof fakeStackApis>>): FakeAppState {

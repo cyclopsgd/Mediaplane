@@ -1,4 +1,4 @@
-import { createServer, type IncomingHttpHeaders } from 'node:http';
+import { createServer, request, type IncomingHttpHeaders } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { onTestFinished } from 'vitest';
 
@@ -93,4 +93,54 @@ export async function closedPort(): Promise<number> {
     });
   });
   return port;
+}
+
+/**
+ * One call to a fake app of fakeStackApis, as `init.host` (its Host header, which tells
+ * the apps apart): its status, its body (as JSON when it is), and the first cookie it set,
+ * if any. A body given is sent as JSON.
+ */
+export function callFake(
+  port: number,
+  path: string,
+  init: {
+    method?: string;
+    body?: unknown;
+    headers?: Record<string, string>;
+    host?: string;
+  } = {},
+): Promise<{ status: number; body: unknown; cookie: string | undefined }> {
+  const text = init.body === undefined ? undefined : JSON.stringify(init.body);
+  return new Promise((resolve, reject) => {
+    const sent = request(
+      {
+        host: '127.0.0.1',
+        port,
+        path,
+        method: init.method ?? (text === undefined ? 'GET' : 'POST'),
+        headers: {
+          host: init.host ?? 'localhost',
+          ...(text === undefined ? {} : { 'content-type': 'application/json' }),
+          ...init.headers,
+        },
+      },
+      (reply) => {
+        const chunks: Buffer[] = [];
+        reply.on('data', (chunk: Buffer) => chunks.push(chunk));
+        reply.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf8');
+          let body: unknown = raw;
+          try {
+            body = JSON.parse(raw) as unknown;
+          } catch {
+            // Plain text, as some apps' refusals are.
+          }
+          const cookie = reply.headers['set-cookie']?.[0];
+          resolve({ status: reply.statusCode ?? 0, body, cookie });
+        });
+      },
+    );
+    sent.on('error', reject);
+    sent.end(text);
+  });
 }

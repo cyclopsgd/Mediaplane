@@ -7,5 +7,6 @@ export * from './jellyfin';
 export * from './prowlarr';
 export * from './providers';
 export * from './schema';
+export * from './seerr';
 export * from './temp';
 export * from './wiring';

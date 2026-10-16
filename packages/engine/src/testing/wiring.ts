@@ -16,6 +16,7 @@ import {
   type FakeLibrary,
 } from './jellyfin';
 import { fakeProwlarr, type FakeProvider } from './prowlarr';
+import { fakeSeerr, freshSeerr, type FakeSeerr } from './seerr';
 import {
   fakeProviders,
   fieldValue,
@@ -118,7 +119,8 @@ export interface FakeAppState {
   categories: Record<string, string>;
   /**
    * Its API key, or any when empty: qBittorrent takes only this one, as a Bearer token,
-   * and Prowlarr's test of its link to Sonarr or Radarr passes only with the arr's.
+   * and Seerr only this one, once it has a user; Prowlarr's test of its link to Sonarr or
+   * Radarr, and Seerr's test of a server, pass only with the arr's.
    */
   key: string;
   /** qBittorrent's web UI port: an arr's test of a client aimed at another fails. */
@@ -170,7 +172,21 @@ export interface FakeAppState {
   configDir?: string;
   /** Sonarr's or Radarr's connections, such as to Jellyfin, their keys in clear. */
   connections: FakeConnection[];
+  /** Sonarr's or Radarr's quality profiles: the six each makes at its first start. */
+  profiles: { id: number; name: string }[];
+  /** What Seerr holds (fakeSeerr). */
+  seerr: FakeSeerr;
 }
+
+/** The quality profiles Sonarr 4 and Radarr 6 make at their first start, in order. */
+export const SERVARR_PROFILES = [
+  'Any',
+  'SD',
+  'HD-720p',
+  'HD-1080p',
+  'Ultra-HD',
+  'HD - 720p/1080p',
+].map((name, i) => ({ id: i + 1, name }));
 
 /** A download client, as Sonarr and Radarr keep one. */
 export interface FakeDownloadClient extends FakeProviderBase {
@@ -206,6 +222,8 @@ export function freshAppState(): FakeAppState {
     sessions: {},
     libraries: [],
     connections: [],
+    profiles: SERVARR_PROFILES.map((profile) => ({ ...profile })),
+    seerr: freshSeerr(),
   };
 }
 
@@ -333,10 +351,12 @@ function fakeServarrDownloads(
  * app/version, its sign-in (with its ban), preferences and categories, answered as
  * qBittorrent 5.2 answers them, and is `apps`' "qbittorrent" also when reached through
  * Gluetun; Jellyfin has its startup wizard, sign-in, keys, user and libraries
- * (fakeJellyfin). Any key is taken, but qBittorrent takes only a Bearer token (X-Api-Key
- * gets a 403): its `key` when that is set; and Jellyfin only one of its own, in its
- * MediaBrowser header. `seams` send every app's calls there. `mkdir` is what the wire
- * step's folder helper does to them: pass it what a fake runtime's `run` is given.
+ * (fakeJellyfin); Seerr its sign-in through Jellyfin, its settings and its tests of the
+ * arrs (fakeSeerr). Any key is taken, but qBittorrent takes only a Bearer token (X-Api-Key
+ * gets a 403): its `key` when that is set; Jellyfin only one of its own, in its
+ * MediaBrowser header; and Seerr its `key`, once it has a user. `seams` send every app's
+ * calls there. `mkdir` is what the wire step's folder helper does to them: pass it what a
+ * fake runtime's `run` is given.
  */
 export async function fakeStackApis(): Promise<{
   app: FakeApp;
@@ -368,6 +388,7 @@ export async function fakeStackApis(): Promise<{
     const state = stateOf(service);
     if (service === 'qbittorrent') return fakeQbittorrent(request, state);
     if (service === 'jellyfin') return fakeJellyfin(request, state);
+    if (service === 'seerr') return fakeSeerr(request, state, (other) => apps.get(other));
     const keyed =
       headers['x-api-key'] !== undefined || headers.authorization !== undefined;
     if (path === '/ping') return { status: state.up ? 200 : 503, body: { status: 'OK' } };
@@ -415,6 +436,7 @@ export async function fakeStackApis(): Promise<{
       'prowlarr',
       'qbittorrent',
       'radarr',
+      'seerr',
       'sonarr',
     ]),
     mkdir: (service, command) => {
