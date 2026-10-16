@@ -6,12 +6,18 @@ import {
   BootstrapFailed,
   createAppApi,
   firstStartEnv,
+  HelperError,
   inspectBootstrap,
   plexTvClient,
   readSecretStore,
   resolveStack,
+  RuntimeError,
+  startVariables,
+  NO_PLEX_TV,
+  type AppApi,
   type BootstrapContext,
   type PlexTv,
+  type ResolvedApp,
   type ResolvedStack,
   type SecretStore,
 } from '@mediaplane/engine';
@@ -23,6 +29,7 @@ import {
   fakePlexTv,
   fakeRuntime,
   fakeStackApis,
+  type FakeRuntimeOptions,
   FIXTURE_HOST,
   fixtureConfig,
   freshAppState,
@@ -155,6 +162,58 @@ describe("Plex's first-run setup", () => {
         "Plex can't be claimed: Mediaplane has no Plex token, so nothing was started",
       hint: 'run "mediaplane plex-login", then run apply again',
     });
+  });
+
+  it('treats a failure to call plex.tv at all as plex.tv not answering, naming only its kind', async () => {
+    const { api, state, plexTv, stack } = await plexOf();
+    // A rejection that needn't be an Error, to see what a failure of any kind shows.
+    /* eslint-disable @typescript-eslint/prefer-promise-reject-errors */
+    const broken = (cause: unknown): PlexTv => ({
+      ...plexTv.client,
+      claimToken: () => Promise.reject(cause),
+      accountId: () => Promise.reject(cause),
+    });
+    /* eslint-enable @typescript-eslint/prefer-promise-reject-errors */
+    // The helper or Docker failed: what they said may hold anything, so none of it shows.
+    const text = `fake: docker said ${TOKEN}`;
+    for (const [cause, kind] of [
+      [new HelperError(text), 'HelperError'],
+      [new RuntimeError(text), 'RuntimeError'],
+      [text, 'not an Error'],
+    ] as const) {
+      const unclaimed = await thrown(
+        Promise.resolve(
+          plexBootstrap.firstStart?.(stack, {
+            keys: { plex: { token: TOKEN } },
+            plexTv: broken(cause),
+          }),
+        ),
+      );
+      expect(unclaimed).toBeInstanceOf(BootstrapFailed);
+      expect(unclaimed).toMatchObject({
+        message: `Plex's first start needs a claim token from plex.tv, which Mediaplane couldn't get, so nothing was started: the call to plex.tv failed (${kind})`,
+        hint: 'check that this host reaches plex.tv, then run apply again',
+      });
+    }
+    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    for (const [cause, kind] of [
+      [new HelperError(text), 'HelperError'],
+      [new RuntimeError(text), 'RuntimeError'],
+    ] as const) {
+      const failed = await thrown(
+        plexBootstrap.run(api, ADMIN, stack, {
+          keys: { plex: { token: TOKEN } },
+          plexTv: broken(cause),
+        }),
+      );
+      expect(failed).toBeInstanceOf(AppApiError);
+      expect(failed).toMatchObject({
+        kind: 'auth',
+        unsure: true,
+        message: `Plex at http://plex:32400 (127.0.0.1) is claimed, and Mediaplane couldn't tell whether by your plex.tv account: the call to plex.tv failed (${kind})`,
+      });
+      expect((failed as Error).message).not.toContain(TOKEN);
+    }
   });
 
   it('takes a Plex your account claimed, waiting while it claims itself as it starts', async () => {
@@ -297,6 +356,145 @@ describe("Plex's first-run setup", () => {
   });
 });
 
+describe("Plex's first start, when it can't be prepared", () => {
+  /** Plex's stack, and a Docker with Plex running (unless `extra` says otherwise). */
+  async function startOf(extra: Partial<FakeRuntimeOptions> = {}) {
+    const home = await tempDir('mediaplane-plex-');
+    const calls: string[] = [];
+    const runtime = fakeRuntime({
+      containers: [fakeContainer('plex', 'fake-plex')],
+      calls,
+      ...extra,
+    });
+    const pending = [{ app: 'plex', unpublished: true }];
+    /** A context whose plex.tv fails to give a claim token with `cause`. */
+    const failing = (cause: Error): BootstrapContext => ({
+      keys: { plex: { token: TOKEN } },
+      plexTv: { ...NO_PLEX_TV, claimToken: () => Promise.reject(cause) },
+    });
+    return { runtime, calls, stack: stackIn(home), pending, failing };
+  }
+
+  it('stops a Plex that runs, and says so, whatever the helper or Docker failed with', async () => {
+    const { runtime, calls, stack, pending, failing } = await startOf();
+    const failed = await thrown(
+      startVariables(
+        stack,
+        pending,
+        failing(new HelperError('fake: no helper')),
+        runtime,
+        {},
+      ),
+    );
+    expect(failed).toBeInstanceOf(BootstrapFailed);
+    expect(failed).toMatchObject({
+      message:
+        "Plex's first start needs a claim token from plex.tv, which Mediaplane couldn't get, so nothing was started: the call to plex.tv failed (HelperError); Mediaplane stopped plex, which ran, but isn't shown to be yours, so that it isn't left published",
+      hint: 'check that this host reaches plex.tv, then run apply again',
+    });
+    expect(calls).toContain('stop plex');
+  });
+
+  it('stops it too, and says what it did, when the failure is not a BootstrapFailed', async () => {
+    const { runtime, calls, stack, pending } = await startOf();
+    const cause = new Error(`fake: boom holds ${TOKEN}`);
+    const odd: ResolvedStack = {
+      ...stack,
+      apps: stack.apps.map((app) =>
+        app.def.id === 'plex' && app.def.bootstrap !== undefined
+          ? {
+              ...app,
+              def: {
+                ...app.def,
+                bootstrap: {
+                  ...app.def.bootstrap,
+                  firstStart: () => Promise.reject(cause),
+                },
+              },
+            }
+          : app,
+      ),
+    };
+    const failed = await thrown(
+      startVariables(odd, pending, { keys: {}, plexTv: NO_PLEX_TV }, runtime, {}),
+    );
+    expect(failed).toBeInstanceOf(BootstrapFailed);
+    expect(failed).toMatchObject({
+      message:
+        "plex's first start couldn't be prepared (Error), so nothing was started; Mediaplane stopped plex, which ran, but isn't shown to be yours, so that it isn't left published",
+      cause,
+    });
+    expect((failed as Error).message).not.toContain(TOKEN);
+    expect(calls).toContain('stop plex');
+  });
+
+  it("says to stop it yourself when it couldn't be stopped, whether Docker said no or threw", async () => {
+    const said = await startOf({ stop: { ok: false, error: 'fake: docker said no' } });
+    const refused = await thrown(
+      startVariables(
+        said.stack,
+        said.pending,
+        said.failing(new HelperError('fake')),
+        said.runtime,
+        {},
+      ),
+    );
+    expect((refused as Error).message).toContain(
+      "; plex runs, isn't shown to be yours, and couldn't be stopped: fake: docker said no. Stop it yourself",
+    );
+    const threw = await startOf();
+    const thrownStop = await thrown(
+      startVariables(
+        threw.stack,
+        threw.pending,
+        threw.failing(new HelperError('fake')),
+        {
+          ...threw.runtime,
+          stop: () => Promise.reject(new RuntimeError('fake: cannot spawn docker')),
+        },
+        {},
+      ),
+    );
+    expect(thrownStop).toBeInstanceOf(BootstrapFailed);
+    expect((thrownStop as Error).message).toContain(
+      "the call to plex.tv failed (HelperError); plex runs, isn't shown to be yours, and couldn't be stopped: fake: cannot spawn docker. Stop it yourself",
+    );
+  });
+
+  it("stops every app it was for when Docker can't list the containers, and stops nothing when none runs", async () => {
+    const unknown = await startOf();
+    const listing = await thrown(
+      startVariables(
+        unknown.stack,
+        unknown.pending,
+        unknown.failing(new HelperError('fake')),
+        {
+          ...unknown.runtime,
+          containers: () => Promise.reject(new RuntimeError('fake: no docker')),
+        },
+        {},
+      ),
+    );
+    expect((listing as Error).message).toContain(
+      "; Mediaplane stopped plex, which may have run, but isn't shown to be yours, so that it isn't left published",
+    );
+    expect(unknown.calls).toContain('stop plex');
+    const idle = await startOf({ containers: [] });
+    const plain = await thrown(
+      startVariables(
+        idle.stack,
+        idle.pending,
+        idle.failing(new HelperError('fake')),
+        idle.runtime,
+        {},
+      ),
+    );
+    expect(plain).toBeInstanceOf(BootstrapFailed);
+    expect((plain as Error).message).not.toContain('stopped');
+    expect(idle.calls).not.toContain('stop plex');
+  });
+});
+
 describe("Plex's setup, as apply's bootstrap step runs it", () => {
   /**
    * Plex in a home of its own, set up by the engine's step as `apply` would run it:
@@ -384,7 +582,7 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
   });
 
   it('keeps a Plex claimed by someone else unpublished, on every apply, with the safe remedies first', async () => {
-    const { home, state, plexTv, published, run, store } = await stepOf();
+    const { home, state, plexTv, published, run, store, apis } = await stepOf();
     claimFakePlex(
       state.plex,
       await plexTv.client.claimToken(SOMEONE.token),
@@ -406,6 +604,38 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
     );
     expect(published).toEqual([['plex'], ['plex']]);
     expect((await readSecretStore(home)).setUp).toBeUndefined();
+    // Plex, not shown to be yours, never got your token.
+    expect(
+      apis.app.requests.filter(
+        (r) => r.headers.host?.startsWith('plex') === true && r.headers['x-plex-token'],
+      ),
+    ).toEqual([]);
+  });
+
+  it("never hands your token to Plex's setup client, which needs none", async () => {
+    const { run, apis, stack, store } = await stepOf();
+    // A setup that, by mistake, asks Plex with the key its client has: none is sent.
+    const index = stack.apps.findIndex((app) => app.def.id === 'plex');
+    const plex = stack.apps[index] as ResolvedApp;
+    const real = plex.def.bootstrap;
+    if (real === undefined) throw new Error('Plex has no setup');
+    stack.apps[index] = {
+      ...plex,
+      def: {
+        ...plex.def,
+        bootstrap: {
+          ...real,
+          run: async (api: AppApi, admin, inStack, ctx) => {
+            await api.check('/library/sections').catch(() => undefined);
+            return real.run(api, admin, inStack, ctx);
+          },
+        },
+      },
+    };
+    await run(store);
+    const toPlex = apis.app.requests.filter((r) => r.headers.host?.startsWith('plex'));
+    expect(toPlex.some((r) => r.path === '/library/sections')).toBe(true);
+    expect(toPlex.filter((r) => r.headers['x-plex-token'] !== undefined)).toEqual([]);
   });
 
   it("asks for a claim token while Mediaplane can't read Preferences.xml, which can't say Plex is claimed", async () => {

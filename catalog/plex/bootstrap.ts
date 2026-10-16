@@ -14,7 +14,10 @@ import { z } from 'zod';
 export const PREFERENCES =
   'Library/Application Support/Plex Media Server/Preferences.xml';
 
-/** Plex's own token, which its claim gave it, in Preferences.xml. */
+/**
+ * Plex's own token, which its claim gave it, in Preferences.xml. The one pattern is both
+ * what says the setup is done and what reads the token.
+ */
 const SERVER_TOKEN = /\sPlexOnlineToken="([^"]+)"/;
 
 const identity = z.looseObject({
@@ -24,12 +27,22 @@ const identity = z.looseObject({
 type Identity = z.infer<typeof identity>['MediaContainer'];
 
 /**
- * What Plex says of itself to anyone (`/identity`): whether it is claimed. Asked without
- * your token, which goes to Plex only once it is shown to be yours.
+ * What Plex says of itself to anyone (`/identity`): whether it is claimed. One GET, asked
+ * without your token, which goes to Plex only once it is shown to be yours. Its time
+ * limit is the client's: a GET that Plex doesn't answer is tried again until the app
+ * deadline.
  */
 async function identityOf(api: AppApi): Promise<Identity> {
-  return (await api.until('/identity', identity, () => true, { anonymous: true }))
-    .MediaContainer;
+  return (await api.get('/identity', identity, { anonymous: true })).MediaContainer;
+}
+
+/**
+ * What a failure to call plex.tv at all says (a helper or Docker error, not plex.tv's
+ * answer): only the kind of error. Its own text is never shown, as what the helper or
+ * Docker said may hold anything.
+ */
+function failedCall(cause: unknown): string {
+  return `the call to plex.tv failed (${cause instanceof Error ? cause.name : 'not an Error'})`;
 }
 
 /** Your Plex token, which the setup claims Plex with, from the stack's keys. */
@@ -70,10 +83,10 @@ async function accountOf(
   try {
     return await ctx.plexTv.accountId(token);
   } catch (cause) {
-    if (!(cause instanceof PlexTvError)) throw cause;
-    if (cause.unsure) {
+    // Not plex.tv's answer (a helper or Docker error): as if it hadn't answered.
+    if (!(cause instanceof PlexTvError) || cause.unsure) {
       throw new AppApiError(
-        `${api.name} at ${api.where} is claimed, and Mediaplane couldn't tell whether by your plex.tv account: ${cause.message}`,
+        `${api.name} at ${api.where} is claimed, and Mediaplane couldn't tell whether by your plex.tv account: ${cause instanceof PlexTvError ? cause.message : failedCall(cause)}`,
         { kind: 'auth', unsure: true },
       );
     }
@@ -110,7 +123,7 @@ async function accountOf(
  *   record names Plex: the token is yours, never one Mediaplane made.
  */
 export const plexBootstrap: Bootstrap = {
-  done: { path: PREFERENCES, pattern: /\sPlexOnlineToken="[^"]+"/ },
+  done: { path: PREFERENCES, pattern: SERVER_TOKEN },
   open: async (api) => !(await identityOf(api)).claimed,
   async firstStart(_stack, ctx) {
     const token = tokenOf(ctx);
@@ -123,10 +136,10 @@ export const plexBootstrap: Bootstrap = {
     try {
       return { PLEX_CLAIM: await ctx.plexTv.claimToken(token) };
     } catch (cause) {
-      if (!(cause instanceof PlexTvError)) throw cause;
+      // Any other failure to call plex.tv is as if it hadn't answered.
       throw new BootstrapFailed(
-        `Plex's first start needs a claim token from plex.tv, which Mediaplane couldn't get, so nothing was started: ${cause.message}`,
-        cause.kind === 'refused'
+        `Plex's first start needs a claim token from plex.tv, which Mediaplane couldn't get, so nothing was started: ${cause instanceof PlexTvError ? cause.message : failedCall(cause)}`,
+        cause instanceof PlexTvError && cause.kind === 'refused'
           ? 'plex.tv refused your Plex token: it was revoked, or is not one. Run "mediaplane plex-login" to sign in again, then run apply again'
           : 'check that this host reaches plex.tv, then run apply again',
       );

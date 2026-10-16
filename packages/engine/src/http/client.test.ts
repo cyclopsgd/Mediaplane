@@ -185,6 +185,17 @@ describe('createAppApi', () => {
     expect(app.requests[1]?.headers['x-plex-token']).toBeUndefined();
   });
 
+  it('makes one GET without the key when asked, and with it otherwise', async () => {
+    const { api, app } = await sonarr(() => ({ status: 200, body: { claimed: false } }), {
+      key: { scheme: 'x-plex-token', value: KEY },
+    });
+    const claimed = z.looseObject({ claimed: z.boolean() });
+    await api.get('/identity', claimed, { anonymous: true });
+    expect(app.requests[0]?.headers['x-plex-token']).toBeUndefined();
+    await api.get('/identity', claimed);
+    expect(app.requests[1]?.headers['x-plex-token']).toBe(KEY);
+  });
+
   it('checks a key with any 2xx answer, reading no JSON: qBittorrent answers plain text', async () => {
     const { api, app } = await sonarr(() => ({ status: 200, body: 'v5.2.4' }), {
       key: { scheme: 'bearer', value: KEY },

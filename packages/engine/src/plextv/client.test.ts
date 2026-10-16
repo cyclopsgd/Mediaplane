@@ -318,12 +318,21 @@ describe('plexTvClient', () => {
   });
 
   it('fails every call, unsure, when it was given no plex.tv', async () => {
+    const pin: PlexPin = {
+      id: 1,
+      code: 'c'.repeat(25),
+      clientId: 'mediaplane-x',
+      expiresIn: 1800,
+    };
     for (const call of [
-      NO_PLEX_TV.createPin(newClientId()),
-      NO_PLEX_TV.claimToken(TOKEN),
-      NO_PLEX_TV.accountId(TOKEN),
+      () => NO_PLEX_TV.createPin(newClientId()),
+      () => NO_PLEX_TV.waitForPin(pin, 1),
+      () => NO_PLEX_TV.claimToken(TOKEN),
+      () => NO_PLEX_TV.accountId(TOKEN),
     ]) {
-      expect(await thrown(call)).toMatchObject({
+      const error = await thrown(call());
+      expect(error).toBeInstanceOf(PlexTvError);
+      expect(error).toMatchObject({
         kind: 'unreachable',
         unsure: true,
         message: 'Mediaplane was given no way to reach plex.tv',

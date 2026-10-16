@@ -63,13 +63,16 @@ export interface WaitingSetup {
   reason: string;
 }
 
-/** The first-run setup failed: what it said, and what to do. It keeps no cause. */
+/**
+ * The first-run setup failed: what it said, and what to do. It keeps a cause only when
+ * given one, for an error whose own text is not shown.
+ */
 export class BootstrapFailed extends Error {
   override readonly name = 'BootstrapFailed';
   readonly hint: string;
 
-  constructor(message: string, hint: string) {
-    super(message);
+  constructor(message: string, hint: string, options?: ErrorOptions) {
+    super(message, options);
     this.hint = hint;
   }
 }
@@ -144,13 +147,14 @@ export async function bootstrapApps(
   const secrets = knownSecrets(options.values, options.store, admin, given);
   const found = options.found ?? foundSecrets();
   const allKeys = stackKeys(stack, options.store, given);
-  // A key that Mediaplane chose, and the app takes from its environment (Seerr's), or
-  // one you give (Plex's token), is carried: the setup asks an app that is set up already
-  // with it, never with the password. A key the setup makes isn't there yet, or may be
-  // stale.
+  // A key that Mediaplane chose, and the app takes from its environment (Seerr's), is
+  // carried: the setup asks an app that is set up already with it, never with the
+  // password. A key the setup makes isn't there yet, or may be stale. One you give (Plex's
+  // token) is not: no setup's client carries it, since it goes only to an app shown to be
+  // yours (the setup reads it from `ctx`).
   const appKeys = Object.fromEntries(
     apps.flatMap((app) => {
-      const own = allKeys[app.def.id];
+      const own = options.store.apps[app.def.id];
       return app.def.bootstrap?.secret === undefined && own !== undefined
         ? [[app.def.id, own]]
         : [];
@@ -475,6 +479,7 @@ export async function startVariables(
   } catch (cause) {
     const apps = (await firstStartApps(stack, pending)).map((app) => app.def.id);
     let running: string[];
+    let known = true;
     try {
       running = (await runtime.containers())
         .filter((c) => apps.includes(c.service) && c.state === 'running')
@@ -482,16 +487,35 @@ export async function startVariables(
     } catch {
       // Not known to be stopped: stop them all.
       running = apps;
+      known = false;
     }
     if (running.length === 0) throw cause;
-    const stopped = await runtime.stop(running, { ...values });
-    if (!(cause instanceof BootstrapFailed)) throw cause;
+    // Whatever the error was, and whatever stopping does: the outcome is always said.
+    let stopped: { ok: boolean; error?: string };
+    try {
+      stopped = await runtime.stop(running, { ...values });
+    } catch (stopCause) {
+      stopped = {
+        ok: false,
+        error:
+          stopCause instanceof RuntimeError
+            ? stopCause.message
+            : `a ${stopCause instanceof Error ? stopCause.name : 'failure that is not an Error'}`,
+      };
+    }
     const names = running.join(', ');
+    const outcome = stopped.ok
+      ? `Mediaplane stopped ${names}, which ${known ? 'ran' : 'may have run'}, but isn't shown to be yours, so that it isn't left published`
+      : `${names} ${known ? 'runs' : 'may run'}, isn't shown to be yours, and couldn't be stopped: ${stopped.error ?? 'no reason given'}. Stop it yourself`;
+    if (cause instanceof BootstrapFailed) {
+      throw new BootstrapFailed(`${cause.message}; ${outcome}`, cause.hint, { cause });
+    }
+    // An error that isn't the setup's own: only its kind is said, never its text.
+    const kind = cause instanceof Error ? cause.name : 'not an Error';
     throw new BootstrapFailed(
-      stopped.ok
-        ? `${cause.message}; Mediaplane stopped ${names}, which ran, but isn't shown to be yours, so that it isn't left published`
-        : `${cause.message}; ${names} runs, isn't shown to be yours, and couldn't be stopped: ${stopped.error}. Stop it yourself`,
-      cause.hint,
+      `${names}'s first start couldn't be prepared (${kind}), so nothing was started; ${outcome}`,
+      HINT,
+      { cause },
     );
   }
 }

@@ -136,8 +136,15 @@ export interface AppApi {
   readonly name: string;
   /** Where it was reached: "http://sonarr:8989 (172.20.0.3)". */
   readonly where: string;
-  /** GET with the key, and the JSON answer, checked with `schema`. */
-  get<T>(path: string, schema: z.ZodType<T>): Promise<T>;
+  /**
+   * GET with the key (without it, when `anonymous`), and the JSON answer, checked with
+   * `schema`. One call, tried again like any GET until the deadline.
+   */
+  get<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    options?: { anonymous?: boolean },
+  ): Promise<T>;
   /** GET with the key, for a 2xx answer only: whatever its body, it isn't read. */
   check(path: string): Promise<void>;
   /** PUT a JSON body with the key; any 2xx answer is success. */
@@ -567,8 +574,8 @@ export function createAppApi(options: AppApiOptions): AppApi {
   return {
     name: options.name,
     where,
-    async get(path, schema) {
-      const call: Call = { method: 'GET', path };
+    async get(path, schema, how = {}) {
+      const call: Call = { method: 'GET', path, anonymous: how.anonymous === true };
       return parsed(call, await send(call, true), schema);
     },
     async check(path) {
