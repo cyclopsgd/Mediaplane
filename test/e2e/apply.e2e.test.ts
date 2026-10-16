@@ -42,7 +42,7 @@ function mediaplane(...args: string[]): Promise<ExecResult> {
 
 /**
  * What the video stack wires, in the order apply wires it: Jellyfin and qBittorrent, then
- * the arrs, then Prowlarr.
+ * the arrs, then Prowlarr, then Seerr.
  */
 const WIRED = [
   'jellyfin.admin',
@@ -64,6 +64,10 @@ const WIRED = [
   'prowlarr.application_sonarr',
   'prowlarr.application_radarr',
   'prowlarr.indexer_proxy',
+  'seerr.media_server',
+  'seerr.server_sonarr',
+  'seerr.server_radarr',
+  'seerr.setup',
 ];
 
 /** Two documentation subnets (RFC 5737), to check Sonarr takes a comma-separated list. */
@@ -85,7 +89,7 @@ interface Resources {
  * Run from source, Mediaplane itself is not on it: the host reaches it.
  */
 async function expectWiringNetwork(containers: readonly { service: string }[]) {
-  const wired = ['jellyfin', 'prowlarr', 'qbittorrent', 'radarr', 'sonarr'];
+  const wired = ['jellyfin', 'prowlarr', 'qbittorrent', 'radarr', 'seerr', 'sonarr'];
   expect(await wiringMembers(PROJECT)).toEqual({
     internal: true,
     members: wired.map((service) => `${PROJECT}-${service}-1`),
@@ -290,6 +294,11 @@ describe('apply against real Docker', () => {
         ['prowlarr.application_sonarr', 'created'],
         ['prowlarr.application_radarr', 'created'],
         ['prowlarr.indexer_proxy', 'created'],
+        // Seerr's first sign-in set Jellyfin as its media server, with no library yet.
+        ['seerr.media_server', 'updated libraries'],
+        ['seerr.server_sonarr', 'created'],
+        ['seerr.server_radarr', 'created'],
+        ['seerr.setup', 'updated initialized'],
       ]);
       expect(second.plan.wiring.map((w) => w.action)).toEqual(
         WIRED.map(() => 'unchanged'),

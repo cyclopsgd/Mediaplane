@@ -362,7 +362,8 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     // Mediaplane in the image reads Jellyfin's system.xml: with Jellyfin's key out of the
     // store, plan lists its setup published, since the wizard is done (apply would only
     // sign in and make a new key). One it couldn't read would say nothing, and plan would
-    // start it unpublished.
+    // start it unpublished. It reads Seerr's settings.json, which uid 1000 owns, too:
+    // Seerr's setup is done, so it isn't listed.
     const store = await readSecretStore(home);
     const { jellyfin: _kept, ...others } = store.apps;
     await writeSecretStore(home, { ...store, apps: others });
@@ -379,13 +380,17 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     // Sonarr to qBittorrent, and made Sonarr's root folder in a throwaway Sonarr
     // container, through the proxy. Slice 5: it started Jellyfin without its port, set it
     // up, then published it, all through the proxy, and Sonarr tells it of imports.
+    // Slice 6: Seerr too, signed in through Jellyfin, then linked to it and to Sonarr.
     const applied = JSON.parse(first.stdout) as {
       plan: { bootstrap: { app: string; unpublished: boolean }[] };
       actions: { step: string; resource?: string; detail?: string }[];
     };
-    expect(applied.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
+    expect(applied.plan.bootstrap).toEqual([
+      { app: 'jellyfin', unpublished: true },
+      { app: 'seerr', unpublished: true },
+    ]);
     expect(applied.actions.find((a) => a.step === 'bootstrap')?.detail).toBe(
-      'set up jellyfin and saved jellyfin.apiKey; published jellyfin',
+      'set up jellyfin, seerr and saved jellyfin.apiKey; published jellyfin, seerr',
     );
     expect(
       applied.actions
@@ -402,7 +407,12 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
       ['sonarr.download_client', 'created'],
       ['sonarr.root_folder', 'created'],
       ['sonarr.connection_jellyfin', 'created'],
+      ['seerr.media_server', 'updated libraries'],
+      ['seerr.server_sonarr', 'created'],
+      ['seerr.setup', 'updated initialized'],
     ]);
+    // Seerr ended published too, as Docker says.
+    expect(await docker('port', `${STACK}-seerr-1`, '5055/tcp')).toBe('127.0.0.1:5055');
     expect((await stat(join(data, 'media', 'tv'))).isDirectory()).toBe(true);
     const shown = await mediaplane('credentials', '--json', '--reveal');
     expect(shown.code, shown.stderr).toBe(0);

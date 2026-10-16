@@ -82,8 +82,12 @@ describe('plan against real Docker', () => {
       ['appdata/radarr/config.xml', 'create'],
       ['appdata/sonarr/config.xml', 'create'],
     ]);
-    // Jellyfin's startup wizard: apply finishes it before it publishes Jellyfin.
-    expect(result.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
+    // Jellyfin's startup wizard, and Seerr's first sign-in through it: apply finishes
+    // each before it publishes the app.
+    expect(result.bootstrap).toEqual([
+      { app: 'jellyfin', unpublished: true },
+      { app: 'seerr', unpublished: true },
+    ]);
   });
 
   it("includes the user's compose.override.yaml in the hashes", async () => {
