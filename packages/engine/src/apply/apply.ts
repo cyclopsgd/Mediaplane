@@ -11,6 +11,7 @@ import {
   type ChangeRecord,
 } from '../history/records';
 import { wire, WiringFailed } from '../integrations/wire';
+import { redactionValues } from '../integrations/wiring';
 import { COMPOSE_PATH, COMPOSE_PREV_PATH, ENV_PATH, STACK_PATH } from '../paths';
 import { plan, planStack, type PlanOptions, type PlanResult } from '../plan/plan';
 import { PROJECT_NAME } from '../render/compose';
@@ -31,7 +32,7 @@ import { acquireLock, LockedError, type Lock } from '../state/lock';
 import { writeFileAtomic } from '../util/atomic';
 import { codeOf } from '../util/error-code';
 import { readIfExists } from '../util/fs';
-import { foundSecrets } from '../util/redact';
+import { foundSecrets, redact } from '../util/redact';
 import { compare } from '../util/sort';
 import { vpnCheck, VPN_RUNBOOK } from '../vpn/check';
 import { bootstrapApps, BootstrapFailed } from './bootstrap';
@@ -281,11 +282,18 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
   });
   await steps.run('verify', async () => {
     const after = await plan(options);
+    // This plan's clients know only what they read themselves: the secrets the bootstrap
+    // and wire steps found are kept out of what it says here too.
+    const clean = (said: string) => redact(said, redactionValues(found.values));
     if (!after.ok) {
       const first = after.diagnostics.find((d) => d.severity === 'error');
-      throw new Error(`could not plan again: ${first?.message ?? 'unknown error'}`);
+      throw new Error(
+        clean(`could not plan again: ${first?.message ?? 'unknown error'}`),
+      );
     }
-    if (after.changed) throw new Error(`changes remain after apply: ${remaining(after)}`);
+    if (after.changed) {
+      throw new Error(clean(`changes remain after apply: ${remaining(after)}`));
+    }
     // The VPN's topology too (spec §6.4, §7.2(6)): vpn-check's checks, without egress.
     if (
       !stack.apps.some(

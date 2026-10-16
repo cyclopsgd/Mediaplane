@@ -310,6 +310,60 @@ describe('wire', () => {
     );
   });
 
+  it('says apart what waits for a first-run setup and what needs what failed, when another resource fails', async () => {
+    const wired = WIRED_CATALOG.map((def) => {
+      if (def.id === 'sonarr') {
+        return {
+          ...def,
+          integration: {
+            after: [],
+            resources: [
+              {
+                ...FAKE_LOGIN,
+                create: () =>
+                  Promise.reject(new AppApiError('fake refusal', { kind: 'rejected' })),
+              },
+              { ...FAKE_LOGIN, name: 'second', requires: ['sonarr.login'] },
+            ],
+          },
+        };
+      }
+      return def.id === 'jellyfin'
+        ? {
+            ...def,
+            api: FIXTURE_API,
+            integration: {
+              after: ['sonarr'],
+              resources: [
+                { ...FAKE_LOGIN, name: 'needs', requires: ['sonarr.login'] },
+                { ...FAKE_LOGIN, name: 'free' },
+              ],
+            },
+          }
+        : def;
+    });
+    const sonarr = await fakeSonarr({ key: KEY });
+    const { run } = await wireWith(
+      {
+        seams: sonarr.seams,
+        addresses: { ...sonarr.addresses, 'fake-jellyfin': '127.0.0.1' },
+      },
+      {
+        stack: stackOf(wired),
+        store: {
+          version: 1,
+          apps: { sonarr: { apiKey: KEY }, jellyfin: { apiKey: KEY } },
+          shared: { adminPassword: PASSWORD },
+        },
+        waiting: ['jellyfin'],
+      },
+    );
+    const failure = await run.catch((thrown: unknown) => thrown);
+    expect((failure as WiringFailed).message).toBe(
+      'the wiring failed for sonarr.login; skipped sonarr.second, which needs what failed; skipped jellyfin.needs, jellyfin.free, which wait for a first-run setup',
+    );
+  });
+
   it('says so when there is no wiring network after the start, and asks no app', async () => {
     const sonarr = await fakeSonarr({ key: KEY });
     const { run, actions } = await wireWith(sonarr, { join: 'no-network' });

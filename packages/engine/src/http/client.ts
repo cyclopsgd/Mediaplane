@@ -653,6 +653,10 @@ export function createAppApi(options: AppApiOptions): AppApi {
           kind: 'protocol',
         });
       }
+      // The run redacts the cookie from now on, in the form Seerr sets (`s%3A…`) and
+      // decoded (`s:…`), whichever client or catalog error quotes it.
+      found.add(value);
+      found.add(decoded(value));
       return createAppApi({
         ...options,
         found,
@@ -671,7 +675,8 @@ export function createAppApi(options: AppApiOptions): AppApi {
     },
     withKey: (value) =>
       createAppApi({
-        ...options,
+        // The key only: a session's cookie is not carried over (it stays redacted).
+        ...withoutCookie(options),
         found,
         // The key it replaces stays out of what it says too.
         secrets: [...options.secrets, ...sent],
@@ -681,6 +686,22 @@ export function createAppApi(options: AppApiOptions): AppApi {
       found.add(value);
     },
   };
+}
+
+/** `options` without its session cookie. */
+function withoutCookie(options: AppApiOptions): AppApiOptions {
+  const rest = { ...options };
+  delete rest.cookie;
+  return rest;
+}
+
+/** `value` percent-decoded, or as it is when it isn't validly encoded. */
+function decoded(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 /** The value of the cookie `name` among Set-Cookie headers, if one sets it to something. */

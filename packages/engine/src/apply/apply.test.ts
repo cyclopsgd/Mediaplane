@@ -13,6 +13,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppDefinition, Catalog } from '../catalog/types';
+import { AppApiError, type AppApi } from '../http/client';
 import { listRecords } from '../history/records';
 import { readResources } from '../integrations/resources';
 import { plan } from '../plan/plan';
@@ -1565,6 +1566,54 @@ describe('apply: what a failed wiring says to do', () => {
     }
   });
 
+  it("keeps a secret the wire step found out of verify's message, though verify's own clients never read it", async () => {
+    const HELD = 'e'.repeat(32);
+    type Rest =
+      Parameters<typeof FAKE_LOGIN.observe> extends [unknown, ...infer R] ? R : never;
+    let calls = 0;
+    const holding: Catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr'
+        ? {
+            ...def,
+            integration: {
+              after: [],
+              resources: [
+                {
+                  ...FAKE_LOGIN,
+                  // Asked in the wire step, it reads a key the app holds in clear; asked
+                  // again by verify's plan, it fails quoting it, without reading it again.
+                  observe: (api: AppApi, ...rest: Rest) => {
+                    calls += 1;
+                    if (calls === 1) {
+                      api.addSecret(HELD);
+                      return FAKE_LOGIN.observe(api, ...rest);
+                    }
+                    return Promise.reject(
+                      new AppApiError(`Sonarr holds ${HELD}`, { kind: 'rejected' }),
+                    );
+                  },
+                },
+              ],
+            },
+          }
+        : def,
+    );
+    const home = await makeHome();
+    const sonarr = await fakeSonarr();
+    const result = await apply(
+      options(home, fakeDocker(home, { addresses: sonarr.addresses }), {
+        catalog: holding,
+        wiring: sonarr.seams,
+      }),
+    );
+    expect(result.outcome).toBe('failed');
+    const said = result.diagnostics.find((d) => d.code === 'apply.verify-failed');
+    expect(said?.message).toBe(
+      'changes remain after apply: sonarr.login (unknown: Sonarr holds ***)',
+    );
+    expect(JSON.stringify(result)).not.toContain(HELD);
+  });
+
   it("says why it couldn't step off the network, and starts nothing", async () => {
     const { own, docker } = await stepFailure('start', (inner) => ({
       ...inner,
@@ -2142,21 +2191,81 @@ describe('apply: a first-run setup that makes no key, after another', () => {
     ]);
   });
 
-  it('keeps one whose setup waits unpublished, though someone else finished it meanwhile', async () => {
+  it('fails one whose setup waits as a claimed one, unpublished, when someone else finished it meanwhile; the next apply then publishes it unchecked', async () => {
     const { setup, ups, run } = await signInStack();
     // Refused because someone inside the stack signed in first: the setup now looks done.
     setup.signIn.refuse = true;
     setup.signIn.claimant = true;
     const waited = await run();
     expect(waited.outcome).toBe('failed');
-    expect(waited.diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'bootstrap.waiting' }),
-    );
+    expect(waited.diagnostics.some((d) => d.code === 'bootstrap.waiting')).toBe(false);
+    expect(waited.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message:
+        "the first-run setup failed: sonarr at http://sonarr:8989 (127.0.0.1) can't sign in yet: Jellyfin refused the shared admin (POST /sign-in); sonarr's setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished: its setup was finished with another login while Mediaplane set it up, and the next apply would publish it. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says",
+    });
+    expect(waited.actions.find((a) => a.step === 'wire')?.result).toBe('skipped');
     expect(setup.signIn.done).toBe(true);
+    // Both ups keep it unpublished: Jellyfin was published once set up, Sonarr never.
     expect(ups).toEqual([
       'jellyfin sonarr unpublished; jellyfin open, sonarr open',
       'sonarr unpublished; jellyfin done, sonarr done',
     ]);
+    // The limit of a setup that makes no key: its file now says it is done, so nothing
+    // asks who owns the app, and the next apply publishes it.
+    setup.signIn.refuse = false;
+    const next = await run();
+    expect(next.outcome).toBe('success');
+    expect(next.plan.bootstrap).toEqual([]);
+    expect(ups.at(-1)).toBe('all published; jellyfin done, sonarr done');
+    expect(setup.app.requests.filter((r) => r.path === '/sign-in')).toHaveLength(1);
+  });
+
+  it('fails, unpublished, a setup that makes a key but gives none', async () => {
+    const catalog = SIGN_IN_CATALOG.map((def) => {
+      const bootstrap = def.bootstrap;
+      if (def.id !== 'jellyfin' || bootstrap === undefined) return def;
+      return {
+        ...def,
+        bootstrap: {
+          ...bootstrap,
+          run: async (...args: Parameters<typeof bootstrap.run>) => {
+            await bootstrap.run(...args);
+            return undefined;
+          },
+        },
+      };
+    });
+    const { home, ups, run } = await signInStack(catalog);
+    const failed = await run();
+    expect(failed.outcome).toBe('failed');
+    expect(failed.diagnostics.at(-1)?.message).toBe(
+      "the first-run setup failed: jellyfin's setup finished without giving its apiKey, which it makes; sonarr waits: sonarr waits for jellyfin's first-run setup, which isn't done",
+    );
+    expect((await readSecretStore(home)).apps.jellyfin).toBeUndefined();
+    expect(ups).toEqual([
+      'jellyfin sonarr unpublished; jellyfin open, sonarr open',
+      'jellyfin sonarr unpublished; jellyfin done, sonarr open',
+    ]);
+  });
+
+  it("fails every apply at verify while a setup that makes no key can't read its file", async () => {
+    const { home, setup, ups, run } = await signInStack();
+    // The app says it is set up; its file can't be read to say so.
+    setup.signIn.done = true;
+    await mkdir(join(home, 'appdata', 'sonarr', 'signed-in.txt'), { recursive: true });
+    for (const attempt of [1, 2]) {
+      const result = await run();
+      expect(result.outcome, `apply ${String(attempt)}`).toBe('failed');
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({ code: 'bootstrap.unreadable', severity: 'warning' }),
+      );
+      expect(result.diagnostics.at(-1)?.message).toContain('sonarr (first-run setup)');
+    }
+    // Set up again each time, and unpublished until the app is asked.
+    expect(ups.filter((u) => u.startsWith('sonarr unpublished')).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it('keeps unpublished, and fails, an app with a setup but no API to finish it through', async () => {

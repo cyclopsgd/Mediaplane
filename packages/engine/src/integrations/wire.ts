@@ -125,6 +125,8 @@ export async function wire(options: WireOptions): Promise<string[]> {
   const diagnostics: Diagnostic[] = [];
   const failed: string[] = [];
   const skipped: string[] = [];
+  /** Skipped because an app's first-run setup waits, or because they need what is. */
+  const waited: string[] = [];
   const done: string[] = [];
   const values = redactionValues(secrets);
   // Every failure's message is redacted once, here, whoever wrote it: the client, a
@@ -157,6 +159,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
     if (options.waiting?.includes(app.def.id) === true) {
       for (const target of targets) {
         skipped.push(target);
+        waited.push(target);
         options.record({
           step: 'wire',
           resource: target,
@@ -186,6 +189,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
       );
       if (blocker !== undefined) {
         skipped.push(address);
+        if (waited.includes(blocker)) waited.push(address);
         options.record({
           step: 'wire',
           resource: address,
@@ -269,7 +273,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
     }
   }
   if (failed.length > 0) {
-    throw new WiringFailed(failureMessage(failed, skipped), diagnostics, {
+    throw new WiringFailed(failureMessage(failed, skipped, waited), diagnostics, {
       hint: HINTS.resources,
     });
   }
@@ -311,13 +315,25 @@ async function makeFolders(
   return `${couldNot}: mkdir in a throwaway ${app.def.name} container exited ${String(made.code)}${said === '' ? '' : `: ${said}`}`;
 }
 
-/** "the wiring failed for a; skipped b, which needs what failed". */
-function failureMessage(failed: readonly string[], skipped: readonly string[]): string {
+/**
+ * "the wiring failed for a; skipped b, which needs what failed; skipped c, which waits for
+ * a first-run setup". A resource skipped because a setup waits didn't fail anything.
+ */
+function failureMessage(
+  failed: readonly string[],
+  skipped: readonly string[],
+  waited: readonly string[],
+): string {
+  const after = skipped.filter((address) => !waited.includes(address));
   const because =
-    skipped.length === 0
+    after.length === 0
       ? ''
-      : `; skipped ${skipped.join(', ')}, which ${skipped.length === 1 ? 'needs' : 'need'} what failed`;
-  return `the wiring failed for ${failed.join(', ')}${because}`;
+      : `; skipped ${after.join(', ')}, which ${after.length === 1 ? 'needs' : 'need'} what failed`;
+  const waits =
+    waited.length === 0
+      ? ''
+      : `; skipped ${waited.join(', ')}, which ${waited.length === 1 ? 'waits' : 'wait'} for a first-run setup`;
+  return `the wiring failed for ${failed.join(', ')}${because}${waits}`;
 }
 
 /** The managed fields only: what resources.json keeps. */

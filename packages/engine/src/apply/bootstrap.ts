@@ -265,7 +265,8 @@ async function looksOpen(
  * done, whose shared admin is then refused (an `auth` failure) stays unpublished, however
  * done its setup now looks (see `claimed`). One the plan started published was done
  * before this run, by hand say, and nobody can claim it. A setup that waits leaves the
- * app as it was, unpublished if the plan started it so.
+ * app as it was, unpublished if the plan started it so; asked once more, one that no
+ * longer looks open was claimed meanwhile, and fails as a claimed one does.
  */
 async function setUp(
   app: ResolvedApp,
@@ -286,6 +287,14 @@ async function setUp(
   try {
     await client.api.ready(api.ready);
     const key = await bootstrap.run(client.api, admin, started.stack);
+    if (bootstrap.secret !== undefined && key === undefined) {
+      // A setup that makes a key and gives none is a bug in the setup: the app would be
+      // published with no key stored, and nothing failed.
+      return {
+        failure: `${name}'s setup finished without giving its ${bootstrap.secret}, which it makes`,
+        open: true,
+      };
+    }
     const after = await looksOpen(bootstrap, client.api);
     if (!after.open) return { key, open: false };
     const still = `${name}'s setup reported success, but the app still looks open (or can't be asked)`;
@@ -298,9 +307,14 @@ async function setUp(
       failure: after.why === undefined ? failure : `${failure}: ${after.why}`,
     };
   } catch (cause) {
-    // Unpublished, without asking again: its setup isn't Mediaplane's, and may have been
-    // finished by someone else meanwhile, as a claimed one is.
-    if (cause instanceof SetupWaiting) return { waiting: cause.message, open: true };
+    if (cause instanceof SetupWaiting) {
+      // Unpublished on this run either way. But a setup that no longer looks open was
+      // finished by someone else while it waited: that is a claimed one, said loudly.
+      if (started.unpublished && !(await looksOpen(bootstrap, client.api)).open) {
+        return { failure: await claimed(app, cause.message, started.home), open: true };
+      }
+      return { waiting: cause.message, open: true };
+    }
     if (!(cause instanceof AppApiError)) throw cause;
     const now = await looksOpen(bootstrap, client.api);
     if (started.unpublished && cause.kind === 'auth' && !now.open) {

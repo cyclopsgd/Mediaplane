@@ -15,7 +15,7 @@ export interface FakeRequest {
 export interface FakeReply {
   status: number;
   body?: unknown;
-  headers?: Record<string, string>;
+  headers?: Record<string, string | string[]>;
 }
 
 /** Answers a request, or 'hang' to never answer it. */

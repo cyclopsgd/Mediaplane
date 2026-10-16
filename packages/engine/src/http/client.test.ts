@@ -1338,6 +1338,69 @@ describe("createAppApi: Seerr's session", () => {
     ).toMatchObject({ kind: 'server', status: 503 });
     expect(app.requests).toHaveLength(1);
   });
+
+  /** Signs in, answering `cookies`, and gives the session and the app it came from. */
+  async function sessionOf(cookies: string[], extra: Partial<AppApiOptions> = {}) {
+    const made = await sonarr(
+      (request) =>
+        request.path === '/api/v1/auth/jellyfin'
+          ? { status: 200, body: {}, headers: { 'Set-Cookie': cookies } }
+          : request.path === '/boom'
+            ? {
+                status: 500,
+                body: { message: `near ${COOKIE} and s:fake-session.signed` },
+              }
+            : { status: 200, body: { status: 'ok' } },
+      { ...seerr, ...extra },
+    );
+    const session = await made.api.session(
+      '/api/v1/auth/jellyfin',
+      {},
+      'connect.sid',
+      [],
+    );
+    if (session === undefined) throw new Error('the sign-in must pass');
+    return { ...made, session };
+  }
+
+  it("takes the cookie's value up to the first ';', whatever dated attribute follows, among several Set-Cookie headers", async () => {
+    const { session, app } = await sessionOf([
+      'locale=en; Path=/',
+      `connect.sid=${COOKIE}; Path=/; Expires=Sun, 15 Nov 2026 12:00:00 GMT; HttpOnly`,
+      'connect.sidx=wrong; Path=/',
+    ]);
+    await session.submit('POST', '/api/v1/auth/logout');
+    expect(app.requests[1]?.headers.cookie).toBe(`connect.sid=${COOKIE}`);
+  });
+
+  it('gives the key alone, never its parent session cookie, to a client made with withKey', async () => {
+    const { session, app } = await sessionOf([`connect.sid=${COOKIE}; Path=/`]);
+    const other = 'd'.repeat(32);
+    await session.withKey(other).check('/api/v1/auth/me');
+    expect(app.requests[1]?.headers).toMatchObject({ 'x-api-key': other });
+    expect(app.requests[1]?.headers).not.toHaveProperty('cookie');
+  });
+
+  it("keeps the cookie, as set and decoded, out of every client's messages in the run, the session's withKey too", async () => {
+    const found = foundSecrets();
+    const { session } = await sessionOf([`connect.sid=${COOKIE}; Path=/`], {
+      found,
+      secrets: [],
+    });
+    expect(found.values).toEqual([COOKIE, 's:fake-session.signed']);
+    const { api: other } = await sonarr(
+      () => ({
+        status: 500,
+        body: { message: `near ${COOKIE} and s:fake-session.signed` },
+      }),
+      { found, secrets: [] },
+    );
+    for (const client of [other, session, session.withKey('d'.repeat(32))]) {
+      expect((await failure(client.check('/boom'))).message).toContain(
+        'near *** and ***',
+      );
+    }
+  });
 });
 
 describe('createAppApi: a secret read in an answer', () => {
