@@ -185,7 +185,8 @@ and its final review an S5 item, two S8 items, a probe in two others, two S9 tes
 and an S9 docs item. Slice 5 (2026-10-15) added an S6 item, six S8 items and an S9
 item, and extended one, and its final review an S8 item and four S9 items. Slice 6
 (2026-10-16) added an S7 item and changed one, added five S8 items and changed one, and
-added an S9 item and changed one. Each slice plan must address the items for that slice.
+added an S9 item and changed one, and its final review an S8 item and an S9 item. Each
+slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
 
@@ -540,6 +541,9 @@ password, which are S3c's (and listed again below).
   server, and its list of Jellyfin's users that checks its Jellyfin key, log an error in
   Seerr's log, and a refused key one in the arr's. Decide how often scheduled drift may
   run them.
+- **Seerr's Jellyfin key is checked twice in one `apply`** (S6): once as the
+  resource's check, and again in the update that follows it, so a key Jellyfin refuses
+  writes a second error line in Seerr's log. Check it once, with the item above.
 - **Seerr keeps its own Jellyfin key** (S6): the one its first sign-in made, named
   `Seerr` in Jellyfin, which Mediaplane checks by using and never keeps, so it can't be
   rotated; it is redacted only once Mediaplane has read it in that run. Mediaplane gives
@@ -596,6 +600,9 @@ password, which are S3c's (and listed again below).
   `toEqual([true, true])` (S5), so a failure doesn't say which claim broke. Split them.
 - **The deploy end-to-end test restores the secret store after `plan`,** but not in a
   `finally` (S5). Move the restore into one.
+- **A test timeout skips `composeDown`** in the end-to-end files (S6): their teardown
+  runs in the test body's `finally`, which a timeout doesn't wait for, so the stack can
+  be left up. Fix it in the harness, for every file at once.
 - **Two wide tables** (S5): convert the README's capability table and the threat
   model's asset table to lists.
 - **A second app with a first-run setup** (S5): S6 brought it, Seerr. So a Jellyfin

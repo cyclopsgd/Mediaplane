@@ -680,6 +680,8 @@ What remains:
   published port from its first start (see T2).
 - While the wizard is open, for the seconds Mediaplane takes, any container of the stack
   can reach Jellyfin on the stack's networks, and Seerr likewise until its first sign-in.
+  A Seerr whose setup waits (Jellyfin refuses the shared admin's password) stays open
+  there, unpublished, for longer: until the next `apply` that signs it in.
   A compromised app could claim either first.
   If it sets the first user and leaves the wizard open, Mediaplane's sign-in fails, and
   `apply` stops, completing no wizard for it. If it also completes the wizard, `apply`

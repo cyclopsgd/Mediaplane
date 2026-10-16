@@ -31,8 +31,9 @@ export interface BootstrapPlan {
  * is set up again, with that warning. A setup that makes no key counts as done only when
  * its file says so and the store names the app (`setUp`): an app set up by someone else,
  * or before Mediaplane knew, starts unpublished, and its setup checks it is Mediaplane's.
- * An app with a setup that runs inside another app's network is an error: that app publishes its ports, and `ports: !reset []` on the app's
- * own service can't unpublish them. Reads only; writes nothing.
+ * An app with a setup that runs inside another app's network is an error: that app
+ * publishes its ports, and `ports: !reset []` on the app's own service can't unpublish
+ * them. Reads only; writes nothing.
  */
 export async function inspectBootstrap(
   stack: ResolvedStack,
@@ -53,7 +54,8 @@ export async function inspectBootstrap(
       );
       continue;
     }
-    // A key the app made says its setup was done once; without one, its file alone says.
+    // A key the app made says its setup was done once; without one, its file and the
+    // store's record of the setup (`setUp`) say, below.
     const made =
       setup.secret !== undefined && store.apps[app.def.id]?.[setup.secret] !== undefined;
     const done = await appSetupDone(stack.home, app);
@@ -78,7 +80,8 @@ export async function inspectBootstrap(
     }
     changes.push({
       app: app.def.id,
-      // A setup that makes no key starts unpublished until it is known to be Mediaplane's.
+      // A setup that makes no key starts unpublished until it is known to be
+      // Mediaplane's.
       unpublished: setup.secret === undefined || done !== true,
     });
   }

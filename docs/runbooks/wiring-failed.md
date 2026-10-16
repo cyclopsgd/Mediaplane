@@ -375,8 +375,9 @@ differ, and a `reason` when it is `unknown`.
   Seerr's key is Mediaplane's own, so nothing but a setup that succeeds shows that Seerr
   is Mediaplane's.
 - **Seerr is set up, but Mediaplane can't show that it is its own**
-  (`apply.bootstrap-failed`). The message says `was set up with another login or another
-Jellyfin`, or `is set up, and Mediaplane couldn't tell whether it is its own`. Seerr
+  (`apply.bootstrap-failed`). The message says
+  `was set up with another login or another Jellyfin`, or
+  `is set up, and Mediaplane couldn't tell whether it is its own`. Seerr
   was already set up when Mediaplane came to it: it looked open when `apply` started it
   but was set up before its sign-in, or it is a Seerr from before Slice 6, or one
   Mediaplane has no record of (`setUp` in `state/secrets.json`). Mediaplane never sends

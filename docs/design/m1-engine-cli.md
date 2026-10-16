@@ -1534,10 +1534,10 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     it holds. Seerr's test fails with one 500 whatever the cause (probed), so a failure
     is tested again with the stack's key, at the stack's address for the arr: a pass then
     means the key was refused (an update); a second failure is Seerr not reaching the arr.
-    A server is saved whole, its id read-only (probed), and made with what Seerr's web UI gives a new one, but with
-    season folders on for Sonarr, Sonarr's own default; Radarr's are off, as films have
-    no seasons. Each key Seerr shows for a server is redacted once read. Each requires
-    its arr's root folder.
+    A server is saved whole, its id read-only (probed), and made with what Seerr's web UI
+    gives a new one, but with season folders on for Sonarr, Sonarr's own default; Radarr's
+    are off, as films have no seasons. Each key Seerr shows for a server is redacted once
+    read. Each requires its arr's root folder.
   - `seerr.setup`: `initialized`, set by `POST /api/v1/settings/initialize` while it is
     false, once Seerr's links are in place, which it requires. Seerr takes it again
     (probed), but it is sent once.

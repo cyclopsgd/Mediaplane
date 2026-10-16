@@ -444,7 +444,8 @@ and keep. What it adds is everything around the file:
   libraries, and told of each import by Sonarr and Radarr;
 - Seerr signed in through Jellyfin by `apply` before its web UI is published, and
   linked to Jellyfin, Sonarr and Radarr (both guarantees hold when `apply` runs the
-  stack: [what voids them](docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup));
+  stack:
+  [what voids them](docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup));
 - next, Plex.
 
 ### How is this different from Buildarr or Recyclarr?

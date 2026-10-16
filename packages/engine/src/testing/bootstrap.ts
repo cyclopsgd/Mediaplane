@@ -72,14 +72,14 @@ async function ownerOf(api: AppApi): Promise<string | null> {
 }
 
 /**
- * A first-run setup shaped like Seerr's: it makes no key (the app's is Mediaplane's own),
- * and is open until the shared admin signs in through Jellyfin (POST /sign-in, which keeps
- * the session in the cookie `sid` and writes signed-in.txt in its appdata), then signs
- * out. It waits (SetupWaiting) while that sign-in is refused, as Seerr's does while
- * Jellyfin refuses the shared admin. Done already, it is asked who it belongs to, with the
- * key and never the password, as Seerr's is (GET /signed-in/own): the first to sign in
- * has to be the shared admin, else it is refused (`auth`), as an app set up by someone
- * else.
+ * A first-run setup shaped like Seerr's: it makes no key (the app's is Mediaplane's
+ * own), and is open until the shared admin signs in through Jellyfin (POST /sign-in,
+ * which keeps the session in the cookie `sid` and writes signed-in.txt in its appdata),
+ * then signs out. It waits (SetupWaiting) while that sign-in is refused, as Seerr's does
+ * while Jellyfin refuses the shared admin. Done already, it is asked who it belongs to,
+ * with the key and never the password, as Seerr's is (GET /signed-in/own): the first to
+ * sign in has to be the shared admin, else it is refused (`auth`), as an app set up by
+ * someone else.
  */
 export const FAKE_SIGN_IN: Bootstrap = {
   done: { path: 'signed-in.txt', pattern: /^yes$/m },
