@@ -79,7 +79,11 @@ describe("fakeStackApis' Seerr", () => {
     });
     const first = await signIn(FIRST);
     expect(first).toMatchObject({ status: 200, body: { id: 1, permissions: 2 } });
-    expect(first.cookie).toMatch(/^connect\.sid=s%3A[^;]+; Path=\/; HttpOnly/);
+    // A 30-day cookie: the date in its Expires holds a comma, and the value ends at the first `;`.
+    expect(first.cookie).toMatch(
+      /^connect\.sid=s%3A[^;,]+; Path=\/; Expires=\w{3}, \d\d /,
+    );
+    expect(first.cookie).toContain('; HttpOnly');
     // It made itself a key in Jellyfin, and uses it.
     const made = jellyfin.apiKeys.find((k) => k.AppName === 'Seerr');
     expect(made).toBeDefined();
@@ -103,6 +107,51 @@ describe("fakeStackApis' Seerr", () => {
     expect((await signIn(again)).status).toBe(200);
     expect((await signIn({ ...again, password: 'fake-wrong' })).status).toBe(401);
     expect(seerr.seerr.sessions).toHaveLength(2);
+  });
+
+  it('gives each session an id no other had, whatever signed out', async () => {
+    const { port, seerr } = await stack();
+    // After the first, a sign-in names no hostname.
+    const { hostname: _h, port: _p, useSsl: _s, urlBase: _u, ...again } = FIRST;
+    const value = async (body: unknown) =>
+      ((await call(port, '/api/v1/auth/jellyfin', { body })).cookie ?? '').split(
+        ';',
+      )[0] ?? '';
+    const first = await value(FIRST);
+    const second = await value(again);
+    await call(port, '/api/v1/auth/logout', {
+      method: 'POST',
+      headers: { cookie: first },
+    });
+    const third = await value(again);
+    expect(new Set([first, second, third]).size).toBe(3);
+    expect(seerr.seerr.sessions).toHaveLength(2);
+  });
+
+  it('refuses a key that is not its own, and takes any while it has none', async () => {
+    const { port, seerr } = await stack();
+    await call(port, '/api/v1/auth/jellyfin', { body: FIRST });
+    const wrong = { 'x-api-key': '0'.repeat(32) };
+    expect((await call(port, '/api/v1/auth/me', { headers: wrong })).status).toBe(403);
+    seerr.key = '';
+    expect((await call(port, '/api/v1/auth/me', { headers: wrong })).status).toBe(200);
+  });
+
+  it('refuses an empty password, and a Jellyfin that is down', async () => {
+    const { port, jellyfin } = await stack();
+    const signIn = (body: unknown) => call(port, '/api/v1/auth/jellyfin', { body });
+    expect(await signIn({ ...FIRST, password: '' })).toMatchObject({
+      status: 401,
+      body: { message: 'INVALID_CREDENTIALS' },
+      cookie: undefined,
+    });
+    jellyfin.up = false;
+    expect(await signIn(FIRST)).toMatchObject({
+      status: 404,
+      body: { message: 'INVALID_URL' },
+    });
+    jellyfin.up = true;
+    expect((await signIn(FIRST)).status).toBe(200);
   });
 
   it('ends the session it gave when it signs out', async () => {
@@ -237,8 +286,46 @@ describe("fakeStackApis' Seerr", () => {
       });
     }
     expect(seerr.seerr.errors.length).toBe(errors + 4);
-    const { apiKey: _k, ...keyless } = server;
-    expect((await test(keyless)).status).toBe(400);
+    // Its validator wants each of these, and says which.
+    for (const field of ['hostname', 'port', 'apiKey', 'useSsl'] as const) {
+      const { [field]: _left, ...without } = server;
+      expect(await test(without)).toMatchObject({
+        status: 400,
+        body: { message: `request/body must have required property '${field}'` },
+      });
+    }
+  });
+
+  it("tests a Radarr server at Radarr's port, with Radarr's key", async () => {
+    const { apis, port } = await stack();
+    await call(port, '/api/v1/auth/jellyfin', { body: FIRST });
+    apis.apps.set('radarr', {
+      ...freshAppState(),
+      key: '2'.repeat(32),
+      rootFolders: [{ id: 1, path: '/data/media/movies' }],
+    });
+    const server = {
+      hostname: 'radarr',
+      port: 7878,
+      apiKey: '2'.repeat(32),
+      useSsl: false,
+    };
+    const test = (body: unknown) =>
+      call(port, '/api/v1/settings/radarr/test', { body, headers: keyed });
+    expect(await test(server)).toMatchObject({
+      status: 200,
+      body: {
+        profiles: [{ id: 1, name: 'Any' }, {}, {}, { id: 4, name: 'HD-1080p' }, {}, {}],
+        rootFolders: [{ id: 1, path: '/data/media/movies' }],
+      },
+    });
+    // Sonarr's port is not Radarr's, and Sonarr's key is not either.
+    for (const wrong of [{ port: 8989 }, { apiKey: SONARR_KEY }]) {
+      expect(await test({ ...server, ...wrong })).toMatchObject({
+        status: 500,
+        body: { message: 'Failed to connect to Radarr' },
+      });
+    }
   });
 
   it('keeps settings.json in its config folder, naming its media server once it has one', async () => {
@@ -247,7 +334,9 @@ describe("fakeStackApis' Seerr", () => {
     seerr.seerr.configDir = dir;
     const written = () => readFile(join(dir, 'settings.json'), 'utf8');
     await call(port, '/api/v1/settings/public');
-    expect(await written()).toBe('{\n "main": {\n  "mediaServerType": 4\n }\n}');
+    expect(await written()).toBe(
+      `{\n "main": {\n  "apiKey": "${SEERR_KEY}",\n  "mediaServerType": 4\n }\n}`,
+    );
     await call(port, '/api/v1/auth/jellyfin', { body: FIRST });
     expect(await written()).toContain('"mediaServerType": 2');
   });
@@ -289,7 +378,7 @@ describe("fakeStackApis' Seerr", () => {
     seerr.seerr.echoKey = true;
     expect(await call(port, '/api/v1/nosuch', { headers: keyed })).toEqual({
       status: 404,
-      body: { message: `fake failure, holding ${own} ${SONARR_KEY}` },
+      body: { message: `fake failure, holding ${SEERR_KEY} ${own} ${SONARR_KEY}` },
       cookie: undefined,
     });
     // A passing answer is left as it is.

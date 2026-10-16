@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FakeReply, FakeRequest } from './http';
 import { libraryId, makeApiKey } from './jellyfin';
+import { PORTS } from './prowlarr';
 import { freshAppState, type FakeAppState } from './wiring';
 
 /** Seerr's media-server types (its `MediaServerType`): Jellyfin is 2, none yet 4. */
@@ -53,11 +54,13 @@ export interface FakeSeerr {
   initialized: boolean;
   /** The values of the session cookies its sign-ins gave, until signed out. */
   sessions: string[];
+  /** How many sessions it has given: each one's id is new, whatever signed out. */
+  signIns: number;
   /** What it logged as errors: a check that fails logs a line, as Seerr does. */
   errors: string[];
   /**
    * Have each refusal and failure it answers quote every key it holds, in clear: its
-   * Jellyfin key and its servers', as an app may echo a secret back.
+   * own key, its Jellyfin key and its servers', as an app may echo a secret back.
    */
   echoKey: boolean;
   /** Paths it refuses (400), whatever is sent: as a request Seerr won't take. */
@@ -76,12 +79,14 @@ export interface FakeSeerr {
 }
 
 /**
- * settings.json, which Seerr writes into its config folder when it starts, and again as
- * its settings change: JSON with a one-space indent, its media-server type in `main`.
+ * settings.json, which Seerr writes into its config folder as it starts, and again as its
+ * settings change: JSON with a one-space indent, its key (`main.apiKey`) and its
+ * media-server type in `main`. The fake writes it on each request it answers, so it
+ * appears on the first one, not before.
  */
-function keepSettingsJson(seerr: FakeSeerr): void {
+function keepSettingsJson(seerr: FakeSeerr, key: string): void {
   if (seerr.configDir === undefined) return;
-  const settings = { main: { mediaServerType: seerr.mediaServerType } };
+  const settings = { main: { apiKey: key, mediaServerType: seerr.mediaServerType } };
   mkdirSync(seerr.configDir, { recursive: true });
   writeFileSync(
     join(seerr.configDir, 'settings.json'),
@@ -99,17 +104,15 @@ export function freshSeerr(): FakeSeerr {
     radarr: [],
     initialized: false,
     sessions: [],
+    signIns: 0,
     errors: [],
     echoKey: false,
     failing: [],
   };
 }
 
-/** How Seerr reaches each arr it can hold: its service, and its port. */
-const ARRS = {
-  sonarr: { name: 'Sonarr', port: 8989 },
-  radarr: { name: 'Radarr', port: 7878 },
-} as const;
+/** How Seerr names each arr it can hold; it reaches one at its service, and PORTS' port. */
+const ARRS = { sonarr: 'Sonarr', radarr: 'Radarr' } as const;
 
 /** What Seerr's request validator (its OpenAPI spec) requires of a server it saves. */
 const REQUIRED = [
@@ -144,6 +147,9 @@ function refused(request: FakeRequest): FakeReply {
         },
       };
 }
+
+/** A session cookie's life, as Seerr gives it: 30 days, in a date that holds a comma. */
+const EXPIRES = 'Expires=Sat, 14 Nov 2026 12:00:00 GMT';
 
 /** The value of the cookie `connect.sid` in a Cookie header, if any. */
 function sessionCookie(header: string | undefined): string | undefined {
@@ -181,10 +187,10 @@ export function fakeSeerr(
   const reply = seerr.failing.includes(request.path.split('?')[0] ?? request.path)
     ? invalid('fake failure')
     : answer(request, state, peek);
-  keepSettingsJson(seerr);
+  keepSettingsJson(seerr, state.key);
   if (!seerr.echoKey || reply.status < 400) return reply;
   const servers = [...seerr.sonarr, ...seerr.radarr];
-  const held = [seerr.jellyfin.apiKey, ...servers.map((s) => s.apiKey)];
+  const held = [state.key, seerr.jellyfin.apiKey, ...servers.map((s) => s.apiKey)];
   return {
     ...reply,
     body: { message: `fake failure, holding ${held.filter((k) => k !== '').join(' ')}` },
@@ -313,7 +319,8 @@ function signIn(
     seerr.jellyfin.apiKey = makeApiKey(jellyfin, 'Seerr');
   }
   if (!seerr.users.includes(sent.username)) seerr.users.push(sent.username);
-  const session = `s%3Afake-session-${String(seerr.sessions.length + 1)}.signed`;
+  seerr.signIns += 1;
+  const session = `s%3Afake-session-${String(seerr.signIns)}.signed`;
   seerr.sessions.push(session);
   return {
     status: 200,
@@ -322,7 +329,9 @@ function signIn(
       jellyfinUsername: sent.username,
       permissions: seerr.users[0] === sent.username ? 2 : 32,
     },
-    headers: { 'Set-Cookie': `connect.sid=${session}; Path=/; HttpOnly; SameSite=Lax` },
+    headers: {
+      'Set-Cookie': `connect.sid=${session}; Path=/; ${EXPIRES}; HttpOnly; SameSite=Lax`,
+    },
   };
 }
 
@@ -425,23 +434,25 @@ function fakeSeerrServers(
   const servers = seerr[arr];
   if (match[2] === 'test' && method === 'POST') {
     const sent = body();
-    if (typeof sent.apiKey !== 'string') {
-      return invalid("body must have required property 'apiKey'");
+    const absent = ['hostname', 'port', 'apiKey', 'useSsl'].find((f) => !(f in sent));
+    if (absent !== undefined) {
+      return invalid(`body must have required property '${absent}'`);
     }
+    if (typeof sent.apiKey !== 'string') return invalid('body/apiKey must be string');
     const held = peek(arr);
     const reached =
       held !== undefined &&
       held.up &&
       sent.hostname === arr &&
-      sent.port === ARRS[arr].port &&
+      sent.port === PORTS[arr] &&
       sent.useSsl !== true &&
       (sent.baseUrl ?? '') === '';
     const takes =
       held !== undefined &&
       (held.key === '' ? sent.apiKey !== '' : sent.apiKey === held.key);
     if (!reached || !takes) {
-      seerr.errors.push(`[${ARRS[arr].name}] Failed to retrieve system status`);
-      return { status: 500, body: { message: `Failed to connect to ${ARRS[arr].name}` } };
+      seerr.errors.push(`[${ARRS[arr]}] Failed to retrieve system status`);
+      return { status: 500, body: { message: `Failed to connect to ${ARRS[arr]}` } };
     }
     return {
       status: 200,

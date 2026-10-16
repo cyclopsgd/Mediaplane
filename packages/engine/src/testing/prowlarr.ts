@@ -20,7 +20,7 @@ export interface FakeProvider extends FakeProviderBase {
 }
 
 /** Where the fake apps listen in their containers: what Prowlarr's links must name. */
-const PORTS: Readonly<Record<string, number>> = {
+export const PORTS: Readonly<Record<string, number>> = {
   prowlarr: 9696,
   radarr: 7878,
   sonarr: 8989,

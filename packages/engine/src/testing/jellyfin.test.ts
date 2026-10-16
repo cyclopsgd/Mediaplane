@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { callFake } from './http';
 import { FAKE_JELLYFIN_USER_ID } from './jellyfin';
 import { tempDir } from './temp';
+import { fakeJellyfinSetUp, SET_UP_JELLYFIN } from './seerr';
 import { fakeStackApis, freshAppState, type FakeAppState } from './wiring';
 
 /** The client fields Jellyfin asks of a sign-in. */
@@ -23,25 +24,6 @@ function jellyfinOf(apis: Awaited<ReturnType<typeof fakeStackApis>>): FakeAppSta
   if (state === undefined) throw new Error('no Jellyfin faked');
   return state;
 }
-
-/** A Jellyfin whose wizard is done, with the admin and the key `key`. */
-function setUp(key: string): FakeAppState {
-  return {
-    ...freshAppState(),
-    wizard: 'done',
-    user: 'admin',
-    password: 'fake-admin-password',
-    apiKeys: [
-      {
-        AccessToken: key,
-        AppName: 'Mediaplane',
-        DateCreated: '2026-10-15T12:00:00.000Z',
-      },
-    ],
-  };
-}
-
-const KEY = '7'.repeat(32);
 
 describe("fakeStackApis' Jellyfin", () => {
   it('runs its startup wizard as Jellyfin 12 does: the first user made by asking for it, named once, then completed', async () => {
@@ -80,7 +62,7 @@ describe("fakeStackApis' Jellyfin", () => {
 
   it('signs in only with its client fields and the right password, one session per device, until it signs out', async () => {
     const apis = await fakeStackApis();
-    apis.apps.set('jellyfin', setUp(KEY));
+    apis.apps.set('jellyfin', fakeJellyfinSetUp());
     const { port } = apis.app;
     const signIn = (
       Pw: string,
@@ -129,9 +111,9 @@ describe("fakeStackApis' Jellyfin", () => {
 
   it('makes API keys by name, lists them in full, and takes them only in its MediaBrowser header', async () => {
     const apis = await fakeStackApis();
-    apis.apps.set('jellyfin', setUp(KEY));
+    apis.apps.set('jellyfin', fakeJellyfinSetUp());
     const { port } = apis.app;
-    const keyed = { authorization: withToken(KEY) };
+    const keyed = { authorization: withToken(SET_UP_JELLYFIN.key) };
     expect(
       (await call(port, '/Auth/Keys?app=Mediaplane', { method: 'POST', headers: keyed }))
         .status,
@@ -143,20 +125,25 @@ describe("fakeStackApis' Jellyfin", () => {
     // Jellyfin 12's legacy ways to send a key are off.
     const info = (headers: Record<string, string>, query = '') =>
       call(port, `/System/Info${query}`, { headers });
-    expect((await info({ 'x-emby-token': KEY })).status).toBe(401);
-    expect((await info({ 'x-mediabrowser-token': KEY })).status).toBe(401);
-    expect((await info({}, `?api_key=${KEY}`)).status).toBe(401);
-    expect((await info({ authorization: `Bearer ${KEY}` })).status).toBe(401);
-    expect((await info({ authorization: `MediaBrowser Token="${KEY}"` })).status).toBe(
-      200,
+    expect((await info({ 'x-emby-token': SET_UP_JELLYFIN.key })).status).toBe(401);
+    expect((await info({ 'x-mediabrowser-token': SET_UP_JELLYFIN.key })).status).toBe(
+      401,
     );
+    expect((await info({}, `?api_key=${SET_UP_JELLYFIN.key}`)).status).toBe(401);
+    expect((await info({ authorization: `Bearer ${SET_UP_JELLYFIN.key}` })).status).toBe(
+      401,
+    );
+    expect(
+      (await info({ authorization: `MediaBrowser Token="${SET_UP_JELLYFIN.key}"` }))
+        .status,
+    ).toBe(200);
   });
 
   it('renames its admin and sets its password with a key, and refuses a user sent without its policy', async () => {
     const apis = await fakeStackApis();
-    apis.apps.set('jellyfin', setUp(KEY));
+    apis.apps.set('jellyfin', fakeJellyfinSetUp());
     const { port } = apis.app;
-    const keyed = { authorization: withToken(KEY) };
+    const keyed = { authorization: withToken(SET_UP_JELLYFIN.key) };
     const users = await call(port, '/Users', { headers: keyed });
     expect(users.body).toMatchObject([
       { Name: 'admin', Id: FAKE_JELLYFIN_USER_ID, Policy: { IsAdministrator: true } },
@@ -186,9 +173,9 @@ describe("fakeStackApis' Jellyfin", () => {
 
   it('keeps libraries as Jellyfin does: folders it can see, a second of one name renamed, paths added and removed by name', async () => {
     const apis = await fakeStackApis();
-    apis.apps.set('jellyfin', setUp(KEY));
+    apis.apps.set('jellyfin', fakeJellyfinSetUp());
     const { port } = apis.app;
-    const keyed = { authorization: withToken(KEY) };
+    const keyed = { authorization: withToken(SET_UP_JELLYFIN.key) };
     const add = (name: string, folder: string) =>
       call(
         port,
@@ -270,11 +257,11 @@ describe("fakeStackApis' Jellyfin", () => {
 
   it('offers a new library the fetchers Jellyfin 12 offers, some on by default', async () => {
     const apis = await fakeStackApis();
-    apis.apps.set('jellyfin', setUp(KEY));
+    apis.apps.set('jellyfin', fakeJellyfinSetUp());
     const { body } = await call(
       apis.app.port,
       '/Libraries/AvailableOptions?libraryContentType=movies&isNewLibrary=true',
-      { headers: { authorization: withToken(KEY) } },
+      { headers: { authorization: withToken(SET_UP_JELLYFIN.key) } },
     );
     expect(body).toMatchObject({
       TypeOptions: [
@@ -318,8 +305,8 @@ describe("fakeStackApis' Jellyfin", () => {
       status: 200,
       body: { Name: 'abc' },
     });
-    apis.apps.set('jellyfin', setUp(KEY));
-    const keyed = { authorization: withToken(KEY) };
+    apis.apps.set('jellyfin', fakeJellyfinSetUp());
+    const keyed = { authorization: withToken(SET_UP_JELLYFIN.key) };
     const [held] = (await call(port, '/Users', { headers: keyed })).body as Record<
       string,
       unknown
@@ -337,24 +324,24 @@ describe("fakeStackApis' Jellyfin", () => {
 
   it('reads its user by id, and has none to read before the wizard names one', async () => {
     const apis = await fakeStackApis();
-    apis.apps.set('jellyfin', setUp(KEY));
+    apis.apps.set('jellyfin', fakeJellyfinSetUp());
     const { port } = apis.app;
-    const keyed = { authorization: withToken(KEY) };
+    const keyed = { authorization: withToken(SET_UP_JELLYFIN.key) };
     const path = `/Users/${FAKE_JELLYFIN_USER_ID}`;
     expect(await call(port, path, { headers: keyed })).toMatchObject({
       status: 200,
       body: { Name: 'admin', Id: FAKE_JELLYFIN_USER_ID },
     });
-    apis.apps.set('jellyfin', { ...setUp(KEY), user: '', password: '' });
+    apis.apps.set('jellyfin', { ...fakeJellyfinSetUp(), user: '', password: '' });
     expect((await call(port, path, { headers: keyed })).status).toBe(404);
     expect((await call(port, '/Users', { headers: keyed })).body).toEqual([]);
   });
 
   it('refuses a key made without a name, and gives each Jellyfin tokens of its own', async () => {
     const apis = await fakeStackApis();
-    apis.apps.set('jellyfin', setUp(KEY));
+    apis.apps.set('jellyfin', fakeJellyfinSetUp());
     const { port } = apis.app;
-    const keyed = { authorization: withToken(KEY) };
+    const keyed = { authorization: withToken(SET_UP_JELLYFIN.key) };
     const make = (query: string) =>
       call(port, `/Auth/Keys${query}`, { method: 'POST', headers: keyed });
     expect((await make('')).status).toBe(400);
@@ -362,7 +349,7 @@ describe("fakeStackApis' Jellyfin", () => {
     expect(jellyfinOf(apis).apiKeys).toHaveLength(1);
     await make('?app=Mediaplane');
     const other = await fakeStackApis();
-    other.apps.set('jellyfin', setUp(KEY));
+    other.apps.set('jellyfin', fakeJellyfinSetUp());
     await call(other.app.port, '/Auth/Keys?app=Mediaplane', {
       method: 'POST',
       headers: keyed,
@@ -373,9 +360,9 @@ describe("fakeStackApis' Jellyfin", () => {
 
   it('removes a library by name, and refuses to remove one it does not have', async () => {
     const apis = await fakeStackApis();
-    apis.apps.set('jellyfin', setUp(KEY));
+    apis.apps.set('jellyfin', fakeJellyfinSetUp());
     const { port } = apis.app;
-    const keyed = { authorization: withToken(KEY) };
+    const keyed = { authorization: withToken(SET_UP_JELLYFIN.key) };
     apis.mkdir('jellyfin', {
       user: { uid: 1000, gid: 1000 },
       entrypoint: 'mkdir',
@@ -400,7 +387,7 @@ describe("fakeStackApis' Jellyfin", () => {
 
   it('answers /System/Info/Public with 503 while it is not up', async () => {
     const apis = await fakeStackApis();
-    apis.apps.set('jellyfin', { ...setUp(KEY), up: false });
+    apis.apps.set('jellyfin', { ...fakeJellyfinSetUp(), up: false });
     expect(await call(apis.app.port, '/System/Info/Public')).toEqual({
       status: 503,
       body: 'Jellyfin Server is loading. Please try again shortly.',
@@ -409,7 +396,7 @@ describe("fakeStackApis' Jellyfin", () => {
 
   it('needs each of the four client fields to sign in', async () => {
     const apis = await fakeStackApis();
-    apis.apps.set('jellyfin', setUp(KEY));
+    apis.apps.set('jellyfin', fakeJellyfinSetUp());
     const fields = {
       Client: 'Mediaplane',
       Device: 'Mediaplane',
@@ -449,7 +436,7 @@ function connection(
       { name: 'host', value: values.host ?? 'jellyfin' },
       { name: 'port', value: values.port ?? 8096 },
       { name: 'useSsl', value: values.useSsl ?? false },
-      { name: 'apiKey', value: values.apiKey ?? KEY },
+      { name: 'apiKey', value: values.apiKey ?? SET_UP_JELLYFIN.key },
       { name: 'updateLibrary', value: true },
     ],
   };
@@ -469,7 +456,7 @@ describe("fakeStackApis' Sonarr and Radarr connections to Jellyfin", () => {
 
   it('tests a new one with a trigger on as it saves it, as Sonarr does: Jellyfin by its service, port and key', async () => {
     const apis = await fakeStackApis();
-    apis.apps.set('jellyfin', setUp(KEY));
+    apis.apps.set('jellyfin', fakeJellyfinSetUp());
     const unsent = (why: string) =>
       refused('Host', `Unable to send test message: ${why}`);
     expect(await save(apis, connection({ host: 'nowhere' }))).toMatchObject(
@@ -497,12 +484,12 @@ describe("fakeStackApis' Sonarr and Radarr connections to Jellyfin", () => {
       host: 'sonarr:8989',
       headers: { 'x-api-key': '0'.repeat(32) },
     });
-    expect(JSON.stringify(held.body)).not.toContain(KEY);
+    expect(JSON.stringify(held.body)).not.toContain(SET_UP_JELLYFIN.key);
   });
 
   it("fails with the arr's own words when a testFailure is set on it, whatever the connection holds", async () => {
     const apis = await fakeStackApis();
-    apis.apps.set('jellyfin', setUp(KEY));
+    apis.apps.set('jellyfin', fakeJellyfinSetUp());
     await save(apis, connection({ apiKey: '9'.repeat(32) }, { onDownload: false }));
     apis.apps.set('sonarr', {
       ...freshAppState(),
@@ -523,7 +510,7 @@ describe("fakeStackApis' Sonarr and Radarr connections to Jellyfin", () => {
 
   it('saves one with no trigger on untested, as the arrs do', async () => {
     const apis = await fakeStackApis();
-    apis.apps.set('jellyfin', setUp(KEY));
+    apis.apps.set('jellyfin', fakeJellyfinSetUp());
     expect(
       (await save(apis, connection({ apiKey: '9'.repeat(32) }, { onDownload: false })))
         .status,
