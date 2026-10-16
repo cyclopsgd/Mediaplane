@@ -10,7 +10,7 @@ import {
   type ReachedApp,
   type WiringSeams,
 } from '../integrations/wiring';
-import type { BootstrapChange } from '../plan/bootstrap';
+import { appSetupDone, type BootstrapChange } from '../plan/bootstrap';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { RuntimeError, type Runtime } from '../runtime/types';
 import { adminLogin } from '../secrets/admin';
@@ -114,6 +114,7 @@ export async function bootstrapApps(
     const result = await setUp(app, reached.get(app.def.id), admin, {
       unpublished: change?.unpublished ?? true,
       container: `${options.project}-${app.def.id}-1`,
+      home: options.home,
     });
     if (result.key !== undefined) {
       const secret = app.def.bootstrap?.secret ?? '';
@@ -127,6 +128,7 @@ export async function bootstrapApps(
       const known = result.key === undefined ? secrets : [...secrets, result.key];
       failed.push(redact(result.failure, redactionValues(known)));
       // An app the plan started published isn't unpublished now: its failure says so.
+      // With a second app to set up, it would keep its ports in the publishing up.
       if (result.open && change?.unpublished !== false) stillOpen.push(app.def.id);
     }
   }
@@ -181,20 +183,20 @@ async function looksOpen(
 }
 
 /**
- * Finish `app`'s setup: its new key, or why not and whether the app must stay unpublished.
- * One Mediaplane can't reach or ask counts as open. A setup that says it is done is asked
- * once more before the app is published: the engine, and not each catalog entry, keeps an
- * app that still looks open unpublished. It still gets its key stored, since the app made
- * it. An app the plan started unpublished, since its setup was open, whose shared admin is
- * then refused (an `auth` failure) was claimed by someone else meanwhile: it stays
- * unpublished, however done its setup now looks. One the plan started published was done
+ * Finish `app`'s setup: its new key, or why not and whether the app must stay
+ * unpublished. One Mediaplane can't reach or ask counts as open. A setup that says it is
+ * done is asked once more before the app is published: the engine, and not each catalog
+ * entry, keeps an app that still looks open unpublished. It still gets its key stored,
+ * since the app made it. An app the plan started unpublished, since its setup didn't look
+ * done, whose shared admin is then refused (an `auth` failure) stays unpublished, however
+ * done its setup now looks (see `claimed`). One the plan started published was done
  * before this run, by hand say, and nobody can claim it.
  */
 async function setUp(
   app: ResolvedApp,
   client: ReachedApp | undefined,
   admin: { username: string; password: string },
-  started: { unpublished: boolean; container: string },
+  started: { unpublished: boolean; container: string; home: string },
 ): Promise<SetUpResult> {
   const { bootstrap, api } = app.def;
   if (client === undefined || bootstrap === undefined || api === undefined) {
@@ -219,11 +221,26 @@ async function setUp(
     if (!(cause instanceof AppApiError)) throw cause;
     const now = await looksOpen(bootstrap, client.api);
     if (started.unpublished && cause.kind === 'auth' && !now.open) {
-      return {
-        failure: `${cause.message}; ${name}'s setup was open when apply started it, so it was finished with another login while Mediaplane set it up, and it stays unpublished. Its setup is now done, so the next apply would publish it: start it afresh first, as the runbook says`,
-        open: true,
-      };
+      return { failure: await claimed(app, cause.message, started.home), open: true };
     }
     return { failure: cause.message, open: now.open };
   }
+}
+
+/**
+ * Why an app the plan started unpublished, whose shared admin is refused once its setup
+ * looks done, stays unpublished. Its appdata, read again, tells the two causes apart: a
+ * file Mediaplane can't read may hide a setup the user finished by hand, which starting
+ * afresh would lose; one it can read was finished with another login meanwhile.
+ */
+async function claimed(app: ResolvedApp, refused: string, home: string): Promise<string> {
+  const { name, id } = app.def;
+  const said = `${refused}; ${name}'s setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished`;
+  const done = await appSetupDone(home, app);
+  if (done === undefined) {
+    const file = `appdata/${id}/${app.def.bootstrap?.done.path ?? ''}`;
+    return `${said}. Mediaplane can't read ${file}, which says whether it is set up, so this may be a ${name} you set up yourself: don't start it afresh. Make that file readable by Mediaplane, or set admin.username and admin.password to its login, then run apply again, as the runbook says`;
+  }
+  const next = done ? ', and the next apply would publish it' : '';
+  return `${said}: its wizard was finished with another login while Mediaplane set it up${next}. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says`;
 }

@@ -182,7 +182,7 @@ the S3c list, two S8 items and one unscheduled item. Slice 3c (2026-10-11) added
 item, five S8 items, an S9 item and an M2 item. Slice 4 (2026-10-15) added four S8 items,
 and its final review an S5 item, two S8 items, a probe in two others, two S9 test gaps
 and an S9 docs item. Slice 5 (2026-10-15) added an S6 item, six S8 items and an S9
-item, and extended one, and its final review an S8 item and three S9 items. Each slice
+item, and extended one, and its final review an S8 item and four S9 items. Each slice
 plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
@@ -562,6 +562,8 @@ password, which are S3c's (and listed again below).
   `finally` (S5). Move the restore into one.
 - **Two wide tables** (S5): convert the README's capability table and the threat
   model's asset table to lists.
+- **A second app with a first-run setup** (S5): a published app whose wizard still
+  looks open would keep its ports in the publishing `up`. Take them away, and say so.
 - **Pins outside the catalog.** Renovate must also bump the images pinned in:
   - `Dockerfile` (`node`, `docker:*-cli`);
   - `deploy/mediaplane.compose.yaml` (`wollomatic/socket-proxy`);

@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { error, warning, type Diagnostic } from '../diagnostics';
-import type { ResolvedStack } from '../resolver/resolve';
+import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import type { SecretStore } from '../secrets/store';
 import { readIfExists } from '../util/fs';
 
@@ -51,10 +51,7 @@ export async function inspectBootstrap(
       continue;
     }
     const stored = store.apps[app.def.id]?.[setup.secret] !== undefined;
-    const done = await setupDone(
-      join(stack.home, 'appdata', app.def.id, setup.done.path),
-      setup.done.pattern,
-    );
+    const done = await appSetupDone(stack.home, app);
     if (done === undefined && stored) {
       diagnostics.push(
         warning(
@@ -76,6 +73,22 @@ export async function planBootstrap(
   store: SecretStore,
 ): Promise<BootstrapChange[]> {
   return (await inspectBootstrap(stack, store)).changes;
+}
+
+/**
+ * Whether `app`'s appdata, in the stack at `home`, says its first-run setup is done:
+ * undefined when the file can't be read, or the app has no setup.
+ */
+export async function appSetupDone(
+  home: string,
+  app: ResolvedApp,
+): Promise<boolean | undefined> {
+  const setup = app.def.bootstrap;
+  if (setup === undefined) return undefined;
+  return setupDone(
+    join(home, 'appdata', app.def.id, setup.done.path),
+    setup.done.pattern,
+  );
 }
 
 /** Whether the file at `path` says the setup is done; undefined when it can't be read. */

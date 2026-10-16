@@ -71,8 +71,8 @@ and Plex.
 
 - **`mediaplane apply` stops at the first-run setup step,** before the wiring. Jellyfin's
   startup wizard is finished there, before its port is published. A Jellyfin whose
-  wizard is still open stays unpublished, and so does one whose wizard was open when
-  `apply` started it but was finished with another login. One whose wizard Mediaplane
+  wizard is still open stays unpublished, and so does one whose wizard didn't look done
+  when `apply` started it but now refuses the shared admin. One whose wizard Mediaplane
   finished, or that was done before `apply` started it, is published all the same. The
   step's line, then its error (trimmed):
 
@@ -263,12 +263,22 @@ differ, and a `reason` when it is `unknown`.
     With the login fixed, a library of yours named Movies or Shows becomes
     Mediaplane's: `plan` shows its folders changing, so rename it first to keep it. If
     you did not finish it, or can't tell, start Jellyfin afresh.
-  - **`Jellyfin's setup was open when apply started it, so it was finished with another login while Mediaplane set it up`**
-    follows it: the wizard was open when `apply` started Jellyfin, unpublished, and
-    something else reached it and finished it before Mediaplane could. That is a
-    container on the stack's networks, or a way in that an override opened. Jellyfin
-    stays unpublished. Its wizard is now done, so the next `apply` would publish it:
-    start Jellyfin afresh first, and find which container reached it.
+  - **`Jellyfin's setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished`**
+    follows it: `apply` started Jellyfin unpublished, and Jellyfin stays so. There are
+    two causes, and the rest of the message says which. Check the safe one first:
+    - **`Mediaplane can't read appdata/jellyfin/system.xml`:** this may be a Jellyfin
+      you set up yourself, whose file Mediaplane can't read (see
+      `bootstrap.unreadable` below). Don't start it afresh, which would lose its
+      database. Make the file readable by Mediaplane, or set `admin.username`, and
+      `admin.password` to a file of your own, to its admin login, then run `apply`
+      again.
+    - **`its wizard was finished with another login while Mediaplane set it up`:** the
+      wizard was open when `apply` started Jellyfin, and something else reached it and
+      finished it before Mediaplane could. That is a container on the stack's networks,
+      or a way in that an override opened. With `and the next apply would publish it`,
+      its `system.xml` now says the wizard is done. If you finished it yourself, set the
+      admin login as above. If you did not, start Jellyfin afresh before you run `apply`
+      again, and find which container reached it.
   - To start Jellyfin afresh, stop it (`docker stop mediaplane-jellyfin-1`), remove
     `appdata/jellyfin` (with `sudo` if it isn't yours), and run `apply`, which sets it
     up anew. That loses Jellyfin's database and settings, but not your media.

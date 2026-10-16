@@ -1385,8 +1385,11 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     it is still open stays unpublished; one whose setup is done is published even when
     making its key failed. An app the plan started unpublished whose shared admin is
     then refused (`Bootstrap.run` throws an `auth` failure) stays unpublished, whatever
-    it says of its setup: someone else finished it while Mediaplane set it up. One the
-    plan started published, done by hand before, is left published.
+    it says of its setup: someone else finished it while Mediaplane set it up, or, when
+    its `done` file can't be read, it may have been set up by hand. The step reads the
+    file again, and its error says which, so that it never advises starting afresh an
+    app the user set up. One the plan started published, done by hand before, is left
+    published.
   - **The re-check, and two plan diagnostics.** Before publishing an app, the engine asks
     the app once more whether its setup is still open (`Bootstrap.open`), and publishes
     it only if it is not; if it still looks open, or can't be asked, the step fails and

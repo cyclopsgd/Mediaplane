@@ -55,9 +55,13 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
   it is not: if it still looks open, `apply` stops and does not publish it. If the
   wizard was open when `apply` started Jellyfin, and the shared admin's sign-in is then
   refused, someone else finished it meanwhile: `apply` stops, and Jellyfin stays
-  unpublished. If Mediaplane can't read `system.xml`, with Jellyfin's key stored, `plan`
-  warns (`bootstrap.unreadable`) that it can't tell whether the wizard is open: fix the
-  ownership of `appdata/jellyfin`, or the user Mediaplane runs as.
+  unpublished. Its wizard is now done, so the next `apply` would publish it: if you did
+  not finish it yourself, start Jellyfin afresh first, as the
+  [wiring failed runbook](../../docs/runbooks/wiring-failed.md) says. If Mediaplane
+  can't read `system.xml`, the error says so instead, since that may be a Jellyfin you
+  set up yourself: fix the file, and don't start it afresh. With Jellyfin's key stored,
+  `plan` warns (`bootstrap.unreadable`) that it can't tell whether the wizard is open:
+  fix the ownership of `appdata/jellyfin`, or the user Mediaplane runs as.
 
 - **The shared admin** (`jellyfin.admin`) is the user the wizard made, named as
   `admin.username`. A change of `admin.username` or `admin.password` reaches it through
@@ -122,11 +126,14 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 - **A wizard finished by hand, before Slice 5.** `apply` can't sign in as the shared
   admin, so it can't make a key, and stops with
-  `refused the shared admin's sign-in: its startup wizard was finished with another login`.
-  Jellyfin stays published, and until then, `apply` wires no app. Set `admin.username`,
-  and `admin.password` to a file of your own, to Jellyfin's admin login, and apply again:
-  the other apps take that login too. A library of yours named Movies or Shows then
-  becomes Mediaplane's: `plan` shows its folders changing, so rename it first to keep it.
+  `refused the shared admin's sign-in: its startup wizard was finished with another login`,
+  with nothing after it. Jellyfin stays published, and until then, `apply` wires no app.
+  When more follows the message, Jellyfin stays unpublished instead: the
+  [wiring failed runbook](../../docs/runbooks/wiring-failed.md) says what to do. For
+  this one, set `admin.username`, and `admin.password` to a file of your own, to
+  Jellyfin's admin login, and apply again: the other apps take that login too. A
+  library of yours named Movies or Shows then becomes Mediaplane's: `plan` shows its
+  folders changing, so rename it first to keep it.
   Or start Jellyfin afresh: stop Jellyfin first (`docker stop mediaplane-jellyfin-1`),
   then remove `appdata/jellyfin`, then run `apply`. That loses its database and settings,
   but not your media.

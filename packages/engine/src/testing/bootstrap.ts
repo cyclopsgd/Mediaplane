@@ -77,8 +77,9 @@ export interface FakeSetUpState {
 
 /**
  * The app behind FAKE_SETUP, as Jellyfin of the stack in `home`: /ready, /setup (its
- * state, and a POST that finishes it), /signin, /key, and /check, which takes only its key. A
- * finished setup writes appdata/jellyfin/setup.txt, as Jellyfin writes its system.xml.
+ * state, and a POST that finishes it), /signin, /key, and /check, which takes only its
+ * key. A finished setup writes appdata/jellyfin/setup.txt, as Jellyfin writes its
+ * system.xml.
  * `addresses` put Jellyfin's fake container on the wiring network, and `seams` send its
  * calls here.
  */

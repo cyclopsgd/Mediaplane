@@ -619,8 +619,11 @@ What remains:
   `apply` stops, completing no wizard for it. If it also completes the wizard, `apply`
   stops and keeps Jellyfin unpublished, but Jellyfin belongs to whoever finished it.
   Its wizard is then done, so the next `apply` would publish it: start Jellyfin afresh
-  first, as the runbook says. This needs a compromised container already inside the
-  stack, which T4 and the other threats here already treat as serious.
+  first, as the runbook says. When Mediaplane can't read Jellyfin's `system.xml`, the
+  same refusal may come from a Jellyfin set up by hand, and the error says so instead,
+  so that nobody starts afresh a Jellyfin they set up themselves. This needs a
+  compromised container already inside the stack, which T4 and the other threats here
+  already treat as serious.
 - A wizard finished by hand before `apply` started Jellyfin (from before Slice 5, say)
   is done, so Jellyfin starts published, and nobody can claim it. If the shared admin
   can't sign in to it, `apply` stops, and Jellyfin stays published: it belongs to

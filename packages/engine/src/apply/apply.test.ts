@@ -1826,9 +1826,51 @@ describe('apply: first-run setup before the ports are published', () => {
     expect(result.diagnostics.at(-1)).toMatchObject({
       code: 'apply.bootstrap-failed',
       message:
-        "the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in (POST /signin); jellyfin's setup was open when apply started it, so it was finished with another login while Mediaplane set it up, and it stays unpublished. Its setup is now done, so the next apply would publish it: start it afresh first, as the runbook says",
+        "the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in (POST /signin); jellyfin's setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished: its wizard was finished with another login while Mediaplane set it up. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says",
     });
     // Whatever the app says now, nothing publishes it.
+    expect(ups).toEqual([
+      'jellyfin unpublished, setup done',
+      'jellyfin unpublished, setup done',
+    ]);
+    expect((await readSecretStore(home)).apps.jellyfin).toBeUndefined();
+  });
+
+  it('says the next apply would publish a setup claimed while Mediaplane set it up, once its appdata says it is done', async () => {
+    const { home, setup, ups, runtime, extra } = await setUpStack();
+    Object.assign(setup.state, { done: true, admin: 'someone-else', key: SET_UP_KEY });
+    // The claimant's Jellyfin writes its file as its wizard completes, after the start.
+    const claiming: Runtime = {
+      ...runtime,
+      up: async (seconds, values, unpublished) => {
+        const result = await runtime.up(seconds, values, unpublished);
+        await writeFile(join(home, 'appdata', 'jellyfin', 'setup.txt'), 'done\n');
+        return result;
+      },
+    };
+    const result = await apply(options(home, claiming, extra));
+    expect(result.diagnostics.at(-1)?.message).toBe(
+      "the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in (POST /signin); jellyfin's setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished: its wizard was finished with another login while Mediaplane set it up, and the next apply would publish it. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says",
+    );
+    expect(ups).toEqual([
+      'jellyfin unpublished, setup done',
+      'jellyfin unpublished, setup done',
+    ]);
+  });
+
+  it("keeps unpublished, and says not to start afresh, a set-up app whose appdata Mediaplane can't read", async () => {
+    const { home, setup, ups, run } = await setUpStack();
+    // Finished by hand, with no key stored, and a file Mediaplane can't read (a folder).
+    await mkdir(join(home, 'appdata', 'jellyfin', 'setup.txt'), { recursive: true });
+    Object.assign(setup.state, { done: true, admin: 'someone-else', key: SET_UP_KEY });
+    const result = await run();
+    expect(result.outcome).toBe('failed');
+    expect(result.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
+    expect(result.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message:
+        "the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in (POST /signin); jellyfin's setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished. Mediaplane can't read appdata/jellyfin/setup.txt, which says whether it is set up, so this may be a jellyfin you set up yourself: don't start it afresh. Make that file readable by Mediaplane, or set admin.username and admin.password to its login, then run apply again, as the runbook says",
+    });
     expect(ups).toEqual([
       'jellyfin unpublished, setup done',
       'jellyfin unpublished, setup done',

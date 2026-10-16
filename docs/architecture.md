@@ -357,7 +357,9 @@ up --wait again
   whose setup failed while it is still open stays unpublished; one whose setup is done
   is published even when making its key failed. But an app the plan started
   unpublished, whose shared admin is then refused, stays unpublished whatever it says:
-  its wizard was finished with another login while Mediaplane set it up.
+  its wizard was finished with another login while Mediaplane set it up. Its appdata,
+  read again, tells that from a setup done by hand whose file Mediaplane can't read,
+  and the error says which.
 - **No new Docker call:** the proxy allows nothing new.
 
 ## The wiring
