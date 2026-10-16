@@ -6,7 +6,7 @@ import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { RuntimeError, type Runtime } from '../runtime/types';
 import { adminLogin } from '../secrets/admin';
 import type { SecretStore } from '../secrets/store';
-import { redact } from '../util/redact';
+import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
 import { readResources, writeResources, type KnownResources } from './resources';
 import type { DesiredResource, Fields, ResourceSpec, WiringContext } from './types';
 import {
@@ -47,6 +47,13 @@ export interface WireOptions {
    * naming it) is set without another check: one failed sign-in per apply, not two.
    */
   planned?: readonly WiringChange[];
+  /**
+   * Apps whose first-run setup waits (the bootstrap step's SetupWaiting): their resources
+   * are skipped, and so is what requires them.
+   */
+  waiting?: readonly string[];
+  /** What the run finds in the apps' answers (FoundSecrets); the step's own, by default. */
+  found?: FoundSecrets;
   seams?: WiringSeams;
 }
 
@@ -87,6 +94,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
   }
   const admin = await adminLogin(stack.config, options.home, options.store, options.env);
   const secrets = knownSecrets(options.values, options.store, admin);
+  const found = options.found ?? foundSecrets();
   let reached: Map<string, ReachedApp>;
   try {
     if ((await runtime.joinWiring()) === 'no-network') {
@@ -101,6 +109,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
       current: await runtime.containers(),
       keys: options.store.apps,
       secrets,
+      found,
       deadlineMs: APP_DEADLINE_MS,
       ...(options.seams === undefined ? {} : { seams: options.seams }),
     });
@@ -119,9 +128,10 @@ export async function wire(options: WireOptions): Promise<string[]> {
   const done: string[] = [];
   const values = redactionValues(secrets);
   // Every failure's message is redacted once, here, whoever wrote it: the client, a
-  // resource's own error, mkdir or Docker.
+  // resource's own error, mkdir or Docker; with the secrets the step has found by then.
+  const redacting = () => redactionValues([...secrets, ...found.values]);
   const fail = (resource: string, said: string, code: string) => {
-    const message = redact(said, values);
+    const message = redact(said, redacting());
     failed.push(resource);
     diagnostics.push(error(code, message, { hint: `see ${WIRING_RUNBOOK}` }));
     options.record({ step: 'wire', resource, result: 'failed', error: message });
@@ -135,7 +145,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
     before = '',
   ): WiringFailed => {
     const said = cause instanceof Error ? cause.message : String(cause);
-    const message = redact(`${before}${said}`, values);
+    const message = redact(`${before}${said}`, redacting());
     for (const resource of resources) {
       options.record({ step: 'wire', resource, result: 'failed', error: message });
     }
@@ -144,6 +154,18 @@ export async function wire(options: WireOptions): Promise<string[]> {
   for (const app of order) {
     const ctx: WiringContext = { stack, app, admin, keys: options.store.apps };
     const targets = wiringTargets(ctx);
+    if (options.waiting?.includes(app.def.id) === true) {
+      for (const target of targets) {
+        skipped.push(target);
+        options.record({
+          step: 'wire',
+          resource: target,
+          result: 'skipped',
+          detail: `${app.def.id}'s first-run setup waits`,
+        });
+      }
+      continue;
+    }
     const client = reached.get(app.def.id);
     if (client === undefined) {
       for (const target of targets)

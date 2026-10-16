@@ -15,6 +15,7 @@ import {
   WIRING_RUNNING as RUNNING,
   wiringStack as stackOf,
 } from '../testing/wiring';
+import { foundSecrets } from '../util/redact';
 import type { KnownResources } from './resources';
 import type { ResourceSpec } from './types';
 import {
@@ -412,6 +413,36 @@ describe('planWiring', () => {
     ]);
   });
 
+  it('keeps a secret a resource read in an answer out of every warning after it', async () => {
+    const HELD = 'e'.repeat(32);
+    // One reads a key the app holds in clear, then fails in its own words, quoting it;
+    // the next quotes it too.
+    const reads: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'first',
+      observe: (api) => {
+        api.addSecret(HELD);
+        return Promise.reject(
+          new AppApiError(`Sonarr holds ${HELD}`, { kind: 'rejected' }),
+        );
+      },
+    };
+    const quotes: ResourceSpec = {
+      ...FAKE_LOGIN,
+      observe: () =>
+        Promise.reject(new AppApiError(`still ${HELD}`, { kind: 'rejected' })),
+    };
+    const sonarr = await fakeSonarr({ key: KEY });
+    const planned = await planWiring(
+      options(sonarr, { stack: sonarrWith([reads, quotes]) }),
+    );
+    expect(planned.diagnostics.map((d) => d.message)).toEqual([
+      'Sonarr holds ***',
+      'still ***',
+    ]);
+    expect(JSON.stringify(planned)).not.toContain(HELD);
+  });
+
   it('says a managed field that holds a secret is one apply would refuse, and asks nothing of it', async () => {
     // The user name "admin" holds a value of the stack's secrets.
     const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
@@ -668,6 +699,7 @@ describe('reachApps', () => {
         current: RUNNING,
         keys: {},
         secrets: [],
+        found: foundSecrets(),
         deadlineMs: 0,
       }),
     ).rejects.toThrow('sonarr has no web port for its API');

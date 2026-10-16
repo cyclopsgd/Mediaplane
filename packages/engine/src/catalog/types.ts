@@ -3,6 +3,7 @@ import type { AppSettings, StackConfig } from '../config/schema';
 import type { Diagnostic } from '../diagnostics';
 import type { AppApi, KeyScheme } from '../http/client';
 import type { Integration } from '../integrations/types';
+import type { ResolvedStack } from '../resolver/resolve';
 
 export type Arch = 'amd64' | 'arm64';
 export type Category =
@@ -120,11 +121,15 @@ export interface ApiSpec {
  * First-run setup that an app opens to anyone who reaches it, which Mediaplane finishes
  * before it publishes the app's ports (spec §5 step 9, §6.4: bootstrap before publish),
  * over the wiring network, without a key: Jellyfin's startup wizard, then the API key that
- * only the app can make.
+ * only the app can make; Seerr's first sign-in, through Jellyfin.
  */
 export interface Bootstrap {
-  /** The secret the setup makes, which the app creates (`createdBy: 'app'`): its key. */
-  secret: string;
+  /**
+   * The secret the setup makes, which the app creates (`createdBy: 'app'`): its key. None
+   * when Mediaplane chose the app's key (Seerr's, in `API_KEY`): its `done` file alone
+   * then says whether the setup is done.
+   */
+  secret?: string;
   /**
    * A file in the app's appdata folder that says the setup is done, such as Jellyfin's
    * system.xml: until it exists and matches `pattern`, the app starts unpublished.
@@ -133,11 +138,18 @@ export interface Bootstrap {
   /** Whether anyone who reaches the app can still claim it. Throws AppApiError. */
   open(api: AppApi): Promise<boolean>;
   /**
-   * Finish what is left of the setup as the shared admin, and give the secret it made, or
-   * the one the app already holds for Mediaplane. Throws AppApiError, of kind `auth` when
-   * the app refuses the shared admin: an app the plan started unpublished then stays so.
+   * Finish what is left of the setup as the shared admin, in `stack`, and give the secret
+   * it made, or the one the app already holds for Mediaplane; undefined for a setup that
+   * makes none. Throws AppApiError, of kind `auth` when the app refuses the shared admin:
+   * an app the plan started unpublished then stays so. Throws SetupWaiting when another
+   * app the setup goes through isn't ready for it: Jellyfin refusing the shared admin that
+   * Seerr signs in as.
    */
-  run(api: AppApi, admin: { username: string; password: string }): Promise<string>;
+  run(
+    api: AppApi,
+    admin: { username: string; password: string },
+    stack: ResolvedStack,
+  ): Promise<string | undefined>;
 }
 
 export interface ServiceExtras {

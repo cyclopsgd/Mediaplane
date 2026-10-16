@@ -31,6 +31,7 @@ import { acquireLock, LockedError, type Lock } from '../state/lock';
 import { writeFileAtomic } from '../util/atomic';
 import { codeOf } from '../util/error-code';
 import { readIfExists } from '../util/fs';
+import { foundSecrets } from '../util/redact';
 import { compare } from '../util/sort';
 import { vpnCheck, VPN_RUNBOOK } from '../vpn/check';
 import { bootstrapApps, BootstrapFailed } from './bootstrap';
@@ -210,14 +211,21 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     // bootstrap step publishes it once it is set up (spec §6.4).
     const unpublished = shown.bootstrap.filter((b) => b.unpublished).map((b) => b.app);
     await up(unpublished);
+    const [its, it] = unpublished.length === 1 ? ['its', 'it'] : ['their', 'them'];
     return [
       'every app is running and healthy',
       ...(restart.length === 0 ? [] : [`restarted ${restart.join(', ')}`]),
       ...(unpublished.length === 0
         ? []
-        : [`started ${unpublished.join(', ')} without its ports, to set it up first`]),
+        : [
+            `started ${unpublished.join(', ')} without ${its} ports, to set ${it} up first`,
+          ]),
     ].join('; ');
   });
+  /** The apps whose first-run setup waits: the wire step skips their resources. */
+  let waiting: string[] = [];
+  /** The secrets the bootstrap and wire steps read in the apps' answers. */
+  const found = foundSecrets();
   if (shown.bootstrap.length > 0) {
     await steps.run('bootstrap', async () => {
       const set = await bootstrapApps({
@@ -230,9 +238,19 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         pending: shown.bootstrap,
         publish: up,
         project: options.project ?? PROJECT_NAME,
+        found,
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });
       store = set.store;
+      waiting = set.waiting.map((w) => w.app);
+      // The step goes on: the wire step may make the app ready, as the next apply finds.
+      for (const w of set.waiting) {
+        steps.diagnostics.push(
+          warning('bootstrap.waiting', w.reason, {
+            hint: `the rest of the stack is wired without ${w.app}, and the next apply sets it up; if it still waits, see ${runbookUrl('wiring-failed')}`,
+          }),
+        );
+      }
       return set.detail;
     });
   }
@@ -250,6 +268,8 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
           steps.record(action);
         },
         planned: shown.wiring,
+        waiting,
+        found,
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });
       return done.length === 0 ? NONE_NEEDED : done.join('; ');
@@ -511,6 +531,7 @@ function remaining(result: PlanResult): string {
       .map((c) => `${c.service} (${c.action})`),
     ...result.secrets.generate,
     ...result.unhealthy,
+    ...result.bootstrap.map((b) => `${b.app} (first-run setup)`),
     // An unknown one says why: its reason names the app and what failed, redacted.
     ...result.wiring
       .filter((w) => w.action !== 'unchanged')

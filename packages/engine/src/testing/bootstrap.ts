@@ -1,11 +1,12 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { SetupWaiting } from '../apply/bootstrap';
 import type { Bootstrap, Catalog } from '../catalog/types';
 import { AppApiError, type AppApi } from '../http/client';
 import type { WiringSeams } from '../integrations/wiring';
 import { FIXTURE_API, fixtureCatalog } from './fixtures';
-import { fakeHttpApp, type FakeApp } from './http';
+import { fakeHttpApp, type FakeApp, type FakeReply, type FakeRequest } from './http';
 
 /** The key the fake setup makes. */
 export const SET_UP_KEY = '9'.repeat(32);
@@ -55,6 +56,118 @@ export const SET_UP_CATALOG: Catalog = fixtureCatalog.map((def) =>
     : def,
 );
 
+/** Whether FAKE_SIGN_IN's app can still be claimed. */
+async function signInOpen(api: AppApi): Promise<boolean> {
+  return !(await api.get('/signed-in', z.looseObject({ done: z.boolean() }))).done;
+}
+
+/**
+ * A first-run setup shaped like Seerr's: it makes no key (the app's is Mediaplane's own),
+ * and is open until the shared admin signs in through Jellyfin (POST /sign-in, which keeps
+ * the session in the cookie `sid` and writes signed-in.txt in its appdata), then signs
+ * out. It waits (SetupWaiting) while that sign-in is refused, as Seerr's does while
+ * Jellyfin refuses the shared admin. Done already, it does nothing.
+ */
+export const FAKE_SIGN_IN: Bootstrap = {
+  done: { path: 'signed-in.txt', pattern: /^yes$/m },
+  open: signInOpen,
+  async run(api, admin, stack) {
+    if (!(await signInOpen(api))) return undefined;
+    const through = stack.apps.find((app) => app.def.id === 'jellyfin')?.def.id;
+    const session = await api.session(
+      '/sign-in',
+      { user: admin.username, password: admin.password, through },
+      'sid',
+      [admin.password],
+    );
+    if (session === undefined) {
+      throw new SetupWaiting(
+        `${api.name} at ${api.where} can't sign in yet: Jellyfin refused the shared admin (POST /sign-in)`,
+      );
+    }
+    await session.submit('POST', '/sign-out');
+    return undefined;
+  },
+};
+
+/**
+ * SET_UP_CATALOG, with Sonarr given FAKE_SIGN_IN, after Jellyfin, an API of its own and
+ * no resource.
+ */
+export const SIGN_IN_CATALOG: Catalog = SET_UP_CATALOG.map((def) =>
+  def.id === 'sonarr'
+    ? {
+        ...def,
+        api: { ...FIXTURE_API, ready: '/ready', check: '/check' },
+        integration: { after: ['jellyfin'], resources: [] },
+        bootstrap: FAKE_SIGN_IN,
+      }
+    : def,
+);
+
+/** What the app behind FAKE_SIGN_IN holds; a test may change it between calls. */
+export interface FakeSignInState {
+  /** Whether the shared admin has signed in, which is its setup. */
+  done: boolean;
+  /** Refuse the sign-in (401), as Jellyfin refusing the shared admin makes Seerr. */
+  refuse: boolean;
+  /**
+   * With `refuse`: someone else signs in first, so the setup is done (signed-in.txt
+   * written) by the time the sign-in is refused.
+   */
+  claimant: boolean;
+  /** Its sessions' cookies, until signed out. */
+  sessions: string[];
+  /** Who signed in, as each sign-in named them, and through what. */
+  signedIn: { user: string; through: string }[];
+}
+
+/**
+ * The app behind FAKE_SIGN_IN, as Sonarr of the stack in `home`: /ready, /signed-in,
+ * /sign-in, /sign-out, and /check, which takes any key.
+ */
+function fakeSignInApp(
+  request: FakeRequest,
+  state: FakeSignInState,
+  home: string,
+): FakeReply {
+  const { method, path, headers } = request;
+  if (path === '/ready') return { status: 200 };
+  if (path === '/signed-in') return { status: 200, body: { done: state.done } };
+  if (path === '/sign-in' && method === 'POST') {
+    if (state.refuse) {
+      if (state.claimant) {
+        state.done = true;
+        writeFileSync(join(home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
+      }
+      return { status: 401 };
+    }
+    const { user, through } = JSON.parse(request.body) as {
+      user: string;
+      through: string;
+    };
+    state.signedIn.push({ user, through });
+    state.done = true;
+    writeFileSync(join(home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
+    const cookie = `fake-sid-${String(state.signedIn.length)}`;
+    state.sessions.push(cookie);
+    return {
+      status: 200,
+      body: {},
+      headers: { 'Set-Cookie': `sid=${cookie}; Path=/; HttpOnly` },
+    };
+  }
+  if (path === '/sign-out' && method === 'POST') {
+    const cookie = /^sid=(.*)$/.exec(headers.cookie ?? '')?.[1];
+    if (cookie === undefined || !state.sessions.includes(cookie)) return { status: 401 };
+    state.sessions = state.sessions.filter((s) => s !== cookie);
+    return { status: 200 };
+  }
+  if (path === '/check')
+    return { status: headers['x-api-key'] === undefined ? 401 : 200 };
+  return { status: 404 };
+}
+
 /** What the app behind FAKE_SETUP holds; a test may change it between calls. */
 export interface FakeSetUpState {
   /** Whether its setup is done. */
@@ -79,16 +192,25 @@ export interface FakeSetUpState {
  * The app behind FAKE_SETUP, as Jellyfin of the stack in `home`: /ready, /setup (its
  * state, and a POST that finishes it), /signin, /key, and /check, which takes only its
  * key. A finished setup writes appdata/jellyfin/setup.txt, as Jellyfin writes its
- * system.xml.
- * `addresses` put Jellyfin's fake container on the wiring network, and `seams` send its
- * calls here.
+ * system.xml. Called as Sonarr (its Host header), it is the app behind FAKE_SIGN_IN, with
+ * `signIn` its state.
+ * `addresses` put Jellyfin's and Sonarr's fake containers on the wiring network, and
+ * `seams` send their calls here.
  */
 export async function fakeSetUpApp(home: string): Promise<{
   app: FakeApp;
   state: FakeSetUpState;
+  signIn: FakeSignInState;
   seams: WiringSeams;
   addresses: Record<string, string>;
 }> {
+  const signIn: FakeSignInState = {
+    done: false,
+    refuse: false,
+    claimant: false,
+    sessions: [],
+    signedIn: [],
+  };
   const state: FakeSetUpState = {
     done: false,
     key: '',
@@ -101,6 +223,9 @@ export async function fakeSetUpApp(home: string): Promise<{
   };
   const app = await fakeHttpApp((request) => {
     const { method, path, headers } = request;
+    if ((headers.host ?? '').startsWith('sonarr:')) {
+      return fakeSignInApp(request, signIn, home);
+    }
     if (path === '/ready') return { status: 200 };
     if (path === '/setup' && method === 'GET') {
       if (state.echoKey && state.key !== '') {
@@ -139,10 +264,11 @@ export async function fakeSetUpApp(home: string): Promise<{
   return {
     app,
     state,
+    signIn,
     seams: {
       endpoint: () => ({ host: '127.0.0.1', port: app.port }),
       retry: { deadlineMs: 0 },
     },
-    addresses: { 'fake-jellyfin': '127.0.0.1' },
+    addresses: { 'fake-jellyfin': '127.0.0.1', 'fake-sonarr': '127.0.0.1' },
   };
 }

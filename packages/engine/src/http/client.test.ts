@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { z } from 'zod';
 import { closedPort, fakeHttpApp, type FakeHandler } from '../testing/http';
+import { foundSecrets } from '../util/redact';
 import {
   AppApiError,
   appMessage,
@@ -1248,5 +1249,133 @@ describe("createAppApi: Jellyfin's ways", () => {
     const refused = await failure(api.withKey('d'.repeat(32)).check('/System/Info'));
     expect(refused.message).toContain('was ***');
     expect(refused.message).not.toContain(KEY);
+  });
+});
+
+describe("createAppApi: Seerr's session", () => {
+  const seerr = { name: 'Seerr', service: 'seerr', port: 5055 };
+  const COOKIE = 's%3Afake-session.signed';
+
+  it('signs in with JSON and without the key, and gives a client that carries the session cookie in place of the key', async () => {
+    const { api, app } = await sonarr(
+      (request) => {
+        if (request.path === '/api/v1/auth/jellyfin') {
+          const { password } = JSON.parse(request.body) as { password: string };
+          return password === PASSWORD
+            ? {
+                status: 200,
+                body: { id: 1 },
+                headers: { 'Set-Cookie': `connect.sid=${COOKIE}; Path=/; HttpOnly` },
+              }
+            : { status: 401, body: { message: 'INVALID_CREDENTIALS' } };
+        }
+        return { status: 200, body: { status: 'ok' } };
+      },
+      { ...seerr },
+    );
+    const signIn = (password: string) =>
+      api.session(
+        '/api/v1/auth/jellyfin',
+        { username: 'admin', password, port: 8096, useSsl: false },
+        'connect.sid',
+        [password],
+      );
+    expect(await signIn('fake-wrong-password')).toBeUndefined();
+    const session = await signIn(PASSWORD);
+    expect(session).toBeDefined();
+    await session?.submit('POST', '/api/v1/auth/logout');
+    const [refused, signedIn, signedOut] = app.requests;
+    expect(refused?.headers).not.toHaveProperty('x-api-key');
+    expect(signedIn).toMatchObject({
+      body: '{"username":"admin","password":"fake-admin-password","port":8096,"useSsl":false}',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(signedIn?.headers).not.toHaveProperty('cookie');
+    expect(signedOut?.headers.cookie).toBe(`connect.sid=${COOKIE}`);
+    expect(signedOut?.headers).not.toHaveProperty('x-api-key');
+    // The client it came from still carries its key, and no cookie.
+    await api.check('/api/v1/auth/me');
+    expect(app.requests[3]?.headers).toMatchObject({ 'x-api-key': KEY });
+    expect(app.requests[3]?.headers).not.toHaveProperty('cookie');
+  });
+
+  it('keeps the cookie and the password out of what it says, and fails a sign-in that sets no cookie', async () => {
+    const replies = [
+      {
+        status: 200,
+        body: {},
+        headers: { 'Set-Cookie': `connect.sid=${COOKIE}; Path=/` },
+      },
+      { status: 500, body: { message: `fake failure with ${COOKIE} and ${PW}` } },
+      { status: 200, body: {}, headers: { 'Set-Cookie': 'connect.sid=; Path=/' } },
+      { status: 400, body: { message: `bad ${PW}` } },
+    ];
+    const { api } = await sonarr(() => replies.shift() ?? { status: 404 }, {
+      ...seerr,
+      secrets: [],
+    });
+    const signIn = () =>
+      api.session('/api/v1/auth/jellyfin', { password: PW }, 'connect.sid', [PW]);
+    const session = await signIn();
+    const said = await failure(
+      session?.submit('POST', '/api/v1/auth/logout') ?? Promise.resolve(),
+    );
+    expect(said.message).toBe(
+      'Seerr at http://seerr:5055 (127.0.0.1) failed (HTTP 500): fake failure with *** and *** (POST /api/v1/auth/logout)',
+    );
+    expect(await failure(signIn())).toMatchObject({
+      kind: 'protocol',
+      message:
+        'Seerr at http://seerr:5055 (127.0.0.1) signed in, but set no connect.sid cookie (POST /api/v1/auth/jellyfin)',
+    });
+    expect((await failure(signIn())).message).toContain('bad ***');
+  });
+
+  it('sends a sign-in once it may have reached the app', async () => {
+    const { api, app } = await sonarr(() => ({ status: 503 }), { ...seerr });
+    expect(
+      await failure(api.session('/api/v1/auth/jellyfin', {}, 'connect.sid', [])),
+    ).toMatchObject({ kind: 'server', status: 503 });
+    expect(app.requests).toHaveLength(1);
+  });
+});
+
+describe('createAppApi: a secret read in an answer', () => {
+  /** A key an app holds in clear, which the run didn't know of when it started. */
+  const HELD = 'e'.repeat(32);
+  const quoting = () => ({ status: 500, body: { message: `fake failure near ${HELD}` } });
+
+  it('is redacted from then on, by every client of the run that shares its FoundSecrets', async () => {
+    const found = foundSecrets();
+    const { api } = await sonarr(quoting, { found });
+    const { api: other } = await sonarr(quoting, { found });
+    // Not one of the run's secrets yet: nothing tells the client it is one.
+    expect((await failure(api.check('/api/v3/system/status'))).message).toContain(HELD);
+    api.addSecret(HELD);
+    expect(found.values).toEqual([HELD]);
+    for (const client of [api, other, api.withKey('d'.repeat(32))]) {
+      const said = await failure(client.check('/api/v3/system/status'));
+      expect(said.message).toBe(
+        'Sonarr at http://sonarr:8989 (127.0.0.1) failed (HTTP 500): fake failure near *** (GET /api/v3/system/status)',
+      );
+    }
+    // In each form an app may echo it in, and in a call that sends secrets of its own.
+    const { api: escaped } = await sonarr(
+      () => ({ status: 500, body: `fake failure near ${encodeURIComponent(PW)}` }),
+      { found },
+    );
+    found.add(PW);
+    expect((await failure(escaped.submit('POST', '/x'))).message).toContain('near ***');
+    expect(
+      (await failure(escaped.session('/x', {}, 'connect.sid', ['fake-other']))).message,
+    ).toContain('near ***');
+  });
+
+  it("is kept by a client without the run's FoundSecrets, and shared with the clients it makes", async () => {
+    const { api } = await sonarr(quoting);
+    api.withKey('d'.repeat(32)).addSecret(HELD);
+    expect((await failure(api.check('/api/v3/system/status'))).message).toContain(
+      'near ***',
+    );
   });
 });

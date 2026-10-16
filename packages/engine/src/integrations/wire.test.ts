@@ -9,6 +9,7 @@ import { RESOURCES_PATH, STATE_DIR } from '../paths';
 import { JoinFailed, OwnContainerUnknown, WiringRefused } from '../runtime/docker';
 import { RuntimeError, type OneOffCommand } from '../runtime/types';
 import { fakeRuntime, type FakeRuntimeOptions } from '../testing/fakes';
+import { FIXTURE_API } from '../testing/fixtures';
 import { tempDir } from '../testing/temp';
 import {
   FAKE_LOGIN,
@@ -260,6 +261,53 @@ describe('wire', () => {
       'sonarr.second skipped sonarr.first failed',
       'sonarr.third skipped sonarr.second was skipped',
     ]);
+  });
+
+  it('skips the resources of an app whose first-run setup waits, and what needs them, asking it nothing', async () => {
+    // Jellyfin, after Sonarr, holds a resource that needs Sonarr's login.
+    const wired = WIRED_CATALOG.map((def) =>
+      def.id === 'jellyfin'
+        ? {
+            ...def,
+            api: FIXTURE_API,
+            integration: {
+              after: ['sonarr'],
+              resources: [
+                { ...FAKE_LOGIN, name: 'needs', requires: ['sonarr.login'] },
+                { ...FAKE_LOGIN, name: 'free' },
+              ],
+            },
+          }
+        : def,
+    );
+    const sonarr = await fakeSonarr({ key: KEY });
+    const { run, actions } = await wireWith(
+      {
+        seams: sonarr.seams,
+        addresses: { ...sonarr.addresses, 'fake-jellyfin': '127.0.0.1' },
+      },
+      {
+        stack: stackOf(wired),
+        store: {
+          version: 1,
+          apps: { sonarr: { apiKey: KEY }, jellyfin: { apiKey: KEY } },
+          shared: { adminPassword: PASSWORD },
+        },
+        waiting: ['sonarr'],
+      },
+    );
+    expect(await run).toEqual(['jellyfin.free created']);
+    expect(
+      actions.map((a) => `${a.resource ?? ''} ${a.result} ${a.detail ?? ''}`),
+    ).toEqual([
+      "sonarr.login skipped sonarr's first-run setup waits",
+      'jellyfin.needs skipped sonarr.login was skipped',
+      'jellyfin.free done created',
+    ]);
+    // Only Jellyfin's calls: its key check, then its free resource.
+    expect(sonarr.app.requests.every((r) => r.headers.host === 'jellyfin:8096')).toBe(
+      true,
+    );
   });
 
   it('says so when there is no wiring network after the start, and asks no app', async () => {
@@ -604,6 +652,42 @@ describe('wire', () => {
     expect(JSON.stringify([failure, actions])).not.toMatch(
       new RegExp(`${KEY}|${PASSWORD}`),
     );
+  });
+
+  it('keeps a secret a resource read in an answer out of every failure after it, and out of the change record', async () => {
+    const HELD = 'e'.repeat(32);
+    const reads: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'first',
+      observe: (api) => {
+        api.addSecret(HELD);
+        return Promise.reject(
+          new AppApiError(`Sonarr holds ${HELD}`, { kind: 'rejected' }),
+        );
+      },
+    };
+    // An error that isn't the app's stops the step: its message is redacted too.
+    const bug: ResourceSpec = {
+      ...FAKE_LOGIN,
+      observe: () => Promise.reject(new Error(`a bug, near ${HELD}`)),
+    };
+    const sonarr = await fakeSonarr({ key: KEY });
+    const { run, actions } = await wireWith(sonarr, {
+      stack: stackOf(
+        WIRED_CATALOG.map((def) =>
+          def.id === 'sonarr'
+            ? { ...def, integration: { after: [], resources: [reads, bug] } }
+            : def,
+        ),
+      ),
+    });
+    const failure = await run.catch((thrown: unknown) => thrown);
+    expect((failure as WiringFailed).message).toBe('a bug, near ***');
+    expect((failure as WiringFailed).diagnostics.map((d) => d.message)).toEqual([
+      'Sonarr holds ***',
+    ]);
+    expect(actions.map((a) => a.error)).toEqual(['Sonarr holds ***', 'a bug, near ***']);
+    expect(JSON.stringify([failure, actions])).not.toContain(HELD);
   });
 
   it('makes no folder for a resource the app already holds', async () => {

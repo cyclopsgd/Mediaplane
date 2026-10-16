@@ -158,7 +158,7 @@ describe("Jellyfin's first-run setup", () => {
   it('runs its startup wizard as the shared admin, makes its key, reads it back, and signs out', async () => {
     const { api, state, app } = await jellyfin();
     expect(await jellyfinBootstrap.open(api)).toBe(true);
-    const key = await jellyfinBootstrap.run(api, ADMIN);
+    const key = await jellyfinBootstrap.run(api, ADMIN, contextOf().stack);
     expect(key).toMatch(/^[0-9a-f]{32}$/);
     expect(state).toMatchObject({ wizard: 'done', user: 'admin', password: PASSWORD });
     expect(state.apiKeys.map((k) => [k.AccessToken, k.AppName])).toEqual([
@@ -185,7 +185,7 @@ describe("Jellyfin's first-run setup", () => {
 
   it('keeps the key it made before rather than make another', async () => {
     const { api, state, app } = await jellyfin(setUp());
-    expect(await jellyfinBootstrap.run(api, ADMIN)).toBe(KEY);
+    expect(await jellyfinBootstrap.run(api, ADMIN, contextOf().stack)).toBe(KEY);
     expect(state.apiKeys).toHaveLength(1);
     expect(calls(app)).not.toContain('POST /Auth/Keys');
   });
@@ -197,7 +197,9 @@ describe("Jellyfin's first-run setup", () => {
       user: 'admin',
       password: PASSWORD,
     });
-    expect(await jellyfinBootstrap.run(api, ADMIN)).toMatch(/^[0-9a-f]{32}$/);
+    expect(await jellyfinBootstrap.run(api, ADMIN, contextOf().stack)).toMatch(
+      /^[0-9a-f]{32}$/,
+    );
     expect(state.wizard).toBe('done');
   });
 
@@ -208,7 +210,7 @@ describe("Jellyfin's first-run setup", () => {
       user: 'abc',
       password: 'fake-someone-else',
     });
-    const refused = await failure(jellyfinBootstrap.run(api, ADMIN));
+    const refused = await failure(jellyfinBootstrap.run(api, ADMIN, contextOf().stack));
     expect(refused.message).toBe(
       "Jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in: its startup wizard has a first user that Mediaplane did not set, so Mediaplane left the wizard open (POST /Users/AuthenticateByName)",
     );
@@ -218,7 +220,9 @@ describe("Jellyfin's first-run setup", () => {
 
   it('says when its wizard was finished with another login', async () => {
     const { api } = await jellyfin(setUp({ password: 'fake-someone-else' }));
-    expect((await failure(jellyfinBootstrap.run(api, ADMIN))).message).toContain(
+    expect(
+      (await failure(jellyfinBootstrap.run(api, ADMIN, contextOf().stack))).message,
+    ).toContain(
       "refused the shared admin's sign-in: its startup wizard was finished with another login",
     );
   });
@@ -227,7 +231,7 @@ describe("Jellyfin's first-run setup", () => {
     const { api, state } = await throughProxy(freshAppState(), (request) =>
       callOf(request) === 'POST /Auth/Keys' ? { status: 502 } : undefined,
     );
-    const failed = await failure(jellyfinBootstrap.run(api, ADMIN));
+    const failed = await failure(jellyfinBootstrap.run(api, ADMIN, contextOf().stack));
     expect(failed.status).toBe(502);
     expect(state.sessions).toEqual({});
 
@@ -237,7 +241,9 @@ describe("Jellyfin's first-run setup", () => {
       if (call === 'POST /Auth/Keys') return { status: 502 };
       return call === 'POST /Sessions/Logout' ? { status: 503 } : undefined;
     });
-    expect((await failure(jellyfinBootstrap.run(both.api, ADMIN))).status).toBe(502);
+    expect(
+      (await failure(jellyfinBootstrap.run(both.api, ADMIN, contextOf().stack))).status,
+    ).toBe(502);
   });
 
   it('ignores the keys of other apps, and takes the newest of its own by date', async () => {
@@ -257,8 +263,30 @@ describe("Jellyfin's first-run setup", () => {
         ],
       }),
     );
-    expect(await jellyfinBootstrap.run(api, ADMIN)).toBe('2'.repeat(32));
+    expect(await jellyfinBootstrap.run(api, ADMIN, contextOf().stack)).toBe(
+      '2'.repeat(32),
+    );
     expect(state.apiKeys).toHaveLength(4);
+  });
+
+  it("keeps every key Jellyfin lists out of what it says after, another app's too", async () => {
+    const seerrs = '3'.repeat(32);
+    const { api } = await throughProxy(
+      setUp({
+        apiKeys: [
+          { AccessToken: KEY, AppName: KEY_NAME, DateCreated: '2026-10-15T12:00:00Z' },
+          { AccessToken: seerrs, AppName: 'Seerr', DateCreated: '2026-10-15T12:01:00Z' },
+        ],
+      }),
+      (request) =>
+        callOf(request) === 'POST /Sessions/Logout'
+          ? { status: 500, body: { message: `fake failure near ${seerrs}` } }
+          : undefined,
+    );
+    const failed = await failure(jellyfinBootstrap.run(api, ADMIN, contextOf().stack));
+    expect(failed.message).toBe(
+      'Jellyfin at http://jellyfin:8096 (127.0.0.1) failed (HTTP 500): fake failure near *** (POST /Sessions/Logout)',
+    );
   });
 
   it('takes the first of two keys made at the same moment', async () => {
@@ -271,7 +299,9 @@ describe("Jellyfin's first-run setup", () => {
         ],
       }),
     );
-    expect(await jellyfinBootstrap.run(api, ADMIN)).toBe('8'.repeat(32));
+    expect(await jellyfinBootstrap.run(api, ADMIN, contextOf().stack)).toBe(
+      '8'.repeat(32),
+    );
   });
 
   it('makes a key when only other apps have one', async () => {
@@ -282,7 +312,7 @@ describe("Jellyfin's first-run setup", () => {
         ],
       }),
     );
-    const made = await jellyfinBootstrap.run(api, ADMIN);
+    const made = await jellyfinBootstrap.run(api, ADMIN, contextOf().stack);
     expect(made).not.toBe(KEY);
     expect(state.apiKeys.map((k) => k.AppName)).toEqual(['Other app', KEY_NAME]);
   });
@@ -291,7 +321,7 @@ describe("Jellyfin's first-run setup", () => {
     const { api, state, seen } = await throughProxy(freshAppState(), (request) =>
       callOf(request) === 'POST /Auth/Keys' ? { status: 204 } : undefined,
     );
-    const failed = await failure(jellyfinBootstrap.run(api, ADMIN));
+    const failed = await failure(jellyfinBootstrap.run(api, ADMIN, contextOf().stack));
     expect(failed.message).toBe(
       'Jellyfin at http://jellyfin:8096 (127.0.0.1) made no key named Mediaplane (GET /Auth/Keys)',
     );

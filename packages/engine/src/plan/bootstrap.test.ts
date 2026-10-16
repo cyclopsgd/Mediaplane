@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { emptySecretStore, type SecretStore } from '../secrets/store';
-import { FAKE_SETUP, SET_UP_CATALOG } from '../testing/bootstrap';
+import { FAKE_SETUP, SET_UP_CATALOG, SIGN_IN_CATALOG } from '../testing/bootstrap';
 import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
 import { tempDir } from '../testing/temp';
 import { inspectBootstrap, planBootstrap } from './bootstrap';
@@ -137,5 +137,54 @@ apps:
     expect(found.diagnostics[0]?.message).toContain("inside gluetun's network");
     // Jellyfin, which runs in its own network, is planned as before.
     expect(found.changes).toEqual([{ app: 'jellyfin', unpublished: true }]);
+  });
+});
+
+describe('planBootstrap: a setup that makes no key', () => {
+  /**
+   * What plan finds of the stack, with Sonarr's FAKE_SIGN_IN and its signed-in.txt as
+   * `file` says, and Jellyfin's setup done and its key kept.
+   */
+  async function signInStack(file: { text: string } | 'absent' | 'unreadable') {
+    const home = await tempDir('mediaplane-bootstrap-');
+    const resolved = resolveStack(
+      fixtureConfig(STACK),
+      SIGN_IN_CATALOG,
+      FIXTURE_HOST,
+      home,
+    );
+    if (resolved.stack === undefined) throw new Error('the stack must resolve');
+    await setupFile(resolved.stack, 'done\n');
+    const path = join(home, 'appdata', 'sonarr', 'signed-in.txt');
+    await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+    if (file === 'unreadable') await mkdir(path);
+    else if (file !== 'absent') await writeFile(path, file.text);
+    return inspectBootstrap(resolved.stack, KEYED);
+  }
+
+  it('sets it up, unpublished, until its file says it is done: there is no key to say so', async () => {
+    expect((await signInStack('absent')).changes).toEqual([
+      { app: 'sonarr', unpublished: true },
+    ]);
+    expect((await signInStack({ text: 'no\n' })).changes).toEqual([
+      { app: 'sonarr', unpublished: true },
+    ]);
+    expect(await signInStack({ text: 'yes\n' })).toEqual({
+      changes: [],
+      diagnostics: [],
+    });
+  });
+
+  it("sets it up again, unpublished, and warns, when it can't read the file", async () => {
+    const found = await signInStack('unreadable');
+    expect(found.changes).toEqual([{ app: 'sonarr', unpublished: true }]);
+    expect(found.diagnostics).toHaveLength(1);
+    expect(found.diagnostics[0]).toMatchObject({
+      severity: 'warning',
+      code: 'bootstrap.unreadable',
+      message:
+        "Mediaplane can't read the file in sonarr's appdata that says whether its first-run setup is done, so it can't tell whether the setup is open; sonarr starts unpublished, and is set up again, until it can",
+      hint: 'check the permissions of appdata/sonarr',
+    });
   });
 });

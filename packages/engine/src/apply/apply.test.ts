@@ -28,7 +28,12 @@ import {
 import { WiringRefused } from '../runtime/docker';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { readSecretStore, writeSecretStore } from '../secrets/store';
-import { fakeSetUpApp, SET_UP_CATALOG, SET_UP_KEY } from '../testing/bootstrap';
+import {
+  fakeSetUpApp,
+  SET_UP_CATALOG,
+  SET_UP_KEY,
+  SIGN_IN_CATALOG,
+} from '../testing/bootstrap';
 import {
   fakeDocker,
   fakeProbe,
@@ -1826,7 +1831,7 @@ describe('apply: first-run setup before the ports are published', () => {
     expect(result.diagnostics.at(-1)).toMatchObject({
       code: 'apply.bootstrap-failed',
       message:
-        "the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in (POST /signin); jellyfin's setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished: its wizard was finished with another login while Mediaplane set it up. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says",
+        "the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in (POST /signin); jellyfin's setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished: its setup was finished with another login while Mediaplane set it up. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says",
     });
     // Whatever the app says now, nothing publishes it.
     expect(ups).toEqual([
@@ -1850,7 +1855,7 @@ describe('apply: first-run setup before the ports are published', () => {
     };
     const result = await apply(options(home, claiming, extra));
     expect(result.diagnostics.at(-1)?.message).toBe(
-      "the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in (POST /signin); jellyfin's setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished: its wizard was finished with another login while Mediaplane set it up, and the next apply would publish it. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says",
+      "the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the shared admin's sign-in (POST /signin); jellyfin's setup didn't look done when apply started it, and the shared admin is refused now, so it stays unpublished: its setup was finished with another login while Mediaplane set it up, and the next apply would publish it. If you set it up yourself, set admin.username and admin.password to its login; if not, start it afresh first, as the runbook says",
     );
     expect(ups).toEqual([
       'jellyfin unpublished, setup done',
@@ -2008,5 +2013,182 @@ describe('apply: first-run setup before the ports are published', () => {
     // Only the start step's up: no publishing one.
     expect(ups).toEqual(['jellyfin unpublished, setup open']);
     expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
+  });
+});
+
+describe('apply: a first-run setup that makes no key, after another', () => {
+  /**
+   * The stack with Jellyfin's FAKE_SETUP and Sonarr's FAKE_SIGN_IN, after it, and a Docker
+   * that notes, at each up, which apps it starts without their ports and where each setup
+   * stands then.
+   */
+  async function signInStack(catalog: Catalog = SIGN_IN_CATALOG) {
+    const home = await makeHome();
+    const setup = await fakeSetUpApp(home);
+    const docker = fakeDocker(home, { addresses: setup.addresses });
+    const ups: string[] = [];
+    const runtime: Runtime = {
+      ...docker,
+      up: (seconds, values, unpublished = []) => {
+        const shown =
+          unpublished.length === 0
+            ? 'all published'
+            : `${unpublished.join(' ')} unpublished`;
+        const jellyfin = setup.state.done ? 'done' : 'open';
+        const sonarr = setup.signIn.done ? 'done' : 'open';
+        ups.push(`${shown}; jellyfin ${jellyfin}, sonarr ${sonarr}`);
+        return docker.up(seconds, values, unpublished);
+      },
+    };
+    const run = () => apply(options(home, runtime, { catalog, wiring: setup.seams }));
+    return { home, setup, ups, run };
+  }
+
+  it('sets it up after the app it signs in through, keeps no key for it, signs out, and publishes both', async () => {
+    const { home, setup, ups, run } = await signInStack();
+    const first = await run();
+    expect(first.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(first.outcome).toBe('success');
+    expect(first.plan.bootstrap).toEqual([
+      { app: 'jellyfin', unpublished: true },
+      { app: 'sonarr', unpublished: true },
+    ]);
+    expect(ups).toEqual([
+      'jellyfin sonarr unpublished; jellyfin open, sonarr open',
+      'all published; jellyfin done, sonarr done',
+    ]);
+    expect(first.actions.find((a) => a.step === 'start')?.detail).toBe(
+      'every app is running and healthy; started jellyfin, sonarr without their ports, to set them up first',
+    );
+    expect(first.actions.find((a) => a.step === 'bootstrap')?.detail).toBe(
+      'set up jellyfin, sonarr and saved jellyfin.apiKey; published jellyfin, sonarr',
+    );
+    // As the shared admin, in the stack it was given, and signed out of again.
+    expect(setup.signIn.signedIn).toEqual([{ user: 'admin', through: 'jellyfin' }]);
+    expect(setup.signIn.sessions).toEqual([]);
+    // Sonarr's key is Mediaplane's own, as generated: the setup made none.
+    expect((await readSecretStore(home)).apps.sonarr).toEqual({
+      apiKey: 'ab'.repeat(16),
+    });
+    expect((await run()).outcome).toBe('no-changes');
+  });
+
+  it('sets the apps up in the order of their integrations, not of their names', async () => {
+    // Jellyfin after Sonarr, here: Sonarr signs in first.
+    const catalog = SIGN_IN_CATALOG.map((def) => {
+      if (def.id === 'jellyfin') {
+        return { ...def, integration: { after: ['sonarr'], resources: [] } };
+      }
+      if (def.id === 'sonarr')
+        return { ...def, integration: { after: [], resources: [] } };
+      return def;
+    });
+    const { setup, run } = await signInStack(catalog);
+    expect((await run()).outcome).toBe('success');
+    const posts = setup.app.requests
+      .filter((r) => r.method === 'POST')
+      .map((r) => r.path);
+    expect(posts.slice(0, 2)).toEqual(['/sign-in', '/sign-out']);
+    expect(posts).toContain('/setup');
+  });
+
+  it('leaves one whose setup waits unpublished, wires the rest without it, and fails only at verify, which says what is left', async () => {
+    const { home, setup, ups, run } = await signInStack();
+    setup.signIn.refuse = true;
+    const waited = await run();
+    expect(waited.outcome).toBe('failed');
+    expect(waited.actions.map((a) => [a.step, a.resource ?? '', a.result])).toEqual([
+      ['keys', '', 'done'],
+      ['files', '', 'done'],
+      ['pull', '', 'done'],
+      ['ownership', '', 'done'],
+      ['start', '', 'done'],
+      ['bootstrap', '', 'done'],
+      ['wire', 'sonarr', 'skipped'],
+      ['wire', '', 'done'],
+      ['verify', '', 'failed'],
+    ]);
+    const reason =
+      "sonarr at http://sonarr:8989 (127.0.0.1) can't sign in yet: Jellyfin refused the shared admin (POST /sign-in)";
+    expect(waited.actions.find((a) => a.step === 'bootstrap')?.detail).toBe(
+      `set up jellyfin and saved jellyfin.apiKey; published jellyfin; sonarr waits: ${reason}`,
+    );
+    expect(waited.actions.find((a) => a.resource === 'sonarr')?.detail).toBe(
+      "sonarr's first-run setup waits",
+    );
+    expect(waited.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: 'warning',
+        code: 'bootstrap.waiting',
+        message: reason,
+        hint: `the rest of the stack is wired without sonarr, and the next apply sets it up; if it still waits, see ${RUNBOOK}`,
+      }),
+    );
+    expect(waited.diagnostics.at(-1)?.message).toContain('sonarr (first-run setup)');
+    // Jellyfin was published once set up; Sonarr, whose setup is still open, never was.
+    expect(ups).toEqual([
+      'jellyfin sonarr unpublished; jellyfin open, sonarr open',
+      'sonarr unpublished; jellyfin done, sonarr open',
+    ]);
+    expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
+    // Once the sign-in works, the next apply sets it up and publishes it.
+    setup.signIn.refuse = false;
+    const then = await run();
+    expect(then.outcome).toBe('success');
+    expect(then.plan.bootstrap).toEqual([{ app: 'sonarr', unpublished: true }]);
+    expect(ups.slice(2)).toEqual([
+      'sonarr unpublished; jellyfin done, sonarr open',
+      'all published; jellyfin done, sonarr done',
+    ]);
+  });
+
+  it('keeps one whose setup waits unpublished, though someone else finished it meanwhile', async () => {
+    const { setup, ups, run } = await signInStack();
+    // Refused because someone inside the stack signed in first: the setup now looks done.
+    setup.signIn.refuse = true;
+    setup.signIn.claimant = true;
+    const waited = await run();
+    expect(waited.outcome).toBe('failed');
+    expect(waited.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'bootstrap.waiting' }),
+    );
+    expect(setup.signIn.done).toBe(true);
+    expect(ups).toEqual([
+      'jellyfin sonarr unpublished; jellyfin open, sonarr open',
+      'sonarr unpublished; jellyfin done, sonarr done',
+    ]);
+  });
+
+  it('keeps unpublished, and fails, an app with a setup but no API to finish it through', async () => {
+    const catalog = SET_UP_CATALOG.map((def) =>
+      def.id === 'jellyfin' ? { ...def, api: undefined } : def,
+    );
+    const { ups, run } = await signInStack(catalog);
+    const failed = await run();
+    expect(failed.outcome).toBe('failed');
+    expect(failed.diagnostics.at(-1)?.message).toBe(
+      "the first-run setup failed: jellyfin's container is not on the stack's wiring network, so Mediaplane can't reach it",
+    );
+    expect(ups).toEqual([
+      'jellyfin unpublished; jellyfin open, sonarr open',
+      'jellyfin unpublished; jellyfin open, sonarr open',
+    ]);
+  });
+
+  it('waits, without asking it, one that comes after an app whose setup failed', async () => {
+    const { setup, ups, run } = await signInStack();
+    setup.state.refuse = 'fake refusal';
+    const failed = await run();
+    expect(failed.outcome).toBe('failed');
+    expect(failed.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message:
+        "the first-run setup failed: jellyfin at http://jellyfin:8096 (127.0.0.1) refused the request (HTTP 400): fake refusal (POST /setup); sonarr waits: sonarr waits for jellyfin's first-run setup, which isn't done",
+    });
+    expect(setup.app.requests.some((r) => r.path === '/sign-in')).toBe(false);
+    expect(ups).toEqual([
+      'jellyfin sonarr unpublished; jellyfin open, sonarr open',
+      'jellyfin sonarr unpublished; jellyfin open, sonarr open',
+    ]);
   });
 });

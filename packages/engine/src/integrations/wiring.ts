@@ -13,7 +13,7 @@ import { serviceAddress, serviceOf } from './address';
 import { JoinFailed, OwnContainerUnknown, WiringRefused } from '../runtime/docker';
 import type { ContainerState, RuntimeError, Runtime } from '../runtime/types';
 import type { SecretStore } from '../secrets/store';
-import { redact } from '../util/redact';
+import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
 import { compare } from '../util/sort';
 import type { KnownResource, KnownResources } from './resources';
 import type {
@@ -154,6 +154,8 @@ export async function reachApps(
     current: readonly ContainerState[];
     keys: Readonly<Record<string, Readonly<Record<string, string>>>>;
     secrets: readonly string[];
+    /** What the run finds: every client shares it. */
+    found: FoundSecrets;
     deadlineMs: number;
     seams?: WiringSeams;
   },
@@ -190,6 +192,7 @@ export async function reachApps(
         // Without a key, as Jellyfin is before its first-run setup, still its own way.
         key: { scheme: spec.key.scheme, ...(key === undefined ? {} : { value: key }) },
         secrets: options.secrets,
+        found: options.found,
         ...(options.seams?.timeoutMs === undefined
           ? {}
           : { timeoutMs: options.seams.timeoutMs }),
@@ -379,6 +382,8 @@ export interface PlanWiringOptions {
   keys: Readonly<Record<string, Readonly<Record<string, string>>>>;
   admin: { username: string; password: string };
   secrets: readonly string[];
+  /** What the run finds in the apps' answers (FoundSecrets); plan's own, by default. */
+  found?: FoundSecrets;
   known: KnownResources;
   seams?: WiringSeams;
 }
@@ -395,10 +400,14 @@ export async function planWiring(
   const ready = options.onNetwork
     ? order.filter((app) => settled(app, options.current, options.changing))
     : [];
-  const reached = await reachApps(ready, { ...options, deadlineMs: PLAN_DEADLINE_MS });
+  const found = options.found ?? foundSecrets();
+  const reached = await reachApps(ready, {
+    ...options,
+    found,
+    deadlineMs: PLAN_DEADLINE_MS,
+  });
   const changes: WiringChange[] = [];
   const diagnostics: Diagnostic[] = [];
-  const values = redactionValues(options.secrets);
   /**
    * Resources apply would make or change, that couldn't be looked at, or whose secrets
    * went unchecked: not known to be in place.
@@ -488,7 +497,10 @@ export async function planWiring(
         }
         // The app answered, about this resource: its others are still asked. A resource
         // can write its own message, which the client never saw: it is redacted here.
-        const said = redact(cause.message, values);
+        const said = redact(
+          cause.message,
+          redactionValues([...options.secrets, ...found.values]),
+        );
         diagnostics.push(
           warning(`wire.${cause.kind}`, said, { hint: `see ${WIRING_RUNBOOK}` }),
         );

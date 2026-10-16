@@ -39,11 +39,15 @@ export async function signIn(
   return answer?.AccessToken;
 }
 
-/** The newest key named KEY_NAME that Jellyfin holds, listed in full, or undefined. */
+/**
+ * The newest key named KEY_NAME that Jellyfin holds, listed in full, or undefined. Every
+ * key it lists, another app's too (Seerr's own), is kept out of what the run says.
+ */
 async function heldKey(api: AppApi): Promise<string | undefined> {
   const { Items } = await api.get('/Auth/Keys', apiKeys);
   let newest: { AccessToken: string; at: number } | undefined;
   for (const key of Items) {
+    api.addSecret(key.AccessToken);
     if (key.AppName !== KEY_NAME) continue;
     // As dates: .NET writes fractions of a second without their trailing zeros, so the
     // strings don't sort. On a tie, or a date that doesn't parse, the earlier one stays.

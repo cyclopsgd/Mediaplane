@@ -1,7 +1,7 @@
 import { Agent, request } from 'node:http';
 import type { z } from 'zod';
 import { codeOf } from '../util/error-code';
-import { redact } from '../util/redact';
+import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
 
 /** How long one request may take, in ms. */
 export const HTTP_TIMEOUT_MS = 30_000;
@@ -104,12 +104,20 @@ export interface AppApiOptions {
    * first-run setup, Jellyfin has none, and is still called its own way.
    */
   key?: { scheme: KeyScheme; value?: string };
+  /** A session's cookie, sent in place of the key: what a session client carries. */
+  cookie?: { name: string; value: string };
   /**
    * Every secret value an answer could hold, replaced with *** in every message, in the
    * forms an app may echo it in (as it is, JSON-escaped, percent-encoded, form-encoded,
    * HTML-escaped). The client adds the key it sends and the password it signs in with.
    */
   secrets: readonly string[];
+  /**
+   * The run's FoundSecrets: a secret any of its clients reads in an answer is redacted by
+   * this one too, from the moment it is added. Without it, the client keeps its own,
+   * which the clients it makes (`session`, `withKey`) share.
+   */
+  found?: FoundSecrets;
   timeoutMs?: number;
   maxBytes?: number;
   retry?: Partial<RetryOptions>;
@@ -177,10 +185,23 @@ export interface AppApi {
    */
   signIn<T>(
     path: string,
-    fields: Readonly<Record<string, string>>,
+    fields: Readonly<Record<string, unknown>>,
     schema: z.ZodType<T>,
     secrets: readonly string[],
   ): Promise<T | undefined>;
+  /**
+   * POST `fields` as JSON, without the key, to an app's own sign-in that keeps its session
+   * in the cookie `cookie` (Seerr's `connect.sid`): the same app's API, carrying that
+   * cookie in place of the key, for what only the session can do, such as signing out;
+   * or undefined when the app refuses the sign-in (401). It is sent as `signIn` is, and
+   * the cookie is kept out of every message, as `secrets`, the values it sends, are.
+   */
+  session(
+    path: string,
+    fields: Readonly<Record<string, unknown>>,
+    cookie: string,
+    secrets: readonly string[],
+  ): Promise<AppApi | undefined>;
   /** Wait, until the deadline, for `path` to answer 200 without the key. */
   ready(path: string): Promise<void>;
   /**
@@ -188,6 +209,12 @@ export interface AppApi {
    * session's token, say. It keeps `value` out of its messages.
    */
   withKey(value: string): AppApi;
+  /**
+   * Treat `value`, a secret read in the app's answer (a key it holds in clear), as one
+   * of the run's: from now on, it is replaced with *** in every message of the run,
+   * this client's and the others' that share its FoundSecrets.
+   */
+  addSecret(value: string): void;
 }
 
 interface Call {
@@ -203,6 +230,8 @@ interface Call {
 interface Answer {
   status: number;
   location: string | undefined;
+  /** Each Set-Cookie header, as it came. */
+  cookies: readonly string[];
   body: string;
 }
 
@@ -252,14 +281,29 @@ export function createAppApi(options: AppApiOptions): AppApi {
   const host = `${options.service}:${String(options.port)}`;
   const where = `http://${host} (${options.endpoint.host})`;
   // What the client sends is redacted whether or not the caller listed it.
-  const sent = options.key?.value === undefined ? [] : [options.key.value];
-  const cleanAlways = redactor([...options.secrets, ...sent]);
+  const sent = [
+    ...(options.key?.value === undefined ? [] : [options.key.value]),
+    ...(options.cookie === undefined ? [] : [options.cookie.value]),
+  ];
+  const found = options.found ?? foundSecrets();
+  // Made again only once the run has found another secret.
+  let always = { found: 0, clean: redactor([...options.secrets, ...sent]) };
 
-  /** Redacts `call`'s messages: the options' secrets, and the ones this call sends. */
+  /**
+   * Redacts `call`'s messages: the options' secrets, the ones this call sends, and those
+   * the run has found by now.
+   */
   function cleanFor(call: Call): (text: string) => string {
-    return call.secrets === undefined
-      ? cleanAlways
-      : redactor([...options.secrets, ...sent, ...call.secrets]);
+    if (call.secrets !== undefined) {
+      return redactor([...options.secrets, ...sent, ...found.values, ...call.secrets]);
+    }
+    if (always.found !== found.values.length) {
+      always = {
+        found: found.values.length,
+        clean: redactor([...options.secrets, ...sent, ...found.values]),
+      };
+    }
+    return always.clean;
   }
 
   /** One attempt, of at most `limitMs`. Any status is an answer; a failed connection throws. */
@@ -277,6 +321,9 @@ export function createAppApi(options: AppApiOptions): AppApi {
       } else if (key !== undefined) {
         if (options.key?.scheme === 'bearer') headers.Authorization = `Bearer ${key}`;
         else headers['X-Api-Key'] = key;
+      }
+      if (options.cookie !== undefined && !call.anonymous) {
+        headers.Cookie = `${options.cookie.name}=${options.cookie.value}`;
       }
       if (call.body !== undefined) {
         headers['Content-Type'] = call.body.type;
@@ -313,6 +360,7 @@ export function createAppApi(options: AppApiOptions): AppApi {
               resolve({
                 status: res.statusCode ?? 0,
                 location: res.headers.location,
+                cookies: res.headers['set-cookie'] ?? [],
                 body: Buffer.concat(chunks).toString('utf8'),
               });
             });
@@ -585,6 +633,34 @@ export function createAppApi(options: AppApiOptions): AppApi {
       );
       return answer.status === 401 ? undefined : parsed(call, answer, schema);
     },
+    async session(path, fields, cookie, secrets) {
+      const call: Call = {
+        method: 'POST',
+        path,
+        anonymous: true,
+        secrets,
+        body: json(fields),
+      };
+      const answer = await send(
+        call,
+        false,
+        (a) => (a.status >= 200 && a.status < 300) || a.status === 401,
+      );
+      if (answer.status === 401) return undefined;
+      const value = cookieOf(answer.cookies, cookie);
+      if (value === undefined) {
+        throw failure(call, `signed in, but set no ${cookie} cookie`, {
+          kind: 'protocol',
+        });
+      }
+      return createAppApi({
+        ...options,
+        found,
+        secrets: [...options.secrets, ...sent, ...secrets],
+        key: { scheme: options.key?.scheme ?? 'x-api-key' },
+        cookie: { name: cookie, value },
+      });
+    },
     async ready(path) {
       // A starting app answers 503, or nothing: both are tried again until the deadline.
       await send(
@@ -596,11 +672,28 @@ export function createAppApi(options: AppApiOptions): AppApi {
     withKey: (value) =>
       createAppApi({
         ...options,
+        found,
         // The key it replaces stays out of what it says too.
         secrets: [...options.secrets, ...sent],
         key: { scheme: options.key?.scheme ?? 'x-api-key', value },
       }),
+    addSecret: (value) => {
+      found.add(value);
+    },
   };
+}
+
+/** The value of the cookie `name` among Set-Cookie headers, if one sets it to something. */
+function cookieOf(headers: readonly string[], name: string): string | undefined {
+  for (const header of headers) {
+    const [pair = ''] = header.split(';');
+    const at = pair.indexOf('=');
+    if (at > 0 && pair.slice(0, at).trim() === name) {
+      const value = pair.slice(at + 1).trim();
+      if (value !== '') return value;
+    }
+  }
+  return undefined;
 }
 
 function toValues(secrets: readonly string[]): Record<string, string> {
