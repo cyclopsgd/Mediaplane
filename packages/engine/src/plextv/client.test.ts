@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { closedPort, fakeHttpApp } from '../testing/http';
 import { FAKE_PLEX_ACCOUNT, fakePlexTv } from '../testing/plextv';
+import { thrown } from '../testing/seerr';
 import {
   newClientId,
   PLEX_CLIENT_ID,
@@ -12,16 +13,6 @@ import {
 
 const TOKEN = FAKE_PLEX_ACCOUNT.token;
 const WRONG = 'wrong-plex-token-000';
-
-/** What `call` threw. */
-async function caught(call: Promise<unknown>): Promise<PlexTvError> {
-  const error = await call.then(
-    () => undefined,
-    (cause: unknown) => cause,
-  );
-  if (!(error instanceof PlexTvError)) throw new Error('expected a PlexTvError');
-  return error;
-}
 
 describe('plexTvClient', () => {
   it('makes a strong PIN for the device that asks, and names the sign-in link', async () => {
@@ -76,7 +67,7 @@ describe('plexTvClient', () => {
     const { client, state } = await fakePlexTv();
     const pin = await client.createPin(newClientId());
     if (state.pins[0] !== undefined) state.pins[0].expired = true;
-    const error = await caught(client.waitForPin(pin, 60));
+    const error = await thrown(client.waitForPin(pin, 60));
     expect(error).toMatchObject({
       kind: 'expired',
       status: 404,
@@ -84,14 +75,14 @@ describe('plexTvClient', () => {
       message:
         'plex.tv no longer knows the sign-in: its link ran out (GET /api/v2/pins/1)',
     });
-    expect(error.message).not.toContain(pin.code);
+    expect(error).toHaveProperty('message', expect.not.stringContaining(pin.code));
   });
 
   it('reads a PIN only as the device it was made for', async () => {
     const { client } = await fakePlexTv();
     const pin = await client.createPin(newClientId());
     const other: PlexPin = { ...pin, clientId: newClientId() };
-    expect(await caught(client.waitForPin(other, 60))).toMatchObject({ kind: 'expired' });
+    expect(await thrown(client.waitForPin(other, 60))).toMatchObject({ kind: 'expired' });
   });
 
   it("gets a claim token, and an account's id", async () => {
@@ -119,25 +110,28 @@ describe('plexTvClient', () => {
     state.servers.push(server);
     expect(await client.accountId(server.token)).toBe(FAKE_PLEX_ACCOUNT.id);
     state.servers = [];
-    const gone = await caught(client.accountId(server.token));
+    const gone = await thrown(client.accountId(server.token));
     expect(gone).toMatchObject({ kind: 'refused', status: 401 });
-    expect(gone.message).not.toContain(server.token);
+    expect(gone).toHaveProperty('message', expect.not.stringContaining(server.token));
   });
 
   it('says plex.tv refused a token, and never shows it', async () => {
     const { client } = await fakePlexTv();
     for (const call of [client.claimToken(WRONG), client.accountId(WRONG)]) {
-      const error = await caught(call);
+      const error = await thrown(call);
       expect(error).toMatchObject({ kind: 'refused', status: 401, unsure: false });
-      expect(error.message).toMatch(/^plex\.tv refused the Plex token \(HTTP 401\)/);
-      expect(error.message).not.toContain(WRONG);
+      expect(error).toHaveProperty(
+        'message',
+        expect.stringMatching(/^plex\.tv refused the Plex token \(HTTP 401\)/),
+      );
+      expect(error).toHaveProperty('message', expect.not.stringContaining(WRONG));
     }
   });
 
   it('asks a GET again, twice, after a 5xx or a 429, then says plex.tv failed', async () => {
     const { client, state } = await fakePlexTv();
     state.failing.push({ path: '/api/claim/token.json', status: 503 });
-    const error = await caught(client.claimToken(TOKEN));
+    const error = await thrown(client.claimToken(TOKEN));
     expect(error).toMatchObject({
       kind: 'failed',
       status: 503,
@@ -150,7 +144,7 @@ describe('plexTvClient', () => {
       'GET /api/claim/token.json',
     ]);
     state.failing = [{ path: '/api/v2/user', status: 429 }];
-    expect(await caught(client.accountId(TOKEN))).toMatchObject({
+    expect(await thrown(client.accountId(TOKEN))).toMatchObject({
       kind: 'failed',
       status: 429,
       unsure: true,
@@ -167,14 +161,84 @@ describe('plexTvClient', () => {
         return Promise.resolve();
       },
     });
-    await caught(client.accountId(TOKEN));
+    await thrown(client.accountId(TOKEN));
     expect(slept).toEqual([5_000, 15_000]);
+  });
+
+  it('counts only a 401 as the token refused: not asked again', async () => {
+    const { client, state } = await fakePlexTv();
+    const error = await thrown(client.accountId(WRONG));
+    expect(error).toMatchObject({ kind: 'refused', status: 401, unsure: false });
+    expect(state.calls).toEqual(['GET /api/v2/user']);
+  });
+
+  it('counts a 403 as unsure, like a 5xx, and asks a GET again', async () => {
+    const { client, state } = await fakePlexTv();
+    state.failing.push({ path: '/api/v2/user', status: 403 });
+    const error = await thrown(client.accountId(TOKEN));
+    expect(error).toBeInstanceOf(PlexTvError);
+    expect(error).toMatchObject({ kind: 'failed', status: 403, unsure: true });
+    expect(error).toHaveProperty(
+      'message',
+      'plex.tv refused the request, which is not a refusal of the token (HTTP 403) (GET /api/v2/user)',
+    );
+    expect(state.calls).toEqual([
+      'GET /api/v2/user',
+      'GET /api/v2/user',
+      'GET /api/v2/user',
+    ]);
+  });
+
+  it('asks an unanswered GET three times, after 5 s then 15 s', async () => {
+    const slept: number[] = [];
+    let asked = 0;
+    const app = await fakeHttpApp(() => {
+      asked += 1;
+      return 'hang';
+    });
+    const client = plexTvClient({
+      base: `http://127.0.0.1:${String(app.port)}`,
+      timeoutMs: 50,
+      sleep: (ms) => {
+        slept.push(ms);
+        return Promise.resolve();
+      },
+    });
+    expect(await thrown(client.accountId(TOKEN))).toMatchObject({
+      kind: 'unreachable',
+      unsure: true,
+    });
+    expect(asked).toBe(3);
+    expect(slept).toEqual([5_000, 15_000]);
+  });
+
+  it('sends a POST that went unanswered once, and waits for nothing', async () => {
+    const slept: number[] = [];
+    let asked = 0;
+    const app = await fakeHttpApp(() => {
+      asked += 1;
+      return 'hang';
+    });
+    const client = plexTvClient({
+      base: `http://127.0.0.1:${String(app.port)}`,
+      timeoutMs: 50,
+      sleep: (ms) => {
+        slept.push(ms);
+        return Promise.resolve();
+      },
+    });
+    expect(await thrown(client.createPin(newClientId()))).toMatchObject({
+      kind: 'unreachable',
+      unsure: true,
+    });
+    expect(asked).toBe(1);
+    expect(slept).toEqual([]);
   });
 
   it('never makes a second PIN after a failure: a POST is sent once', async () => {
     const { client, state } = await fakePlexTv();
     state.failing.push({ path: '/api/v2/pins', status: 503 });
-    expect(await caught(client.createPin(newClientId()))).toMatchObject({
+    expect(await thrown(client.createPin(newClientId()))).toMatchObject({
       kind: 'failed',
     });
     expect(state.calls).toEqual(['POST /api/v2/pins?strong=true']);
@@ -186,7 +250,7 @@ describe('plexTvClient', () => {
       base: `http://127.0.0.1:${String(port)}`,
       sleep: () => Promise.resolve(),
     });
-    const error = await caught(client.accountId(TOKEN));
+    const error = await thrown(client.accountId(TOKEN));
     expect(error).toMatchObject({
       kind: 'unreachable',
       unsure: true,
@@ -201,7 +265,7 @@ describe('plexTvClient', () => {
       timeoutMs: 50,
       sleep: () => Promise.resolve(),
     });
-    expect(await caught(client.accountId(TOKEN))).toMatchObject({
+    expect(await thrown(client.accountId(TOKEN))).toMatchObject({
       kind: 'unreachable',
       unsure: true,
       message: 'plex.tv did not answer within 0.05 s (GET /api/v2/user)',
@@ -215,15 +279,16 @@ describe('plexTvClient', () => {
         : { status: 200, body: `not json ${TOKEN}` },
     );
     const client = plexTvClient({ base: `http://127.0.0.1:${String(app.port)}` });
-    const claim = await caught(client.claimToken(TOKEN));
+    const claim = await thrown(client.claimToken(TOKEN));
     expect(claim).toMatchObject({
       kind: 'protocol',
       unsure: false,
       message:
         "plex.tv answered something Mediaplane doesn't understand (at token) (GET /api/claim/token.json)",
     });
-    const user = await caught(client.accountId(TOKEN));
-    expect(user.message).toBe(
+    const user = await thrown(client.accountId(TOKEN));
+    expect(user).toHaveProperty(
+      'message',
       'plex.tv answered with something that is not JSON (GET /api/v2/user)',
     );
   });
@@ -231,7 +296,7 @@ describe('plexTvClient', () => {
   it('refuses another refusal, such as a 400, as plex.tv refusing the request', async () => {
     const app = await fakeHttpApp(() => ({ status: 400, body: 'no' }));
     const client = plexTvClient({ base: `http://127.0.0.1:${String(app.port)}` });
-    expect(await caught(client.accountId(TOKEN))).toMatchObject({
+    expect(await thrown(client.accountId(TOKEN))).toMatchObject({
       kind: 'protocol',
       status: 400,
       unsure: false,
@@ -245,7 +310,7 @@ describe('plexTvClient', () => {
       body: 'x'.repeat(1024 * 1024 + 1),
     }));
     const client = plexTvClient({ base: `http://127.0.0.1:${String(app.port)}` });
-    expect(await caught(client.accountId(TOKEN))).toMatchObject({
+    expect(await thrown(client.accountId(TOKEN))).toMatchObject({
       kind: 'protocol',
       message: 'plex.tv answered more than 1 MiB (GET /api/v2/user)',
     });
@@ -254,10 +319,13 @@ describe('plexTvClient', () => {
   it('refuses a token that can not go in a header, without showing it', async () => {
     const { client, app } = await fakePlexTv();
     const bad = 'line\nbreak-token';
-    const error = await caught(client.accountId(bad));
+    const error = await thrown(client.accountId(bad));
     expect(error).toMatchObject({ kind: 'protocol' });
-    expect(error.message).toMatch(/^plex\.tv could not be asked \(/);
-    expect(error.message).not.toContain('break-token');
+    expect(error).toHaveProperty(
+      'message',
+      expect.stringMatching(/^plex\.tv could not be asked \(/),
+    );
+    expect(error).toHaveProperty('message', expect.not.stringContaining('break-token'));
     expect(app.requests).toEqual([]);
   });
 });

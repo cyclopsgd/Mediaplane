@@ -39,10 +39,12 @@ const MAX_BYTES = 1024 * 1024;
 
 /**
  * Why a plex.tv call failed:
- * - `refused`: plex.tv refused the token (401): it was revoked, or is not a Plex token;
+ * - `refused`: plex.tv refused the token (401, and only 401): it was revoked, or is not a
+ *   Plex token;
  * - `expired`: plex.tv no longer knows the sign-in's PIN (404): it ran out;
  * - `unreachable`: nothing answered in time, or at all;
- * - `failed`: plex.tv failed (5xx), or kept refusing to be asked so often (429);
+ * - `failed`: plex.tv failed (5xx), kept refusing to be asked so often (429), or refused
+ *   in a way that is not about the token (403, as a CDN or a geo-block answers);
  * - `protocol`: it answered something Mediaplane doesn't understand, or another refusal.
  */
 export type PlexTvErrorKind =
@@ -278,11 +280,22 @@ export function plexTvClient(options: PlexTvOptions = {}): PlexTv {
   }
 
   function statusFailure(call: Call, status: number): PlexTvError {
-    if (status === 401 || status === 403) {
-      return failure(call, `refused the Plex token (HTTP ${String(status)})`, {
+    if (status === 401) {
+      return failure(call, 'refused the Plex token (HTTP 401)', {
         kind: 'refused',
         status,
       });
+    }
+    // Not the token's refusal, which is a 401: a CDN or a geo-block says 403 too. Unsure.
+    if (status === 403) {
+      return failure(
+        call,
+        'refused the request, which is not a refusal of the token (HTTP 403)',
+        {
+          kind: 'failed',
+          status,
+        },
+      );
     }
     if (status === 429) {
       return failure(call, 'is being asked too often (HTTP 429)', {

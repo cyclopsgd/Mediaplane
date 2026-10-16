@@ -1,20 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { fakeRuntime } from '../testing/fakes';
 import { FAKE_PLEX_ACCOUNT, fakePlexTv } from '../testing/plextv';
+import { thrown } from '../testing/seerr';
 import { HelperError } from '../runtime/types';
 import { newClientId, PlexTvError, type PlexTv } from './client';
 import { answerPlexTvRequest, helperPlexTv, PLEX_TV_HELPER_SCHEMA } from './helper';
 
 const TOKEN = FAKE_PLEX_ACCOUNT.token;
 const USER = { uid: 1000, gid: 1000 };
-
-/** What `call` threw. */
-async function caught(call: Promise<unknown>): Promise<unknown> {
-  return call.then(
-    () => undefined,
-    (cause: unknown) => cause,
-  );
-}
 
 /** The plex.tv helper's answer to `request`, parsed. */
 async function answered(request: unknown, client: PlexTv): Promise<unknown> {
@@ -155,7 +148,7 @@ describe('helperPlexTv', () => {
       },
     });
     const helper = helperPlexTv({ runtime, image: 'mediaplane:test', user: USER });
-    const error = await caught(helper.claimToken(TOKEN));
+    const error = await thrown(helper.claimToken(TOKEN));
     expect(error).toBeInstanceOf(PlexTvError);
     expect(error).toMatchObject({
       kind: 'unreachable',
@@ -167,7 +160,7 @@ describe('helperPlexTv', () => {
 
   it("throws plex.tv's refusal as the helper answered it", async () => {
     const { helper } = await helped();
-    const error = await caught(helper.accountId('wrong-plex-token-000'));
+    const error = await thrown(helper.accountId('wrong-plex-token-000'));
     expect(error).toBeInstanceOf(PlexTvError);
     expect(error).toMatchObject({ kind: 'refused', status: 401, unsure: false });
   });
@@ -180,7 +173,7 @@ describe('helperPlexTv', () => {
       }),
     });
     const helper = helperPlexTv({ runtime, image: 'mediaplane:test', user: USER });
-    const error = await caught(helper.claimToken(TOKEN));
+    const error = await thrown(helper.claimToken(TOKEN));
     expect(error).toBeInstanceOf(PlexTvError);
     expect(error).toMatchObject({
       kind: 'unreachable',
@@ -197,7 +190,7 @@ describe('helperPlexTv', () => {
     ]) {
       const runtime = fakeRuntime({ plexTvHelper: () => ({ ok: true, stdout }) });
       const helper = helperPlexTv({ runtime, image: 'mediaplane:test', user: USER });
-      expect(await caught(helper.claimToken(TOKEN))).toMatchObject({
+      expect(await thrown(helper.claimToken(TOKEN))).toMatchObject({
         kind: 'protocol',
         unsure: false,
       });
@@ -209,7 +202,7 @@ describe('helperPlexTv', () => {
       }),
     });
     const helper = helperPlexTv({ runtime, image: 'mediaplane:test', user: USER });
-    expect(await caught(helper.createPin(newClientId()))).toMatchObject({
+    expect(await thrown(helper.createPin(newClientId()))).toMatchObject({
       kind: 'protocol',
     });
   });
@@ -218,7 +211,7 @@ describe('helperPlexTv', () => {
     const calls: string[] = [];
     const runtime = fakeRuntime({ calls });
     const helper = helperPlexTv({ runtime, image: '--privileged', user: USER });
-    expect(await caught(helper.accountId(TOKEN))).toBeInstanceOf(HelperError);
+    expect(await thrown(helper.accountId(TOKEN))).toBeInstanceOf(HelperError);
     expect(calls).toEqual([]);
   });
 });
