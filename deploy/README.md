@@ -162,11 +162,10 @@ files are written: there it only skips the sign-in. Without a terminal it asks n
 - **The admin login.** `init` asks for its user name (`--admin-user`), and whether
   Mediaplane should generate its password. Answer `n` and, on a terminal, it asks you to
   type your own twice, with nothing shown, and saves it in `secrets/admin-password`,
-  readable by you only. It needs at least 12 characters. Enter instead asks for a file
-  in the home that you fill yourself (`--admin-password-file secrets/admin-password`
-  without a terminal), and a file already at `secrets/admin-password` is used as it is.
-  After
-  `apply`, `mediaplane credentials` shows the login and each app's address. It shows a
+  readable by you only. It needs at least 12 characters, with no space at either end.
+  Enter instead asks for a file in the home that you fill yourself, and a file already at
+  `secrets/admin-password` is used as it is. Without a terminal, pass
+  `--admin-password-file secrets/admin-password`. After `apply`, `mediaplane credentials` shows the login and each app's address. It shows a
   password of your own only with `--reveal`, and its `--json` output leaves out either
   unless you add `--reveal`. qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin use it,
   and Seerr through Jellyfin. qBittorrent gets it before its first start, Jellyfin in its

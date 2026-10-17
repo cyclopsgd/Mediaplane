@@ -1,6 +1,7 @@
 import { chmod, mkdir } from 'node:fs/promises';
 import { isAbsolute, join, normalize, resolve } from 'node:path';
 import {
+  ADMIN_PASSWORD_MIN_LENGTH,
   inSubnet,
   invokingUser,
   parseConfig,
@@ -100,6 +101,11 @@ export async function init(
     adminPassword !== undefined &&
     passwordPath !== undefined &&
     (await writeFileExclusive(passwordPath, `${adminPassword}\n`, 0o600));
+  if (adminPassword !== undefined && !savedPassword) {
+    io.stderr(
+      `${String(passwordPath)} appeared while init asked, so the password you typed wasn't saved: that file is used instead.\n`,
+    );
+  }
   const data = await dataFolder(answers.dataPath, home, answers.user);
 
   const tokenPath = join(secrets, 'plex-token');
@@ -130,6 +136,8 @@ export async function init(
   io.stdout(`Wrote ${stackPath}.\n`);
   if (savedKey) io.stdout(`Saved your WireGuard private key in ${keyPath}.\n`);
   if (savedPassword) io.stdout(`Saved your admin password in ${passwordPath}.\n`);
+  if (adminPasswordFound)
+    io.stdout(`Using your admin password in ${String(passwordPath)}.\n`);
   if (data === 'created') {
     io.stdout(`Created ${answers.dataPath} for your downloads and media.\n`);
   }
@@ -398,9 +406,6 @@ async function gatherAnswers(
   };
 }
 
-/** The shortest admin password stack.yaml accepts. */
-const MIN_PASSWORD = 12;
-
 /**
  * Your own admin password, typed twice with nothing shown, or undefined on Enter (put it in
  * a file yourself). Too short, or two that differ, asks again; it is never printed.
@@ -408,12 +413,16 @@ const MIN_PASSWORD = 12;
 async function askPassword(askSecret: Ask, io: Io): Promise<string | undefined> {
   explain(io, NOTES.ownPassword);
   for (;;) {
-    const first = await askSecret(
-      `Your admin password, at least ${String(MIN_PASSWORD)} characters (nothing shows as you type; Enter to put it in a file yourself): `,
-    );
+    const first = await askSecret('Your admin password (Enter to use a file instead): ');
     if (first === '') return undefined;
-    if (first.trim().length < MIN_PASSWORD) {
-      io.stderr(`That has fewer than ${String(MIN_PASSWORD)} characters.\n`);
+    // The apps get it trimmed, as every secret is read, so a space at either end would
+    // make a password that none of them takes.
+    if (first !== first.trim()) {
+      io.stderr('That starts or ends with a space, which the apps would never see.\n');
+      continue;
+    }
+    if (first.length < ADMIN_PASSWORD_MIN_LENGTH) {
+      io.stderr(`That has fewer than ${String(ADMIN_PASSWORD_MIN_LENGTH)} characters.\n`);
       continue;
     }
     if ((await askSecret('Type it again: ')) === first) return first;
@@ -461,15 +470,15 @@ export const NOTES = {
   adminUser: ["Admin user: one login for every app's web page."],
   adminPassword: [
     'Admin password: Mediaplane can generate a strong one, or',
-    'use your own, from a file in the Mediaplane home.',
+    'you can type your own, or keep it in a file of yours.',
   ],
   plexSignIn: [
     'Plex sign-in: init shows a link; sign in to Plex there, in',
     'any browser, and it saves your Plex token for apply.',
   ],
   ownPassword: [
-    'Your password: typed twice, and saved for you only in',
-    'secrets/admin-password. It is never shown.',
+    'Your password: at least 12 characters, typed twice; nothing',
+    'shows. Saved for you only in secrets/admin-password.',
   ],
   passwordFile: [
     'Your password file: at least 12 characters. Put it there',

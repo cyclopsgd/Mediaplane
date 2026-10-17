@@ -1225,7 +1225,10 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     and in the image a folder outside the home is left to you. On a terminal, a line or
     two before each question says what it is for, and with a VPN provider it takes the
     WireGuard private key on a hidden prompt, checks its shape, and writes it to
-    `secrets/wg.key` (0600), never over an existing one.
+    `secrets/wg.key` (0600), never over an existing one. Asked not to generate the admin
+    password, it takes yours the same way, typed twice, at least 12 characters with no
+    space at either end, into `secrets/admin-password` (0600); Enter asks for a file of
+    yours instead, and one already there is used as it is.
 
 ### Slice 3c: the download path (2026-10-11)
 

@@ -1,5 +1,6 @@
 import { chmod, mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import type * as FsPromises from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { invokingUser, parseConfig } from '@mediaplane/engine';
 import {
@@ -1100,8 +1101,7 @@ describe('mediaplane init: your own admin password', () => {
     '--admin-user',
     'admin',
   ];
-  const ASKED =
-    'Your admin password, at least 12 characters (nothing shows as you type; Enter to put it in a file yourself): ';
+  const ASKED = 'Your admin password (Enter to use a file instead): ';
   const AGAIN = 'Type it again: ';
   const PASSWORD = 'fake-correct-horse-1';
 
@@ -1119,21 +1119,24 @@ describe('mediaplane init: your own admin password', () => {
     expect(term.stdout()).toContain('Saved your admin password in ');
     expect(term.stdout()).not.toContain('Put your admin password');
     expect(term.shown()).not.toContain(PASSWORD);
+    expect(term.shown()).toContain(`${NOTES.ownPassword.join('\n')}\n${ASKED}`);
   });
 
   it('asks again for one too short, or two that differ', async () => {
     const home = await newHome();
     const term = capture(['', 'n'], {}, [
       'fake-short',
+      ` ${PASSWORD}`,
       PASSWORD,
       'fake-something-else',
       PASSWORD,
       PASSWORD,
     ]);
     expect(await run(['init', '--home', home, ...FLAGS], term.io, deps())).toBe(0);
-    expect(term.hidden).toEqual([ASKED, ASKED, AGAIN, ASKED, AGAIN]);
+    expect(term.hidden).toEqual([ASKED, ASKED, ASKED, AGAIN, ASKED, AGAIN]);
     expect(term.stderr()).toBe(
       'That has fewer than 12 characters.\n' +
+        'That starts or ends with a space, which the apps would never see.\n' +
         "Those don't match. Type your password again.\n",
     );
     expect(await readFile(join(home, 'secrets', 'admin-password'), 'utf8')).toBe(
@@ -1166,6 +1169,28 @@ describe('mediaplane init: your own admin password', () => {
       admin: { password: { file: 'secrets/admin-password' } },
     });
     expect(term.stdout()).not.toContain('Put your admin password');
+    expect(term.stdout()).toContain('Using your admin password in ');
+    expect(await readFile(join(home, 'secrets', 'admin-password'), 'utf8')).toBe(
+      `${PASSWORD}\n`,
+    );
+  });
+
+  it('writes no password file when stack.yaml is already there', async () => {
+    const home = await newHome();
+    await writeFile(join(home, 'stack.yaml'), 'version: 1\n');
+    const term = capture(['', 'n'], {}, [PASSWORD, PASSWORD]);
+    expect(await run(['init', '--home', home, ...FLAGS], term.io, deps())).toBe(1);
+    expect(existsSync(join(home, 'secrets', 'admin-password'))).toBe(false);
+    expect(term.shown()).not.toContain(PASSWORD);
+  });
+
+  it('writes nothing when you stop at the hidden question', async () => {
+    const home = await newHome();
+    const term = capture(['', 'n'], {}, []);
+    term.io.askSecret = () => Promise.reject(new PromptCancelled());
+    expect(await run(['init', '--home', home, ...FLAGS], term.io, deps())).toBe(1);
+    expect(term.stderr()).toContain('init stopped at a question; nothing was written');
+    expect(existsSync(join(home, 'stack.yaml'))).toBe(false);
   });
 });
 
