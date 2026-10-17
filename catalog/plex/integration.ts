@@ -199,9 +199,10 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
 
 /**
  * What Mediaplane wires in Plex (spec §6.2): its name, and the Movies and TV Shows
- * libraries. Its claim (bootstrap.ts) comes before. Its remote access, and the networks
- * allowed in without signing in, stay Plex's defaults (off, and none) and yours: Mediaplane
- * never sets them.
+ * libraries. Its claim (bootstrap.ts) comes before. Its remote access, and the settings
+ * that let a client in without signing in (the networks allowed, local security, DLNA),
+ * stay Plex's defaults and yours: Mediaplane never sets them, and its setup refuses to
+ * publish a Plex of yours that has them open (bootstrap.ts, OPEN_SETTINGS).
  */
 export default defineIntegration({
   after: [],

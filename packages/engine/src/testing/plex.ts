@@ -36,6 +36,14 @@ export interface FakePlex {
   remoteAccess: boolean;
   /** The networks allowed in without signing in (`allowedNetworks`): none, at first. */
   allowedNetworks: string;
+  /**
+   * Whether local clients must sign in (`enableLocalSecurity`, hidden): -1 at first, Plex's
+   * default; 1 is stricter. A claimed Plex answered 401 to a client with no token, by IP,
+   * at -1 and at 0 alike (probed), but only -1 and 1 are known to be what Plex means.
+   */
+  enableLocalSecurity: number;
+  /** Whether its DLNA server is on (`DlnaEnabled`, off at first): DLNA has no sign-in. */
+  dlnaEnabled: boolean;
   sections: FakePlexSection[];
   /**
    * A fault: what GET /:/prefs answers (to a token Plex takes) instead of its settings,
@@ -81,6 +89,8 @@ export function freshPlex(): FakePlex {
     friendlyName: '',
     remoteAccess: false,
     allowedNetworks: '',
+    enableLocalSecurity: -1,
+    dlnaEnabled: false,
     sections: [],
     claimingFor: 0,
     startingFor: 0,
@@ -270,7 +280,7 @@ export function fakePlex(
       status: 200,
       body: {
         MediaContainer: {
-          size: 3,
+          size: 5,
           Setting: [
             { id: 'FriendlyName', type: 'text', default: '', value: plex.friendlyName },
             {
@@ -285,6 +295,13 @@ export function fakePlex(
               default: '',
               value: plex.allowedNetworks,
             },
+            {
+              id: 'enableLocalSecurity',
+              type: 'int',
+              default: -1,
+              value: plex.enableLocalSecurity,
+            },
+            { id: 'DlnaEnabled', type: 'bool', default: false, value: plex.dlnaEnabled },
           ],
         },
       },
@@ -295,6 +312,8 @@ export function fakePlex(
       if (name === 'FriendlyName') plex.friendlyName = value;
       else if (name === 'PublishServerOnPlexOnlineKey') plex.remoteAccess = value === '1';
       else if (name === 'allowedNetworks') plex.allowedNetworks = value;
+      else if (name === 'enableLocalSecurity') plex.enableLocalSecurity = Number(value);
+      else if (name === 'DlnaEnabled') plex.dlnaEnabled = value === '1';
       else {
         return {
           status: 400,

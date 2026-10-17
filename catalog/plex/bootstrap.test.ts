@@ -235,7 +235,7 @@ describe("Plex's first-run setup", () => {
     const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
     expect(failed).toMatchObject({
       kind: 'rejected',
-      message: `Plex at http://plex:32400 (127.0.0.1) is yours, but lets "192.0.2.0/255.255.255.0" in without a sign-in (allowedNetworks), which Mediaplane never sets: it may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), clear allowedNetworks in appdata/plex/${PLEX_PREFERENCES}, then run apply again`,
+      message: `Plex at http://plex:32400 (127.0.0.1) is yours, but lets "192.0.2.0/255.255.255.0" in without a sign-in (allowedNetworks). Mediaplane never sets allowedNetworks: this may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), reset allowedNetworks in appdata/plex/${PLEX_PREFERENCES} (delete the attribute, or set it to its default: allowedNetworks ''), then run apply again`,
     });
     // Cleared, it is taken.
     state.plex.allowedNetworks = '';
@@ -348,6 +348,109 @@ describe("Plex's first-run setup", () => {
     expect((short as Error).message).toContain(
       'lets "192.0.2.0/255.255.255.0" in without a sign-in',
     );
+  });
+
+  /** GET /:/prefs as Plex answers it, with `settings` in place of the defaults (undefined: left out). */
+  function prefsWith(settings: Record<string, unknown>): FakeReply {
+    const all: Record<string, unknown> = {
+      FriendlyName: '',
+      allowedNetworks: '',
+      enableLocalSecurity: -1,
+      DlnaEnabled: false,
+      ...settings,
+    };
+    return {
+      status: 200,
+      body: {
+        MediaContainer: {
+          Setting: Object.entries(all)
+            .filter(([, value]) => value !== undefined)
+            .map(([id, value]) => ({ id, value })),
+        },
+      },
+    };
+  }
+
+  it('takes a Plex whose local security is its default or stricter, and whose DLNA is off', async () => {
+    for (const security of [-1, 1]) {
+      const { api, state, plexTv, ctx, stack } = await plexOf();
+      claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+      state.plex.enableLocalSecurity = security;
+      expect(await plexBootstrap.run(api, ADMIN, stack, ctx), String(security)).toBe(
+        undefined,
+      );
+    }
+  });
+
+  it('keeps unpublished a Plex of yours whose local security is neither -1 nor 1, or whose DLNA is on, naming the setting and its value', async () => {
+    const cases: [string, FakeReply, string][] = [
+      [
+        'local security 0',
+        prefsWith({ enableLocalSecurity: 0 }),
+        'has enableLocalSecurity at 0, not -1 or 1, so a client may be let in without a sign-in. Mediaplane never sets enableLocalSecurity: this may have been set while Plex was unclaimed, so Plex stays unpublished.',
+      ],
+      [
+        'local security 2',
+        prefsWith({ enableLocalSecurity: 2 }),
+        'has enableLocalSecurity at 2,',
+      ],
+      [
+        'local security as text',
+        prefsWith({ enableLocalSecurity: '1' }),
+        'has enableLocalSecurity at "1",',
+      ],
+      [
+        'local security null',
+        prefsWith({ enableLocalSecurity: null }),
+        'has enableLocalSecurity at a value it does not give,',
+      ],
+      [
+        'local security missing',
+        prefsWith({ enableLocalSecurity: undefined }),
+        'has enableLocalSecurity at a value it does not give,',
+      ],
+      [
+        'DLNA on',
+        prefsWith({ DlnaEnabled: true }),
+        'has DlnaEnabled at true, not false, and DLNA streams without a sign-in. Mediaplane never sets DlnaEnabled:',
+      ],
+      [
+        'DLNA as text',
+        prefsWith({ DlnaEnabled: '0' }),
+        'has DlnaEnabled at "0", not false,',
+      ],
+      [
+        'DLNA missing',
+        prefsWith({ DlnaEnabled: undefined }),
+        'has DlnaEnabled at a value it does not give,',
+      ],
+    ];
+    for (const [what, answer, said] of cases) {
+      const { api, state, plexTv, ctx, stack } = await plexOf();
+      claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+      state.plex.prefsAnswer = answer;
+      const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+      expect(failed, what).toMatchObject({ kind: 'rejected' });
+      expect((failed as Error).message, what).toContain(
+        `Plex at http://plex:32400 (127.0.0.1) is yours, but ${said}`,
+      );
+      expect((failed as Error).message, what).toContain(
+        'Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), reset ',
+      );
+    }
+  });
+
+  it('names every setting that fails at once, each with its value and its default', async () => {
+    const { api, state, plexTv, ctx, stack } = await plexOf();
+    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    state.plex.allowedNetworks = '192.0.2.0/24';
+    state.plex.enableLocalSecurity = 0;
+    state.plex.dlnaEnabled = true;
+    const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+    expect(failed).toMatchObject({
+      kind: 'rejected',
+      message: `Plex at http://plex:32400 (127.0.0.1) is yours, but lets "192.0.2.0/24" in without a sign-in (allowedNetworks); has enableLocalSecurity at 0, not -1 or 1, so a client may be let in without a sign-in; has DlnaEnabled at true, not false, and DLNA streams without a sign-in. Mediaplane never sets allowedNetworks, enableLocalSecurity, DlnaEnabled: this may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), reset allowedNetworks, enableLocalSecurity, DlnaEnabled in appdata/plex/${PLEX_PREFERENCES} (delete the attribute, or set it to its default: allowedNetworks '', enableLocalSecurity -1, DlnaEnabled false), then run apply again`,
+    });
   });
 
   it("keeps a Plex that didn't claim itself unpublished, saying why", async () => {
@@ -769,7 +872,15 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
   });
 
   it('keeps a Plex unpublished, and unrecorded, whenever it does not say that no network is let in without a sign-in', async () => {
-    const faults: [string, FakeReply | { allowedNetworks: string }][] = [
+    const faults: [
+      string,
+      (
+        | FakeReply
+        | { allowedNetworks: string }
+        | { enableLocalSecurity: number }
+        | { dlnaEnabled: boolean }
+      ),
+    ][] = [
       ['a network let in', { allowedNetworks: '192.0.2.0/255.255.255.0' }],
       [
         'no allowedNetworks',
@@ -785,12 +896,17 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
           body: { MediaContainer: { Setting: [{ id: 'allowedNetworks', value: 5 }] } },
         },
       ],
+      ['local security 0', { enableLocalSecurity: 0 }],
+      ['DLNA on', { dlnaEnabled: true }],
       ['a 5xx', { status: 503, body: 'fake: unavailable' }],
       ['an answer that is not settings', { status: 200, body: { nope: true } }],
     ];
     for (const [what, fault] of faults) {
       const { home, state, published, run, store } = await stepOf();
       if ('allowedNetworks' in fault) state.plex.allowedNetworks = fault.allowedNetworks;
+      else if ('enableLocalSecurity' in fault)
+        state.plex.enableLocalSecurity = fault.enableLocalSecurity;
+      else if ('dlnaEnabled' in fault) state.plex.dlnaEnabled = fault.dlnaEnabled;
       else state.plex.prefsAnswer = fault;
       // Claimed as it first starts, yours: it stays unpublished all the same.
       const failed = await thrown(run(store));

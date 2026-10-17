@@ -37,7 +37,7 @@ async function identityOf(api: AppApi): Promise<Identity> {
   return (await api.get('/identity', identity, { anonymous: true })).MediaContainer;
 }
 
-/** The most of Plex's `allowedNetworks` a message shows, in characters. */
+/** The most of a text Plex holds that a message shows, in characters. */
 const SHOWN_MAX = 120;
 
 /**
@@ -49,6 +49,71 @@ function shown(text: string): string {
   const clean = Array.from(text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ''));
   return JSON.stringify(
     clean.length > SHOWN_MAX ? `${clean.slice(0, SHOWN_MAX).join('')}…` : clean.join(''),
+  );
+}
+
+/**
+ * A setting of Plex that, left as whoever reached it unclaimed set it, lets a client use
+ * Plex without signing in (probed on the pinned image). Mediaplane never sets them.
+ */
+interface OpenSetting {
+  /** Its id in `GET /:/prefs`. */
+  id: string;
+  /** Whether `value`, as Plex gives it, is safe. Anything not understood is not. */
+  safe: (value: unknown) => boolean;
+  /** What a message says of a value that is not safe. */
+  says: (value: unknown) => string;
+  /** Its default, for the remedy. */
+  reset: string;
+}
+
+/** A value of a setting, as a message shows it: text quoted and capped, else as JSON. */
+function valueShown(value: unknown): string {
+  if (typeof value === 'string') return shown(value);
+  if (typeof value === 'number' || typeof value === 'boolean')
+    return JSON.stringify(value);
+  return 'a value it does not give';
+}
+
+/**
+ * The settings a Plex of yours must have as Plex defaults them, or stricter, before it is
+ * published. Each is anything whoever reached Plex while it was unclaimed could have set
+ * over `PUT /:/prefs` with no token (probed), and which survives the claim:
+ * - `allowedNetworks`, the networks let in without a sign-in: none;
+ * - `enableLocalSecurity`, hidden: -1 (Plex's default; a claimed Plex answered 401 to a
+ *   client with no token, by IP, probed) or 1 (stricter). Anything else, 0 included, is
+ *   not known to be safe;
+ * - `DlnaEnabled`: off. DLNA streams with no Plex sign-in.
+ * A setting that is missing, or not of the type Plex gives, is not safe either.
+ */
+const OPEN_SETTINGS: readonly OpenSetting[] = [
+  {
+    id: 'allowedNetworks',
+    safe: (value) => value === '',
+    says: (value) =>
+      `lets ${typeof value === 'string' ? shown(value) : 'networks it does not name'} in without a sign-in (allowedNetworks)`,
+    reset: "allowedNetworks ''",
+  },
+  {
+    id: 'enableLocalSecurity',
+    safe: (value) => value === -1 || value === 1,
+    says: (value) =>
+      `has enableLocalSecurity at ${valueShown(value)}, not -1 or 1, so a client may be let in without a sign-in`,
+    reset: 'enableLocalSecurity -1',
+  },
+  {
+    id: 'DlnaEnabled',
+    safe: (value) => value === false,
+    says: (value) =>
+      `has DlnaEnabled at ${valueShown(value)}, not false, and DLNA streams without a sign-in`,
+    reset: 'DlnaEnabled false',
+  },
+];
+
+/** The settings of OPEN_SETTINGS that Plex's answer to `GET /:/prefs` doesn't show safe. */
+function opens(settings: readonly { id: string; value?: unknown }[]): OpenSetting[] {
+  return OPEN_SETTINGS.filter(
+    (open) => !open.safe(settings.find((s) => s.id === open.id)?.value),
   );
 }
 
@@ -135,10 +200,11 @@ async function accountOf(
  *   Plex stays unpublished: another account's token, or one plex.tv refuses, as it does
  *   once the server is removed from its account (probed). plex.tv unanswered (a timeout, a
  *   5xx, no connection) is `unsure`, as is a claimed Plex whose file holds no token.
- * - Before it is done, a Plex of yours must let no network in without a sign-in
- *   (`allowedNetworks` empty): anyone could set that while it was unclaimed. Plex's
- *   settings are asked for with your token, on that one call, once plex.tv has said this
- *   Plex is yours: the setup's client carries no token of yours.
+ * - Before it is done, a Plex of yours must let no client in without a sign-in:
+ *   `allowedNetworks` empty, `enableLocalSecurity` -1 or 1, `DlnaEnabled` off
+ *   (OPEN_SETTINGS). Anyone could set them while it was unclaimed. Plex's settings are
+ *   asked for with your token, on that one call, once plex.tv has said this Plex is yours:
+ *   the setup's client carries no token of yours.
  * - It is done once Preferences.xml holds a token (`PlexOnlineToken`), and Mediaplane's
  *   record names Plex: the token is yours, never one Mediaplane made.
  */
@@ -208,15 +274,18 @@ export const plexBootstrap: Bootstrap = {
     }
     // Yours, so it may have your token now, on this one call (the setup's client carries
     // none). While it was unclaimed, anyone who reached it could change its settings, and
-    // they survive the claim (probed): a network let in without a sign-in would be open
-    // once it is published. Asked here only, so one you set later, on purpose, is left
-    // alone.
-    const allowed = (
-      await api.withKey(token).get('/:/prefs', prefs)
-    ).MediaContainer.Setting.find((s) => s.id === 'allowedNetworks')?.value;
-    if (allowed !== '') {
+    // they survive the claim (probed): a network, a local client or DLNA let in without a
+    // sign-in would be open once it is published. Asked here only, so one you set later,
+    // on purpose, is left alone.
+    const { Setting } = (await api.withKey(token).get('/:/prefs', prefs)).MediaContainer;
+    const open = opens(Setting);
+    if (open.length > 0) {
+      const ids = open.map((o) => o.id).join(', ');
+      const problems = open
+        .map((o) => o.says(Setting.find((s) => s.id === o.id)?.value))
+        .join('; ');
       throw new AppApiError(
-        `${api.name} at ${api.where} is yours, but lets ${typeof allowed === 'string' ? shown(allowed) : 'networks it does not name'} in without a sign-in (allowedNetworks), which Mediaplane never sets: it may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), clear allowedNetworks in appdata/plex/${PREFERENCES}, then run apply again`,
+        `${api.name} at ${api.where} is yours, but ${problems}. Mediaplane never sets ${ids}: this may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), reset ${ids} in appdata/plex/${PREFERENCES} (delete the attribute, or set it to its default: ${open.map((o) => o.reset).join(', ')}), then run apply again`,
         { kind: 'rejected' },
       );
     }
