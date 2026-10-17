@@ -28,7 +28,8 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
 - **It runs Plex** whenever `media_server` is `plex`, listed under `apps` or not, with
   your data folder at `/data`. It publishes its web UI as `network.bind` says, at
   `/web`, once Plex is claimed for your account.
-- **Your token.** Run `mediaplane plex-login` before the first `apply`: it signs you in
+- **Your token.** `init` offers to sign you in to Plex as it finishes, on a terminal.
+  Otherwise, run `mediaplane plex-login` before the first `apply`: it signs you in
   to plex.tv with a link you open in a browser, and saves your Plex token where
   `plex.token` says (`secrets/plex-token`, which `init` writes). It never prints the
   token. A saved token plex.tv still takes is kept, unless you add `--force`, and so is

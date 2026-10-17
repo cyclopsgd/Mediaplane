@@ -532,7 +532,11 @@ export function createProgram(
         setExitCode(1);
         return;
       }
-      setExitCode(await init(options, io, host.host, deps.dataFolder));
+      setExitCode(
+        await init(options, io, host.host, deps.dataFolder, (home) =>
+          plexLogin({ home, json: false, force: false }, io, deps.plexTv(runtime)),
+        ),
+      );
     });
 
   // What the host helper container runs (spec §4.2); not for people, so not in --help.

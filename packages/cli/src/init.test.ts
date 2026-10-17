@@ -3,7 +3,9 @@ import type * as FsPromises from 'node:fs/promises';
 import { join } from 'node:path';
 import { invokingUser, parseConfig } from '@mediaplane/engine';
 import {
+  FAKE_PLEX_ACCOUNT,
   FIXTURE_HOST,
+  fakePlexTv,
   fakeProbe,
   fakeRuntime,
   tempDir,
@@ -204,7 +206,7 @@ describe('mediaplane init', () => {
 
   it('asks on a terminal for what the flags leave out', async () => {
     const home = await newHome();
-    const term = capture(['plex', '/srv/media', '', 'localhost', '', '']);
+    const term = capture(['plex', '/srv/media', '', 'localhost', '', '', 'n']);
     expect(await run(['init', '--home', home], term.io, deps())).toBe(0);
     // Nothing is published beyond this machine, so there is no login on the LAN to ask about.
     expect(term.questions).toEqual([
@@ -214,6 +216,7 @@ describe('mediaplane init', () => {
       'Publish the web UIs on your LAN, or keep them on this machine? lan or localhost [lan]: ',
       'Admin user name for the apps [admin]: ',
       'Generate the admin password? [Y/n] ',
+      'Sign in to Plex now? [Y/n] ',
     ]);
     const config = await stackIn(home);
     expect(config).toMatchObject({
@@ -768,6 +771,7 @@ describe('mediaplane init', () => {
       'stack.yaml',
       'secrets/',
       'secrets/my-password',
+      'n',
     ]);
     expect(await run(['init', '--home', home], term.io, deps())).toBe(0);
     expect(term.questions).toEqual([
@@ -787,6 +791,7 @@ describe('mediaplane init', () => {
       'File holding your password, inside the Mediaplane home [secrets/admin-password]: ',
       'File holding your password, inside the Mediaplane home [secrets/admin-password]: ',
       'File holding your password, inside the Mediaplane home [secrets/admin-password]: ',
+      'Sign in to Plex now? [Y/n] ',
     ]);
     expect(term.stderr()).toBe(
       [
@@ -955,6 +960,7 @@ describe('mediaplane init: what each question is for', () => {
     'admin',
     'n',
     '',
+    'n',
   ];
 
   it('says what each question is for, just before it, in lines of 60 columns at most', async () => {
@@ -975,6 +981,7 @@ describe('mediaplane init: what each question is for', () => {
     before(NOTES.adminUser, 'Admin user name for the apps [admin]: ');
     before(NOTES.adminPassword, 'Generate the admin password? [Y/n] ');
     before(NOTES.passwordFile, 'File holding your password, inside the Mediaplane home');
+    before(NOTES.plexSignIn, 'Sign in to Plex now? [Y/n] ');
     for (const line of Object.values(NOTES).flat()) {
       expect(line.length, line).toBeLessThanOrEqual(60);
     }
@@ -1079,6 +1086,118 @@ describe('mediaplane init: the WireGuard key', () => {
       await run(['init', '--home', await newHome(), ...flags, ...vpn], script.io, deps()),
     ).toBe(0);
     expect(script.stdout()).toContain("Put your VPN's WireGuard private key in");
+  });
+});
+
+describe('mediaplane init: signing in to Plex', () => {
+  const PLEX = ['--media-server', 'plex', '--data', '/srv/data', '--bind', 'localhost'];
+  const GENERATE = ['', '', ''];
+  const QUESTION = 'Sign in to Plex now? [Y/n] ';
+  const tokenIn = (home: string) => readFile(join(home, 'secrets', 'plex-token'), 'utf8');
+  const nextLogin = (home: string) =>
+    `Run "mediaplane plex-login" to sign in to Plex: it saves your Plex token in ${join(home, 'secrets', 'plex-token')}.`;
+
+  it('offers the sign-in on a terminal, and runs it on yes', async () => {
+    const home = await newHome();
+    const plexTv = await fakePlexTv();
+    plexTv.state.signIn = { token: FAKE_PLEX_ACCOUNT.token, afterReads: 0 };
+    const term = capture([...GENERATE, '']);
+    const code = await run(['init', '--home', home, ...PLEX], term.io, {
+      ...deps(),
+      plexTv: () => plexTv.client,
+    });
+    expect(code).toBe(0);
+    expect(term.questions.at(-1)).toBe(QUESTION);
+    expect(await tokenIn(home)).toBe(`${FAKE_PLEX_ACCOUNT.token}\n`);
+    const shown = term.shown();
+    // The files first, then the sign-in, then what is left to do, which it isn't.
+    expect(shown.indexOf('Wrote ')).toBeLessThan(shown.indexOf(QUESTION));
+    expect(shown.indexOf('https://app.plex.tv/auth#?clientID=')).toBeLessThan(
+      shown.indexOf('Next steps:'),
+    );
+    expect(shown).toContain('Signed in. Saved your Plex token in secrets/plex-token.');
+    expect(term.stdout()).not.toContain(nextLogin(home));
+    expect(shown).not.toContain(FAKE_PLEX_ACCOUNT.token);
+  });
+
+  it('leaves the sign-in as a next step on no', async () => {
+    const home = await newHome();
+    const plexTv = await fakePlexTv();
+    const term = capture([...GENERATE, 'n']);
+    const code = await run(['init', '--home', home, ...PLEX], term.io, {
+      ...deps(),
+      plexTv: () => plexTv.client,
+    });
+    expect(code).toBe(0);
+    expect(plexTv.state.calls).toEqual([]);
+    expect(term.stdout()).toContain(nextLogin(home));
+  });
+
+  it('keeps the files, and says to run plex-login again, when the sign-in fails', async () => {
+    const home = await newHome();
+    const plexTv = await fakePlexTv();
+    plexTv.state.failing.push({ path: '/api/v2/pins', status: 503 });
+    const term = capture([...GENERATE, 'y']);
+    const code = await run(['init', '--home', home, ...PLEX], term.io, {
+      ...deps(),
+      plexTv: () => plexTv.client,
+    });
+    expect(code).toBe(0);
+    expect(await stackIn(home)).toMatchObject({ media_server: 'plex' });
+    expect(term.stderr()).toContain('plex.tv answered with HTTP 503');
+    expect(term.stdout()).toContain(
+      `Run "mediaplane plex-login" again to sign in to Plex: it saves your Plex token in ${join(home, 'secrets', 'plex-token')}.`,
+    );
+  });
+
+  it('keeps the next step when you stop at the question', async () => {
+    const home = await newHome();
+    const plexTv = await fakePlexTv();
+    const term = capture(GENERATE);
+    const asked = term.io.ask;
+    term.io.ask = (question) =>
+      question === QUESTION
+        ? Promise.reject(new PromptCancelled())
+        : (asked?.(question) ?? Promise.resolve(''));
+    const code = await run(['init', '--home', home, ...PLEX], term.io, {
+      ...deps(),
+      plexTv: () => plexTv.client,
+    });
+    expect(code).toBe(0);
+    expect(plexTv.state.calls).toEqual([]);
+    expect(term.stdout()).toContain(nextLogin(home));
+  });
+
+  it('never asks without a terminal, with --json, or for Jellyfin', async () => {
+    const plexTv = await fakePlexTv();
+    const withPlexTv = { ...deps(), plexTv: () => plexTv.client };
+    const noTerminal = capture();
+    expect(
+      await run(['init', '--home', await newHome(), ...PLEX], noTerminal.io, withPlexTv),
+    ).toBe(0);
+    const json = capture([]);
+    expect(
+      await run(
+        ['init', '--home', await newHome(), ...PLEX, '--json'],
+        json.io,
+        withPlexTv,
+      ),
+    ).toBe(0);
+    expect(json.questions).toEqual([]);
+    const jellyfin = capture([...GENERATE]);
+    const flags = [
+      '--media-server',
+      'jellyfin',
+      '--data',
+      '/srv/data',
+      '--bind',
+      'localhost',
+    ];
+    expect(
+      await run(['init', '--home', await newHome(), ...flags], jellyfin.io, withPlexTv),
+    ).toBe(0);
+    expect(jellyfin.questions).not.toContain(QUESTION);
+    expect(plexTv.state.calls).toEqual([]);
   });
 });
 

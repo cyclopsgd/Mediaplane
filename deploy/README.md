@@ -100,8 +100,9 @@ It adds `-t` only on a terminal, so it works in scripts too.
 ## First run
 
 ```bash
-mediaplane init         # asks a few questions, then writes /opt/mediaplane/stack.yaml
-mediaplane plex-login   # with Plex: signs you in to plex.tv, saves your token
+mediaplane init         # asks a few questions, writes /opt/mediaplane/stack.yaml,
+                        # and with Plex offers to sign you in to plex.tv
+mediaplane plex-login   # with Plex, if you said no: signs you in, saves your token
 mediaplane plan         # checks the host and shows what apply would do
 mediaplane apply        # asks before it changes anything; --yes skips the question
 mediaplane status
@@ -143,8 +144,10 @@ nothing. Without a terminal it asks nothing: pass the flags in the
   - With `lan`, it also asks whether your own network must sign in too
     (`security.login_on_lan`; `--no-login-on-lan` says no).
 
-- **Your Plex token.** With `media_server: plex`, run `mediaplane plex-login` before the
-  first `apply`. It prints a link: open it in a browser, on any device, and sign in to
+- **Your Plex token.** With `media_server: plex`, on a terminal, `init` ends by asking
+  "Sign in to Plex now?". Yes runs the same sign-in as `mediaplane plex-login`, there and
+  then. No, a script, `--json`, or a sign-in that fails leaves it as a next step: run
+  `mediaplane plex-login` before the first `apply`. It prints a link: open it in a browser, on any device, and sign in to
   Plex. It then saves your token where `plex.token` says (`secrets/plex-token`), readable
   by you only, and never prints it. It waits as long as the link lasts, 30 minutes, or
   `--timeout` seconds. A saved token that plex.tv still takes is kept, unless you add

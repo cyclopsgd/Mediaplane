@@ -37,7 +37,11 @@ export interface InitOptions {
   json?: boolean;
 }
 
-/** `mediaplane init`: write a starter stack.yaml and secrets/, never overwriting. */
+/**
+ * `mediaplane init`: write a starter stack.yaml and secrets/, never overwriting. With Plex,
+ * on a terminal, it then offers the sign-in to plex.tv: `signIn` is plex-login for the home,
+ * returning its exit code.
+ */
 export async function init(
   options: InitOptions,
   io: Io,
@@ -47,6 +51,7 @@ export async function init(
     home: string,
     user: { uid: number; gid: number },
   ) => Promise<DataFolder>,
+  signIn?: (home: string) => Promise<number>,
 ): Promise<number> {
   const asJson = options.json === true;
   const home = resolve(options.home);
@@ -88,13 +93,14 @@ export async function init(
     (await writeFileExclusive(keyPath, `${wireguardKey}\n`, 0o600));
   const data = await dataFolder(answers.dataPath, home, answers.user);
 
-  const next = [
+  const tokenPath = join(secrets, 'plex-token');
+  const next = (plex: 'ask' | 'again' | 'done') => [
     ...(answers.vpnProvider === undefined || savedKey
       ? []
       : [`Put your VPN's WireGuard private key in ${keyPath}.`]),
-    ...(answers.mediaServer === 'plex'
+    ...(answers.mediaServer === 'plex' && plex !== 'done'
       ? [
-          `Run "mediaplane plex-login" to sign in to Plex: it saves your Plex token in ${join(secrets, 'plex-token')}.`,
+          `Run "mediaplane plex-login"${plex === 'again' ? ' again' : ''} to sign in to Plex: it saves your Plex token in ${tokenPath}.`,
         ]
       : []),
     ...(answers.adminPasswordFile === undefined
@@ -108,7 +114,7 @@ export async function init(
   ];
   if (asJson) {
     io.stdout(
-      `${JSON.stringify({ schema: INIT_JSON_SCHEMA, ok: true, stackPath, next }, null, 2)}\n`,
+      `${JSON.stringify({ schema: INIT_JSON_SCHEMA, ok: true, stackPath, next: next('ask') }, null, 2)}\n`,
     );
     return 0;
   }
@@ -122,8 +128,37 @@ export async function init(
       `This looks like a VM on ${host.cloud}, so the web UIs stay on localhost (network.bind).\n`,
     );
   }
-  io.stdout(`\nNext steps:\n${next.map((step) => `  - ${step}\n`).join('')}`);
+  const plex =
+    answers.mediaServer === 'plex' && io.ask !== undefined && signIn !== undefined
+      ? await offerSignIn(io, io.ask, () => signIn(home))
+      : 'ask';
+  io.stdout(
+    `\nNext steps:\n${next(plex)
+      .map((step) => `  - ${step}\n`)
+      .join('')}`,
+  );
   return 0;
+}
+
+/**
+ * Ask whether to sign in to Plex now, and run the sign-in on yes: 'done' once it saved a
+ * token, 'again' when it failed (it said why), 'ask' on no or when you stop at the question.
+ * The files are written either way, so init still succeeds.
+ */
+async function offerSignIn(
+  io: Io,
+  ask: Ask,
+  signIn: () => Promise<number>,
+): Promise<'ask' | 'again' | 'done'> {
+  io.stdout('\n');
+  explain(io, NOTES.plexSignIn);
+  const answer = await ask('Sign in to Plex now? [Y/n] ').catch((cause: unknown) => {
+    if (cause instanceof PromptCancelled) return 'n';
+    throw cause;
+  });
+  if (/^n/i.test(answer.trim())) return 'ask';
+  io.stdout('\n');
+  return (await signIn()) === 0 ? 'done' : 'again';
 }
 
 type Ask = (question: string) => Promise<string>;
@@ -328,7 +363,7 @@ async function gatherAnswers(
 export const NOTES = {
   mediaServer: [
     'Media server: jellyfin needs no account. plex needs a Plex',
-    'account: run "mediaplane plex-login" once init is done.',
+    'account: init offers to sign you in to it at the end.',
   ],
   dataPath: [
     'Data folder: one folder for downloads and your library,',
@@ -362,6 +397,10 @@ export const NOTES = {
   adminPassword: [
     'Admin password: Mediaplane can generate a strong one, or',
     'use your own, from a file in the Mediaplane home.',
+  ],
+  plexSignIn: [
+    'Plex sign-in: init shows a link; sign in to Plex there, in',
+    'any browser, and it saves your Plex token for apply.',
   ],
   passwordFile: [
     'Your password file: at least 12 characters. Put it there',
