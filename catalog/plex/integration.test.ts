@@ -201,6 +201,51 @@ describe("Plex's libraries", () => {
     expect(await movies.observe(api, undefined)).toBeUndefined();
   });
 
+  it('records the library it made, not the first Plex lists in its answer', async () => {
+    const { api, plex } = await plexOf();
+    plex.sections.push({
+      key: '5',
+      title: 'Documentaries',
+      type: 'movie',
+      agent: 'tv.plex.agents.movie',
+      scanner: 'Plex Movie',
+      language: 'en-US',
+      locations: ['/data/elsewhere'],
+    });
+    // Plex lists every library, the new one last: its key is 6, not 5.
+    plex.createListing = 'every';
+    expect(
+      await resource('library_movies').create(api, wanted('library_movies')),
+    ).toEqual({
+      id: '6',
+    });
+    // Two of a name differ by what they hold: the TV one is not the movie one.
+    plex.sections.push({
+      key: '8',
+      title: 'TV Shows',
+      type: 'movie',
+      agent: 'tv.plex.agents.movie',
+      scanner: 'Plex Movie',
+      language: 'en-US',
+      locations: ['/data/other'],
+    });
+    expect(await resource('library_tv').create(api, wanted('library_tv'))).toEqual({
+      id: '9',
+    });
+  });
+
+  it("never guesses which library it made: an answer that doesn't list it is an error", async () => {
+    const { api, plex } = await plexOf();
+    plex.createListing = 'other';
+    expect(
+      await thrown(resource('library_movies').create(api, wanted('library_movies'))),
+    ).toMatchObject({
+      kind: 'rejected',
+      message:
+        "Plex at http://plex:32400 (127.0.0.1) made the library Movies, but its answer doesn't list a movie library of that name, so Mediaplane can't tell which it is (POST /library/sections)",
+    });
+  });
+
   it('puts back its name and folder, keeping the agent you chose', async () => {
     const { api, plex } = await plexOf();
     const movies = resource('library_movies');

@@ -491,3 +491,57 @@ describe("Radarr's connection to Jellyfin", () => {
     });
   });
 });
+
+describe("Radarr's connection to Plex", () => {
+  it('is refused while Plex has no Movie library, whatever TV libraries it has, and then made', async () => {
+    const plexTv = await fakePlexTv();
+    const apis = await fakeStackApis(plexTv.state);
+    const state = freshAppState();
+    apis.apps.set('radarr', state);
+    const plex = freshAppState();
+    claimFakePlex(
+      plex.plex,
+      await plexTv.client.claimToken(FAKE_PLEX_ACCOUNT.token),
+      plexTv.state,
+    );
+    apis.apps.set('plex', plex);
+    const section = (key: string, type: 'movie' | 'show') => ({
+      key,
+      title: type === 'movie' ? 'Movies' : 'TV Shows',
+      type,
+      agent: type === 'movie' ? 'tv.plex.agents.movie' : 'tv.plex.agents.series',
+      scanner: type === 'movie' ? 'Plex Movie' : 'Plex TV Series',
+      language: 'en-US',
+      locations: [type === 'movie' ? '/data/media/movies' : '/data/media/tv'],
+    });
+    plex.plex.sections.push(section('1', 'show'));
+    const api = createAppApi({
+      name: 'Radarr',
+      service: 'radarr',
+      port: 7878,
+      endpoint: { host: '127.0.0.1', port: apis.app.port },
+      key: { scheme: 'x-api-key', value: SONARR_KEY },
+      secrets: [SONARR_KEY, FAKE_PLEX_ACCOUNT.token],
+      retry: { deadlineMs: 0 },
+    });
+    const radarr = servarrPlex(RADARR_TRIGGERS, 'plex.library_movies');
+    const resolved = stack('plex', '  radarr: {}\n');
+    const app = resolved.apps.find((a) => a.def.id === 'radarr');
+    if (app === undefined) throw new Error('no Radarr in the stack');
+    const desired = radarr.desired({
+      ...contextOf(resolved, { plex: { token: FAKE_PLEX_ACCOUNT.token } }),
+      app,
+    });
+    if (desired === undefined) throw new Error('the connection is wanted');
+    await expect(radarr.create(api, desired)).rejects.toThrow(
+      'refused the request (HTTP 400): Host: At least one Movie library is required',
+    );
+    plex.plex.sections.push(section('2', 'movie'));
+    expect(await radarr.create(api, desired)).toEqual({ id: 1 });
+    expect(state.connections[0]).toMatchObject({
+      name: PLEX_CONNECTION_NAME,
+      implementation: 'PlexServer',
+      onMovieDelete: true,
+    });
+  });
+});

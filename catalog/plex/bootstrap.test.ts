@@ -29,6 +29,7 @@ import {
   fakePlexTv,
   fakeRuntime,
   fakeStackApis,
+  type FakeReply,
   type FakeRuntimeOptions,
   FIXTURE_HOST,
   fixtureConfig,
@@ -234,11 +235,119 @@ describe("Plex's first-run setup", () => {
     const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
     expect(failed).toMatchObject({
       kind: 'rejected',
-      message: `Plex at http://plex:32400 (127.0.0.1) is yours, but lets 192.0.2.0/255.255.255.0 in without a sign-in (allowedNetworks), which Mediaplane never sets: it may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it, clear allowedNetworks in appdata/plex/${PLEX_PREFERENCES}, then run apply again`,
+      message: `Plex at http://plex:32400 (127.0.0.1) is yours, but lets "192.0.2.0/255.255.255.0" in without a sign-in (allowedNetworks), which Mediaplane never sets: it may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), clear allowedNetworks in appdata/plex/${PLEX_PREFERENCES}, then run apply again`,
     });
     // Cleared, it is taken.
     state.plex.allowedNetworks = '';
     expect(await plexBootstrap.run(api, ADMIN, stack, ctx)).toBeUndefined();
+  });
+
+  /** What GET /:/prefs answers when it doesn't say that allowedNetworks is empty. */
+  const UNSAID: [string, FakeReply][] = [
+    [
+      'is missing',
+      {
+        status: 200,
+        body: { MediaContainer: { Setting: [{ id: 'FriendlyName', value: '' }] } },
+      },
+    ],
+    [
+      'is a number',
+      {
+        status: 200,
+        body: { MediaContainer: { Setting: [{ id: 'allowedNetworks', value: 5 }] } },
+      },
+    ],
+    [
+      'is null',
+      {
+        status: 200,
+        body: { MediaContainer: { Setting: [{ id: 'allowedNetworks', value: null }] } },
+      },
+    ],
+    [
+      'is true',
+      {
+        status: 200,
+        body: { MediaContainer: { Setting: [{ id: 'allowedNetworks', value: true }] } },
+      },
+    ],
+  ];
+
+  it('keeps a Plex of yours unpublished that does not say allowedNetworks is empty: missing, or not text', async () => {
+    for (const [what, answer] of UNSAID) {
+      const { api, state, plexTv, ctx, stack } = await plexOf();
+      claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+      state.plex.prefsAnswer = answer;
+      const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+      expect(failed, `allowedNetworks ${what}`).toMatchObject({ kind: 'rejected' });
+      expect((failed as Error).message).toContain(
+        'is yours, but lets networks it does not name in without a sign-in (allowedNetworks)',
+      );
+    }
+  });
+
+  it('keeps a Plex of yours unpublished when its settings are not read: a 5xx, no answer, or an answer that is not settings', async () => {
+    const { api, state, plexTv, ctx, stack } = await plexOf();
+    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    state.plex.prefsAnswer = { status: 500, body: 'fake: broken' };
+    const broken = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+    expect(broken).toBeInstanceOf(AppApiError);
+    expect((broken as Error).message).toContain('(HTTP 500)');
+    expect((broken as Error).message).toContain('GET /:/prefs');
+    state.plex.prefsAnswer = { status: 200, body: { MediaContainer: { size: 0 } } };
+    const odd = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+    expect(odd).toBeInstanceOf(AppApiError);
+    expect((odd as Error).message).toContain('GET /:/prefs');
+    state.plex.prefsAnswer = {
+      status: 200,
+      body: { MediaContainer: { Setting: [{ id: 'allowedNetworks' }] } },
+    };
+    expect(await thrown(plexBootstrap.run(api, ADMIN, stack, ctx))).toBeInstanceOf(
+      AppApiError,
+    );
+    state.plex.prefsAnswer = { status: 200, body: 'not json at all' };
+    expect(await thrown(plexBootstrap.run(api, ADMIN, stack, ctx))).toBeInstanceOf(
+      AppApiError,
+    );
+    // Plex doesn't answer: the client's own failure comes out, never a pass.
+    const silent: AppApi = {
+      ...api,
+      withKey: () => ({
+        ...api,
+        get: () =>
+          Promise.reject(
+            new AppApiError('Plex at http://plex:32400 (127.0.0.1) did not answer', {
+              kind: 'unreachable',
+            }),
+          ),
+      }),
+    };
+    state.plex.prefsAnswer = undefined;
+    expect(await thrown(plexBootstrap.run(silent, ADMIN, stack, ctx))).toMatchObject({
+      kind: 'unreachable',
+    });
+  });
+
+  it('shows the networks Plex lets in as quoted text of at most 120 characters, without control characters, as whoever reached it unclaimed chose them', async () => {
+    const { api, state, plexTv, ctx, stack } = await plexOf();
+    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    const letters = 'A'.repeat(200);
+    state.plex.allowedNetworks = `\u001b[31m192.0.2.0/24\n\r\t\u0000${letters}\u2028"quoted"\u007f`;
+    const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+    expect(failed).toMatchObject({ kind: 'rejected' });
+    const said = (failed as Error).message;
+    // Controls stripped (the "[31m" after the ESC is plain text), then 120 characters kept.
+    const kept = `[31m192.0.2.0/24${letters}`.slice(0, 120);
+    expect(said).toContain(`lets ${JSON.stringify(`${kept}…`)} in without a sign-in`);
+    expect(said).not.toMatch(/[\p{Cc}\p{Zl}\p{Zp}]/u);
+    expect(said).not.toContain('quoted');
+    // A short one is shown whole, quoted.
+    state.plex.allowedNetworks = '192.0.2.0/255.255.255.0';
+    const short = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+    expect((short as Error).message).toContain(
+      'lets "192.0.2.0/255.255.255.0" in without a sign-in',
+    );
   });
 
   it("keeps a Plex that didn't claim itself unpublished, saying why", async () => {
@@ -657,6 +766,38 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
         (r) => r.headers.host?.startsWith('plex') === true && r.headers['x-plex-token'],
       ),
     ).toEqual([]);
+  });
+
+  it('keeps a Plex unpublished, and unrecorded, whenever it does not say that no network is let in without a sign-in', async () => {
+    const faults: [string, FakeReply | { allowedNetworks: string }][] = [
+      ['a network let in', { allowedNetworks: '192.0.2.0/255.255.255.0' }],
+      [
+        'no allowedNetworks',
+        {
+          status: 200,
+          body: { MediaContainer: { Setting: [{ id: 'FriendlyName', value: '' }] } },
+        },
+      ],
+      [
+        'allowedNetworks that is not text',
+        {
+          status: 200,
+          body: { MediaContainer: { Setting: [{ id: 'allowedNetworks', value: 5 }] } },
+        },
+      ],
+      ['a 5xx', { status: 503, body: 'fake: unavailable' }],
+      ['an answer that is not settings', { status: 200, body: { nope: true } }],
+    ];
+    for (const [what, fault] of faults) {
+      const { home, state, published, run, store } = await stepOf();
+      if ('allowedNetworks' in fault) state.plex.allowedNetworks = fault.allowedNetworks;
+      else state.plex.prefsAnswer = fault;
+      // Claimed as it first starts, yours: it stays unpublished all the same.
+      const failed = await thrown(run(store));
+      expect(failed, what).toBeInstanceOf(BootstrapFailed);
+      expect(published, what).toEqual([['plex']]);
+      expect((await readSecretStore(home)).setUp, what).toBeUndefined();
+    }
   });
 
   it("never hands your token to Plex's setup client, which needs none", async () => {

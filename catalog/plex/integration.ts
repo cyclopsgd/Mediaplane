@@ -9,7 +9,8 @@ import { z } from 'zod';
 /** The name Plex shows for itself, unless `apps.plex.server_name` names another. */
 export const SERVER_NAME = 'Mediaplane';
 
-const prefs = z.looseObject({
+/** Plex's settings, as `GET /:/prefs` lists them: asked for here and by Plex's setup. */
+export const prefs = z.looseObject({
   MediaContainer: z.looseObject({
     Setting: z.array(z.looseObject({ id: z.string(), value: z.unknown() })),
   }),
@@ -156,8 +157,17 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
         location: spec.path,
       });
       const answer = await api.post(`${SECTIONS}?${query.toString()}`, {}, made);
-      const [first] = answer.MediaContainer.Directory;
-      return { id: first?.key ?? null };
+      // The one that is the library just asked for, whatever else Plex lists in its answer.
+      const created = answer.MediaContainer.Directory.find(
+        (s) => s.title === spec.name && s.type === spec.type,
+      );
+      if (created === undefined) {
+        throw new AppApiError(
+          `${api.name} at ${api.where} made the library ${spec.name}, but its answer doesn't list a ${spec.type} library of that name, so Mediaplane can't tell which it is (POST ${SECTIONS})`,
+          { kind: 'rejected' },
+        );
+      }
+      return { id: created.key };
     },
     async update(api, _desired, observed) {
       const holds = String(observed.fields.type);

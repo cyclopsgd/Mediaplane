@@ -38,6 +38,17 @@ export interface FakePlex {
   allowedNetworks: string;
   sections: FakePlexSection[];
   /**
+   * A fault: what GET /:/prefs answers (to a token Plex takes) instead of its settings,
+   * such as a 500 or an answer that isn't the settings'.
+   */
+  prefsAnswer?: FakeReply;
+  /**
+   * What a POST that makes a library lists in its answer: just the new one (the default),
+   * every library Plex has, the new one last, or only a library that isn't the one asked
+   * for.
+   */
+  createListing?: 'new' | 'every' | 'other';
+  /**
    * How many more times /identity says it is unclaimed though it is claimed: Plex stops a
    * server it started for its config, claims itself, then starts again (probed).
    */
@@ -149,7 +160,8 @@ function plexTakes(plex: FakePlex, token: unknown, plexTv: FakePlexTvState): boo
  * refusal, or undefined when it passes. As theirs does (probed), it reaches Plex by its
  * service (plex), while it runs, at 32400, without TLS or a URL base, and asks for its
  * libraries with the token: one Plex refuses is `AuthToken: Authentication Token is
- * invalid`. A `testFailure` set on the arr overrides every check.
+ * invalid`. A `testFailure` set on the arr overrides every check. `service` is the arr's
+ * (sonarr or radarr): the library it needs is a TV one, or a Movie one.
  */
 export function testPlexConnection(
   sent: FakeProviderBase,
@@ -157,6 +169,7 @@ export function testPlexConnection(
   state: FakeAppState,
   plex: FakeAppState,
   plexTv: FakePlexTvState,
+  service: string,
 ): FakeRefusal | undefined {
   const value = (name: string) => fieldValue(sent, name);
   if (state.testFailure !== '') return refusal('Host', state.testFailure);
@@ -178,7 +191,7 @@ export function testPlexConnection(
     return refusal('AuthToken', 'Authentication Token is invalid');
   }
   // The arr needs a library of what it files (probed): Sonarr a TV one, Radarr a Movie one.
-  const radarr = 'onMovieDelete' in sent;
+  const radarr = service === 'radarr';
   const holds = radarr ? 'movie' : 'show';
   return plex.plex.sections.some((s) => s.type === holds)
     ? undefined
@@ -252,6 +265,7 @@ export function fakePlex(
     };
   }
   if (url.pathname === '/:/prefs' && method === 'GET') {
+    if (plex.prefsAnswer !== undefined) return plex.prefsAnswer;
     return {
       status: 200,
       body: {
@@ -330,10 +344,17 @@ export function fakePlex(
       language: query('language'),
       locations: url.searchParams.getAll('location'),
     };
+    const before = plex.sections.map(sectionShown);
     plex.sections.push(made);
+    const listed =
+      plex.createListing === 'every'
+        ? [...before, sectionShown(made)]
+        : plex.createListing === 'other'
+          ? [sectionShown({ ...made, key: '99', title: 'Elsewhere' })]
+          : [sectionShown(made)];
     return {
       status: 201,
-      body: { MediaContainer: { size: 1, Directory: [sectionShown(made)] } },
+      body: { MediaContainer: { size: listed.length, Directory: listed } },
     };
   }
   const one = /^\/library\/sections\/(\d+)$/.exec(url.pathname);

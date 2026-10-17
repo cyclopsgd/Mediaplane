@@ -9,6 +9,7 @@ import {
   type BootstrapContext,
 } from '@mediaplane/engine';
 import { z } from 'zod';
+import { prefs } from './integration';
 
 /** Where Plex keeps its settings, its claim's token among them, in its appdata folder. */
 export const PREFERENCES =
@@ -19,12 +20,6 @@ export const PREFERENCES =
  * what says the setup is done and what reads the token.
  */
 const SERVER_TOKEN = /\sPlexOnlineToken="([^"]+)"/;
-
-const prefs = z.looseObject({
-  MediaContainer: z.looseObject({
-    Setting: z.array(z.looseObject({ id: z.string(), value: z.unknown() })),
-  }),
-});
 
 const identity = z.looseObject({
   MediaContainer: z.looseObject({ claimed: z.boolean() }),
@@ -40,6 +35,21 @@ type Identity = z.infer<typeof identity>['MediaContainer'];
  */
 async function identityOf(api: AppApi): Promise<Identity> {
   return (await api.get('/identity', identity, { anonymous: true })).MediaContainer;
+}
+
+/** The most of Plex's `allowedNetworks` a message shows, in characters. */
+const SHOWN_MAX = 120;
+
+/**
+ * A text Plex holds, as a message may show it: whoever reached Plex while it was unclaimed
+ * chose it. Control characters (and line and paragraph separators) are dropped, it is cut
+ * at SHOWN_MAX characters with an ellipsis, and quoted as JSON.
+ */
+function shown(text: string): string {
+  const clean = Array.from(text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ''));
+  return JSON.stringify(
+    clean.length > SHOWN_MAX ? `${clean.slice(0, SHOWN_MAX).join('')}…` : clean.join(''),
+  );
 }
 
 /**
@@ -206,7 +216,7 @@ export const plexBootstrap: Bootstrap = {
     ).MediaContainer.Setting.find((s) => s.id === 'allowedNetworks')?.value;
     if (allowed !== '') {
       throw new AppApiError(
-        `${api.name} at ${api.where} is yours, but lets ${typeof allowed === 'string' ? allowed : 'networks it does not name'} in without a sign-in (allowedNetworks), which Mediaplane never sets: it may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it, clear allowedNetworks in appdata/plex/${PREFERENCES}, then run apply again`,
+        `${api.name} at ${api.where} is yours, but lets ${typeof allowed === 'string' ? shown(allowed) : 'networks it does not name'} in without a sign-in (allowedNetworks), which Mediaplane never sets: it may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), clear allowedNetworks in appdata/plex/${PREFERENCES}, then run apply again`,
         { kind: 'rejected' },
       );
     }

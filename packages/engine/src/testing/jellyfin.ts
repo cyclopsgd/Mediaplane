@@ -572,7 +572,7 @@ export function fakeServarrConnections(
     templates: () => [mediaBrowserTemplate(service), plexServerTemplate(service)],
     test: (sent, key) =>
       sent.implementation === 'PlexServer'
-        ? testPlexConnection(sent, key, state, media.plex, media.plexTv)
+        ? testPlexConnection(sent, key, state, media.plex, media.plexTv, service)
         : testConnection(sent, key, state, media.jellyfin),
     testedOnCreate: (sent) =>
       Object.entries(sent).some(([name, on]) => name.startsWith('on') && on === true),
