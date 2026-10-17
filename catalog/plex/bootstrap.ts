@@ -9,6 +9,7 @@ import {
   type BootstrapContext,
 } from '@mediaplane/engine';
 import { z } from 'zod';
+import { failedCall } from '../_shared/plextv';
 import { prefs } from './integration';
 
 /** Where Plex keeps its settings, its claim's token among them, in its appdata folder. */
@@ -115,15 +116,6 @@ function opens(settings: readonly { id: string; value?: unknown }[]): OpenSettin
   return OPEN_SETTINGS.filter(
     (open) => !open.safe(settings.find((s) => s.id === open.id)?.value),
   );
-}
-
-/**
- * What a failure to call plex.tv at all says (a helper or Docker error, not plex.tv's
- * answer): only the kind of error. Its own text is never shown, as what the helper or
- * Docker said may hold anything.
- */
-function failedCall(cause: unknown): string {
-  return `the call to plex.tv failed (${cause instanceof Error ? cause.name : 'not an Error'})`;
 }
 
 /** Your Plex token, which the setup claims Plex with, from the stack's keys. */

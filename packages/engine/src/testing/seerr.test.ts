@@ -573,6 +573,25 @@ describe("fakeStackApis' Seerr, with Plex", () => {
     expect(seerr.seerr.plex.libraries).toHaveLength(2);
   });
 
+  it("lets an account with access to its admin's Plex sign in as a user of its own", async () => {
+    const { port, seerr } = await plexStack();
+    seerr.seerr.plexAccess = [SOMEONE.id];
+    const signIn = (authToken: string) =>
+      call(port, '/api/v1/auth/plex', { body: { authToken } });
+    const admin = await signIn(TOKEN);
+    const member = await signIn(SOMEONE.token);
+    expect(member).toMatchObject({ status: 200, body: { id: 2, permissions: 32 } });
+    expect(seerr.seerr.plexUsers).toEqual([FAKE_PLEX_ACCOUNT.id, SOMEONE.id]);
+    // A session is of the user who signed in; the key, of its admin.
+    const me = async (cookie: string) =>
+      (await call(port, '/api/v1/auth/me', { headers: { cookie } })).body;
+    expect(await me(String(member.cookie).split(';')[0] ?? '')).toMatchObject({ id: 2 });
+    expect(await me(String(admin.cookie).split(';')[0] ?? '')).toMatchObject({ id: 1 });
+    expect((await call(port, '/api/v1/auth/me', { headers: keyed })).body).toMatchObject({
+      id: 1,
+    });
+  });
+
   it('is set up by a plex.tv claimant who signs in first', async () => {
     const { port, seerr } = await plexStack();
     seerr.seerr.plexClaimant = { plexId: SOMEONE.id, token: SOMEONE.token };

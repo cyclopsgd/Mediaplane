@@ -10,6 +10,7 @@ import {
   type ResolvedStack,
 } from '@mediaplane/engine';
 import { z } from 'zod';
+import { failedCall } from '../_shared/plextv';
 import { atStackJellyfin, jellyfinSettings } from './jellyfin';
 import { atStackPlex, plexSettings } from './plex';
 
@@ -25,10 +26,14 @@ const PLEX_SIGN_IN = '/api/v1/auth/plex';
 
 const publicSettings = z.looseObject({ mediaServerType: z.number() });
 const me = z.looseObject({
+  id: z.number().optional(),
   jellyfinUsername: z.string().nullable().optional(),
   plexId: z.number().nullable().optional(),
   plexToken: z.string().nullable().optional(),
 });
+
+/** The id of Seerr's first user, which is its admin. */
+const ADMIN_ID = 1;
 
 /** Failures of a question Seerr didn't answer: Mediaplane couldn't tell. */
 const UNANSWERED: ReadonlySet<AppApiErrorKind> = new Set([
@@ -45,6 +50,48 @@ async function open(api: AppApi): Promise<boolean> {
   return (
     (await api.get('/api/v1/settings/public', publicSettings)).mediaServerType ===
     NOT_CONFIGURED
+  );
+}
+
+/**
+ * Sign out of `session`, the one Mediaplane's first sign-in gave. It is never kept, and
+ * runs out by itself (30 days), so a logout that fails fails nothing.
+ */
+async function signOut(session: AppApi): Promise<void> {
+  try {
+    await session.submit('POST', '/api/v1/auth/logout');
+  } catch (cause) {
+    if (!(cause instanceof AppApiError)) throw cause;
+  }
+}
+
+/**
+ * Refuse (`auth`), signing out, a first sign-in whose user isn't Seerr's admin (its first
+ * user, id 1), as `session` itself says. Someone may have signed in between the look at
+ * Seerr and the sign-in, and a sign-in that Seerr takes of a later user, with access to
+ * what the first set, makes that user a user of Seerr's, not its admin: signing out and
+ * recording the setup would publish a Seerr someone else is admin of. A session that
+ * can't say whose it is is refused too, as `unsure` when Seerr gave no answer; the next
+ * apply finds Seerr set up, and asks whether it is Mediaplane's (`ownSetup`,
+ * `ownPlexSetup`).
+ */
+async function requireAdmin(api: AppApi, session: AppApi): Promise<void> {
+  let id: number | undefined;
+  try {
+    id = (await session.get('/api/v1/auth/me', me)).id;
+  } catch (cause) {
+    if (!(cause instanceof AppApiError)) throw cause;
+    await signOut(session);
+    throw new AppApiError(
+      `${api.name} at ${api.where} signed Mediaplane in, and Mediaplane couldn't tell whether as its admin: ${cause.message}`,
+      UNANSWERED.has(cause.kind) ? { kind: 'auth', unsure: true } : { kind: 'auth' },
+    );
+  }
+  if (id === ADMIN_ID) return;
+  await signOut(session);
+  throw new AppApiError(
+    `${api.name} at ${api.where} signed Mediaplane in as a user that isn't its admin, so someone set it up before Mediaplane did (GET /api/v1/auth/me)`,
+    { kind: 'auth' },
   );
 }
 
@@ -94,24 +141,19 @@ async function ownSetup(
 }
 
 /**
- * What a failure to call plex.tv at all says (a helper or Docker error, not plex.tv's
- * answer): only the kind of error. Its own text is never shown, as what the helper or
- * Docker said may hold anything.
- */
-function failedCall(cause: unknown): string {
-  return `the call to plex.tv failed (${cause instanceof Error ? cause.name : 'not an Error'})`;
-}
-
-/**
- * Refuse (`auth`) a Seerr on a Plex stack that is set up but not Mediaplane's: its admin
- * (its first user) isn't your plex.tv account, or its Plex is set and isn't the stack's,
+ * Refuse a Seerr on a Plex stack that is set up but not Mediaplane's: its admin (its
+ * first user) isn't your plex.tv account, or its Plex is set and isn't the stack's,
  * without TLS. Your account is plex.tv's answer to your token, and Seerr's admin is the
  * plex.tv account it signed in with, which only that account's token can make it: neither
- * is an answer Seerr's admin can shape. It is asked with Seerr's key, never by signing in,
- * which would hand your token to that Seerr. A question that goes unanswered (a timeout,
- * a 5xx, no connection), Seerr's or plex.tv's, or a failure to call plex.tv at all (a helper
- * or Docker error), is refused as `unsure`; another answer that
- * doesn't show Seerr is Mediaplane's, as not its own.
+ * is an answer Seerr's admin can shape. It is asked with Seerr's key, never by signing
+ * in, which would hand your token to that Seerr. Every refusal leaves Seerr unpublished.
+ * - A question that goes unanswered is `auth` and `unsure`: Seerr's (a timeout, a 5xx,
+ *   no connection), plex.tv's (the same, or a 403 or 429), or a failure to call plex.tv
+ *   at all (a helper or Docker error).
+ * - An answer that shows Seerr isn't Mediaplane's is `auth`: Seerr's (a 4xx, another
+ *   shape), or an admin or Plex that isn't yours.
+ * - An answer of plex.tv's that doesn't say whose your token is, is `rejected`: its
+ *   refusal of your token (401), which says to sign in again, or one it can't read.
  */
 async function ownPlexSetup(
   api: AppApi,
@@ -219,11 +261,8 @@ async function runPlex(
       { kind: 'rejected' },
     );
   }
-  try {
-    await session.submit('POST', '/api/v1/auth/logout');
-  } catch (cause) {
-    if (!(cause instanceof AppApiError)) throw cause;
-  }
+  await requireAdmin(api, session);
+  await signOut(session);
 }
 
 /**
@@ -324,13 +363,9 @@ export const seerrBootstrap: Bootstrap = {
         `${api.name} at ${api.where} can't sign in through Jellyfin yet: Jellyfin refused the shared admin's password (POST ${SIGN_IN})`,
       );
     }
-    try {
-      await session.submit('POST', '/api/v1/auth/logout');
-    } catch (cause) {
-      // Seerr is set up, as Mediaplane's: that is done. The session is never kept, and
-      // runs out by itself (30 days), so a logout that fails fails nothing.
-      if (!(cause instanceof AppApiError)) throw cause;
-    }
+    // Its admin signed in, so Seerr is set up as Mediaplane's: that is done.
+    await requireAdmin(api, session);
+    await signOut(session);
     return undefined;
   },
 };

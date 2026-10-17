@@ -160,7 +160,7 @@ describe("Seerr's media server, with Plex", () => {
     });
     const calls = () =>
       apis.app.requests.map((r: FakeRequest) => `${r.method} ${r.path}`);
-    return { api, state, calls, plex: plex.plex };
+    return { api, state, calls, plex: plex.plex, plexApp: plex };
   }
 
   it("is wanted only with Plex, at Plex's service and port, with both libraries, and holds no secret", () => {
@@ -221,6 +221,27 @@ describe("Seerr's media server, with Plex", () => {
     });
   });
 
+  it("reads a link Seerr never saved as not linked, though it holds Plex's address, and links it once Plex answers", async () => {
+    const { api, state, plexApp } = await plexSeerr();
+    const desired = wanted(spec, contextOf(PLEX_STACK));
+    // Plex doesn't answer Seerr: the save fails, but Seerr keeps what was sent.
+    plexApp.up = false;
+    expect(await thrown(spec.create(api, desired))).toMatchObject({ kind: 'server' });
+    expect(state.seerr.plex).toMatchObject({ ip: 'plex', port: 32400 });
+    expect(state.seerr.plex.machineId).toBeUndefined();
+    expect(await spec.observe(api, undefined, desired)).toBeUndefined();
+    plexApp.up = true;
+    expect(await spec.observe(api, undefined, desired)).toBeUndefined();
+    await spec.create(api, desired);
+    expect(state.seerr.plex.machineId).toBe('fake-machine-identifier-0001');
+    expect(await spec.observe(api, undefined, desired)).toMatchObject({
+      fields: { hostname: 'plex', libraries: 'Movies,TV Shows' },
+    });
+    // A link held with an empty machine identifier is not linked either.
+    state.seerr.plex.machineId = '';
+    expect(await spec.observe(api, undefined, desired)).toBeUndefined();
+  });
+
   it('refuses a library Seerr finds no Plex library of, by name', async () => {
     const { api, plex } = await plexSeerr();
     const desired = wanted(spec, contextOf(PLEX_STACK));
@@ -279,6 +300,19 @@ describe("Seerr's media server", () => {
     expect(state.seerr.jellyfin.apiKey).toBe(seerrKey);
     expect(await spec.verify?.(api, desired, observed)).toBe(true);
     expect(state.seerr.errors).toEqual([]);
+  });
+
+  it('reads a link held without the Jellyfin server id Seerr sets when it saves one as not linked, and links it again', async () => {
+    const { api, state } = await seerr();
+    const desired = wanted(spec);
+    expect(await spec.observe(api, undefined, desired)).toBeDefined();
+    state.seerr.jellyfin.serverId = '';
+    expect(await spec.observe(api, undefined, desired)).toBeUndefined();
+    await spec.create(api, desired);
+    expect(state.seerr.jellyfin.serverId).not.toBe('');
+    expect(await spec.observe(api, undefined, desired)).toMatchObject({
+      fields: { hostname: 'jellyfin', libraries: 'Movies,Shows' },
+    });
   });
 
   it("gives Seerr Mediaplane's key once Jellyfin refuses its own, or Jellyfin moved", async () => {

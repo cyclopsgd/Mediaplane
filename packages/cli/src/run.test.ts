@@ -1596,6 +1596,24 @@ apps:
     expectNoSecrets(term.stdout() + term.stderr(), ['revoked-plex-token-0']);
   });
 
+  it("keeps Seerr waiting, with nothing sent to it, while Plex's setup isn't done", async () => {
+    const { home, docker } = await plexHome(FAKE_PLEX_ACCOUNT.token, false);
+    await writeFile(join(home, 'stack.yaml'), `${PLEX_STACK}  seerr: {}\n`);
+    const seerr = freshAppState();
+    seerr.seerr.configDir = join(home, 'appdata', 'seerr');
+    apis.apps.set('seerr', seerr);
+    const term = capture();
+    expect(await run(['apply', '--home', home, '--yes'], term.io, deps(docker))).toBe(1);
+    expect(term.stderr()).toContain(
+      "Seerr waits for Plex's first-run setup, which isn't done",
+    );
+    // Seerr is neither signed in to nor linked, and is not recorded as set up.
+    expect(seerr.seerr).toMatchObject({ plexUsers: [], sessions: [], signIns: 0 });
+    expect(seerr.seerr.plex.ip).toBe('');
+    expect((await readSecretStore(home)).setUp).toBeUndefined();
+    expectNoSecrets(term.stdout() + term.stderr(), plexSecrets());
+  });
+
   it("keeps a Plex that didn't claim itself unpublished, and fails", async () => {
     const { home, plex, docker } = await plexHome(FAKE_PLEX_ACCOUNT.token, false);
     const term = capture();

@@ -6,6 +6,7 @@ import {
   createAppApi,
   HelperError,
   inspectBootstrap,
+  PlexTvError,
   readSecretStore,
   resolveStack,
   RuntimeError,
@@ -149,6 +150,7 @@ describe("Seerr's first-run setup", () => {
       'GET /api/v1/auth/me',
       'GET /api/v1/settings/public',
       'POST /api/v1/auth/jellyfin',
+      'GET /api/v1/auth/me',
       'POST /api/v1/auth/logout',
       'GET /api/v1/settings/public',
       'GET /api/v1/auth/me',
@@ -286,6 +288,59 @@ describe("Seerr's first-run setup", () => {
         "Seerr at http://seerr:5055 (127.0.0.1) can't be set up: the stack runs no Plex, or Mediaplane has no Plex token, for it to sign in with",
     });
     expect(calls()).toEqual([]);
+  });
+
+  it('fails in a Jellyfin stack with no Jellyfin to sign in through, asking nothing', async () => {
+    const { api, calls, stack } = await seerrOf();
+    // The config refuses a Jellyfin stack without Jellyfin: a stack as it could be built.
+    const none: ResolvedStack = {
+      ...stack,
+      apps: stack.apps.filter((app) => app.def.id !== 'jellyfin'),
+    };
+    expect(
+      await thrown(seerrBootstrap.run(api, ADMIN, none, NO_SETUP_CONTEXT)),
+    ).toMatchObject({
+      kind: 'rejected',
+      message:
+        "Seerr at http://seerr:5055 (127.0.0.1) can't be set up: the stack runs no Jellyfin for it to sign in through",
+    });
+    expect(calls()).toEqual([]);
+  });
+
+  it("refuses, signing out, a sign-in that isn't Seerr's admin: a user was there first", async () => {
+    // Someone is Seerr's first user, though its media server isn't set yet: the shared
+    // admin signs in as its second.
+    const { api, state, calls, stack } = await seerrOf(fakeJellyfinSetUp(), {
+      users: ['someone'],
+    });
+    const refused = await thrown(seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT));
+    expect(refused).toBeInstanceOf(AppApiError);
+    expect(refused).toMatchObject({
+      kind: 'auth',
+      unsure: false,
+      message:
+        "Seerr at http://seerr:5055 (127.0.0.1) signed Mediaplane in as a user that isn't its admin, so someone set it up before Mediaplane did (GET /api/v1/auth/me)",
+    });
+    expect(calls()).toEqual([
+      'GET /api/v1/settings/public',
+      'POST /api/v1/auth/jellyfin',
+      'GET /api/v1/auth/me',
+      'POST /api/v1/auth/logout',
+    ]);
+    expect(state.seerr.sessions).toEqual([]);
+  });
+
+  it("refuses, as unsure, and signs out, a sign-in when Seerr can't say whose session it is", async () => {
+    const { api, state, stack } = await seerrOf(fakeJellyfinSetUp(), {
+      failing: ['/api/v1/auth/me'],
+      failStatus: 500,
+    });
+    const refused = await thrown(seerrBootstrap.run(api, ADMIN, stack, NO_SETUP_CONTEXT));
+    expect(refused).toMatchObject({ kind: 'auth', unsure: true });
+    expect((refused as Error).message).toContain(
+      "signed Mediaplane in, and Mediaplane couldn't tell whether as its admin",
+    );
+    expect(state.seerr.sessions).toEqual([]);
   });
 
   it('says it is done once settings.json names a media server', () => {
@@ -639,6 +694,7 @@ describe("Seerr's first-run setup, with Plex", () => {
       'GET /api/v1/settings/public',
       'GET /api/v1/settings/public',
       'POST /api/v1/auth/plex',
+      'GET /api/v1/auth/me',
       'POST /api/v1/auth/logout',
       'GET /api/v1/settings/public',
     ]);
@@ -757,6 +813,112 @@ describe("Seerr's first-run setup, with Plex", () => {
     }
     // Your token never went to that Seerr.
     expect(calls()).not.toContain('POST /api/v1/auth/plex');
+  });
+
+  it("refuses, signing out, a sign-in that isn't Seerr's admin: someone with their own plex.tv account was there first and shares their Plex with yours", async () => {
+    const { api, ctx, stack, state, calls } = await plexSeerrOf({
+      plexClaimant: { plexId: SOMEONE.id, token: SOMEONE.token },
+      plexAccess: [FAKE_PLEX_ACCOUNT.id],
+    });
+    const refused = await thrown(seerrBootstrap.run(api, ADMIN, stack, ctx));
+    expect(refused).toBeInstanceOf(AppApiError);
+    expect(refused).toMatchObject({
+      kind: 'auth',
+      unsure: false,
+      message:
+        "Seerr at http://seerr:5055 (127.0.0.1) signed Mediaplane in as a user that isn't its admin, so someone set it up before Mediaplane did (GET /api/v1/auth/me)",
+    });
+    expect(calls()).toEqual([
+      'GET /api/v1/settings/public',
+      'POST /api/v1/auth/plex',
+      'GET /api/v1/auth/me',
+      'POST /api/v1/auth/logout',
+    ]);
+    expect(state.seerr.sessions).toEqual([]);
+    expect(state.seerr.plexUsers).toEqual([SOMEONE.id, FAKE_PLEX_ACCOUNT.id]);
+  });
+
+  it("refuses, as unsure, and signs out, a sign-in when Seerr can't say whose session it is", async () => {
+    const { api, ctx, stack, state } = await plexSeerrOf({
+      failing: ['/api/v1/auth/me'],
+      failStatus: 500,
+    });
+    const refused = await thrown(seerrBootstrap.run(api, ADMIN, stack, ctx));
+    expect(refused).toMatchObject({ kind: 'auth', unsure: true });
+    expect((refused as Error).message).toContain(
+      "signed Mediaplane in, and Mediaplane couldn't tell whether as its admin",
+    );
+    expect(state.seerr.sessions).toEqual([]);
+  });
+
+  it('refuses a Seerr set up and then not answering, as unsure, and one answering with a 4xx, as not shown to be its own', async () => {
+    for (const path of ['/api/v1/auth/me', '/api/v1/settings/plex']) {
+      for (const [failStatus, unsure] of [
+        [500, true],
+        [404, false],
+      ] as const) {
+        const { api, ctx, stack, calls } = await plexSeerrOf({
+          ...SIGNED_IN,
+          failing: [path],
+          failStatus,
+        });
+        const refused = await thrown(seerrBootstrap.run(api, ADMIN, stack, ctx));
+        expect(refused).toBeInstanceOf(AppApiError);
+        expect(refused).toMatchObject({ kind: 'auth', unsure });
+        expect((refused as Error).message).toContain(
+          unsure
+            ? "is set up, and Mediaplane couldn't tell whether it is its own"
+            : "is set up, and its answers don't show that it is Mediaplane's",
+        );
+        expect((refused as Error).message).toContain(`(GET ${path})`);
+        expect(calls()).not.toContain('POST /api/v1/auth/plex');
+      }
+    }
+  });
+
+  it("refuses, as not its own, a set-up Seerr when plex.tv's answer can't be read", async () => {
+    const { api, ctx, stack } = await plexSeerrOf(SIGNED_IN);
+    const unreadable: PlexTv = {
+      ...ctx.plexTv,
+      accountId: () =>
+        Promise.reject(
+          new PlexTvError('plex.tv sent what is not JSON', { kind: 'protocol' }),
+        ),
+    };
+    const refused = await thrown(
+      seerrBootstrap.run(api, ADMIN, stack, { ...ctx, plexTv: unreadable }),
+    );
+    expect(refused).toMatchObject({
+      kind: 'rejected',
+      message:
+        "Seerr at http://seerr:5055 (127.0.0.1) is set up, and plex.tv's answer doesn't say whose your Plex token is: plex.tv sent what is not JSON",
+    });
+  });
+
+  it('refuses a Seerr on a Plex stack that was set up through Jellyfin, asking, never signing in', async () => {
+    const { api, ctx, stack, calls } = await plexSeerrOf({
+      mediaServerType: SEERR_JELLYFIN,
+      users: ['admin'],
+    });
+    expect(await thrown(seerrBootstrap.run(api, ADMIN, stack, ctx))).toMatchObject({
+      kind: 'auth',
+      unsure: false,
+      message:
+        'Seerr at http://seerr:5055 (127.0.0.1) was set up with another plex.tv account or another Plex (GET /api/v1/auth/me, GET /api/v1/settings/plex)',
+    });
+    expect(calls()).not.toContain('POST /api/v1/auth/plex');
+  });
+
+  it('refuses, as rejected, a sign-in Seerr answers with a 401', async () => {
+    const { api, ctx, stack } = await plexSeerrOf({
+      failing: ['/api/v1/auth/plex'],
+      failStatus: 401,
+    });
+    expect(await thrown(seerrBootstrap.run(api, ADMIN, stack, ctx))).toMatchObject({
+      kind: 'rejected',
+      message:
+        'Seerr at http://seerr:5055 (127.0.0.1) refused the sign-in with your Plex token (POST /api/v1/auth/plex)',
+    });
   });
 
   it('refuses a Seerr someone signed in to first, with their own plex.tv account', async () => {

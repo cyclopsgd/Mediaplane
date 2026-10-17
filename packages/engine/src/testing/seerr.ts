@@ -79,6 +79,11 @@ export interface FakeSeerr {
    * reaches a Seerr nobody has set up. Unset: nobody.
    */
   plexClaimant?: { plexId: number; token: string };
+  /**
+   * The plex.tv accounts that share the admin's Plex: they sign in through Plex as users
+   * of their own, not its admin, as Seerr lets those with access to its Plex do.
+   */
+  plexAccess: number[];
   /** Its Sonarr and Radarr servers. */
   sonarr: FakeSeerrServer[];
   radarr: FakeSeerrServer[];
@@ -86,6 +91,8 @@ export interface FakeSeerr {
   initialized: boolean;
   /** The values of the session cookies its sign-ins gave, until signed out. */
   sessions: string[];
+  /** The id of the user each session in `sessions` is of. */
+  sessionIds: Record<string, number>;
   /** How many sessions it has given: each one's id is new, whatever signed out. */
   signIns: number;
   /** What it logged as errors: a check that fails logs a line, as Seerr does. */
@@ -151,11 +158,13 @@ export function freshSeerr(): FakeSeerr {
     },
     plexUsers: [],
     plexTokens: {},
+    plexAccess: [],
     plex: { ip: '', port: 32400, useSsl: false, libraries: [] },
     sonarr: [],
     radarr: [],
     initialized: false,
     sessions: [],
+    sessionIds: {},
     signIns: 0,
     errors: [],
     echoKey: false,
@@ -305,6 +314,7 @@ function answer(
   if (path === '/api/v1/auth/logout' && method === 'POST') {
     if (cookie === undefined) return refused(request);
     seerr.sessions = seerr.sessions.filter((s) => s !== cookie);
+    Reflect.deleteProperty(seerr.sessionIds, cookie);
     return { status: 200, body: { status: 'ok' } };
   }
   // Its key acts as its admin, once there is one; a session, as whoever signed in.
@@ -320,7 +330,8 @@ function answer(
     return {
       status: 200,
       body: {
-        id: 1,
+        // The key acts as its admin; a session, as whoever signed in.
+        id: keyed ? 1 : (seerr.sessionIds[cookie ?? ''] ?? 1),
         jellyfinUsername: seerr.users[0] ?? null,
         plexId: plexId ?? null,
         plexUsername: plexId === undefined ? null : 'fake-user',
@@ -344,8 +355,8 @@ function answer(
  * `POST /api/v1/auth/plex` (Seerr 3.5's code, probed): Seerr asks plex.tv whose `authToken`
  * it is. A token plex.tv refuses is a 500, "Unable to authenticate."; with no user yet,
  * its account becomes Seerr's admin, and Plex its media server; after that, only that
- * account signs in (anyone else is a 403 here: the fake knows no one else with access to
- * Seerr's Plex). Each sign-in keeps the token, which is what Seerr reaches Plex with.
+ * account signs in, or one of `plexAccess`, as a user of its own; anyone else is a 403.
+ * The admin's sign-in keeps the token, which is what Seerr reaches Plex with.
  */
 function plexSignIn(
   sent: Record<string, unknown>,
@@ -366,19 +377,33 @@ function plexSignIn(
     seerr.errors.push('Something went wrong authenticating with Plex account');
     return { status: 500, body: { message: 'Unable to authenticate.' } };
   }
+  let admin = true;
   if (seerr.plexUsers.length === 0) {
     seerr.plexUsers = [account.id];
     seerr.mediaServerType = SEERR_PLEX;
   } else if (seerr.plexUsers[0] !== account.id) {
-    return { status: 403, body: { message: 'Access denied.' } };
+    // Another account signs in only where it has access to the admin's Plex: as a user
+    // of its own, with the permissions of a user.
+    if (!seerr.plexAccess.includes(account.id)) {
+      return { status: 403, body: { message: 'Access denied.' } };
+    }
+    if (!seerr.plexUsers.includes(account.id)) seerr.plexUsers.push(account.id);
+    admin = false;
   }
-  seerr.plexTokens[account.id] = sent.authToken;
+  if (admin) seerr.plexTokens[account.id] = sent.authToken;
   seerr.signIns += 1;
   const session = `s%3Afake-session-${String(seerr.signIns)}.signed`;
   seerr.sessions.push(session);
+  const id = seerr.plexUsers.indexOf(account.id) + 1;
+  seerr.sessionIds[session] = id;
   return {
     status: 200,
-    body: { id: 1, plexUsername: 'fake-user', permissions: 2, userType: 1 },
+    body: {
+      id,
+      plexUsername: 'fake-user',
+      permissions: admin ? 2 : 32,
+      userType: 1,
+    },
     headers: {
       'Set-Cookie': `connect.sid=${session}; Path=/; ${EXPIRES}; HttpOnly; SameSite=Lax`,
     },
@@ -550,6 +575,7 @@ function signIn(
   seerr.signIns += 1;
   const session = `s%3Afake-session-${String(seerr.signIns)}.signed`;
   seerr.sessions.push(session);
+  seerr.sessionIds[session] = seerr.users.indexOf(sent.username) + 1;
   return {
     status: 200,
     body: {
@@ -593,6 +619,7 @@ function fakeSeerrJellyfin(
       return { status: 401, body: { message: 'INVALID_URL' } };
     }
     Object.assign(seerr.jellyfin, sent);
+    seerr.jellyfin.serverId = 'fake';
     return { status: 200, body: shown() };
   }
   const works =

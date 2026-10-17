@@ -45,7 +45,15 @@ function stackApp(
 }
 
 const library = z.looseObject({ id: z.string(), name: z.string(), enabled: z.boolean() });
-const jellyfinSettings = heldJellyfin.extend({ libraries: z.array(library) });
+/**
+ * `serverId` is the server's own identifier, which Seerr sets only once it has saved a
+ * link and reached the server: without one, the link is not saved (probed for Plex's
+ * `machineId`: a failed save still leaves the address in Seerr's settings).
+ */
+const jellyfinSettings = heldJellyfin.extend({
+  libraries: z.array(library),
+  serverId: z.string().optional(),
+});
 
 /** Which of Mediaplane's libraries (`wanted`) Seerr has enabled, as one list. */
 function enabledOf(
@@ -147,7 +155,7 @@ const mediaServer: ResourceSpec = {
   async observe(api) {
     const held = await api.get(`${SETTINGS}/jellyfin`, jellyfinSettings);
     api.addSecret(held.apiKey);
-    return held.ip === ''
+    return held.ip === '' || (held.serverId ?? '') === ''
       ? undefined
       : {
           id: null,
@@ -180,7 +188,11 @@ const mediaServer: ResourceSpec = {
 
 const PLEX = { path: 'plex', name: 'Plex', wanted: WANTED_PLEX } as const;
 
-const plexSettings = heldPlex.extend({ libraries: z.array(library) });
+/** `machineId` is Plex's own identifier, which Seerr sets only once it has saved a link. */
+const plexSettings = heldPlex.extend({
+  libraries: z.array(library),
+  machineId: z.string().optional(),
+});
 
 /**
  * Point Seerr at the stack's Plex, without TLS: Seerr saves it only once it has reached
@@ -221,7 +233,7 @@ const mediaServerPlex: ResourceSpec = {
   },
   async observe(api) {
     const held = await api.get(`${SETTINGS}/plex`, plexSettings);
-    return held.ip === ''
+    return held.ip === '' || (held.machineId ?? '') === ''
       ? undefined
       : {
           id: null,
