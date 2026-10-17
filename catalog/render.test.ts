@@ -82,6 +82,45 @@ describe('the real catalog', () => {
     });
   });
 
+  it('gives the media server no GPU unless hardware_transcoding asks for it', () => {
+    expect(render(SPEC_EXAMPLE).compose.services.jellyfin?.devices).toBeUndefined();
+    const plex = SPEC_EXAMPLE.replace(
+      'media_server: jellyfin',
+      'media_server: plex\nplex: { token: { env: PLEX_TOKEN } }',
+    );
+    expect(render(plex).compose.services.plex?.devices).toBeUndefined();
+  });
+
+  it.each(['jellyfin', 'plex'] as const)(
+    "gives %s this host's GPU with hardware_transcoding: true",
+    (server) => {
+      const source = SPEC_EXAMPLE.replace(
+        'media_server: jellyfin',
+        server === 'plex'
+          ? 'media_server: plex\nplex: { token: { env: PLEX_TOKEN } }'
+          : 'media_server: jellyfin',
+      ).replace(
+        '  seerr: {}\n',
+        `  seerr: {}\n  ${server}: { hardware_transcoding: true }\n`,
+      );
+      const { compose, diagnostics } = render(source);
+      expect(diagnostics).toEqual([]);
+      expect(compose.services[server]?.devices).toEqual(['/dev/dri:/dev/dri']);
+    },
+  );
+
+  it('refuses hardware_transcoding that is not true or false', () => {
+    const source = SPEC_EXAMPLE.replace(
+      '  seerr: {}\n',
+      '  seerr: {}\n  jellyfin: { hardware_transcoding: intel }\n',
+    );
+    const result = resolve(source);
+    expect(result.stack).toBeUndefined();
+    expect(result.diagnostics.map((d) => d.path)).toContain(
+      'apps.jellyfin.hardware_transcoding',
+    );
+  });
+
   it('publishes a port override on the host side only', () => {
     expect(render(SPEC_EXAMPLE).compose.services.radarr?.ports).toEqual([
       '192.168.1.10:7879:7878',

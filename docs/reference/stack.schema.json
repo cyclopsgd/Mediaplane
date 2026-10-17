@@ -519,6 +519,11 @@
                       }
                     ]
                   }
+                },
+                "hardware_transcoding": {
+                  "default": false,
+                  "description": "Give the media server this host's GPU (/dev/dri), for hardware transcoding with Intel Quick Sync or AMD. Turn it on in the app's transcoding settings too; Plex needs Plex Pass for it.",
+                  "type": "boolean"
                 }
               },
               "additionalProperties": false,
@@ -600,6 +605,11 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 64
+                },
+                "hardware_transcoding": {
+                  "default": false,
+                  "description": "Give the media server this host's GPU (/dev/dri), for hardware transcoding with Intel Quick Sync or AMD. Turn it on in the app's transcoding settings too; Plex needs Plex Pass for it.",
+                  "type": "boolean"
                 }
               },
               "additionalProperties": false,

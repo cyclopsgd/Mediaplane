@@ -446,6 +446,15 @@ password, which are S3c's (and listed again below).
 
 **S8:**
 
+- **Decided by the owner on 2026-10-17,** for the items below:
+  - **qBittorrent's post-import category:** `plan` skips the arr's download-client test
+    while that category is missing.
+  - **The "failing" mark a wrong key leaves:** drift skips a key test when it already
+    knows the key is wrong.
+  - **Jellyfin's sign-in activity entries:** drift checks the admin password less often.
+  - **qBittorrent's sign-in ban:** drift stops checking a password it knows differs,
+    until `apply` sets it.
+  - **Seerr's key checked twice per apply:** check it once.
 - **Seerr keeps the Plex token it signed in with** (S7). After `plex-login` saves a new
   token, Seerr still holds the old one, which it uses to reach Plex, and Mediaplane can't
   check it with Seerr's key. When the old one is revoked, Seerr's libraries stop
@@ -714,6 +723,22 @@ password, which are S3c's (and listed again below).
 
 **Not scheduled yet:**
 
+- **Use a media server you already run** (possible future feature, 2026-10-17). Two
+  levels:
+  - **Use it as it is:** an `external` media server, given by address and token.
+    Mediaplane wires Sonarr, Radarr and Seerr to it, and never touches its container,
+    data or claim. Integrations already reach the media server as an address and a
+    credential, so this stays additive.
+  - **Adopt it:** Mediaplane runs your existing Plex or Jellyfin, keeping its watch
+    history, libraries and claim. That means starting from its appdata, mapping its
+    media paths to `/data`, taking over its libraries by name rather than adding
+    `Movies` and `TV Shows` beside them, an "adopted" mode for the open-settings check
+    (allowed networks may be set on purpose), and the same for any existing Sonarr and
+    Radarr. It builds on S8's re-adoption by name and key recovery from appdata.
+- **NVIDIA hardware transcoding.** `hardware_transcoding` gives the media server
+  `/dev/dri`, which covers Intel Quick Sync and AMD. NVIDIA needs Docker's NVIDIA
+  runtime instead: a later `gpu: nvidia` style option, tested on a host with the
+  runtime.
 - **Restrict what the proxy lets Mediaplane create.** The wiring network keeps
   Mediaplane's container offline, but the proxy still lets it create containers with any
   network, so that is defence in depth, not a wall (ADR 0011).

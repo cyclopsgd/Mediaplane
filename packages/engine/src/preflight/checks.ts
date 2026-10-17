@@ -251,6 +251,16 @@ async function checkDataRoot(
   return diagnostics;
 }
 
+/** The GPU's device folder, which a media server's hardware_transcoding maps in. */
+const GPU_FOLDER = '/dev/dri';
+
+/** What to do about each device the catalog maps in, when the host lacks it. */
+const DEVICE_HINTS: Record<string, string> = {
+  '/dev/net/tun': 'load the TUN module: sudo modprobe tun',
+  [GPU_FOLDER]:
+    "this host's GPU has no driver loaded (Intel: i915 or xe; check ls /dev/dri), or set hardware_transcoding: false",
+};
+
 async function checkDevices(
   stack: ResolvedStack,
   probe: HostProbe,
@@ -258,19 +268,14 @@ async function checkDevices(
   const diagnostics: Diagnostic[] = [];
   for (const { app, hostPath } of devicesNeeded(stack)) {
     const stat = await probe.stat(hostPath);
+    // /dev/dri is a folder of the GPU's devices, which Docker maps in whole.
     if (stat?.isCharacterDevice === true) continue;
+    if (hostPath === GPU_FOLDER && stat?.isDirectory === true) continue;
     diagnostics.push(
       error(
         'preflight.device-missing',
         `${app.def.name} needs ${hostPath}, which does not exist on this host`,
-        {
-          path: `apps.${app.def.id}`,
-          ...withHint(
-            hostPath === '/dev/net/tun'
-              ? 'load the TUN module: sudo modprobe tun'
-              : undefined,
-          ),
-        },
+        { path: `apps.${app.def.id}`, ...withHint(DEVICE_HINTS[hostPath]) },
       ),
     );
   }

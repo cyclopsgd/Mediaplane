@@ -103,7 +103,8 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Changing it
 
-- **In `stack.yaml`,** under `apps.jellyfin`, you can set `port`, `version` and `env`.
+- **In `stack.yaml`,** under `apps.jellyfin`, you can set `port`, `version`, `env` and
+  `hardware_transcoding`.
   The media server that `media_server` names can't be turned off with `enabled: false`:
   change `media_server` instead. A different `version` is an untested combination, and
   `plan` warns about it. See the
@@ -113,18 +114,26 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   next `apply` (Slice 8 adds Keep mine). Add a library of your own instead. A library you
   rename is no longer Mediaplane's: the next `apply` makes `Movies` or `Shows` again.
   Everything else in them, such as their metadata language, is yours.
-- **Anything else** goes in `compose.override.yaml` in the Mediaplane home. For example,
-  hardware transcoding needs the GPU device:
+- **Hardware transcoding** (Intel Quick Sync, or AMD): set
+  `hardware_transcoding: true` under `apps.jellyfin`. Mediaplane then gives Jellyfin the
+  host's GPU (`/dev/dri`), and `plan` checks the host has one. What it can't do for
+  you:
+  - load the GPU's driver on the host: `ls /dev/dri` should list `renderD128`. Recent
+    Intel chips (12th gen, Arc) may need a recent kernel;
+  - turn it on in Jellyfin: Dashboard, Playback, Transcoding, then Intel QuickSync
+    (QSV) or VAAPI;
+  - NVIDIA GPUs, which need Docker's NVIDIA runtime rather than `/dev/dri`. Add that in
+    `compose.override.yaml` yourself.
 
-  ```yaml
-  services:
-    jellyfin:
-      devices:
-        - /dev/dri:/dev/dri
-  ```
+  The pinned image's start-up gives Jellyfin's user the GPU's group (its
+  `init-device-perms` step, checked on the pinned image), so no permissions need
+  changing. CI has no GPU, so this is tested only as far as the Compose file and
+  `plan`'s check; whether a stream really transcodes on the GPU shows in Jellyfin
+  while you play something that needs it.
 
-  A port you publish there is held back too while the wizard is open, when the stack
-  runs through `apply`. But `!reset` covers only `ports`: a `network_mode: host`, or a
+- **Anything else** goes in `compose.override.yaml` in the Mediaplane home. A port you
+  publish there is held back too while the wizard is open, when the stack runs through
+  `apply`. But `!reset` covers only `ports`: a `network_mode: host`, or a
   network shared with another service, publishes Jellyfin while its wizard is open. Keep
   those out of the override. The threat model lists what voids the guarantee:
   [T16](../../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).

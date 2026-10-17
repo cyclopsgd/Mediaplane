@@ -1,5 +1,6 @@
 import { defineApp } from '@mediaplane/engine';
 import { z } from 'zod';
+import { gpuExtras, hardwareTranscoding } from '../_shared/hardware-transcoding';
 import { plexBootstrap } from './bootstrap';
 import integration from './integration';
 
@@ -58,8 +59,10 @@ export default defineApp({
       .describe(
         'The name Plex shows for this server, in its apps and your plex.tv account. Default Mediaplane.',
       ),
+    hardware_transcoding: hardwareTranscoding,
   }),
   env: () => ({ VERSION: 'docker' }),
+  extras: (ctx) => gpuExtras(ctx.options.hardware_transcoding),
   // Your own plex.tv account: never the shared admin (spec §6.1).
   login: { own: 'Plex' },
   webPath: '/web',

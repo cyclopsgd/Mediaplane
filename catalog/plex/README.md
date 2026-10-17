@@ -133,22 +133,31 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Changing it
 
-- **In `stack.yaml`,** under `apps.plex`, you can set `port`, `version`, `env` and
-  `server_name`. The media server that `media_server` names can't be turned off with
+- **In `stack.yaml`,** under `apps.plex`, you can set `port`, `version`, `env`,
+  `server_name` and `hardware_transcoding`. The media server that `media_server` names can't be turned off with
   `enabled: false`: change `media_server` instead. A different `version` is an untested
   combination, and `plan` warns about it. See the
   [`stack.yaml` reference](../../docs/reference/stack-yaml.md).
 - **What Mediaplane manages** (its name, and its libraries' names, kinds and folders) is
   put back by the next `apply` when changed in Plex. Keep mine comes in Slice 8.
-- **Anything else** goes in `compose.override.yaml` in the Mediaplane home. For example,
-  hardware transcoding needs the GPU device:
+- **Hardware transcoding** (Intel Quick Sync, or AMD): set
+  `hardware_transcoding: true` under `apps.plex`. Mediaplane then gives Plex the
+  host's GPU (`/dev/dri`), and `plan` checks the host has one. What it can't do for
+  you:
+  - load the GPU's driver on the host: `ls /dev/dri` should list `renderD128`. Recent
+    Intel chips (12th gen, Arc) may need a recent kernel;
+  - turn it on in Plex: Settings, Transcoder, "Use hardware acceleration when available";
+  - Plex Pass: Plex transcodes on the GPU only for a Plex Pass account;
+  - NVIDIA GPUs, which need Docker's NVIDIA runtime rather than `/dev/dri`. Add that in
+    `compose.override.yaml` yourself.
 
-  ```yaml
-  services:
-    plex:
-      devices:
-        - /dev/dri:/dev/dri
-  ```
+  The pinned image's start-up gives Plex's user the GPU's group (its
+  `init-device-perms` step, checked on the pinned image), so no permissions need
+  changing. CI has no GPU, so this is tested only as far as the Compose file and
+  `plan`'s check; whether a stream really transcodes on the GPU shows in Plex
+  while you play something that needs it.
+
+- **Anything else** goes in `compose.override.yaml` in the Mediaplane home.
 
 ## Known issues
 

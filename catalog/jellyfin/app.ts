@@ -1,4 +1,6 @@
 import { defineApp } from '@mediaplane/engine';
+import { z } from 'zod';
+import { gpuExtras, hardwareTranscoding } from '../_shared/hardware-transcoding';
 import { jellyfinBootstrap } from './bootstrap';
 import integration from './integration';
 
@@ -38,6 +40,8 @@ export default defineApp({
   },
   integration,
   bootstrap: jellyfinBootstrap,
+  options: z.strictObject({ hardware_transcoding: hardwareTranscoding }),
+  extras: (ctx) => gpuExtras(ctx.options.hardware_transcoding),
   login: 'shared',
   experimental: false,
 });

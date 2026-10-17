@@ -147,6 +147,43 @@ describe('runPreflight', () => {
     ]);
   });
 
+  describe("the GPU's device folder", () => {
+    const withGpu = () =>
+      stackOf(
+        STACK,
+        fixtureCatalog.map((def) =>
+          def.id === 'sonarr'
+            ? fixtureApp({ ...def, extras: () => ({ devices: ['/dev/dri:/dev/dri'] }) })
+            : def,
+        ),
+      );
+
+    it('accepts /dev/dri as a folder of devices', async () => {
+      const probe = fakeProbe({ stats: { '/dev/dri': dir() } });
+      expect(await runPreflight(input({ stack: withGpu() }), probe)).toEqual([]);
+    });
+
+    it("says how to give the host's GPU a driver, or turn the option off", async () => {
+      const probe = fakeProbe({ stats: { '/dev/dri': undefined } });
+      expect(await runPreflight(input({ stack: withGpu() }), probe)).toEqual([
+        expect.objectContaining({
+          code: 'preflight.device-missing',
+          path: 'apps.sonarr',
+          hint: "this host's GPU has no driver loaded (Intel: i915 or xe; check ls /dev/dri), or set hardware_transcoding: false",
+        }),
+      ]);
+    });
+
+    it('refuses a /dev/dri that is a plain file', async () => {
+      const probe = fakeProbe({
+        stats: { '/dev/dri': dir({ isDirectory: false, mode: 0o100644 }) },
+      });
+      expect(codes(await runPreflight(input({ stack: withGpu() }), probe))).toEqual([
+        'preflight.device-missing',
+      ]);
+    });
+  });
+
   it('reports a published port that something else is using', async () => {
     const probe = fakeProbe({ busyPorts: [portKey('tcp', '127.0.0.1', 8989)] });
     expect(await runPreflight(input(), probe)).toEqual([
