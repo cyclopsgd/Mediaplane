@@ -156,6 +156,20 @@ describe("Plex's first-run setup", () => {
       hint: 'check that this host reaches plex.tv, then run apply again',
     });
     expect((unreached as Error).message).not.toContain(TOKEN);
+    // A 403 that won't clear may be about the account, not the host's connection.
+    plexTv.state.failing.push({ path: '/api/claim/token.json', status: 403 });
+    const forbidden = await thrown(
+      Promise.resolve(
+        plexBootstrap.firstStart?.(stack, {
+          keys: { plex: { token: TOKEN } },
+          plexTv: plexTv.client,
+        }),
+      ),
+    );
+    expect(forbidden).toMatchObject({
+      hint: 'check that this host reaches plex.tv, or that this plex.tv account may claim a server, then run apply again',
+    });
+    expect((forbidden as Error).message).toContain('(HTTP 403)');
     const none = await thrown(
       Promise.resolve(plexBootstrap.firstStart?.(stack, { keys: {}, plexTv: away })),
     );

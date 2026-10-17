@@ -463,6 +463,16 @@ password, which are S3c's (and listed again below).
 - **A Plex claimed by another account stays unpublished on every `apply`** (S7), with
   its remedies in the error. Decide whether drift reports a Plex whose `PlexOnline`
   settings were removed by hand while it runs, which then looks unclaimed to it.
+- **Every setup gets every stored key** (S7): `BootstrapContext.keys` holds each app's,
+  but Plex's and Seerr's setups read only your Plex token. Narrow it, to the keys you
+  give or to the Plex token alone, when S8 changes the setups for signing in again.
+- **The setups' contract has leftovers** (S7): `Bootstrap.firstStart`'s `stack` is
+  unused; `AppLoginKind`'s `{ own: string }` could be `{ own: 'Plex' }`; and no app uses
+  `{ comingIn }` or the `login: 'not-yet'` of `credentials` any more. Keep `not-yet` while
+  `mediaplane.credentials/v1` has it, but say it is for later slices.
+- **The fake Seerr's `/auth/me` answers a session that isn't its admin's** with the
+  admin's `plexId` and `jellyfinUsername` (S7). Nothing reads them from such a session
+  yet. Fix the fake when signing Seerr in again reads sessions.
 
 - Override field names are case-sensitive, so the managed-field comparison must
   match them exactly.
@@ -610,7 +620,8 @@ password, which are S3c's (and listed again below).
   workflow from reading the secret, for whoever can push a branch.
 - **A 429 from plex.tv counts as "couldn't tell"** (S7): it is retried after 5 and 15
   seconds, and still fails closed, but its error says to run `apply` again rather than
-  that plex.tv refused. Revisit if plex.tv's limits bite.
+  that plex.tv refused. Its `Retry-After` is not read: the waits are fixed. Revisit both
+  if plex.tv's limits bite.
 - **Docker's default bridge network** (S7): the plex.tv helper needs it. A daemon set up
   with `"bridge": "none"` fails the helper. Decide whether `plan` checks for it on a Plex
   stack.

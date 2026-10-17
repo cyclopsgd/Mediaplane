@@ -96,6 +96,27 @@ async function requireAdmin(api: AppApi, session: AppApi): Promise<void> {
 }
 
 /**
+ * What a failure to ask a set-up Seerr whose it is becomes: not shown to be Mediaplane's
+ * is not Mediaplane's, so whatever the failure, Seerr stays unpublished (the engine
+ * publishes an app that is set up, but for an `auth`). A question that goes unanswered is
+ * `auth` and `unsure`; any other answer is `auth`. An `auth`, or an error that isn't an
+ * AppApiError, is as it was.
+ */
+function notShownOwn(api: AppApi, cause: unknown): unknown {
+  if (!(cause instanceof AppApiError) || cause.kind === 'auth') return cause;
+  if (UNANSWERED.has(cause.kind)) {
+    return new AppApiError(
+      `${api.name} at ${api.where} is set up, and Mediaplane couldn't tell whether it is its own: ${cause.message}`,
+      { kind: 'auth', unsure: true },
+    );
+  }
+  return new AppApiError(
+    `${api.name} at ${api.where} is set up, and its answers don't show that it is Mediaplane's: ${cause.message}`,
+    { kind: 'auth' },
+  );
+}
+
+/**
  * Refuse (`auth`) a Seerr that is set up but not Mediaplane's: its admin isn't the shared
  * admin, or its Jellyfin isn't the stack's, with no URL base and no TLS (a user named as
  * the shared admin is easily made on a Jellyfin of one's own, which `@<host>` in the URL
@@ -117,19 +138,7 @@ async function ownSetup(
     jellyfinUsername = (await api.get('/api/v1/auth/me', me)).jellyfinUsername;
     held = await api.get('/api/v1/settings/jellyfin', jellyfinSettings);
   } catch (cause) {
-    // Not shown to be Mediaplane's is not Mediaplane's: whatever the failure, Seerr
-    // stays unpublished (the engine publishes an app that is set up, but for an `auth`).
-    if (!(cause instanceof AppApiError) || cause.kind === 'auth') throw cause;
-    if (UNANSWERED.has(cause.kind)) {
-      throw new AppApiError(
-        `${api.name} at ${api.where} is set up, and Mediaplane couldn't tell whether it is its own: ${cause.message}`,
-        { kind: 'auth', unsure: true },
-      );
-    }
-    throw new AppApiError(
-      `${api.name} at ${api.where} is set up, and its answers don't show that it is Mediaplane's: ${cause.message}`,
-      { kind: 'auth' },
-    );
+    throw notShownOwn(api, cause);
   }
   api.addSecret(held.apiKey);
   if (jellyfinUsername !== admin.username || !atStackJellyfin(held, jellyfin)) {
@@ -168,19 +177,7 @@ async function ownPlexSetup(
     settings = await api.get('/api/v1/settings/plex', plexSettings);
     if (typeof held.plexToken === 'string') api.addSecret(held.plexToken);
   } catch (cause) {
-    // Not shown to be Mediaplane's is not Mediaplane's: whatever the failure, Seerr
-    // stays unpublished.
-    if (!(cause instanceof AppApiError) || cause.kind === 'auth') throw cause;
-    if (UNANSWERED.has(cause.kind)) {
-      throw new AppApiError(
-        `${api.name} at ${api.where} is set up, and Mediaplane couldn't tell whether it is its own: ${cause.message}`,
-        { kind: 'auth', unsure: true },
-      );
-    }
-    throw new AppApiError(
-      `${api.name} at ${api.where} is set up, and its answers don't show that it is Mediaplane's: ${cause.message}`,
-      { kind: 'auth' },
-    );
+    throw notShownOwn(api, cause);
   }
   let account: number;
   try {

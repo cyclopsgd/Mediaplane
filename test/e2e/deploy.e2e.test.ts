@@ -500,16 +500,19 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
       '--json',
     );
     // A real PIN from plex.tv, asked for and waited on by the helper: nobody signs in. A
-    // plex.tv that is down, or too busy, is said so, from inside the helper too: either
-    // way the path through the proxy and the default bridge was taken, and neither fails
-    // a pull request.
+    // plex.tv that is down (no answer, or a 5xx from behind its CDN), or too busy (a 429),
+    // is said so, from inside the helper too: either way the path through the proxy and
+    // the default bridge was taken, and neither fails a pull request. Only a link is
+    // checked, when there was one.
     expect(result.code, result.stderr).toBe(1);
     const said = (JSON.parse(result.stdout) as { error: { message: string } }).error
       .message;
     const waited =
       'nobody signed in within 4 seconds; run plex-login again for a new link';
     expect(
-      said === waited || said.startsWith("couldn't reach plex.tv: "),
+      said === waited ||
+        said.startsWith("couldn't reach plex.tv: ") ||
+        said.startsWith('plex.tv answered'),
       `plex-login said: ${said}`,
     ).toBe(true);
     if (said === waited) {

@@ -260,7 +260,7 @@ differ, and a `reason` when it is `unknown`.
      log (check 3) says why a claim failed;
    - `mediaplane history <id>` shows the first-run setup step's result and error.
 6. **Whether your Plex token works:** `mediaplane plex-login` keeps a saved token that
-   plex.tv still takes, and says so, without opening a sign-in. Your plex.tv account's
+   plex.tv still takes, or can't say about, and says which, without opening a sign-in. Your plex.tv account's
    devices (in Plex's web app, Settings, Authorized Devices) list each Plex claimed for
    it, by the name Mediaplane gives it (`Mediaplane`, or `apps.plex.server_name`).
 
@@ -431,7 +431,8 @@ differ, and a `reason` when it is `unknown`.
     so it starts nothing. In the image, the call goes from a short-lived helper on
     Docker's default `bridge` network: check that containers there reach the internet
     (a firewall, or `"bridge": "none"` in Docker's `daemon.json`, stops them), then run
-    `apply` again.
+    `apply` again. A 403 that won't clear may be about your plex.tv account instead:
+    check that it may claim a server, as the hint says.
 - **`didn't claim itself as it started, so it stays unpublished`.** Plex had its claim
   token, but didn't trade it at plex.tv while `apply` waited: it couldn't reach plex.tv,
   or the token, which lasts four minutes, ran out first. Plex's log (check 3) says which.
@@ -543,11 +544,18 @@ differ, and a `reason` when it is `unknown`.
   (`apply.bootstrap-failed`). Seerr was set up already, and its admin (its first user)
   isn't your plex.tv account, as plex.tv says your token is, or its Plex is set and isn't
   `plex:32400` without TLS. Mediaplane asks it with Seerr's key, and never signs in to it,
-  which would hand your token to whoever set it up. Seerr stays unpublished. The safe
-  way out first:
-  - If that plex.tv account is yours, run `mediaplane plex-login --force`, sign in as
-    it, and set Seerr's Plex to `plex`, port 32400, without TLS (or leave it unset),
-    then run `apply` again.
+  which would hand your token to whoever set it up. Seerr stays unpublished. The common
+  case is a Seerr set up by hand on a Plex stack before Slice 7, as Seerr's README said
+  then: its Plex is the one Seerr's own list offered, a LAN address or a `plex.direct`
+  URL with TLS. The safe ways out first:
+  - If that plex.tv account is yours, run `mediaplane plex-login --force` and sign in as
+    it (without `--force`, `plex-login` keeps the saved token, of your other account,
+    since plex.tv still takes it), then run `apply` again.
+  - If Seerr's Plex is set and isn't `plex`, port 32400, without TLS: Seerr is
+    unpublished, so its web UI can't be reached to change it. Stop Seerr
+    (`docker stop mediaplane-seerr-1`, for the stack `mediaplane`), and in
+    `appdata/seerr/settings.json` set `plex.ip` to `"plex"`, `plex.port` to `32400` and
+    `plex.useSsl` to `false`, then run `apply`. Seerr reads the file as it starts.
   - Last, if you did not set Seerr up, start it afresh, as below.
 
   On a Plex stack, `is set up, and Mediaplane couldn't tell whether it is its own` and
@@ -612,10 +620,10 @@ differ, and a `reason` when it is `unknown`.
   The same, on a Plex stack: check that Seerr's Plex is the stack's (`plex`, port 32400),
   and that the library is in Plex, as `plex.library_tv` keeps it, then run `apply` again.
 - **`plan` shows `seerr.media_server` or `seerr.media_server_plex` to create,** though
-  Seerr's settings show a server. Seerr keeps the address it was given even when it
-  couldn't save the link, but it sets the server's own id (`serverId` for Jellyfin,
-  `machineId` for Plex) only once it has. A link with no id reads as not linked, and
-  `apply` links it again.
+  Seerr's settings show a server. Seerr keeps the address of Plex even when it couldn't
+  save the link, but sets Plex's own id (`machineId`) only once it has; it sets
+  Jellyfin's (`serverId`) at its first sign-in and on each link it saves. A link with no
+  id reads as not linked, and `apply` links it again.
 - **`Mediaplane can't read the file in Jellyfin's appdata`** (`bootstrap.unreadable`).
   With Jellyfin's key stored, `plan` takes its setup as done, but it can't check: the
   user Mediaplane runs as can't read `appdata/jellyfin/system.xml`. That is

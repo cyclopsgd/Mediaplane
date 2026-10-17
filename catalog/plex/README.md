@@ -32,8 +32,8 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
   to plex.tv with a link you open in a browser, and saves your Plex token where
   `plex.token` says (`secrets/plex-token`, which `init` writes). It never prints the
   token. A saved token plex.tv still takes is kept, unless you add `--force`, and so is
-  one plex.tv can't say about (no answer, a 403, a 429 or an error of its own): it says
-  so, and `--force` signs in anyway.
+  one plex.tv can't say about (no answer, a 403, a 429, an error of its own, or an answer
+  Mediaplane doesn't understand): it says so, and `--force` signs in anyway.
 - **It claims Plex for your account before its web UI is published.** An unclaimed Plex
   lets whoever reaches it claim it for their own plex.tv account, with no sign-in. So on
   its first start, Plex has no published port:

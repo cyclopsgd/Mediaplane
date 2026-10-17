@@ -160,8 +160,11 @@ function failureMessage(cause: PlexTvError, checking: boolean, shown: string): s
       ? `plex.tv answered${status}, so Mediaplane can't tell whether the Plex token in ${shown} still works. It is kept. Try again later, or run "mediaplane plex-login --force" to sign in anyway.`
       : `plex.tv answered${status}; run plex-login again later`;
   }
-  // A refusal or an answer Mediaplane can't read: the error says which, as it is.
-  return cause.message;
+  // An answer Mediaplane can't read: the error says what it was, as it is. The check
+  // never gets here with a refusal (works), so a token it couldn't check is kept.
+  return checking
+    ? `${cause.message}, so Mediaplane can't tell whether the Plex token in ${shown} still works. It is kept. Run "mediaplane plex-login --force" to sign in anyway.`
+    : cause.message;
 }
 
 /** The saved token ('' when the file is empty); undefined when there is no file. */

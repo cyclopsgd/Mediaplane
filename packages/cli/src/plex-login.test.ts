@@ -8,7 +8,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { join } from 'node:path';
-import { plexTvClient, type PlexTv } from '@mediaplane/engine';
+import { plexTvClient, PlexTvError, type PlexTv } from '@mediaplane/engine';
 import {
   closedPort,
   FAKE_PLEX_ACCOUNT,
@@ -191,16 +191,51 @@ describe('mediaplane plex-login', () => {
     );
   });
 
-  it("does not call an answer it can't understand a refusal", async () => {
+  it("does not call an answer it can't understand a refusal: it says the saved token is kept, and names --force", async () => {
     const home = await makeHome();
     await mkdir(join(home, 'secrets'));
     await writeFile(join(home, 'secrets', 'plex-token'), `${TOKEN}\n`);
     const plexTv = await fakePlexTv();
     plexTv.state.failing.push({ path: '/api/v2/user', status: 400 });
+    plexTv.state.signIn = { token: 'new-plex-token-00002', afterReads: 0 };
+    const odd: PlexTv = {
+      ...plexTv.client,
+      accountId: () =>
+        Promise.reject(
+          new PlexTvError(
+            "plex.tv answered something Mediaplane doesn't understand (at id) (GET /api/v2/user)",
+            { kind: 'protocol' },
+          ),
+        ),
+    };
+    for (const [client, said] of [
+      [plexTv.client, 'plex.tv refused the request (HTTP 400) (GET /api/v2/user)'],
+      [
+        odd,
+        "plex.tv answered something Mediaplane doesn't understand (at id) (GET /api/v2/user)",
+      ],
+    ] as const) {
+      const { code, stdout, stderr } = await login(home, client);
+      expect(code).toBe(1);
+      expect(stdout).toBe('');
+      expect(stderr).toBe(
+        `error: ${said}, so Mediaplane can't tell whether the Plex token in secrets/plex-token still works. It is kept. Run "mediaplane plex-login --force" to sign in anyway.\n`,
+      );
+      expect(await readFile(join(home, 'secrets', 'plex-token'), 'utf8')).toBe(
+        `${TOKEN}\n`,
+      );
+    }
+    expect(plexTv.state.pins).toEqual([]);
+  });
+
+  it('says an answer it cannot understand as it is, once the saved token is checked', async () => {
+    const home = await makeHome();
+    const plexTv = await fakePlexTv();
+    plexTv.state.failing.push({ path: '/api/v2/pins', status: 400 });
     const { code, stderr } = await login(home, plexTv.client);
     expect(code).toBe(1);
     expect(stderr).toBe(
-      'error: plex.tv refused the request (HTTP 400) (GET /api/v2/user)\n',
+      'error: plex.tv refused the request (HTTP 400) (POST /api/v2/pins)\n',
     );
   });
 

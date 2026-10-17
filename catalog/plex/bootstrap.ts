@@ -173,6 +173,18 @@ async function accountOf(
   }
 }
 
+/** What to do when plex.tv gives no claim token, failing with `cause`. */
+function claimHint(cause: unknown): string {
+  if (cause instanceof PlexTvError && cause.kind === 'refused') {
+    return 'plex.tv refused your Plex token: it was revoked, or is not one. Run "mediaplane plex-login" to sign in again, then run apply again';
+  }
+  // A 403 that won't clear may be about the account, not the host.
+  if (cause instanceof PlexTvError && cause.status === 403) {
+    return 'check that this host reaches plex.tv, or that this plex.tv account may claim a server, then run apply again';
+  }
+  return 'check that this host reaches plex.tv, then run apply again';
+}
+
 /**
  * Plex's first-run setup: its claim (spec §6.1, §6.4). An unclaimed Plex lets anyone who
  * reaches it at an address claim it, with a claim token of their own plex.tv account and
@@ -217,9 +229,7 @@ export const plexBootstrap: Bootstrap = {
       // Any other failure to call plex.tv is as if it hadn't answered.
       throw new BootstrapFailed(
         `Plex's first start needs a claim token from plex.tv, which Mediaplane couldn't get, so nothing was started: ${cause instanceof PlexTvError ? cause.message : failedCall(cause)}`,
-        cause instanceof PlexTvError && cause.kind === 'refused'
-          ? 'plex.tv refused your Plex token: it was revoked, or is not one. Run "mediaplane plex-login" to sign in again, then run apply again'
-          : 'check that this host reaches plex.tv, then run apply again',
+        claimHint(cause),
       );
     }
   },

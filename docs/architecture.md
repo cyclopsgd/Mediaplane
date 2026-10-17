@@ -669,9 +669,10 @@ mediaplane (the stack)
     `plex:32400` without TLS (Seerr's Plex has no URL base), with the Movies and TV Shows
     libraries enabled. Seerr reaches Plex with its admin's token, yours, from its first
     sign-in: the link holds no secret of Mediaplane's.
-  - Seerr keeps the address it is given even when it couldn't save the link, but sets the
-    server's own id (`serverId` for Jellyfin, `machineId` for Plex) only once it has. A
-    link with an empty id reads as not linked, and `apply` links it again.
+  - Seerr keeps the address of Plex even when it couldn't save the link, but sets Plex's
+    own id (`machineId`) only once it has. It sets Jellyfin's (`serverId`) at its first
+    sign-in and on each link it saves. A link with an empty id reads as not linked, and
+    `apply` links it again.
 
 - **Each resource** is one of:
   - `create` or `update`: the app lacks it, or a managed field or a secret differs. A

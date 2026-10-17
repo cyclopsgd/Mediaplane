@@ -43,7 +43,7 @@ With Jellyfin as the media server (with Plex, see below):
   This holds when `apply` runs the stack; the threat model lists what voids it, such as a
   Seerr whose appdata is reset outside `apply`:
   [T16](../../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
-- **A Seerr set up before this slice,** by hand, has no record. The first `apply` starts
+- **A Seerr set up before Slice 6,** by hand, has no record. The first `apply` starts
   it unpublished once and checks it with its key, never the password. It is
   Mediaplane's only when its admin (its first user) is the Jellyfin login
   `admin.username` names and its Jellyfin is `jellyfin:8096`, with no URL base and no
@@ -63,9 +63,9 @@ With Jellyfin as the media server (with Plex, see below):
   (named `Seerr` in Jellyfin's dashboard): Mediaplane checks that it works, and gives
   Seerr its own Jellyfin key only when Jellyfin refuses Seerr's, or Jellyfin moves,
   when Seerr's libraries are synced again too. Seerr shows that key in clear: Mediaplane
-  keeps it out of all it prints and records. Seerr keeps an address it couldn't save a
-  link for, but sets Jellyfin's id (`serverId`) only once it has: a link with an empty
-  id reads as not linked, and `apply` links it again.
+  keeps it out of all it prints and records. Seerr sets Jellyfin's id (`serverId`) at
+  its first sign-in and on each link it saves: a link with an empty id reads as not
+  linked, and `apply` links it again.
 - **Its Sonarr and Radarr servers** (`seerr.server_sonarr`, `seerr.server_radarr`), each
   while the stack runs the arr, named `Sonarr (Mediaplane)` and `Radarr (Mediaplane)`: the
   arr at its service and port, with its key, its root folder, a quality profile, and set

@@ -46,9 +46,10 @@ function stackApp(
 
 const library = z.looseObject({ id: z.string(), name: z.string(), enabled: z.boolean() });
 /**
- * `serverId` is the server's own identifier, which Seerr sets only once it has saved a
- * link and reached the server: without one, the link is not saved (probed for Plex's
- * `machineId`: a failed save still leaves the address in Seerr's settings).
+ * `serverId` is the server's own identifier, which Seerr sets at its first sign-in
+ * through Jellyfin and on each link to Jellyfin it saves (read from Seerr's code): without
+ * one, the link reads as not saved, as Plex's does without `machineId` (probed: a failed
+ * save to Plex still leaves the address in Seerr's settings).
  */
 const jellyfinSettings = heldJellyfin.extend({
   libraries: z.array(library),
