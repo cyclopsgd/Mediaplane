@@ -534,16 +534,22 @@ describe('the VPN kill switch, against a local WireGuard server', () => {
       });
       expect(stopped.code, stopped.stderr).toBe(0);
       const inQbittorrent = `container:${qbittorrent}`;
+      // Docker takes away Gluetun's eth0. Its tun0 is a kernel WireGuard interface: it is
+      // gone when Gluetun deletes it on the way out, but stays when Gluetun is killed first
+      // (a slow runner, past stop's 5 s). Either way nothing gets out, since the tunnel's
+      // own packets have no interface left to leave by.
       const links = await busybox(inQbittorrent, 'ip', '-o', 'link');
-      expect(
-        links.stdout
-          .trim()
-          .split('\n')
-          .map((l) => l.split(':')[1]?.trim()),
-      ).toEqual(['lo']);
+      const left = links.stdout
+        .trim()
+        .split('\n')
+        .map((l) => l.split(':')[1]?.trim());
+      expect(left[0]).toBe('lo');
+      expect(left.slice(1).every((name) => name === 'tun0')).toBe(true);
       const unreachable = await fetchFrom(inQbittorrent, leak);
       expect(unreachable.code).not.toBe(0);
-      expect(unreachable.stderr).toContain('Network is unreachable');
+      if (!left.includes('tun0')) {
+        expect(unreachable.stderr).toContain('Network is unreachable');
+      }
       const gluetunDown = await vpnCheck(home, {}, '--no-egress');
       expect(gluetunDown.code, gluetunDown.stdout + gluetunDown.stderr).toBe(1);
       expect(checksOf(gluetunDown)).toEqual(['network ok', 'gluetun down']);
