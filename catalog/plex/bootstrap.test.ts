@@ -720,7 +720,7 @@ describe("Plex's first start, when it can't be prepared", () => {
     );
   });
 
-  it("stops every app it was for when Docker can't list the containers, and stops nothing when none runs", async () => {
+  it("stops every app the plan starts unpublished when Docker can't list the containers, and stops nothing when none runs", async () => {
     const unknown = await startOf();
     const listing = await thrown(
       startVariables(

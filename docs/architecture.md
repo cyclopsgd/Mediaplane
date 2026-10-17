@@ -388,8 +388,9 @@ up --wait again
   on Compose's standard input sets it, as `"${MP_START_PLEX_PLEX_CLAIM}"`, which Compose
   takes from its own environment, so it is in no file. The start step asks for it before
   it changes anything. Without one (no token, plex.tv refusing your token or not
-  answering, or the helper failing), it fails, and stops a Plex that runs and isn't yet
-  shown to be yours, such as one an `apply` before this slice published unclaimed. The
+  answering, or the helper failing), it fails, and stops every app that runs and isn't
+  yet shown to be yours, Plex, and Seerr: a Plex an `apply` before this slice published
+  unclaimed, say, or a Seerr set up by hand then. The
   image trades the claim token at plex.tv for a token of your account, which it saves in
   `Preferences.xml`. The setup waits, as long as `apply` waits for an app, until Plex
   says it is claimed, asking `/identity` without your token, then asks plex.tv whose

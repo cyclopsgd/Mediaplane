@@ -421,8 +421,8 @@ Controls today:
   unpublished: the image trades it at plex.tv within seconds, and a claim token works
   once, for four minutes. The container that publishes Plex is made without it, which the
   nightly end-to-end test checks. It is fetched before the start step changes anything:
-  without one, the step fails, and stops a Plex that runs and isn't yet shown to be
-  yours.
+  without one, the step fails, and stops every app that runs and isn't yet shown to be
+  yours, Plex, and Seerr.
 - Plex's own token, which its claim makes, is in Plex's `Preferences.xml`, which Plex
   writes 0600. Mediaplane reads it there only to ask plex.tv whose account it is, once
   Plex is claimed, through the plex.tv helper's standard input (from source, in the
