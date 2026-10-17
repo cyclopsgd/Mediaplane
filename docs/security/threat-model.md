@@ -778,9 +778,10 @@ Controls today:
   plex.tv has said Plex is yours.
 - When Mediaplane can't get a claim token at all (no token, plex.tv refusing it or not
   answering, the helper failing), the start step fails before it changes anything. It
-  first stops a Plex that runs and isn't yet shown to be yours, published or not, such as
-  one that an `apply` before Slice 7 published unclaimed, and the error says so (or says
-  that it couldn't, and to stop it yourself). Plex counts as set up only when its
+  first stops every app that runs and isn't yet shown to be yours, Plex, and Seerr,
+  published or not: a Plex that an `apply` before Slice 7 published unclaimed, say, or a
+  Seerr set up by hand then. The error names each (or says that they couldn't be
+  stopped, and to stop them yourself). Plex counts as set up only when its
   `Preferences.xml` holds a token (`PlexOnlineToken`) and Mediaplane's record names it.
 - Before Plex's setup is done, so before Plex is first published, Mediaplane reads its
   settings and keeps it unpublished, with what to do, unless each of these is as Plex

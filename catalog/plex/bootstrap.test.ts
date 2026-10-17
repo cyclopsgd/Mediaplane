@@ -738,6 +738,93 @@ describe("Plex's first start, when it can't be prepared", () => {
     expect((plain as Error).message).not.toContain('stopped');
     expect(idle.calls).not.toContain('stop plex');
   });
+
+  it('wraps a failure that is not a BootstrapFailed by its kind only, when nothing runs too', async () => {
+    const { runtime, calls, stack, pending } = await startOf({ containers: [] });
+    const cause = new Error(`fake: boom holds ${TOKEN}`);
+    const odd: ResolvedStack = {
+      ...stack,
+      apps: stack.apps.map((app) =>
+        app.def.id === 'plex' && app.def.bootstrap !== undefined
+          ? {
+              ...app,
+              def: {
+                ...app.def,
+                bootstrap: {
+                  ...app.def.bootstrap,
+                  firstStart: () => Promise.reject(cause),
+                },
+              },
+            }
+          : app,
+      ),
+    };
+    const failed = await thrown(
+      startVariables(odd, pending, { keys: {}, plexTv: NO_PLEX_TV }, runtime, {}),
+    );
+    expect(failed).toBeInstanceOf(BootstrapFailed);
+    expect(failed).toMatchObject({
+      message: "plex's first start couldn't be prepared (Error), so nothing was started",
+      cause,
+    });
+    expect((failed as Error).message).not.toContain(TOKEN);
+    expect(calls.some((call) => call.startsWith('stop'))).toBe(false);
+  });
+
+  it('stops every app the plan starts unpublished that runs, such as a published Seerr, and says so of each', async () => {
+    const home = await tempDir('mediaplane-plex-');
+    const resolved = resolveStack(
+      fixtureConfig(`${STACK}  seerr: {}\n`),
+      catalog,
+      FIXTURE_HOST,
+      home,
+    );
+    if (resolved.stack === undefined) throw new Error('no stack');
+    const calls: string[] = [];
+    // As an apply before Slice 7 left them: Plex unclaimed, and Seerr set up by hand,
+    // both published. Sonarr, set up, runs too.
+    const runtime = fakeRuntime({
+      containers: [
+        fakeContainer('sonarr', 'fake-sonarr'),
+        fakeContainer('seerr', 'fake-seerr'),
+        fakeContainer('plex', 'fake-plex'),
+      ],
+      calls,
+    });
+    const pending = [
+      { app: 'plex', unpublished: true },
+      { app: 'seerr', unpublished: true },
+    ];
+    /** A context whose plex.tv can't give a claim token. */
+    const failing = (): BootstrapContext => ({
+      keys: { plex: { token: TOKEN } },
+      plexTv: {
+        ...NO_PLEX_TV,
+        claimToken: () => Promise.reject(new HelperError('fake: no helper')),
+      },
+    });
+    const failed = await thrown(
+      startVariables(resolved.stack, pending, failing(), runtime, {}),
+    );
+    expect(failed).toBeInstanceOf(BootstrapFailed);
+    expect((failed as Error).message).toBe(
+      "Plex's first start needs a claim token from plex.tv, which Mediaplane couldn't get, so nothing was started: the call to plex.tv failed (HelperError); Mediaplane stopped plex and seerr, which ran, but aren't shown to be yours, so that they aren't left published",
+    );
+    expect(calls.filter((call) => call.startsWith('stop'))).toEqual(['stop plex seerr']);
+    // Not stopped: each is named, with what to do.
+    const refused = await thrown(
+      startVariables(
+        resolved.stack,
+        pending,
+        failing(),
+        { ...runtime, stop: () => Promise.resolve({ ok: false, error: 'fake: no' }) },
+        {},
+      ),
+    );
+    expect((refused as Error).message).toContain(
+      "; plex and seerr run, aren't shown to be yours, and couldn't be stopped: fake: no. Stop them yourself",
+    );
+  });
 });
 
 describe("Plex's setup, as apply's bootstrap step runs it", () => {
@@ -968,14 +1055,16 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
     expect(prefsAsked()).toBe(1);
   });
 
-  it("asks for a claim token while Mediaplane can't read Preferences.xml, which can't say Plex is claimed", async () => {
-    const { stack, ctx } = await stepOf();
+  it("asks for no claim token while Mediaplane can't read Preferences.xml, as Plex's setup can't succeed until it can", async () => {
+    const { stack, ctx, plexTv } = await stepOf();
     const unreadable = [{ app: 'plex', unpublished: true }];
-    // A folder where the file should be: reading it fails.
+    // A folder where the file should be: reading it fails. The plan's
+    // bootstrap.unreadable warning says what to fix.
     await mkdir(join(stack.home, 'appdata', 'plex', PLEX_PREFERENCES), {
       recursive: true,
     });
-    expect(Object.keys(await firstStartEnv(stack, unreadable, ctx))).toEqual(['plex']);
+    expect(await firstStartEnv(stack, unreadable, ctx)).toEqual({});
+    expect(plexTv.state.claims).toEqual([]);
     // Started published, it gets none: start variables go only with an unpublished start.
     expect(
       await firstStartEnv(stack, [{ app: 'plex', unpublished: false }], ctx),

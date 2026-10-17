@@ -1596,6 +1596,32 @@ apps:
     expectNoSecrets(term.stdout() + term.stderr(), ['revoked-plex-token-0']);
   });
 
+  it('stops a published Seerr on a Plex stack too, when plex.tv refuses your token', async () => {
+    const { home, docker } = await plexHome('revoked-plex-token-0');
+    await writeFile(join(home, 'stack.yaml'), `${PLEX_STACK}  seerr: {}\n`);
+    const seerr = freshAppState();
+    seerr.seerr.configDir = join(home, 'appdata', 'seerr');
+    apis.apps.set('seerr', seerr);
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(1);
+    // As an apply before Slice 7 left them: Plex unclaimed, and Seerr, which had no setup
+    // then, both published.
+    expect((await docker.up(60, {}, [])).ok).toBe(true);
+    docker.calls.length = 0;
+    const term = capture();
+    expect(await run(['apply', '--home', home, '--yes'], term.io, deps(docker))).toBe(1);
+    expect(term.stderr()).toContain(
+      "plex.tv refused the Plex token (HTTP 401) (GET /api/claim/token.json); Mediaplane stopped plex and seerr, which ran, but aren't shown to be yours, so that they aren't left published\n",
+    );
+    expect(docker.calls.filter((call) => /^(up|stop|leave-wiring)\b/.test(call))).toEqual(
+      ['stop plex seerr'],
+    );
+    // Nothing was sent to Seerr.
+    expect(seerr.seerr).toMatchObject({ plexUsers: [], sessions: [], signIns: 0 });
+    expectNoSecrets(term.stdout() + term.stderr(), ['revoked-plex-token-0']);
+  });
+
   it("keeps Seerr waiting, with nothing sent to it, while Plex's setup isn't done", async () => {
     const { home, docker } = await plexHome(FAKE_PLEX_ACCOUNT.token, false);
     await writeFile(join(home, 'stack.yaml'), `${PLEX_STACK}  seerr: {}\n`);

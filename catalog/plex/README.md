@@ -71,10 +71,11 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
   a token of your account. A Plex claimed by another account stays unpublished, and so
   does one plex.tv couldn't be asked about (only a 401 is plex.tv refusing a token; a 403,
   a 429, a 5xx, no answer, a helper that fails or runs out of time, or Docker failing on
-  the way is "couldn't tell"; a helper answer Mediaplane doesn't understand is refused),
+  the way is "couldn't tell"; a helper answer Mediaplane doesn't understand is rejected),
   or one that didn't claim itself while `apply` waited. When `apply` can't get a claim
-  token at all, it starts nothing, and stops a Plex that runs and isn't yet shown to be
-  yours, such as one an older `apply` published unclaimed; the error says so. Plex counts
+  token at all, it starts nothing, and stops every app that runs and isn't yet shown to
+  be yours, Plex, and Seerr: a Plex an older `apply` published unclaimed, say, or a Seerr
+  set up by hand then. The error names each. Plex counts
   as set up when its `Preferences.xml` holds a token (`PlexOnlineToken`) and Mediaplane's
   record does (`setUp` in `state/secrets.json`).
 - **Before Plex is first published, it must let no client in without a sign-in.**

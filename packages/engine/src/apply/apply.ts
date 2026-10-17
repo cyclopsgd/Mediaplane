@@ -213,8 +213,8 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
   await steps.run('start', async () => {
     // An app whose setup needs something for its first start gets it now, as late as can
     // be (Plex's claim token lasts four minutes), but before anything changes: one that
-    // can't be had stops the step, and stops the app it was for if it runs, since it
-    // isn't shown to be yours.
+    // can't be had stops the step, and stops each app the plan starts unpublished that
+    // runs (Plex, and Seerr), since none of them is shown to be yours.
     startEnv = await startVariables(
       stack,
       shown.bootstrap,

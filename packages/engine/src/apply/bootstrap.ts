@@ -427,8 +427,9 @@ async function claimed(
 
 /**
  * The start variables of each app the plan starts unpublished whose setup gives some for
- * its first start (`Bootstrap.firstStart`), while its appdata doesn't say the setup is done
- * (a file Mediaplane can't read doesn't say so either), by service: Plex's PLEX_CLAIM. One
+ * its first start (`Bootstrap.firstStart`), while its appdata says the setup isn't done,
+ * by service: Plex's PLEX_CLAIM. A file Mediaplane can't read gets none: the setup can't
+ * succeed until it can read it, which the plan's `bootstrap.unreadable` warning says. One
  * that can't be made throws, before anything starts.
  */
 export async function firstStartEnv(
@@ -455,7 +456,7 @@ async function firstStartApps(
     if (!change.unpublished) continue;
     const app = stack.apps.find((a) => a.def.id === change.app);
     if (app?.def.bootstrap?.firstStart === undefined) continue;
-    if ((await appSetupDone(stack.home, app)) === true) continue;
+    if ((await appSetupDone(stack.home, app)) !== false) continue;
     apps.push(app);
   }
   return apps;
@@ -463,9 +464,11 @@ async function firstStartApps(
 
 /**
  * firstStartEnv, for apply's start step, before it changes anything. When it throws, each
- * app it was for that runs is stopped first: an app whose setup isn't done isn't shown to
- * be yours (Plex, unclaimed or claimed by someone else, such as one an apply before
- * Slice 7 published), so it must not stay published. A BootstrapFailed then says so.
+ * app the plan starts unpublished that runs is stopped first: an app whose setup isn't
+ * done isn't shown to be yours (Plex, unclaimed or claimed by someone else, such as one an
+ * apply before Slice 7 published; Seerr on a Plex stack, set up by hand then), so it must
+ * not stay published. A BootstrapFailed then says so. An error that isn't the setup's
+ * own is always wrapped, saying only its kind.
  */
 export async function startVariables(
   stack: ResolvedStack,
@@ -477,45 +480,71 @@ export async function startVariables(
   try {
     return await firstStartEnv(stack, pending, ctx);
   } catch (cause) {
-    const apps = (await firstStartApps(stack, pending)).map((app) => app.def.id);
-    let running: string[];
-    let known = true;
-    try {
-      running = (await runtime.containers())
-        .filter((c) => apps.includes(c.service) && c.state === 'running')
-        .map((c) => c.service);
-    } catch {
-      // Not known to be stopped: stop them all.
-      running = apps;
-      known = false;
-    }
-    if (running.length === 0) throw cause;
-    // Whatever the error was, and whatever stopping does: the outcome is always said.
-    let stopped: { ok: boolean; error?: string };
-    try {
-      stopped = await runtime.stop(running, { ...values });
-    } catch (stopCause) {
-      stopped = {
-        ok: false,
-        error:
-          stopCause instanceof RuntimeError
-            ? stopCause.message
-            : `a ${stopCause instanceof Error ? stopCause.name : 'failure that is not an Error'}`,
-      };
-    }
-    const names = running.join(', ');
-    const outcome = stopped.ok
-      ? `Mediaplane stopped ${names}, which ${known ? 'ran' : 'may have run'}, but isn't shown to be yours, so that it isn't left published`
-      : `${names} ${known ? 'runs' : 'may run'}, isn't shown to be yours, and couldn't be stopped: ${stopped.error ?? 'no reason given'}. Stop it yourself`;
+    const outcome = await stopUnproven(
+      pending.filter((change) => change.unpublished).map((change) => change.app),
+      runtime,
+      values,
+    );
+    const then = outcome === undefined ? '' : `; ${outcome}`;
     if (cause instanceof BootstrapFailed) {
-      throw new BootstrapFailed(`${cause.message}; ${outcome}`, cause.hint, { cause });
+      if (outcome === undefined) throw cause;
+      throw new BootstrapFailed(`${cause.message}${then}`, cause.hint, { cause });
     }
     // An error that isn't the setup's own: only its kind is said, never its text.
     const kind = cause instanceof Error ? cause.name : 'not an Error';
+    const names = (await firstStartApps(stack, pending)).map((app) => app.def.id);
     throw new BootstrapFailed(
-      `${names}'s first start couldn't be prepared (${kind}), so nothing was started; ${outcome}`,
+      `${names.join(', ')}'s first start couldn't be prepared (${kind}), so nothing was started${then}`,
       HINT,
       { cause },
     );
   }
+}
+
+/**
+ * Stops those of `apps` that run, which aren't shown to be yours, and says what it did;
+ * undefined when none runs. Whatever stopping does, the outcome is always said.
+ */
+async function stopUnproven(
+  apps: readonly string[],
+  runtime: Runtime,
+  values: Readonly<Record<string, string>>,
+): Promise<string | undefined> {
+  let running: string[];
+  let known = true;
+  try {
+    const up = new Set(
+      (await runtime.containers())
+        .filter((c) => c.state === 'running')
+        .map((c) => c.service),
+    );
+    running = apps.filter((app) => up.has(app));
+  } catch {
+    // Not known to be stopped: stop them all.
+    running = [...apps];
+    known = false;
+  }
+  if (running.length === 0) return undefined;
+  let stopped: { ok: boolean; error?: string };
+  try {
+    stopped = await runtime.stop(running, { ...values });
+  } catch (stopCause) {
+    stopped = {
+      ok: false,
+      error:
+        stopCause instanceof RuntimeError
+          ? stopCause.message
+          : `a ${stopCause instanceof Error ? stopCause.name : 'failure that is not an Error'}`,
+    };
+  }
+  const one = running.length === 1;
+  const names = one
+    ? running.join('')
+    : `${running.slice(0, -1).join(', ')} and ${running.at(-1) ?? ''}`;
+  const isnt = one ? "isn't" : "aren't";
+  if (stopped.ok) {
+    return `Mediaplane stopped ${names}, which ${known ? 'ran' : 'may have run'}, but ${isnt} shown to be yours, so that ${one ? 'it' : 'they'} ${isnt} left published`;
+  }
+  const runs = known ? (one ? 'runs' : 'run') : 'may run';
+  return `${names} ${runs}, ${isnt} shown to be yours, and couldn't be stopped: ${stopped.error ?? 'no reason given'}. Stop ${one ? 'it' : 'them'} yourself`;
 }

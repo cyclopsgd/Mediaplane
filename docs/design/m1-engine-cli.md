@@ -1633,15 +1633,18 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   as Seerr's (its key is your token), and starts unpublished.
   - **The claim token** is fetched by the start step, just before `up`, with your token
     (`GET /api/claim/token.json`), and only for an app the plan starts unpublished whose
-    setup isn't done (`Bootstrap.firstStart`). It lasts four minutes and works once. It
+    appdata says its setup isn't done (`Bootstrap.firstStart`): a `Preferences.xml`
+    Mediaplane can't read gets none, as the setup can't succeed until it can. It lasts four minutes and works once. It
     reaches Plex as `PLEX_CLAIM`, in the extra Compose file on standard input, as
     `"${MP_START_PLEX_PLEX_CLAIM}"`, which Compose takes from its environment (Compose
     2.38.2 and 5.5.1, probed); the publishing `up` doesn't pass it. It is redacted in
     `up`'s errors. It is fetched before the start step changes anything (before
     Mediaplane leaves the wiring network, and before the VPN's guests are stopped). With
-    no token, or no claim token, the step fails, and stops a running app it was for, and
-    says so: a Plex whose setup isn't done isn't shown to be yours, and must not stay
-    published, as one an `apply` before this slice published unclaimed would. Plex's
+    no token, or no claim token, the step fails, and stops every running app the plan
+    starts unpublished, Plex, and Seerr, naming each: an app whose setup isn't done isn't
+    shown to be yours, and must not stay published, as a Plex an `apply` before this
+    slice published unclaimed, or a Seerr set up by hand then, would. An error that isn't
+    the setup's own is said by its kind only, whether or not anything ran. Plex's
     setup never holds your token: only the one read of its settings, once ownership is
     proven, carries it.
   - **The setup** waits, as long as `apply` waits for an app (`AppApi.until`), until

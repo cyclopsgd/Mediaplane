@@ -106,11 +106,12 @@ Plex token, before its port is published, and links to Plex.
   `Plex's first start needs a claim token from plex.tv, which Mediaplane couldn't get, so nothing was started`
   or `Plex can't be claimed: Mediaplane has no Plex token, so nothing was started`. Plex
   starts unpublished, with a claim token of your plex.tv account that `apply` fetches
-  the moment before, and here it had none to give. A Plex that runs, and isn't yet shown
-  to be yours, is stopped, so that it isn't left published, such as one that an `apply`
-  before Slice 7 published unclaimed. The message says so
-  (`Mediaplane stopped plex, which ran, but isn't shown to be yours`), or, when it
-  couldn't be stopped, says that, and you stop it yourself.
+  the moment before, and here it had none to give. Every app that runs and isn't yet
+  shown to be yours, Plex, and Seerr, is stopped, so that it isn't left published: a
+  Plex that an `apply` before Slice 7 published unclaimed, say, or a Seerr set up by
+  hand then. The message names each app it stopped
+  (`Mediaplane stopped plex and seerr, which ran, but aren't shown to be yours`), or,
+  when they couldn't be stopped, says that, and you stop them yourself.
 - **`mediaplane apply` stops at the first-run setup step** on a Plex stack, with Plex
   unpublished, and an error such as `didn't claim itself as it started`,
   `is claimed by another plex.tv account than yours`,
@@ -412,11 +413,11 @@ differ, and a `reason` when it is `unknown`.
   your token there, then run `apply` again.
 - **`Plex can't be claimed: Mediaplane has no Plex token`.** The same, found at the
   containers step: the token file went missing after the plan. Run
-  `mediaplane plex-login`, then run `apply` again. Nothing was started, and a Plex that
-  ran is stopped (see Symptoms).
+  `mediaplane plex-login`, then run `apply` again. Nothing was started, and a Plex or a
+  Seerr that ran is stopped (see Symptoms).
 - **`needs a claim token from plex.tv, which Mediaplane couldn't get`.** Nothing was
-  started, and a Plex that ran is stopped (see Symptoms); the next `apply` that gets a
-  claim token starts it again, unpublished. Only a 401 from plex.tv is a refusal of your
+  started, and a Plex or a Seerr that ran is stopped (see Symptoms); the next `apply`
+  that gets a claim token starts them again, unpublished. Only a 401 from plex.tv is a refusal of your
   token. What follows the colon says which:
   - `plex.tv refused the Plex token (HTTP 401)`: it was revoked (signed out of every
     device, or the password changed), or it is not one. Run `mediaplane plex-login` to
@@ -448,7 +449,8 @@ differ, and a `reason` when it is `unknown`.
   First check who owns `appdata/plex` and the `Preferences.xml` in it (`ls -ln`) against
   `user:` in `stack.yaml`: Plex writes the file 0600, as `user:`, so Mediaplane must run
   as that user (in the image, `MEDIAPLANE_UID`). Give the folder back to `user:`, or run
-  Mediaplane as it, then run `apply` again.
+  Mediaplane as it, then run `apply` again. While it can't read the file, `apply` gets
+  Plex no new claim token, so it doesn't recreate Plex on every run.
 - **`plex.tv's answer doesn't say by whose account`.** plex.tv answered in a shape
   Mediaplane doesn't understand, or the plex.tv helper printed an answer it doesn't
   understand (a protocol error, not "couldn't tell"), so Plex stays unpublished. Run
