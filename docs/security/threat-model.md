@@ -89,15 +89,22 @@ mounts ──► plex.tv
   outside service Mediaplane calls: for `mediaplane plex-login`, for the claim token Plex
   first starts with, and to ask whose a Plex or a Seerr is. So for each call it runs a
   container of its own image, `mediaplane plex-tv`, on Docker's default `bridge` network
-  ([ADR 0012](../adr/0012-reach-plex-tv-through-a-short-lived-helper.md)). That network
-  has a route out, and Docker keeps it apart from the stack's networks: from it, an app
-  on neither the wiring network nor the stack's own is reached (probed). The helper has no
-  mount, no Docker socket and no other network, runs as Mediaplane's user, with no
-  capabilities, a read-only root and `no-new-privileges`, never pulls an image, and is
-  removed when it exits. Your Plex token reaches it on its standard input, never on a
-  command line or in its environment, and it calls only plex.tv's own address. It uses
-  the Docker API calls the host helper already makes, so the proxy allows nothing new for
-  it. Run from source, the CLI calls plex.tv itself, from the host.
+  ([ADR 0012](../adr/0012-reach-plex-tv-through-a-short-lived-helper.md)).
+  - What it can reach: the internet, through that network's route out, and, as any
+    container there can, the host's published ports, your LAN, and other containers on
+    the default bridge (T14 says why that is harmless, and what voids it).
+  - What it can't: any app on the stack's wiring network or on the stack's own network.
+    Docker keeps those apart from the default bridge, and a probe from it reached no
+    container on either.
+
+  The helper has no mount, no Docker socket and no other network, runs as Mediaplane's
+  user, with no capabilities, a read-only root and `no-new-privileges`, never pulls an
+  image, and is removed when it exits. Your Plex token reaches it on its standard input,
+  never on a command line or in its environment, and it calls only plex.tv's own
+  address. It uses the Docker API calls the host helper already makes, so the proxy
+  allows nothing new for it. Run from source, the CLI calls plex.tv itself, from the
+  host.
+
 - **The appdata ownership helper.** During `apply`, when an app's `appdata/<app>` is not
   owned by the user the app runs as, Mediaplane runs
   `docker compose run --rm --no-deps -T --user 0:0 --entrypoint chown <app> -R <uid>:<gid> <path>`.
@@ -760,8 +767,10 @@ Controls today:
   of itself, its machine identifier too (probed), so that can't decide; they can't give
   Plex a token of your account without one. A Plex claimed by another account stays
   unpublished, and `apply` stops. So does one plex.tv couldn't be asked about: only a
-  401 from plex.tv is a refusal, and a 403, a 429, a 5xx, no answer, or a failure of the
-  plex.tv helper or of Docker on the way counts as "couldn't tell". One that doesn't
+  401 from plex.tv is a refusal, and a 403, a 429, a 5xx, no answer, a plex.tv helper
+  that fails or runs out of time, or Docker failing on the way counts as "couldn't
+  tell". A helper answer Mediaplane doesn't understand is an error of its own, which
+  refuses Plex (`rejected`). Either way, Plex stays unpublished. One that doesn't
   claim itself while `apply` waits for it (its claim token ran out, or it couldn't reach
   plex.tv) stays unpublished too.
 - Plex's setup never holds your plex.tv token: it asks Plex whether it is claimed
@@ -806,9 +815,11 @@ What remains:
 - While Plex is unclaimed, for the seconds its claim takes, any container of the stack
   can reach it on the stack's networks, and could claim it first, as for Jellyfin's
   wizard below. Mediaplane then finds it claimed by another account, and it stays
-  unpublished. The runbook's ways out come first, and keep what Plex holds: sign in to
-  `plex-login` as that account, if it is yours, or take Plex's `PlexOnline` settings out
-  of its `Preferences.xml` so the next `apply` claims it again.
+  unpublished. The runbook's ways out come first, and keep what Plex holds: run
+  `mediaplane plex-login --force` and sign in as that account, if it is yours (without
+  `--force`, `plex-login` keeps a saved token that plex.tv still takes), or take Plex's
+  `PlexOnline` settings out of its `Preferences.xml` so the next `apply` claims it
+  again.
 - In those seconds, such a container could also change Plex's settings without claiming
   it, through `PUT /:/prefs`, and they survive the claim. Mediaplane checks the three
   known to let a client in without a sign-in (above). Others, such as remote access,

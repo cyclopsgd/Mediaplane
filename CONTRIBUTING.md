@@ -75,7 +75,8 @@ get. So the same file's last test runs only in the nightly Plex job
 - its two architectures run one at a time, sharing the test account, and each removes
   only the servers it noted, in a last step that runs whatever happened.
 
-Set `PLEX_TOKEN` to the token of a plex.tv account kept for tests, never your own. To
+Set `PLEX_TOKEN` as a secret of the `plex` environment, limited to `main`, to the token
+of a **test** plex.tv account, kept for this job, never your own. To
 run that test locally, put such a token in a file only you can read, and point
 `MEDIAPLANE_E2E_PLEX_TOKEN_FILE` at it. The test removes the server it claimed from the
 account when it ends, passed or not.

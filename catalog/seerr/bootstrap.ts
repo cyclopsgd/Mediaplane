@@ -276,7 +276,7 @@ function claimedHint(stack: ResolvedStack): string {
     const plex = stackAddress(stack, 'plex');
     const at =
       plex === undefined ? "the stack's Plex" : `${plex.host}:${String(plex.port)}`;
-    return `First: if the plex.tv account it was set up with is yours, run "mediaplane plex-login" and sign in as it, with its Plex unset or at ${at}, with no TLS; then run apply again. Last, if you did not set it up: start it afresh, as the runbook says`;
+    return `First: if the plex.tv account it was set up with is yours, run "mediaplane plex-login --force" and sign in as it (without --force, plex-login keeps a saved token that plex.tv still takes), with its Plex unset or at ${at}, with no TLS; then run apply again. Last, if you did not set it up: start it afresh, as the runbook says`;
   }
   const jellyfin = stackAddress(stack, 'jellyfin');
   const at =

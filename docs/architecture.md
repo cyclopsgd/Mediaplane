@@ -396,8 +396,10 @@ up --wait again
   account the token in Plex's `Preferences.xml` is: it must be yours. That is plex.tv's
   answer, which Plex's admin can't shape: they can change Plex's machine identifier
   (probed), but not give Plex a token of your account. Only a 401 from plex.tv counts as
-  a refusal; a 403, a 429, a 5xx, no answer, or a failure of the helper or of Docker on
-  the way is "couldn't tell", and keeps Plex unpublished too. Only then does Plex get
+  a refusal; a 403, a 429, a 5xx, no answer, a helper that fails or runs out of time, or
+  Docker failing on the way is "couldn't tell". A helper answer Mediaplane doesn't
+  understand is a protocol error, which refuses Plex (`rejected`). Each keeps Plex
+  unpublished. Only then does Plex get
   your token, on one call: the read of its settings (`GET /:/prefs`). The setup checks
   that none lets a client in without a sign-in: `allowedNetworks` empty,
   `enableLocalSecurity` at `-1` (Plex's default) or `1`, and `DlnaEnabled` off. Anyone

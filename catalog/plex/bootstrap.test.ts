@@ -596,7 +596,7 @@ describe("Plex's first-run setup", () => {
       'mediaplane-plex-1',
     );
     expect(hint).toBe(
-      'First: if that plex.tv account is yours too, run "mediaplane plex-login" and sign in as it, then run apply again. Or second, keeping what Plex holds: stop it ("docker stop mediaplane-plex-1"), remove every attribute whose name starts with PlexOnline from appdata/plex/Library/Application Support/Plex Media Server/Preferences.xml, then run apply again, which claims it as yours. Last, only if you don\'t need what it holds: start it afresh, as the runbook says',
+      'First: if that plex.tv account is yours too, run "mediaplane plex-login --force" and sign in as it (without --force, plex-login keeps a saved token that plex.tv still takes), then run apply again. Or second, keeping what Plex holds: stop it ("docker stop mediaplane-plex-1"), remove every attribute whose name starts with PlexOnline from appdata/plex/Library/Application Support/Plex Media Server/Preferences.xml, then run apply again, which claims it as yours. Last, only if you don\'t need what it holds: start it afresh, as the runbook says',
     );
   });
 });

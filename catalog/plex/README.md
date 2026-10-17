@@ -66,16 +66,17 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
   `plan` lists Plex under `First-run setup:`, and never calls plex.tv.
 
 - **It publishes Plex only once plex.tv says it is yours:** plex.tv, asked with the token
-  Plex's claim gave it (in its `Preferences.xml`), answers with your account. Plex's
-  admin can change what Plex says of itself, its machine identifier too, but can't make
-  it hold a token of your account. A Plex claimed by another account stays unpublished,
-  and so does one plex.tv couldn't be asked about (only a 401 is plex.tv refusing a
-  token; a 403, a 429, a 5xx, no answer, or a failure of the helper or of Docker is
-  "couldn't tell"), or one that didn't claim itself while `apply` waited. When `apply`
-  can't get a claim token at all, it starts nothing, and stops a Plex that runs and
-  isn't yet shown to be yours, such as one an older `apply` published unclaimed; the
-  error says so. Plex counts as set up when its `Preferences.xml` holds a token
-  (`PlexOnlineToken`) and Mediaplane's record does (`setUp` in `state/secrets.json`).
+  Plex's claim gave it (in its `Preferences.xml`), answers with your account. Plex's admin
+  can change what Plex says of itself, its machine identifier too, but can't make it hold
+  a token of your account. A Plex claimed by another account stays unpublished, and so
+  does one plex.tv couldn't be asked about (only a 401 is plex.tv refusing a token; a 403,
+  a 429, a 5xx, no answer, a helper that fails or runs out of time, or Docker failing on
+  the way is "couldn't tell"; a helper answer Mediaplane doesn't understand is refused),
+  or one that didn't claim itself while `apply` waited. When `apply` can't get a claim
+  token at all, it starts nothing, and stops a Plex that runs and isn't yet shown to be
+  yours, such as one an older `apply` published unclaimed; the error says so. Plex counts
+  as set up when its `Preferences.xml` holds a token (`PlexOnlineToken`) and Mediaplane's
+  record does (`setUp` in `state/secrets.json`).
 - **Before Plex is first published, it must let no client in without a sign-in.**
   Anyone who reached it while it was unclaimed could have changed these settings, with
   no token, and they survive the claim. So the setup checks, once Plex is yours:

@@ -71,9 +71,11 @@ And for the token:
   the client's own tries, with a minute more; one that runs out of time counts as
   plex.tv not answering.
 - **Only plex.tv's own refusal is a refusal.** A 401 says plex.tv refused the token. A
-  403, a 429, a 5xx or no answer is "couldn't tell", and so is any failure of the helper
-  or of Docker on the way: it keeps Plex, and Seerr on a Plex stack, unpublished, and
-  says to run `apply` again rather than to sign in again.
+  403, a 429, a 5xx or no answer is "couldn't tell", and so is a helper that fails or
+  runs out of time, or Docker failing on the way: it keeps Plex, and Seerr on a Plex
+  stack, unpublished, and says to run `apply` again rather than to sign in again. A
+  helper answer Mediaplane doesn't understand is a protocol error, not "couldn't tell":
+  Plex's and Seerr's checks refuse it (`rejected`), and they stay unpublished too.
 - **The helper's answer can hold a token:** `plex-login`'s, and a claim token. It is in
   the helper's output, which `docker logs` can show while the container runs, for a
   moment; `--rm` removes it with the container.

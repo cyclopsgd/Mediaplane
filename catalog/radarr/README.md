@@ -86,8 +86,7 @@ LinuxServer.io image, unmodified.
   - its host is `plex`, at Plex's own port, without TLS, and it has Plex update its
     library ("Update Library");
   - it is made with the same events as Jellyfin's: a film imported, upgraded or
-    renamed, or a film or its file deleted. Which events it has after
-    that is yours;
+    renamed, or a film or its file deleted. Which events it has after that is yours;
   - its token is your Plex token, which Radarr shows masked. `plan` and `apply` check it
     with Radarr's own test of the connection, as for Jellyfin's, never by comparing it.
     Radarr's test needs a Movie library in Plex, so the connection comes after it. The

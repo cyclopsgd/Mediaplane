@@ -1607,10 +1607,11 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   but not the token (403), never a POST, and its messages name the method and path
   only, never a query or a value.
 - **What plex.tv's answers mean.** Only a 401 is "refused" (`refused`). A 403, a 429, a
-  5xx or no answer is "couldn't tell" (`unsure`), and so is any helper or Docker error
-  on the way to plex.tv (`failedCall`, which names only the error's kind): it keeps
-  Plex and Seerr unpublished. A 404 for a sign-in's PIN is `expired`; another answer
-  is `protocol`.
+  5xx or no answer is "couldn't tell" (`unsure`), and so is a helper that fails or runs
+  out of time (`unreachable`), or Docker failing on the way to plex.tv (`failedCall`,
+  which names only the error's kind). A 404 for a sign-in's PIN is `expired`; another
+  answer, or a helper answer Mediaplane doesn't understand, is `protocol`, which Plex's
+  and Seerr's setups refuse (`rejected`). Each keeps Plex and Seerr unpublished.
 - **`mediaplane plex-login`** (§5.2, §6.1). It asks plex.tv for a strong PIN (25
   characters, 30 minutes, probed), prints a link to `app.plex.tv/auth` with it, and asks
   every two seconds until someone signs in, the PIN runs out, or `--timeout` seconds
@@ -1654,8 +1655,10 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     nor can anything else Plex says; Plex can hold a token of your account only through a
     claim token of yours. Plex's token refused (401, as once the server is removed from
     its account, probed) is claimed too; plex.tv unsure (a timeout, a 5xx, a 429, a 403,
-    no connection, or a helper or Docker error) is `unsure`, as is a claimed Plex whose
-    file holds no token; your token refused, or the file unreadable, is `rejected`. All
+    no connection, a helper that fails or runs out of time, or Docker failing on the
+    way) is `unsure`, as is a claimed Plex whose file holds no token; your token
+    refused, an answer not understood (plex.tv's or the helper's), or the file
+    unreadable, is `rejected`. All
     keep Plex unpublished, as any failure of a keyless setup does. Only then does Plex get
     your token: the setup reads its preferences (`GET /:/prefs`), and refuses (`rejected`)
     a Plex that could let a client in without a sign-in: `allowedNetworks` not empty,
@@ -1670,10 +1673,13 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     that never says `claimed` stays unpublished, and the next `apply` fetches a new claim
     token.
   - **Done** is `Preferences.xml` holding `PlexOnlineToken`, and `setUp` naming Plex.
-  - **Claimed by another account:** the remedies are, in order, `plex-login` as that
-    account if it is yours; removing Plex's `PlexOnline*` attributes, which the next
-    `apply` claims again with your account, keeping Plex's libraries and machine
-    identifier (probed); and, last, starting it afresh (`Bootstrap.claimedHint`).
+  - **Claimed by another account:** the remedies are, in order,
+    `mediaplane plex-login --force` as that account if it is yours (without `--force`,
+    `plex-login` keeps a saved token that plex.tv still takes); removing Plex's
+    `PlexOnline*` attributes, which the next `apply` claims again with your account,
+    keeping Plex's libraries and machine identifier (probed); and, last, starting it
+    afresh (`Bootstrap.claimedHint`). Seerr's on a Plex stack starts with the same
+    `plex-login --force`.
 - **Plex's resources** (§6.2):
   - `plex.server`: `name`, Plex's `FriendlyName` (`PUT /:/prefs`, probed), `Mediaplane`
     or `apps.plex.server_name` (a new option, 1 to 64 characters), so it isn't taken for
@@ -1740,13 +1746,13 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   among Plex's devices (probed), as a test from its web UI does. `plan` never calls
   plex.tv, never claims Plex and never signs Seerr in: a claim token works once.
 - **Secrets** (§6.3, §7): your Plex token is a user secret, read once per run
-  (`userSecrets`), redacted everywhere, and sent only in Plex's `X-Plex-Token` header,
-  once Plex is shown to be yours,
-  (a new key scheme, `x-plex-token`), in request bodies to the arrs and Seerr, and to
-  plex.tv. Claim tokens, plex.tv's answers and Seerr's cookie are redacted too. None is
-  in `compose.yaml`, `.env`, a record, `resources.json` or the output. Every secret you
-  give is redacted, but only those an app's API takes as its key (`api.key.secret`)
-  reach setups and resources as keys (`stackKeys`): the VPN key never does.
+  (`userSecrets`), redacted everywhere, and sent only in Plex's `X-Plex-Token` header (a
+  new key scheme, `x-plex-token`), once Plex is shown to be yours, in request bodies to
+  the arrs and Seerr, and to plex.tv. Claim tokens, plex.tv's answers and Seerr's cookie
+  are redacted too. None is in `compose.yaml`, `.env`, a record, `resources.json` or the
+  output. Every secret you give is redacted, but only those an app's API takes as its key
+  (`api.key.secret`) reach setups and resources as keys (`stackKeys`): the VPN key never
+  does.
 - **Tests** (§8). The every-PR end-to-end test runs Plex against a fake plex.tv, whose
   claim token Plex's image sends to the real plex.tv, which refuses it (no account is
   involved), and checks that Plex, unclaimable, is never published. The deploy test

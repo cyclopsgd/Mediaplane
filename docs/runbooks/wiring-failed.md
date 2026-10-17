@@ -101,8 +101,8 @@ Plex token, before its port is published, and links to Plex.
     skipped wiring seerr.media_server: seerr's first-run setup waits
   ```
 
-- **`mediaplane apply` stops at the containers step** on a Plex stack, before anything
-  changes, with
+- **`mediaplane apply` stops at the containers step** on a Plex stack, before any
+  container starts, with
   `Plex's first start needs a claim token from plex.tv, which Mediaplane couldn't get, so nothing was started`
   or `Plex can't be claimed: Mediaplane has no Plex token, so nothing was started`. Plex
   starts unpublished, with a claim token of your plex.tv account that `apply` fetches
@@ -450,9 +450,10 @@ differ, and a `reason` when it is `unknown`.
   as that user (in the image, `MEDIAPLANE_UID`). Give the folder back to `user:`, or run
   Mediaplane as it, then run `apply` again.
 - **`plex.tv's answer doesn't say by whose account`.** plex.tv answered in a shape
-  Mediaplane doesn't understand. Run `apply` again; if it says the same, plex.tv may have
-  changed, and the ways out of `is claimed by another plex.tv account than yours`, below,
-  still apply.
+  Mediaplane doesn't understand, or the plex.tv helper printed an answer it doesn't
+  understand (a protocol error, not "couldn't tell"), so Plex stays unpublished. Run
+  `apply` again; if it says the same, plex.tv may have changed, and the ways out of
+  `is claimed by another plex.tv account than yours`, below, still apply.
 - **`is yours, but …`, naming `allowedNetworks`, `enableLocalSecurity` or
   `DlnaEnabled`.** Plex is yours, but one of its settings lets a client in without a
   sign-in. Mediaplane never sets them, and anyone who reached Plex while it was
@@ -503,8 +504,14 @@ differ, and a `reason` when it is `unknown`.
   Plex can't change what a library holds. Rename or remove that library in Plex, and the
   next `apply` makes `Movies` (or `TV Shows`) again, on the stack's folder.
 - **`AuthToken: Authentication Token is invalid`, for `<arr>.connection_plex`.** The arr's
-  own test of its connection to Plex failed with the token it holds, and with yours:
-  Plex refuses your token too. Run `mediaplane plex-login`, then run `apply` again.
+  own test of its connection to Plex failed. First check that the connection holds the
+  stack's token: a token changed by hand in the arr is refused, and `apply` sets the
+  stack's back, so run `apply` again. If it fails the same way with the stack's token,
+  Plex refuses your token too. Run `mediaplane plex-login`: it replaces a token plex.tv
+  refuses, with no `--force` needed. If it says the token works, plex.tv still takes it,
+  and Plex was claimed for another account since: see
+  `is claimed by another plex.tv account than yours`, above, where `--force` is the way
+  to sign in as another account.
 - **`Host: Unable to connect to Plex Media Server`, for `<arr>.connection_plex`.** Sonarr
   or Radarr can't reach Plex at `plex:32400`. Check that Plex is healthy
   (`mediaplane status plex`), and that no override takes either off the stack's network.

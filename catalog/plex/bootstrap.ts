@@ -285,5 +285,5 @@ export const plexBootstrap: Bootstrap = {
     return undefined;
   },
   claimedHint: (_stack, container) =>
-    `First: if that plex.tv account is yours too, run "mediaplane plex-login" and sign in as it, then run apply again. Or second, keeping what Plex holds: stop it ("docker stop ${container}"), remove every attribute whose name starts with PlexOnline from appdata/plex/${PREFERENCES}, then run apply again, which claims it as yours. Last, only if you don't need what it holds: start it afresh, as the runbook says`,
+    `First: if that plex.tv account is yours too, run "mediaplane plex-login --force" and sign in as it (without --force, plex-login keeps a saved token that plex.tv still takes), then run apply again. Or second, keeping what Plex holds: stop it ("docker stop ${container}"), remove every attribute whose name starts with PlexOnline from appdata/plex/${PREFERENCES}, then run apply again, which claims it as yours. Last, only if you don't need what it holds: start it afresh, as the runbook says`,
 };

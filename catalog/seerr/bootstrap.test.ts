@@ -935,7 +935,7 @@ describe("Seerr's first-run setup, with Plex", () => {
 
   it('gives the remedies for a claimed Seerr on a Plex stack, starting afresh last', () => {
     expect(seerrBootstrap.claimedHint?.(wiringStack(catalog, PLEX_STACK), 'x')).toBe(
-      'First: if the plex.tv account it was set up with is yours, run "mediaplane plex-login" and sign in as it, with its Plex unset or at plex:32400, with no TLS; then run apply again. Last, if you did not set it up: start it afresh, as the runbook says',
+      'First: if the plex.tv account it was set up with is yours, run "mediaplane plex-login --force" and sign in as it (without --force, plex-login keeps a saved token that plex.tv still takes), with its Plex unset or at plex:32400, with no TLS; then run apply again. Last, if you did not set it up: start it afresh, as the runbook says',
     );
   });
 });
