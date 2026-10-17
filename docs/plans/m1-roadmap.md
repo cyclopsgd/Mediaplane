@@ -616,6 +616,12 @@ password, which are S3c's (and listed again below).
 
 **S9 (before going public):**
 
+- **Decided by the owner on 2026-10-17:**
+  - the licence is GPL-3.0-or-later;
+  - no code of conduct, and no community-support material such as issue templates or
+    CODEOWNERS: Mediaplane is one person's project, published so others can use it.
+    Security reports keep GitHub's private reporting;
+  - `main` is protected in S9, light or strict to be chosen then.
 - **The nightly Plex job** (S7) needs the secret `PLEX_TOKEN` (owner): the token of a
   plex.tv account kept for tests, never your real one. Until it is set, the job does
   nothing. It claims a server each night on each architecture, one at a time, since

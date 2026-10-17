@@ -59,7 +59,7 @@ export default defineApp({
       .describe(
         'The name Plex shows for this server, in its apps and your plex.tv account. Default Mediaplane.',
       ),
-    hardware_transcoding: hardwareTranscoding,
+    hardware_transcoding: hardwareTranscoding('Plex', '; Plex needs Plex Pass for it'),
   }),
   env: () => ({ VERSION: 'docker' }),
   extras: (ctx) => gpuExtras(ctx.options.hardware_transcoding),

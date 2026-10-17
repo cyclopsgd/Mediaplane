@@ -40,7 +40,7 @@ export default defineApp({
   },
   integration,
   bootstrap: jellyfinBootstrap,
-  options: z.strictObject({ hardware_transcoding: hardwareTranscoding }),
+  options: z.strictObject({ hardware_transcoding: hardwareTranscoding('Jellyfin', '') }),
   extras: (ctx) => gpuExtras(ctx.options.hardware_transcoding),
   login: 'shared',
   experimental: false,

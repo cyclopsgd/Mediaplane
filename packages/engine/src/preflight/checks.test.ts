@@ -169,7 +169,7 @@ describe('runPreflight', () => {
         expect.objectContaining({
           code: 'preflight.device-missing',
           path: 'apps.sonarr',
-          hint: "this host's GPU has no driver loaded (Intel: i915 or xe; check ls /dev/dri), or set hardware_transcoding: false",
+          hint: "this host's GPU has no driver loaded (Intel: i915 or xe; AMD: amdgpu; check ls /dev/dri), or set hardware_transcoding: false",
         }),
       ]);
     });

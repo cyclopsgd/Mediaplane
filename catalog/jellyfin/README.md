@@ -116,7 +116,8 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   Everything else in them, such as their metadata language, is yours.
 - **Hardware transcoding** (Intel Quick Sync, or AMD): set
   `hardware_transcoding: true` under `apps.jellyfin`. Mediaplane then gives Jellyfin the
-  host's GPU (`/dev/dri`), and `plan` checks the host has one. What it can't do for
+  host's GPU (all of `/dev/dri`: the render node and the display node, as the image's own
+  guide does), and `plan` checks the host has one. What it can't do for
   you:
   - load the GPU's driver on the host: `ls /dev/dri` should list `renderD128`. Recent
     Intel chips (12th gen, Arc) may need a recent kernel;

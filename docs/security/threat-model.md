@@ -74,7 +74,8 @@ mounts ──► plex.tv
   - through the host network: the host's addresses and free ports, and for `vpn-check`,
     the address the host's own traffic leaves from (see T13);
   - through read-only bind mounts: the data folder, the home's `stack.yaml`, and `/dev`
-    when the VPN needs `/dev/net/tun`.
+    when an app needs a device: `/dev/net/tun` for the VPN, or `/dev/dri` for a media
+    server's `hardware_transcoding`.
 
   It runs as Mediaplane's user, with no capabilities, a read-only root and
   `no-new-privileges`. It never pulls an image, and is removed when it exits. Two limits

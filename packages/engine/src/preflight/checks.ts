@@ -258,7 +258,7 @@ const GPU_FOLDER = '/dev/dri';
 const DEVICE_HINTS: Record<string, string> = {
   '/dev/net/tun': 'load the TUN module: sudo modprobe tun',
   [GPU_FOLDER]:
-    "this host's GPU has no driver loaded (Intel: i915 or xe; check ls /dev/dri), or set hardware_transcoding: false",
+    "this host's GPU has no driver loaded (Intel: i915 or xe; AMD: amdgpu; check ls /dev/dri), or set hardware_transcoding: false",
 };
 
 async function checkDevices(

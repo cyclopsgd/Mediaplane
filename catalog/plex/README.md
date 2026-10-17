@@ -134,15 +134,16 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 ## Changing it
 
 - **In `stack.yaml`,** under `apps.plex`, you can set `port`, `version`, `env`,
-  `server_name` and `hardware_transcoding`. The media server that `media_server` names can't be turned off with
-  `enabled: false`: change `media_server` instead. A different `version` is an untested
+  `server_name` and `hardware_transcoding`. The media server that `media_server` names
+  can't be turned off with `enabled: false`: change `media_server` instead. A different `version` is an untested
   combination, and `plan` warns about it. See the
   [`stack.yaml` reference](../../docs/reference/stack-yaml.md).
 - **What Mediaplane manages** (its name, and its libraries' names, kinds and folders) is
   put back by the next `apply` when changed in Plex. Keep mine comes in Slice 8.
 - **Hardware transcoding** (Intel Quick Sync, or AMD): set
   `hardware_transcoding: true` under `apps.plex`. Mediaplane then gives Plex the
-  host's GPU (`/dev/dri`), and `plan` checks the host has one. What it can't do for
+  host's GPU (all of `/dev/dri`: the render node and the display node, as the image's own
+  guide does), and `plan` checks the host has one. What it can't do for
   you:
   - load the GPU's driver on the host: `ls /dev/dri` should list `renderD128`. Recent
     Intel chips (12th gen, Arc) may need a recent kernel;

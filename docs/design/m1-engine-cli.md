@@ -478,7 +478,8 @@ lock → load+validate → preflight → keys → plan → write files → pull 
    - the data root exists and is writable by `uid`/`gid`;
    - **downloads and media are on the same filesystem**, which hardlinks require
      (compared by `st_dev`);
-   - `/dev/net/tun` is present when a VPN is configured;
+   - `/dev/net/tun` is present when a VPN is configured, and `/dev/dri` (a folder of the
+     GPU's devices) when a media server sets `hardware_transcoding`;
    - the ports to be published are free;
    - the host's private addresses are present when `network.bind: lan` is set
      (§4.2);
@@ -945,7 +946,7 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 - **The host helper does more than addresses.** Inside the container,
   Mediaplane can see neither the host's ports, nor its folders outside the home,
   nor its devices. So the helper container (§4.2) also reports them to
-  preflight: free ports, the data folder, `/dev/net/tun` and free space, and
+  preflight: free ports, the data folder, `/dev/net/tun` or `/dev/dri` and free space, and
   whether the home's `stack.yaml` is the host's own. It runs Mediaplane's own
   image, with read-only mounts, during `init`, `plan` and `apply`. The one
   container created outside the managed project is the unnamed, `--rm` host

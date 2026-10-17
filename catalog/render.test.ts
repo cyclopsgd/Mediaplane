@@ -2,6 +2,7 @@ import {
   composeToYaml,
   emptySecretStore,
   parseConfig,
+  preflightRequest,
   renderCompose,
   renderPrestartFiles,
   resolveStack,
@@ -109,16 +110,55 @@ describe('the real catalog', () => {
     },
   );
 
-  it('refuses hardware_transcoding that is not true or false', () => {
-    const source = SPEC_EXAMPLE.replace(
-      '  seerr: {}\n',
-      '  seerr: {}\n  jellyfin: { hardware_transcoding: intel }\n',
-    );
-    const result = resolve(source);
+  /** The design-spec example on `server`, with `apps.<server>` set to `options`. */
+  const onServer = (server: 'jellyfin' | 'plex', options: string) =>
+    SPEC_EXAMPLE.replace(
+      'media_server: jellyfin',
+      server === 'plex'
+        ? 'media_server: plex\nplex: { token: { env: PLEX_TOKEN } }'
+        : 'media_server: jellyfin',
+    ).replace('  seerr: {}\n', `  seerr: {}\n  ${server}: ${options}\n`);
+
+  it.each(['jellyfin', 'plex'] as const)(
+    'gives %s no GPU with hardware_transcoding: false written out',
+    (server) => {
+      const { compose, diagnostics } = render(
+        onServer(server, '{ hardware_transcoding: false }'),
+      );
+      expect(diagnostics).toEqual([]);
+      expect(compose.services[server]?.devices).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ['jellyfin', 'intel'],
+    ['jellyfin', '"true"'],
+    ['plex', 'intel'],
+    ['plex', '"true"'],
+  ] as const)('refuses %s hardware_transcoding: %s', (server, value) => {
+    const result = resolve(onServer(server, `{ hardware_transcoding: ${value} }`));
     expect(result.stack).toBeUndefined();
     expect(result.diagnostics.map((d) => d.path)).toContain(
-      'apps.jellyfin.hardware_transcoding',
+      `apps.${server}.hardware_transcoding`,
     );
+  });
+
+  it("asks preflight about the host's /dev/dri only with hardware_transcoding", () => {
+    const stackOf = (source: string) => {
+      const result = resolve(source);
+      if (result.stack === undefined) throw new Error(JSON.stringify(result.diagnostics));
+      return result.stack;
+    };
+    const asked = (source: string) =>
+      preflightRequest({
+        stack: stackOf(source),
+        versions: { engine: '29.8.0', compose: '5.5.1' },
+        ownPorts: new Set(),
+      }).stat;
+    expect(asked(onServer('plex', '{ hardware_transcoding: true }'))).toContain(
+      '/dev/dri',
+    );
+    expect(asked(onServer('plex', '{}'))).not.toContain('/dev/dri');
   });
 
   it('publishes a port override on the host side only', () => {

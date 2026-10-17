@@ -53,9 +53,9 @@ Under `apps.<app>`, where `<app>` is one of the apps listed at the end of this p
 
 ## One app's own settings
 
-- `apps.jellyfin.hardware_transcoding` (boolean; default `false`): Give the media server this host's GPU (/dev/dri), for hardware transcoding with Intel Quick Sync or AMD. Turn it on in the app's transcoding settings too; Plex needs Plex Pass for it.
+- `apps.jellyfin.hardware_transcoding` (boolean; default `false`): Give Jellyfin this host's GPU (/dev/dri), for hardware transcoding with Intel Quick Sync or AMD. Turn it on in Jellyfin's transcoding settings too.
 - `apps.plex.server_name` (string): The name Plex shows for this server, in its apps and your plex.tv account. Default Mediaplane.
-- `apps.plex.hardware_transcoding` (boolean; default `false`): Give the media server this host's GPU (/dev/dri), for hardware transcoding with Intel Quick Sync or AMD. Turn it on in the app's transcoding settings too; Plex needs Plex Pass for it.
+- `apps.plex.hardware_transcoding` (boolean; default `false`): Give Plex this host's GPU (/dev/dri), for hardware transcoding with Intel Quick Sync or AMD. Turn it on in Plex's transcoding settings too; Plex needs Plex Pass for it.
 - `apps.qbittorrent.vpn` (boolean; default `true`): Route qBittorrent through Gluetun's VPN, so it has no network when the VPN is down. true needs a vpn: block; false makes plan warn every time.
 - `apps.seerr.sonarr_profile` (string): The Sonarr quality profile Seerr requests with, by name. Unset: HD-1080p, else Any, else Sonarr's first.
 - `apps.seerr.radarr_profile` (string): The Radarr quality profile Seerr requests with, by name. Unset: HD-1080p, else Any, else Radarr's first.

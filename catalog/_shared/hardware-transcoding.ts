@@ -7,13 +7,18 @@ import { z } from 'zod';
  */
 export const GPU_DEVICES = '/dev/dri';
 
-/** `apps.<media server>.hardware_transcoding`: hand the media server the host's GPU. */
-export const hardwareTranscoding = z
-  .boolean()
-  .default(false)
-  .describe(
-    "Give the media server this host's GPU (/dev/dri), for hardware transcoding with Intel Quick Sync or AMD. Turn it on in the app's transcoding settings too; Plex needs Plex Pass for it.",
-  );
+/**
+ * `apps.<media server>.hardware_transcoding`: hand the media server the host's GPU. `also`
+ * is what else the app needs for it, for the stack.yaml reference.
+ */
+export function hardwareTranscoding(app: string, also: string) {
+  return z
+    .boolean()
+    .default(false)
+    .describe(
+      `Give ${app} this host's GPU (/dev/dri), for hardware transcoding with Intel Quick Sync or AMD. Turn it on in ${app}'s transcoding settings too${also}.`,
+    );
+}
 
 /** The devices the media server gets, given its hardware_transcoding option. */
 export function gpuExtras(on: boolean): ServiceExtras {
