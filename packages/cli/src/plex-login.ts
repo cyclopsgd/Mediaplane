@@ -26,6 +26,8 @@ export interface PlexLoginOptions {
   force: boolean;
   /** The longest to wait for the sign-in, in seconds; the link's own life by default. */
   timeout?: string;
+  /** Run by init, whose own next steps follow: say nothing of what to do next. */
+  fromInit?: boolean;
 }
 
 /** Why the sign-in didn't happen, said once; never holds a token. */
@@ -123,7 +125,7 @@ export async function plexLogin(
       saved: shown,
       signedIn: true,
       replaced: existing !== undefined,
-      said: `Signed in. Saved your Plex token in ${shown}. Next: run "mediaplane apply".`,
+      said: `Signed in. Saved your Plex token in ${shown}.${options.fromInit === true ? '' : ' Next: run "mediaplane apply".'}`,
     });
     return 0;
   } catch (cause) {

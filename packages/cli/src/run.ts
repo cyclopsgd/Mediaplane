@@ -534,7 +534,11 @@ export function createProgram(
       }
       setExitCode(
         await init(options, io, host.host, deps.dataFolder, (home) =>
-          plexLogin({ home, json: false, force: false }, io, deps.plexTv(runtime)),
+          plexLogin(
+            { home, json: false, force: false, fromInit: true },
+            io,
+            deps.plexTv(runtime),
+          ),
         ),
       );
     });

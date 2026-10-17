@@ -113,7 +113,8 @@ mediaplane vpn-check    # with a VPN: qBittorrent gets out only through it
 `init` checks the flags it can before its first question, including that it can create
 the home or write into it, and asks again when an answer won't do. A line or two before
 each question says what it is for. Ctrl-D or Ctrl-C at a question stops it, writing
-nothing. Without a terminal it asks nothing: pass the flags in the
+nothing, except at the last one with Plex, "Sign in to Plex now?", which comes once the
+files are written: there it only skips the sign-in. Without a terminal it asks nothing: pass the flags in the
 [CLI reference](../docs/reference/cli.md#mediaplane-init) instead.
 
 - **The data folder.** Run from source, `init` creates it if it is missing and you may,
@@ -147,8 +148,8 @@ nothing. Without a terminal it asks nothing: pass the flags in the
 - **Your Plex token.** With `media_server: plex`, on a terminal, `init` ends by asking
   "Sign in to Plex now?". Yes runs the same sign-in as `mediaplane plex-login`, there and
   then. No, a script, `--json`, or a sign-in that fails leaves it as a next step: run
-  `mediaplane plex-login` before the first `apply`. It prints a link: open it in a browser, on any device, and sign in to
-  Plex. It then saves your token where `plex.token` says (`secrets/plex-token`), readable
+  `mediaplane plex-login` before the first `apply`. It prints a link: open it in a
+  browser, on any device, and sign in to Plex. It then saves your token where `plex.token` says (`secrets/plex-token`), readable
   by you only, and never prints it. It waits as long as the link lasts, 30 minutes, or
   `--timeout` seconds. A saved token that plex.tv still takes is kept, unless you add
   `--force`; one plex.tv refuses (HTTP 401) is replaced. When plex.tv can't say whether
@@ -213,8 +214,8 @@ host
 │                   init, plan, apply
 │                   and vpn-check
 └─ plex.tv helper   seconds, with
-                    Plex: plex-login,
-                    apply
+                    Plex: init,
+                    plex-login, apply
 ```
 
 - **The host helper.** From inside its container, Mediaplane can't see the host's

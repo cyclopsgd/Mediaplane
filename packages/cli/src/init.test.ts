@@ -1109,14 +1109,18 @@ describe('mediaplane init: signing in to Plex', () => {
     expect(code).toBe(0);
     expect(term.questions.at(-1)).toBe(QUESTION);
     expect(await tokenIn(home)).toBe(`${FAKE_PLEX_ACCOUNT.token}\n`);
+    expect((await stat(join(home, 'secrets', 'plex-token'))).mode & 0o777).toBe(0o600);
+    expect((await stat(join(home, 'secrets'))).mode & 0o777).toBe(0o700);
     const shown = term.shown();
     // The files first, then the sign-in, then what is left to do, which it isn't.
     expect(shown.indexOf('Wrote ')).toBeLessThan(shown.indexOf(QUESTION));
     expect(shown.indexOf('https://app.plex.tv/auth#?clientID=')).toBeLessThan(
       shown.indexOf('Next steps:'),
     );
-    expect(shown).toContain('Signed in. Saved your Plex token in secrets/plex-token.');
-    expect(term.stdout()).not.toContain(nextLogin(home));
+    expect(shown).toContain('Signed in. Saved your Plex token in secrets/plex-token.\n');
+    // init's own next steps follow, so plex-login's "Next:" doesn't.
+    expect(shown).not.toContain('Next: run "mediaplane apply"');
+    expect(term.stdout()).not.toContain('mediaplane plex-login');
     expect(shown).not.toContain(FAKE_PLEX_ACCOUNT.token);
   });
 
@@ -1150,6 +1154,29 @@ describe('mediaplane init: signing in to Plex', () => {
     );
   });
 
+  it('keeps the files and the next steps when the sign-in throws', async () => {
+    const home = await newHome();
+    const plexTv = await fakePlexTv();
+    const term = capture([...GENERATE, 'y']);
+    const broken = {
+      ...plexTv.client,
+      createPin: () => Promise.reject(new Error('fake: Docker is not running')),
+    };
+    const code = await run(['init', '--home', home, ...PLEX], term.io, {
+      ...deps(),
+      plexTv: () => broken,
+    });
+    expect(code).toBe(0);
+    expect(await stackIn(home)).toMatchObject({ media_server: 'plex' });
+    expect(term.stderr()).toContain(
+      'the sign-in to Plex stopped: fake: Docker is not running',
+    );
+    expect(term.stdout()).toContain(
+      `Run "mediaplane plex-login" again to sign in to Plex: it saves your Plex token in ${join(home, 'secrets', 'plex-token')}.`,
+    );
+    expect(term.stdout()).toContain('Run "mediaplane plan" to check everything');
+  });
+
   it('keeps the next step when you stop at the question', async () => {
     const home = await newHome();
     const plexTv = await fakePlexTv();
@@ -1172,9 +1199,11 @@ describe('mediaplane init: signing in to Plex', () => {
     const plexTv = await fakePlexTv();
     const withPlexTv = { ...deps(), plexTv: () => plexTv.client };
     const noTerminal = capture();
-    expect(
-      await run(['init', '--home', await newHome(), ...PLEX], noTerminal.io, withPlexTv),
-    ).toBe(0);
+    const quiet = await newHome();
+    expect(await run(['init', '--home', quiet, ...PLEX], noTerminal.io, withPlexTv)).toBe(
+      0,
+    );
+    expect(noTerminal.stdout()).toContain(nextLogin(quiet));
     const json = capture([]);
     expect(
       await run(

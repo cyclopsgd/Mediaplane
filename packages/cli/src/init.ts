@@ -158,7 +158,18 @@ async function offerSignIn(
   });
   if (/^n/i.test(answer.trim())) return 'ask';
   io.stdout('\n');
-  return (await signIn()) === 0 ? 'done' : 'again';
+  // A Docker or helper failure on the way, which plex-login lets through, ends only the
+  // sign-in: the files are written, and the next steps still say what is left to do.
+  try {
+    return (await signIn()) === 0 ? 'done' : 'again';
+  } catch (cause) {
+    printError(
+      `the sign-in to Plex stopped: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { json: false },
+      io,
+    );
+    return 'again';
+  }
 }
 
 type Ask = (question: string) => Promise<string>;

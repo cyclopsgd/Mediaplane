@@ -413,7 +413,8 @@ Controls today:
   only once plex.tv says Plex is yours: Plex's setup asks Plex whether it is claimed
   without it. Of the secrets you give, only an app's key (your Plex token) reaches a setup
   or a resource; the others, such as the VPN key, are only redacted.
-  `mediaplane plex-login` writes it to `plex.token`'s file, 0600, inside a 0700
+  `mediaplane plex-login`, or `init` when you say yes to its sign-in, which runs the
+  same code, writes it to `plex.token`'s file, 0600, inside a 0700
   `secrets/`, never half-written, and prints only a link to sign in with, never the token.
 - A claim token is fetched with your token by the `apply` that first starts Plex, the
   moment before. It goes to Compose through its environment, which the extra file on

@@ -23,7 +23,7 @@ Compose and wires the apps together for you.**
 >   [threat model](docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)
 >   entry says what voids that), and links Seerr to Jellyfin, with both libraries, and to
 >   Sonarr and Radarr, with a quality profile, ready for requests. With Plex instead,
->   `mediaplane plex-login` signs you in to plex.tv and saves your Plex token; `apply`
+>   `mediaplane init` (or `plex-login`) signs you in to plex.tv and saves your Plex token; `apply`
 >   claims Plex for your account before its web UI is published, names it, gives it
 >   its Movies and TV Shows libraries, connects Sonarr and Radarr to it, and signs Seerr
 >   in with your Plex account before Seerr is published, linked to Plex (when `apply`
