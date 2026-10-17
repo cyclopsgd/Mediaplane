@@ -1,4 +1,4 @@
-import { chmod, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import type * as FsPromises from 'node:fs/promises';
 import { join } from 'node:path';
 import { invokingUser, parseConfig } from '@mediaplane/engine';
@@ -1086,6 +1086,86 @@ describe('mediaplane init: the WireGuard key', () => {
       await run(['init', '--home', await newHome(), ...flags, ...vpn], script.io, deps()),
     ).toBe(0);
     expect(script.stdout()).toContain("Put your VPN's WireGuard private key in");
+  });
+});
+
+describe('mediaplane init: your own admin password', () => {
+  const FLAGS = [
+    '--media-server',
+    'jellyfin',
+    '--data',
+    '/srv/data',
+    '--bind',
+    'localhost',
+    '--admin-user',
+    'admin',
+  ];
+  const ASKED =
+    'Your admin password, at least 12 characters (nothing shows as you type; Enter to put it in a file yourself): ';
+  const AGAIN = 'Type it again: ';
+  const PASSWORD = 'fake-correct-horse-1';
+
+  it('asks for it hidden, twice, and saves it 0600 where stack.yaml says', async () => {
+    const home = await newHome();
+    const term = capture(['', 'n'], {}, [PASSWORD, PASSWORD]);
+    expect(await run(['init', '--home', home, ...FLAGS], term.io, deps())).toBe(0);
+    expect(term.hidden).toEqual([ASKED, AGAIN]);
+    const path = join(home, 'secrets', 'admin-password');
+    expect(await readFile(path, 'utf8')).toBe(`${PASSWORD}\n`);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    expect(await stackIn(home)).toMatchObject({
+      admin: { password: { file: 'secrets/admin-password' } },
+    });
+    expect(term.stdout()).toContain('Saved your admin password in ');
+    expect(term.stdout()).not.toContain('Put your admin password');
+    expect(term.shown()).not.toContain(PASSWORD);
+  });
+
+  it('asks again for one too short, or two that differ', async () => {
+    const home = await newHome();
+    const term = capture(['', 'n'], {}, [
+      'fake-short',
+      PASSWORD,
+      'fake-something-else',
+      PASSWORD,
+      PASSWORD,
+    ]);
+    expect(await run(['init', '--home', home, ...FLAGS], term.io, deps())).toBe(0);
+    expect(term.hidden).toEqual([ASKED, ASKED, AGAIN, ASKED, AGAIN]);
+    expect(term.stderr()).toBe(
+      'That has fewer than 12 characters.\n' +
+        "Those don't match. Type your password again.\n",
+    );
+    expect(await readFile(join(home, 'secrets', 'admin-password'), 'utf8')).toBe(
+      `${PASSWORD}\n`,
+    );
+    expect(term.shown()).not.toContain(PASSWORD);
+  });
+
+  it('asks for the file on Enter, as before', async () => {
+    const home = await newHome();
+    const term = capture(['', 'n', ''], {}, ['']);
+    expect(await run(['init', '--home', home, ...FLAGS], term.io, deps())).toBe(0);
+    expect(term.hidden).toEqual([ASKED]);
+    expect(term.questions.at(-1)).toBe(
+      'File holding your password, inside the Mediaplane home [secrets/admin-password]: ',
+    );
+    expect(term.stdout()).toContain(
+      `Put your admin password, at least 12 characters, in ${join(home, 'secrets', 'admin-password')}.`,
+    );
+  });
+
+  it('uses a password file of yours already there, without asking', async () => {
+    const home = await newHome();
+    await mkdir(join(home, 'secrets'), { recursive: true });
+    await writeFile(join(home, 'secrets', 'admin-password'), `${PASSWORD}\n`);
+    const term = capture(['', 'n'], {}, []);
+    expect(await run(['init', '--home', home, ...FLAGS], term.io, deps())).toBe(0);
+    expect(term.hidden).toEqual([]);
+    expect(await stackIn(home)).toMatchObject({
+      admin: { password: { file: 'secrets/admin-password' } },
+    });
+    expect(term.stdout()).not.toContain('Put your admin password');
   });
 });
 

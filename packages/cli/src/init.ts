@@ -66,7 +66,7 @@ export async function init(
     printError(gathered, { json: asJson }, io);
     return 1;
   }
-  const { starter: answers, wireguardKey } = gathered;
+  const { starter: answers, wireguardKey, adminPassword, adminPasswordFound } = gathered;
   const text = starterStack(answers);
   const parsed = parseConfig(text);
   if (!parsed.ok) {
@@ -91,6 +91,15 @@ export async function init(
   const savedKey =
     wireguardKey !== undefined &&
     (await writeFileExclusive(keyPath, `${wireguardKey}\n`, 0o600));
+  const passwordPath =
+    answers.adminPasswordFile === undefined
+      ? undefined
+      : join(home, answers.adminPasswordFile);
+  // The same for a password you typed: 0600, and never over a file that appeared meanwhile.
+  const savedPassword =
+    adminPassword !== undefined &&
+    passwordPath !== undefined &&
+    (await writeFileExclusive(passwordPath, `${adminPassword}\n`, 0o600));
   const data = await dataFolder(answers.dataPath, home, answers.user);
 
   const tokenPath = join(secrets, 'plex-token');
@@ -103,7 +112,7 @@ export async function init(
           `Run "mediaplane plex-login"${plex === 'again' ? ' again' : ''} to sign in to Plex: it saves your Plex token in ${tokenPath}.`,
         ]
       : []),
-    ...(answers.adminPasswordFile === undefined
+    ...(answers.adminPasswordFile === undefined || savedPassword || adminPasswordFound
       ? []
       : [
           `Put your admin password, at least 12 characters, in ${join(home, answers.adminPasswordFile)}.`,
@@ -120,6 +129,7 @@ export async function init(
   }
   io.stdout(`Wrote ${stackPath}.\n`);
   if (savedKey) io.stdout(`Saved your WireGuard private key in ${keyPath}.\n`);
+  if (savedPassword) io.stdout(`Saved your admin password in ${passwordPath}.\n`);
   if (data === 'created') {
     io.stdout(`Created ${answers.dataPath} for your downloads and media.\n`);
   }
@@ -200,6 +210,10 @@ interface Answers {
   starter: StarterAnswers;
   /** Held in memory until it is written to secrets/wg.key: never printed or logged. */
   wireguardKey: string | undefined;
+  /** Typed on a terminal, held until it is written to the password file, the same way. */
+  adminPassword: string | undefined;
+  /** Your password file was already in the usual place, so init used it as it is. */
+  adminPasswordFound: boolean;
 }
 
 async function gatherAnswers(
@@ -217,6 +231,8 @@ async function gatherAnswers(
   let { adminUser, adminPasswordFile } = flags;
   let loginOnLan = options.loginOnLan;
   let wireguardKey: string | undefined;
+  let adminPassword: string | undefined;
+  let adminPasswordFound = false;
   if (ask !== undefined) {
     if (mediaServer === undefined) {
       explain(io, NOTES.mediaServer);
@@ -326,19 +342,32 @@ async function gatherAnswers(
     if (adminPasswordFile === undefined) {
       explain(io, NOTES.adminPassword);
       if (/^n/i.test((await ask('Generate the admin password? [Y/n] ')).trim())) {
-        explain(io, NOTES.passwordFile);
-        adminPasswordFile = await askUntil(
-          ask,
-          io,
-          `File holding your password, inside the Mediaplane home [${DEFAULT_PASSWORD_FILE}]: `,
-          (answer) => {
-            const file = answer || DEFAULT_PASSWORD_FILE;
-            const problem = passwordFileProblem(file);
-            return problem === undefined
-              ? { value: file }
-              : { problem: `That ${problem}.` };
-          },
-        );
+        // Typed, never shown, as the WireGuard key is pasted. A file of yours already in
+        // the usual place is used as it is; Enter asks for a file instead, as before.
+        if (await exists(join(resolve(options.home), DEFAULT_PASSWORD_FILE))) {
+          adminPasswordFile = DEFAULT_PASSWORD_FILE;
+          adminPasswordFound = true;
+        } else {
+          adminPassword =
+            askSecret === undefined ? undefined : await askPassword(askSecret, io);
+          if (adminPassword !== undefined) {
+            adminPasswordFile = DEFAULT_PASSWORD_FILE;
+          } else {
+            explain(io, NOTES.passwordFile);
+            adminPasswordFile = await askUntil(
+              ask,
+              io,
+              `File holding your password, inside the Mediaplane home [${DEFAULT_PASSWORD_FILE}]: `,
+              (answer) => {
+                const file = answer || DEFAULT_PASSWORD_FILE;
+                const problem = passwordFileProblem(file);
+                return problem === undefined
+                  ? { value: file }
+                  : { problem: `That ${problem}.` };
+              },
+            );
+          }
+        }
       }
     }
   }
@@ -364,7 +393,32 @@ async function gatherAnswers(
       adminPasswordFile,
     },
     wireguardKey,
+    adminPassword,
+    adminPasswordFound,
   };
+}
+
+/** The shortest admin password stack.yaml accepts. */
+const MIN_PASSWORD = 12;
+
+/**
+ * Your own admin password, typed twice with nothing shown, or undefined on Enter (put it in
+ * a file yourself). Too short, or two that differ, asks again; it is never printed.
+ */
+async function askPassword(askSecret: Ask, io: Io): Promise<string | undefined> {
+  explain(io, NOTES.ownPassword);
+  for (;;) {
+    const first = await askSecret(
+      `Your admin password, at least ${String(MIN_PASSWORD)} characters (nothing shows as you type; Enter to put it in a file yourself): `,
+    );
+    if (first === '') return undefined;
+    if (first.trim().length < MIN_PASSWORD) {
+      io.stderr(`That has fewer than ${String(MIN_PASSWORD)} characters.\n`);
+      continue;
+    }
+    if ((await askSecret('Type it again: ')) === first) return first;
+    io.stderr("Those don't match. Type your password again.\n");
+  }
 }
 
 /**
@@ -412,6 +466,10 @@ export const NOTES = {
   plexSignIn: [
     'Plex sign-in: init shows a link; sign in to Plex there, in',
     'any browser, and it saves your Plex token for apply.',
+  ],
+  ownPassword: [
+    'Your password: typed twice, and saved for you only in',
+    'secrets/admin-password. It is never shown.',
   ],
   passwordFile: [
     'Your password file: at least 12 characters. Put it there',
