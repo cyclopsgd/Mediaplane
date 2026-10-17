@@ -235,7 +235,7 @@ describe("Plex's first-run setup", () => {
     const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
     expect(failed).toMatchObject({
       kind: 'rejected',
-      message: `Plex at http://plex:32400 (127.0.0.1) is yours, but lets "192.0.2.0/255.255.255.0" in without a sign-in (allowedNetworks). Mediaplane never sets allowedNetworks: this may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), reset allowedNetworks in appdata/plex/${PLEX_PREFERENCES} (delete the attribute, or set it to its default: allowedNetworks ''), then run apply again`,
+      message: `Plex at http://plex:32400 (127.0.0.1) is yours, but lets "192.0.2.0/255.255.255.0" in without a sign-in (allowedNetworks). Mediaplane never sets allowedNetworks: this may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), reset allowedNetworks in appdata/plex/${PLEX_PREFERENCES} (delete the attribute, or else set it to its default as the file writes it: allowedNetworks=""), then run apply again`,
     });
     // Cleared, it is taken.
     state.plex.allowedNetworks = '';
@@ -440,6 +440,23 @@ describe("Plex's first-run setup", () => {
     }
   });
 
+  it("gives each setting's default as Preferences.xml writes it, after deleting the attribute, and says 'this' of one setting", async () => {
+    for (const [settings, id, form] of [
+      [{ enableLocalSecurity: 0 }, 'enableLocalSecurity', 'enableLocalSecurity="-1"'],
+      [{ DlnaEnabled: true }, 'DlnaEnabled', 'DlnaEnabled="0"'],
+    ] as const) {
+      const { api, state, plexTv, ctx, stack } = await plexOf();
+      claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+      state.plex.prefsAnswer = prefsWith(settings);
+      const said = ((await thrown(plexBootstrap.run(api, ADMIN, stack, ctx))) as Error)
+        .message;
+      expect(said).toContain(`: this may have been set while Plex was unclaimed`);
+      expect(said).toContain(
+        `reset ${id} in appdata/plex/${PLEX_PREFERENCES} (delete the attribute, or else set it to its default as the file writes it: ${form}), then run apply again`,
+      );
+    }
+  });
+
   it('names every setting that fails at once, each with its value and its default', async () => {
     const { api, state, plexTv, ctx, stack } = await plexOf();
     claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
@@ -449,7 +466,7 @@ describe("Plex's first-run setup", () => {
     const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
     expect(failed).toMatchObject({
       kind: 'rejected',
-      message: `Plex at http://plex:32400 (127.0.0.1) is yours, but lets "192.0.2.0/24" in without a sign-in (allowedNetworks); has enableLocalSecurity at 0, not -1 or 1, so a client may be let in without a sign-in; has DlnaEnabled at true, not false, and DLNA streams without a sign-in. Mediaplane never sets allowedNetworks, enableLocalSecurity, DlnaEnabled: this may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), reset allowedNetworks, enableLocalSecurity, DlnaEnabled in appdata/plex/${PLEX_PREFERENCES} (delete the attribute, or set it to its default: allowedNetworks '', enableLocalSecurity -1, DlnaEnabled false), then run apply again`,
+      message: `Plex at http://plex:32400 (127.0.0.1) is yours, but lets "192.0.2.0/24" in without a sign-in (allowedNetworks); has enableLocalSecurity at 0, not -1 or 1, so a client may be let in without a sign-in; has DlnaEnabled at true, not false, and DLNA streams without a sign-in. Mediaplane never sets allowedNetworks, enableLocalSecurity, DlnaEnabled: these may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), reset allowedNetworks, enableLocalSecurity, DlnaEnabled in appdata/plex/${PLEX_PREFERENCES} (delete each attribute, or else set each to its default as the file writes it: allowedNetworks="", enableLocalSecurity="-1", DlnaEnabled="0"), then run apply again`,
     });
   });
 

@@ -63,7 +63,7 @@ interface OpenSetting {
   safe: (value: unknown) => boolean;
   /** What a message says of a value that is not safe. */
   says: (value: unknown) => string;
-  /** Its default, for the remedy. */
+  /** Its default, as Preferences.xml writes it (an attribute; a boolean is "0" or "1"). */
   reset: string;
 }
 
@@ -92,21 +92,21 @@ const OPEN_SETTINGS: readonly OpenSetting[] = [
     safe: (value) => value === '',
     says: (value) =>
       `lets ${typeof value === 'string' ? shown(value) : 'networks it does not name'} in without a sign-in (allowedNetworks)`,
-    reset: "allowedNetworks ''",
+    reset: 'allowedNetworks=""',
   },
   {
     id: 'enableLocalSecurity',
     safe: (value) => value === -1 || value === 1,
     says: (value) =>
       `has enableLocalSecurity at ${valueShown(value)}, not -1 or 1, so a client may be let in without a sign-in`,
-    reset: 'enableLocalSecurity -1',
+    reset: 'enableLocalSecurity="-1"',
   },
   {
     id: 'DlnaEnabled',
     safe: (value) => value === false,
     says: (value) =>
       `has DlnaEnabled at ${valueShown(value)}, not false, and DLNA streams without a sign-in`,
-    reset: 'DlnaEnabled false',
+    reset: 'DlnaEnabled="0"',
   },
 ];
 
@@ -284,8 +284,9 @@ export const plexBootstrap: Bootstrap = {
       const problems = open
         .map((o) => o.says(Setting.find((s) => s.id === o.id)?.value))
         .join('; ');
+      const many = open.length > 1;
       throw new AppApiError(
-        `${api.name} at ${api.where} is yours, but ${problems}. Mediaplane never sets ${ids}: this may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), reset ${ids} in appdata/plex/${PREFERENCES} (delete the attribute, or set it to its default: ${open.map((o) => o.reset).join(', ')}), then run apply again`,
+        `${api.name} at ${api.where} is yours, but ${problems}. Mediaplane never sets ${ids}: ${many ? 'these' : 'this'} may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it ("mediaplane status plex" names its container; then "docker stop <container>"), reset ${ids} in appdata/plex/${PREFERENCES} (delete ${many ? 'each attribute' : 'the attribute'}, or else set ${many ? 'each' : 'it'} to its default as the file writes it: ${open.map((o) => o.reset).join(', ')}), then run apply again`,
         { kind: 'rejected' },
       );
     }
