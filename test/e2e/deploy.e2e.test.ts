@@ -483,6 +483,54 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     }
   }, 1_200_000);
 
+  it("reaches plex.tv for plex-login through its helper, on Docker's default bridge, through the proxy", async () => {
+    // A home of its own, inside Mediaplane's, with a Plex stack: plex-login reads plex.token.
+    const plexHome = join(home, 'plex-login');
+    await mkdir(plexHome);
+    await writeFile(
+      join(plexHome, 'stack.yaml'),
+      'version: 1\npaths: { data: /srv/data }\nmedia_server: plex\nplex: { token: { file: secrets/plex-token } }\n',
+    );
+    const result = await mediaplane(
+      'plex-login',
+      '--home',
+      plexHome,
+      '--timeout',
+      '4',
+      '--json',
+    );
+    // A real PIN from plex.tv, asked for and waited on by the helper: nobody signs in. A
+    // plex.tv that is down, or too busy, is said so, from inside the helper too: either
+    // way the path through the proxy and the default bridge was taken, and neither fails
+    // a pull request.
+    expect(result.code, result.stderr).toBe(1);
+    const said = (JSON.parse(result.stdout) as { error: { message: string } }).error
+      .message;
+    const waited =
+      'nobody signed in within 4 seconds; run plex-login again for a new link';
+    expect(
+      said === waited || said.startsWith("couldn't reach plex.tv: "),
+      `plex-login said: ${said}`,
+    ).toBe(true);
+    if (said === waited) {
+      expect(result.stderr).toMatch(
+        /https:\/\/app\.plex\.tv\/auth#\?clientID=mediaplane-[0-9a-f-]{36}&code=\w{25}&/,
+      );
+    }
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      schema: 'mediaplane.error/v1',
+      ok: false,
+    });
+    // Each helper ran, and is gone: none is left, by its label.
+    const left = await nodeExec(
+      'docker',
+      ['ps', '--all', '--quiet', '--filter', 'label=io.mediaplane.helper=plex-tv'],
+      { cwd: '/' },
+    );
+    expect(left.stdout.trim()).toBe('');
+    await rm(plexHome, { recursive: true });
+  });
+
   it('refuses the Docker calls the engine never makes', async () => {
     const containers = await createDockerRuntime({ home, project: STACK }).containers();
     const sonarr = containers.find((c) => c.service === 'sonarr');

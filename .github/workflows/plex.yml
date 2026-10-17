@@ -1,0 +1,84 @@
+name: Plex (nightly)
+
+# Plex can't be signed in from a pull request's CI: this job claims a real Plex with a
+# plex.tv test account's token, kept as the PLEX_TOKEN secret (spec §8.1). It runs on main,
+# on a schedule or by hand, by a maintainer, never for a pull request, so a fork's pull
+# request never sees the secret. Without the secret it does nothing.
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time, never cancelled: a cancelled run could skip its cleanup. Its two jobs
+# run side by side, each with a server of its own.
+concurrency:
+  group: plex-nightly
+  cancel-in-progress: false
+
+jobs:
+  plex:
+    name: Plex end to end (${{ matrix.arch }})
+    # This repository's main only: a dispatch runs the chosen branch's copy of this file,
+    # so the job checks the branch too. Only a maintainer can dispatch it.
+    if: github.repository == 'cyclopsgd/Mediaplane' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    # The secret is in the environment of the two steps that read it, and no other: not
+    # of the install, whose packages' scripts run with the job's environment.
+    steps:
+      - name: Is there a plex.tv token?
+        id: token
+        env:
+          PLEX_TOKEN: ${{ secrets.PLEX_TOKEN }}
+        run: |
+          if [ -z "$PLEX_TOKEN" ]; then
+            echo "No PLEX_TOKEN secret, so there is nothing to test."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: steps.token.outputs.present == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.token.outputs.present == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - if: steps.token.outputs.present == 'true'
+        run: pnpm install --frozen-lockfile
+      # The token goes to a file only this job can read, never onto a command line. The
+      # test hides each value it makes from it (a claim token, Plex's own token) with
+      # ::add-mask::, as GitHub hides only the secret itself.
+      - name: Save the token for the test
+        if: steps.token.outputs.present == 'true'
+        env:
+          PLEX_TOKEN: ${{ secrets.PLEX_TOKEN }}
+        run: |
+          umask 077
+          dir="$(mktemp -d -p "$RUNNER_TEMP")"
+          printf '%s\n' "$PLEX_TOKEN" > "$dir/token"
+          echo "MEDIAPLANE_E2E_PLEX_TOKEN_FILE=$dir/token" >> "$GITHUB_ENV"
+          echo "MEDIAPLANE_E2E_PLEX_SERVERS=$dir/servers" >> "$GITHUB_ENV"
+      - name: Claim, wire and check a Plex stack
+        if: steps.token.outputs.present == 'true'
+        run: pnpm vitest run --config vitest.e2e.config.ts test/e2e/plex.e2e.test.ts
+      # Even when the test failed, or was cancelled: every run claims a new server, and
+      # one left on the account stays there, offline.
+      - name: Remove the servers this run claimed from the test account
+        if: always() && steps.token.outputs.present == 'true'
+        run: pnpm exec tsx test/e2e/plex-cleanup.ts
