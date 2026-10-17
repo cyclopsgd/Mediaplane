@@ -437,6 +437,9 @@ differ, and a `reason` when it is `unknown`.
   token, but didn't trade it at plex.tv while `apply` waited: it couldn't reach plex.tv,
   or the token, which lasts four minutes, ran out first. Plex's log (check 3) says which.
   Run `apply` again: it fetches a new claim token, and starts Plex with it, unpublished.
+  If `plan` also warns that it can't read Plex's `Preferences.xml`, fix that first
+  (check appdata's owner against `user:`): Mediaplane fetches no claim token for a Plex
+  whose file it can't read.
 - **`is claimed, and Mediaplane couldn't tell whether by your plex.tv account`.** plex.tv
   didn't answer (a timeout, an error of its own, no connection), asked Mediaplane to wait
   (HTTP 429), refused the request in a way that isn't about a token (HTTP 403), or the
@@ -555,7 +558,9 @@ differ, and a `reason` when it is `unknown`.
     unpublished, so its web UI can't be reached to change it. Stop Seerr
     (`docker stop mediaplane-seerr-1`, for the stack `mediaplane`), and in
     `appdata/seerr/settings.json` set `plex.ip` to `"plex"`, `plex.port` to `32400` and
-    `plex.useSsl` to `false`, then run `apply`. Seerr reads the file as it starts.
+    `plex.useSsl` to `false`, then run `apply`. Seerr reads the file as it starts, and
+    writes it back when its settings change, so edit it only while Seerr is stopped,
+    and keep it valid JSON.
   - Last, if you did not set Seerr up, start it afresh, as below.
 
   On a Plex stack, `is set up, and Mediaplane couldn't tell whether it is its own` and

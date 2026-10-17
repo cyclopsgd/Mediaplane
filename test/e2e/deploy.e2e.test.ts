@@ -512,7 +512,7 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     expect(
       said === waited ||
         said.startsWith("couldn't reach plex.tv: ") ||
-        said.startsWith('plex.tv answered'),
+        /^plex\.tv answered( with HTTP \d+)?; /.test(said),
       `plex-login said: ${said}`,
     ).toBe(true);
     if (said === waited) {
