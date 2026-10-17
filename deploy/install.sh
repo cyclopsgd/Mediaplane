@@ -2,19 +2,19 @@
 # Mediaplane's installer (deploy/README.md): from a checkout, run ./deploy/install.sh as
 # your normal user. It checks Docker, builds the image, makes the home, writes
 # deploy/.env, starts Mediaplane's container and installs the `mediaplane` command. It
-# uses sudo only where it must: to create the home under /opt and to install the command
-# in /usr/local/bin. Run it again after `git pull` to update; it keeps your deploy/.env
-# and never touches your stack.
+# uses sudo only for what it can't do as you: to create the home under a folder that
+# isn't yours, and to install the command in /usr/local/bin. Run it again after
+# `git pull` to update: it keeps your deploy/.env, home included, and never touches your
+# stack.
 set -eu
 
-here=$(cd "$(dirname "$0")" && pwd)
-root=$(dirname "$here")
-home=${MEDIAPLANE_HOME:-/opt/mediaplane}
-image=${MEDIAPLANE_IMAGE:-mediaplane:local}
-# For the tests only: where the command goes, what runs as root, and the Docker socket.
-bindir=${MEDIAPLANE_BIN_DIR:-/usr/local/bin}
-sudo=${MEDIAPLANE_SUDO:-sudo}
-socket=${MEDIAPLANE_DOCKER_SOCKET:-/var/run/docker.sock}
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+root=$(dirname -- "$here")
+env_file=$here/.env
+# For the tests only: where the command goes, and the Docker socket to look at (the
+# deployment itself always mounts /var/run/docker.sock).
+bindir=${MEDIAPLANE_TEST_BIN_DIR:-/usr/local/bin}
+socket=${MEDIAPLANE_TEST_DOCKER_SOCKET:-/var/run/docker.sock}
 
 say() { printf '%s\n' "$*"; }
 fail() {
@@ -26,10 +26,37 @@ at_least() {
   v=${1#v}
   major=${v%%.*}
   rest=${v#*.}
-  minor=${rest%%.*}
-  case $major$minor in *[!0-9]* | '') return 1 ;; esac
+  minor=${rest%%[!0-9]*}
+  case $major in '' | *[!0-9]*) return 1 ;; esac
+  case $minor in '' | *[!0-9]*) return 1 ;; esac
   [ "$major" -gt "$2" ] || { [ "$major" -eq "$2" ] && [ "$minor" -ge "$3" ]; }
 }
+# The value deploy/.env gives `name`, or nothing.
+from_env_file() {
+  [ -e "$env_file" ] || return 0
+  sed -n "s/^$1=//p" "$env_file" | tail -n 1
+}
+
+# The home: the one deploy/.env names once it exists, so a re-run keeps it.
+kept_home=$(from_env_file MEDIAPLANE_HOME)
+if [ -e "$env_file" ]; then
+  home=${kept_home:-/opt/mediaplane}
+  if [ -n "${MEDIAPLANE_HOME:-}" ] && [ "$MEDIAPLANE_HOME" != "$home" ]; then
+    fail "deploy/.env says the home is $home, but MEDIAPLANE_HOME says $MEDIAPLANE_HOME: unset MEDIAPLANE_HOME, or change deploy/.env, then run this again"
+  fi
+else
+  home=${MEDIAPLANE_HOME:-/opt/mediaplane}
+fi
+case $home in
+  /*) ;;
+  *) fail "the home must be an absolute path, such as /opt/mediaplane, not \"$home\"" ;;
+esac
+case $home in
+  / | *[\"\'\$\#\\\`]* | *'
+'*) fail "the home \"$home\" won't do: use a folder below /, with no quotes, \$, #, \\ or backquotes in its name" ;;
+esac
+image=$(from_env_file MEDIAPLANE_IMAGE)
+image=${image:-${MEDIAPLANE_IMAGE:-mediaplane:local}}
 
 [ "$(id -u)" != 0 ] ||
   fail "run this as your normal user, not root: Mediaplane's container must not run as root, and the installer asks for sudo only where it needs it"
@@ -38,56 +65,66 @@ command -v docker >/dev/null 2>&1 ||
   fail "Docker isn't installed: install Docker Engine 24 or newer, with its Compose plugin, then run this again"
 docker info >/dev/null 2>&1 ||
   fail "Docker isn't answering: start it, and check that your user may use it (docker info says why), then run this again"
-engine=$(docker version --format '{{.Server.Version}}')
+engine=$(docker version --format '{{.Server.Version}}' 2>/dev/null) || engine=
+[ -n "$engine" ] || fail "couldn't read Docker Engine's version (docker version says why)"
 at_least "$engine" 24 0 ||
   fail "Docker Engine $engine is too old: Mediaplane needs 24 or newer"
-compose=$(docker compose version --short 2>/dev/null) ||
+compose=$(docker compose version --short 2>/dev/null) || compose=
+[ -n "$compose" ] ||
   fail "Docker's Compose plugin is missing: install docker-compose-plugin, then run this again"
 at_least "$compose" 2 24 ||
   fail "Docker Compose $compose is too old: Mediaplane needs 2.24 or newer"
-case $(docker info --format '{{.SecurityOptions}}') in
+case $(docker info --format '{{.SecurityOptions}}' 2>/dev/null) in
   *rootless*) fail "this Docker is rootless, which Mediaplane doesn't support yet: use rootful Docker" ;;
 esac
 [ -S "$socket" ] ||
   fail "Docker's socket isn't at $socket, where Mediaplane's socket proxy looks for it"
 
-# The home is yours: Mediaplane runs as you, and writes its stack there.
-if [ ! -d "$home" ]; then
-  if ! mkdir -p "$home" 2>/dev/null; then
-    say "Creating $home, owned by you, needs sudo:"
-    $sudo mkdir -p "$home"
-    $sudo chown "$(id -u):$(id -g)" "$home"
-  fi
+me="$(id -u):$(id -g)"
+# The home is yours: Mediaplane runs as you, and writes its stack there. With sudo, only a
+# folder it has just made is given to you: a plain mkdir fails on one that was there.
+if [ ! -d "$home" ] && ! mkdir -p -- "$home" 2>/dev/null; then
+  say "Creating $home, owned by you, needs sudo:"
+  sudo mkdir -p -- "$(dirname -- "$home")"
+  sudo mkdir -- "$home"
+  sudo chown -- "$me" "$home"
 fi
 [ -w "$home" ] ||
-  fail "$home isn't yours to write: run \"sudo chown $(id -u):$(id -g) $home\" if it holds nothing of someone else's, or set MEDIAPLANE_HOME to a folder of yours, then run this again"
+  fail "$home isn't yours to write: if it holds nothing of anyone else's, run: sudo chown $me \"$home\" (or set MEDIAPLANE_HOME to a folder of yours), then run this again"
 
 if [ "$image" = mediaplane:local ]; then
   say "Building Mediaplane's image from this checkout (a few minutes the first time)..."
-  docker build --tag mediaplane:local "$root"
+  docker build --tag mediaplane:local "$root" ||
+    fail "Mediaplane's image didn't build: the lines above say why"
 fi
 
-if [ -e "$here/.env" ]; then
+if [ -e "$env_file" ]; then
   say "Keeping your deploy/.env as it is."
 else
   tz=$(timedatectl show --property=Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || true)
+  # Whole or not at all: an interrupted write leaves no half deploy/.env to keep.
   {
     say "MEDIAPLANE_IMAGE=$image"
     say "MEDIAPLANE_UID=$(id -u)"
     say "MEDIAPLANE_GID=$(id -g)"
-    say "DOCKER_GID=$(stat -c %g "$socket")"
+    say "DOCKER_GID=$(stat -L -c %g "$socket")"
     say "TZ=$tz"
     if [ "$home" != /opt/mediaplane ]; then say "MEDIAPLANE_HOME=$home"; fi
-  } >"$here/.env"
+  } >"$env_file.new"
+  mv -- "$env_file.new" "$env_file"
   say "Wrote deploy/.env."
 fi
 
-docker compose -f "$here/mediaplane.compose.yaml" up -d
+# deploy/.env decides: the same names exported in this shell would override it.
+(
+  unset MEDIAPLANE_IMAGE MEDIAPLANE_UID MEDIAPLANE_GID DOCKER_GID TZ MEDIAPLANE_HOME
+  docker compose -f "$here/mediaplane.compose.yaml" up -d
+)
 
 if ! cmp -s "$here/mediaplane" "$bindir/mediaplane"; then
   if ! install -m 0755 "$here/mediaplane" "$bindir/mediaplane" 2>/dev/null; then
     say "Installing the mediaplane command in $bindir needs sudo:"
-    $sudo install -m 0755 "$here/mediaplane" "$bindir/mediaplane"
+    sudo install -m 0755 "$here/mediaplane" "$bindir/mediaplane"
   fi
 fi
 found=$(command -v mediaplane 2>/dev/null || true)
@@ -101,6 +138,7 @@ if [ -e "$home/stack.yaml" ]; then
   say "Next: \"mediaplane plan\" checks your stack, then \"mediaplane apply\"."
   exit 0
 fi
+if [ "$home" = /opt/mediaplane ]; then init=init; else init="init --home \"$home\""; fi
 if [ -t 0 ] && [ -t 1 ]; then
   printf '\nSet up your stack now with "mediaplane init"? [Y/n] '
   read -r answer || answer=n
@@ -113,5 +151,4 @@ if [ -t 0 ] && [ -t 1 ]; then
   esac
 fi
 say ""
-if [ "$home" = /opt/mediaplane ]; then init=init; else init="init --home $home"; fi
-say "Next: \"mediaplane $init\" asks a few questions and writes your stack."
+say "Next: run mediaplane $init. It asks a few questions and writes your stack."

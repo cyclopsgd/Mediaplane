@@ -59,11 +59,19 @@ cd Mediaplane
 - starts Mediaplane's container, and installs the `mediaplane` command in
   `/usr/local/bin`.
 
-It asks for `sudo` only to create the home under `/opt` and to install the command. With
-no `stack.yaml` yet, on a terminal, it ends by offering to run `mediaplane init`. Run it
-again after `git pull` to update. It keeps your `deploy/.env` as it is and never touches
-your stack. If `mediaplane` then runs something else in your shell, `type -a mediaplane`
-shows what, such as an old alias.
+It asks for `sudo` only where it can't do the job as you: to create the home under a
+folder that isn't yours, such as `/opt`, and to install the command. With `sudo` it gives
+you only a home it has just created, never a folder that was already there. With no
+`stack.yaml` yet, on a terminal, it ends by offering to run `mediaplane init`.
+
+- **Another home:** set `MEDIAPLANE_HOME=/srv/mediaplane` for the first run. It must be
+  an absolute path, without quotes, `$`, `#` or backslashes. The installer writes it into
+  `deploy/.env`, and later runs keep it from there.
+- **Updating:** run it again after `git pull`. It rebuilds the image, keeps your
+  `deploy/.env` as it is, and never touches your stack.
+- **An image of your own:** set `MEDIAPLANE_IMAGE` and it builds nothing.
+- **If `mediaplane` then runs something else** in your shell, `type -a mediaplane` shows
+  what, such as an old alias.
 
 ### By hand
 
@@ -95,7 +103,7 @@ cat > deploy/.env <<EOF
 MEDIAPLANE_IMAGE=mediaplane:local
 MEDIAPLANE_UID=$(id -u)
 MEDIAPLANE_GID=$(id -g)
-DOCKER_GID=$(stat -c %g /var/run/docker.sock)
+DOCKER_GID=$(stat -L -c %g /var/run/docker.sock)
 TZ=$(timedatectl show --property=Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null)
 EOF
 docker compose -f deploy/mediaplane.compose.yaml up -d
@@ -369,11 +377,13 @@ Each item is a message you may see, then what to do.
 
 - `required variable … is missing a value`
 
-  Create `deploy/.env`, as in [Install](#install).
+  Run `./deploy/install.sh`, which writes it, or create it by hand, as in
+  [By hand](#by-hand).
 
 - `bind source path does not exist: /opt/mediaplane`
 
-  Create the home first, as in [Install](#install).
+  Run `./deploy/install.sh`, which creates it, or create it by hand, as in
+  [By hand](#by-hand).
 
 - `the Mediaplane home … is not the same folder on the Docker host`
 
@@ -536,7 +546,12 @@ only after `apply`, because `plan` joins the network to ask the apps. Bring
 `docker compose -f deploy/mediaplane.compose.yaml down` removes Mediaplane and the proxy,
 and takes Mediaplane off the stack's wiring network. Your stack keeps running. The
 command in the header of `/opt/mediaplane/generated/compose.yaml` manages it without
-Mediaplane.
+Mediaplane. Then remove the command and the deployment's settings:
+
+```bash
+sudo rm /usr/local/bin/mediaplane
+rm deploy/.env
+```
 
 That command uses your host's Compose. If it is not the version in Mediaplane's image
 (5.5.1), its first `up -d` may recreate most apps once, for the reason in Updating.

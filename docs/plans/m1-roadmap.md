@@ -27,6 +27,10 @@ Detailed plans so far:
 Where M1 stands (the README shows the same):
 
 - **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4, S5, S6 and S7.
+- **Since S7 (2026-10-17), outside the slices** by the lighter route for small changes
+  (test-first, one review, CI): `hardware_transcoding` for Plex and Jellyfin, `init`
+  offering the Plex sign-in and asking for your own admin password, and
+  `deploy/install.sh`.
 - **Next:** S8 (drift detection).
 - **After that:** S9.
 
@@ -729,6 +733,11 @@ password, which are S3c's (and listed again below).
 
 **Not scheduled yet:**
 
+- **Default quality settings for Sonarr and Radarr** (owner to discuss, 2026-10-17).
+  Mediaplane leaves the arrs' quality profiles as they ship, and only picks Seerr's
+  (`HD-1080p`, else `Any`). Decide the default (resolution, sources, size limits,
+  language), and whether Mediaplane sets a profile of its own, offers presets in
+  `init`, or leaves it to Recyclarr (M4); and how drift treats a profile changed by hand.
 - **Use a media server you already run** (possible future feature, 2026-10-17). Two
   levels:
   - **Use it as it is:** an `external` media server, given by address and token.

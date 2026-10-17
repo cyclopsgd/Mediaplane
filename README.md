@@ -78,6 +78,8 @@ Mediaplane does that part for you:
 | Sign Seerr in through Jellyfin before it is published, and link it                | Done         |
 | Sign in to Plex (`plex-login`), and claim Plex before it is published             | Done         |
 | Plex's libraries and links, and Seerr signed in with your Plex account            | Done         |
+| Guided install: `install.sh`, then `init` asks for everything, Plex sign-in too   | Done         |
+| Hardware transcoding for Plex or Jellyfin (`hardware_transcoding`)                | Done         |
 | Detect manual changes and offer Re-apply or "Keep mine"                           | Planned      |
 | Web panel with a setup wizard                                                     | Planned (M2) |
 
@@ -542,7 +544,9 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
 - **Merged:** S1 (the pure core), S2a (`plan` against a real host), S2b (`apply`), S2c
   (packaging), S3a (the shared admin and pre-start files), S3d (the VPN's kill-switch
   test and `vpn-check`), S3b (the wiring framework), S3c (the download path), S4
-  (indexers), S5 (Jellyfin), S6 (requests) and S7 (Plex).
+  (indexers), S5 (Jellyfin), S6 (requests) and S7 (Plex). Since S7, smaller changes
+  have added a guided install (`deploy/install.sh`, and `init` asking for your own admin
+  password and signing you in to Plex) and hardware transcoding.
 - **Next:** S8 (drift detection).
 - **After that:** S9: the release.
 

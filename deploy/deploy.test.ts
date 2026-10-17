@@ -333,26 +333,37 @@ describe('the host shim', () => {
 });
 
 describe('the installer', () => {
+  interface SandboxOptions {
+    engine?: string;
+    compose?: string;
+    rootless?: boolean;
+    uid?: string;
+    buildFails?: boolean;
+    /** deploy/.env's text, when one is already there. */
+    env?: string;
+    /** MEDIAPLANE_HOME for the run: the sandbox's home by default, null for unset. */
+    homeVar?: string | null;
+    /** The home's parent: yours to write, not yours, or not even yours to look into. */
+    parent?: 'open' | 'locked' | 'hidden';
+    /** The home itself, made beforehand: missing, there, or there and not yours. */
+    home?: 'missing' | 'there' | 'locked';
+  }
+
   /**
-   * A checkout of its own, with stand-ins first on PATH: docker answers as `versions` say and
-   * logs every call, sudo logs and runs, and id answers `uid`. The home and the command's
-   * folder are under the same temporary folder, and the Docker socket is a real socket.
+   * A checkout of its own, with stand-ins first on PATH: docker answers as told and logs
+   * every call, and sudo logs, opens the home's parent (as root would see it) and runs the
+   * rest as you. id says `uid` when given. The home, under `parent/`, and the command's
+   * folder are in one temporary folder, and the Docker socket is a real socket.
    */
-  async function sandbox(
-    options: {
-      engine?: string;
-      compose?: string;
-      rootless?: boolean;
-      uid?: string;
-      env?: string;
-      home?: 'missing' | 'locked';
-    } = {},
-  ) {
-    const top = mkdtempSync(join(tmpdir(), 'mediaplane-install-'));
+  async function sandbox(options: SandboxOptions = {}) {
+    const top = mkdtempSync(join(tmpdir(), 'mp-install-'));
     const deploy = join(top, 'checkout', 'deploy');
     const bin = join(top, 'bin');
-    const commands = join(top, 'usr-local-bin');
-    for (const dir of [deploy, bin, commands]) mkdirSync(dir, { recursive: true });
+    const commands = join(top, 'commands');
+    const parent = join(top, 'parent');
+    const home = join(parent, 'home');
+    for (const dir of [deploy, bin, commands, parent])
+      mkdirSync(dir, { recursive: true });
     for (const name of ['install.sh', 'mediaplane', 'mediaplane.compose.yaml']) {
       copyFileSync(
         fileURLToPath(new URL(`./${name}`, import.meta.url)),
@@ -362,9 +373,11 @@ describe('the installer', () => {
     chmodSync(join(deploy, 'install.sh'), 0o755);
     chmodSync(join(deploy, 'mediaplane'), 0o755);
     if (options.env !== undefined) writeFileSync(join(deploy, '.env'), options.env);
+    if (options.home === 'there' || options.home === 'locked') mkdirSync(home);
+    if (options.home === 'locked') chmodSync(home, 0o555);
+    if (options.parent === 'locked') chmodSync(parent, 0o555);
+    if (options.parent === 'hidden') chmodSync(parent, 0o600);
     const log = join(top, 'calls.log');
-    const engine = options.engine ?? '29.8.0';
-    const compose = options.compose ?? '2.38.2';
     const security =
       options.rootless === true ? '[name=seccomp name=rootless]' : '[name=seccomp]';
     writeFileSync(
@@ -372,9 +385,10 @@ describe('the installer', () => {
       `#!/bin/sh
 printf 'docker %s\\n' "$*" >> '${log}'
 case "$*" in
-  'version --format {{.Server.Version}}') echo '${engine}' ;;
-  'compose version --short') echo '${compose}' ;;
+  'version --format {{.Server.Version}}') echo '${options.engine ?? '29.8.0'}' ;;
+  'compose version --short') echo '${options.compose ?? '2.38.2'}' ;;
   'info --format {{.SecurityOptions}}') echo '${security}' ;;
+  build*) exit ${options.buildFails === true ? '1' : '0'} ;;
 esac
 exit 0
 `,
@@ -382,7 +396,7 @@ exit 0
     );
     writeFileSync(
       join(bin, 'sudo'),
-      `#!/bin/sh\nprintf 'sudo %s\\n' "$*" >> '${log}'\nexec "$@"\n`,
+      `#!/bin/sh\nprintf 'sudo %s\\n' "$*" >> '${log}'\nchmod 755 '${parent}'\nexec "$@"\n`,
       { mode: 0o755 },
     );
     if (options.uid !== undefined) {
@@ -392,24 +406,25 @@ exit 0
         { mode: 0o755 },
       );
     }
-    const home = join(top, 'home');
-    if (options.home === 'locked') {
-      mkdirSync(home);
-      chmodSync(home, 0o555);
-    }
     const socketPath = join(top, 'docker.sock');
     const server = createServer();
     await new Promise<void>((done) => server.listen(socketPath, done));
-    const runIt = () => {
+    // Your own MEDIAPLANE_* settings stay out of the run.
+    const env: NodeJS.ProcessEnv = Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([name]) => !name.startsWith('MEDIAPLANE_') && name !== 'DOCKER_GID',
+      ),
+    );
+    const homeVar = options.homeVar === undefined ? home : options.homeVar;
+    const run = () => {
       const result = spawnSync(join(deploy, 'install.sh'), [], {
         encoding: 'utf8',
         env: {
-          ...process.env,
+          ...env,
           PATH: `${bin}:${commands}:${process.env.PATH ?? ''}`,
-          MEDIAPLANE_HOME: home,
-          MEDIAPLANE_BIN_DIR: commands,
-          MEDIAPLANE_DOCKER_SOCKET: socketPath,
-          MEDIAPLANE_IMAGE: '',
+          ...(homeVar === null ? {} : { MEDIAPLANE_HOME: homeVar }),
+          MEDIAPLANE_TEST_BIN_DIR: commands,
+          MEDIAPLANE_TEST_DOCKER_SOCKET: socketPath,
         },
       });
       return {
@@ -421,11 +436,30 @@ exit 0
     };
     const cleanup = () => {
       server.close();
-      if (options.home === 'locked') chmodSync(home, 0o755);
+      chmodSync(parent, 0o755);
+      if (existsSync(home)) chmodSync(home, 0o755);
       rmSync(top, { recursive: true, force: true });
     };
-    return { top, deploy, home, commands, run: runIt, cleanup };
+    return { top, deploy, parent, home, commands, run, cleanup };
   }
+  type Sandbox = Awaited<ReturnType<typeof sandbox>>;
+
+  /** Runs `test` in a sandbox, and always cleans it up. */
+  const inSandbox = async (options: SandboxOptions, test: (box: Sandbox) => void) => {
+    const box = await sandbox(options);
+    try {
+      test(box);
+    } finally {
+      box.cleanup();
+    }
+  };
+  const changedNothing = (box: Sandbox, calls: string[]) => {
+    expect(calls.some((call) => / build | up -d/.test(` ${call}`))).toBe(false);
+    expect(calls.some((call) => call.startsWith('sudo'))).toBe(false);
+    expect(existsSync(join(box.deploy, '.env'))).toBe(false);
+  };
+  // Run as root, the sandbox's locked folders lock nothing, and the installer refuses.
+  const asYou = process.getuid?.() !== 0;
 
   it('is executable, and plain sh', () => {
     expect(statSync(INSTALL).mode & 0o111).not.toBe(0);
@@ -433,100 +467,135 @@ exit 0
     expect(spawnSync('sh', ['-n', INSTALL]).status).toBe(0);
   });
 
-  it('builds, makes the home, writes deploy/.env, starts Mediaplane and installs the command', async () => {
-    const box = await sandbox();
-    try {
-      const result = box.run();
-      expect(result.code, result.err).toBe(0);
-      expect(result.calls).toContain(
-        `docker build --tag mediaplane:local ${join(box.top, 'checkout')}`,
-      );
-      expect(result.calls).toContain(
-        `docker compose -f ${join(box.deploy, 'mediaplane.compose.yaml')} up -d`,
-      );
-      expect(statSync(box.home).isDirectory()).toBe(true);
-      const env = readFileSync(join(box.deploy, '.env'), 'utf8');
-      expect(env).toContain('MEDIAPLANE_IMAGE=mediaplane:local\n');
-      expect(env).toMatch(/^MEDIAPLANE_UID=\d+$/m);
-      expect(env).toMatch(/^DOCKER_GID=\d+$/m);
-      expect(env).toContain(`MEDIAPLANE_HOME=${box.home}\n`);
-      expect(readFileSync(join(box.commands, 'mediaplane'), 'utf8')).toBe(
-        readFileSync(SHIM, 'utf8'),
-      );
-      // Not on a terminal: it says what's next rather than asking.
-      expect(result.out).toContain(
-        `Next: "mediaplane init --home ${box.home}" asks a few questions`,
-      );
-      // Everything went in without root here, so it never asked for sudo.
-      expect(result.calls.filter((call) => call.startsWith('sudo'))).toEqual([]);
-    } finally {
-      box.cleanup();
-    }
-  });
+  it.runIf(asYou)(
+    'builds, makes the home, writes deploy/.env, starts Mediaplane and installs the command',
+    () =>
+      inSandbox({}, (box) => {
+        const result = box.run();
+        expect(result.code, result.err).toBe(0);
+        expect(result.calls).toContain(
+          `docker build --tag mediaplane:local ${join(box.top, 'checkout')}`,
+        );
+        expect(result.calls).toContain(
+          `docker compose -f ${join(box.deploy, 'mediaplane.compose.yaml')} up -d`,
+        );
+        expect(statSync(box.home).isDirectory()).toBe(true);
+        const env = readFileSync(join(box.deploy, '.env'), 'utf8');
+        expect(env).toContain('MEDIAPLANE_IMAGE=mediaplane:local\n');
+        expect(env).toMatch(/^MEDIAPLANE_UID=\d+$/m);
+        expect(env).toMatch(/^DOCKER_GID=\d+$/m);
+        expect(env).toContain(`MEDIAPLANE_HOME=${box.home}\n`);
+        expect(readFileSync(join(box.commands, 'mediaplane'), 'utf8')).toBe(
+          readFileSync(SHIM, 'utf8'),
+        );
+        // Not on a terminal: it says what's next rather than asking.
+        expect(result.out).toContain(`Next: run mediaplane init --home "${box.home}".`);
+        // Everything went in as you here, so it never asked for sudo.
+        expect(result.calls.filter((call) => call.startsWith('sudo'))).toEqual([]);
+      }),
+  );
 
-  it('keeps a deploy/.env that is there, and says plan next once there is a stack', async () => {
-    const box = await sandbox({ env: 'MEDIAPLANE_IMAGE=mediaplane:local\nTZ=Etc/UTC\n' });
-    try {
-      mkdirSync(box.home);
-      writeFileSync(join(box.home, 'stack.yaml'), 'version: 1\n');
+  it.runIf(asYou)(
+    "uses sudo for a home under a folder that isn't yours, and gives you only that",
+    () =>
+      inSandbox({ parent: 'locked' }, (box) => {
+        const result = box.run();
+        expect(result.code, result.err).toBe(0);
+        expect(result.calls.filter((call) => call.startsWith('sudo'))).toEqual([
+          `sudo mkdir -p -- ${box.parent}`,
+          `sudo mkdir -- ${box.home}`,
+          expect.stringMatching(new RegExp(`^sudo chown -- \\d+:\\d+ ${box.home}$`)),
+        ]);
+      }),
+  );
+
+  it.runIf(asYou)('never gives you a home that was already there, unseen', () =>
+    inSandbox({ parent: 'hidden', home: 'there' }, (box) => {
       const result = box.run();
-      expect(result.code, result.err).toBe(0);
-      expect(readFileSync(join(box.deploy, '.env'), 'utf8')).toBe(
-        'MEDIAPLANE_IMAGE=mediaplane:local\nTZ=Etc/UTC\n',
+      expect(result.code).not.toBe(0);
+      expect(result.calls.some((call) => call.startsWith('sudo chown'))).toBe(false);
+      expect(result.calls.some((call) => call.includes('up -d'))).toBe(false);
+    }),
+  );
+
+  it.runIf(asYou)(
+    'keeps deploy/.env and the home it names, and says plan next once there is a stack',
+    () =>
+      inSandbox({ homeVar: null }, (box) => {
+        const kept = `MEDIAPLANE_IMAGE=mediaplane:local\nTZ=Etc/UTC\nMEDIAPLANE_HOME=${box.home}\n`;
+        writeFileSync(join(box.deploy, '.env'), kept);
+        mkdirSync(box.home);
+        writeFileSync(join(box.home, 'stack.yaml'), 'version: 1\n');
+        const result = box.run();
+        expect(result.code, result.err).toBe(0);
+        expect(readFileSync(join(box.deploy, '.env'), 'utf8')).toBe(kept);
+        expect(result.out).toContain('Keeping your deploy/.env as it is.');
+        expect(result.out).toContain('Next: "mediaplane plan" checks your stack');
+        expect(result.calls.some((call) => call.includes('/opt/mediaplane'))).toBe(false);
+      }),
+  );
+
+  it('refuses a MEDIAPLANE_HOME that differs from the home deploy/.env keeps', () =>
+    inSandbox({ env: 'MEDIAPLANE_HOME=/srv/fake-elsewhere\n' }, (box) => {
+      const result = box.run();
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(
+        'deploy/.env says the home is /srv/fake-elsewhere, but MEDIAPLANE_HOME says',
       );
-      expect(result.out).toContain('Keeping your deploy/.env as it is.');
-      expect(result.out).toContain('Next: "mediaplane plan" checks your stack');
-    } finally {
-      box.cleanup();
-    }
-  });
+      expect(result.calls).toEqual([]);
+    }));
 
   it.each([
+    [{ homeVar: 'relative/home' }, 'the home must be an absolute path'],
+    [{ homeVar: '/srv/a$b' }, "won't do: use a folder below /"],
+    [{ homeVar: '/' }, "won't do: use a folder below /"],
     [{ uid: '0' }, 'run this as your normal user, not root'],
     [
       { engine: '23.0.6' },
       'Docker Engine 23.0.6 is too old: Mediaplane needs 24 or newer',
     ],
+    [{ engine: '' }, "couldn't read Docker Engine's version"],
     [
       { compose: 'v2.20.3' },
       'Docker Compose v2.20.3 is too old: Mediaplane needs 2.24 or newer',
     ],
     [{ rootless: true }, 'this Docker is rootless'],
-  ] as const)('refuses %o before it changes anything', async (options, said) => {
-    const box = await sandbox(options);
-    try {
+  ] as const)('refuses %o before it changes anything', (options, said) =>
+    inSandbox(options, (box) => {
       const result = box.run();
       expect(result.code).toBe(1);
       expect(result.err).toContain(said);
-      expect(result.calls.some((call) => / build | up -d/.test(` ${call}`))).toBe(false);
-      expect(existsSync(join(box.deploy, '.env'))).toBe(false);
-      expect(existsSync(box.home)).toBe(false);
-    } finally {
-      box.cleanup();
-    }
-  });
+      changedNothing(box, result.calls);
+    }),
+  );
 
-  it('accepts Compose 5 and Engine 28', async () => {
-    const box = await sandbox({ engine: '28.5.1', compose: '5.5.1' });
-    try {
+  it.runIf(asYou)(
+    'stops at a build that fails, before deploy/.env or the container',
+    () =>
+      inSandbox({ buildFails: true }, (box) => {
+        const result = box.run();
+        expect(result.code).toBe(1);
+        expect(result.err).toContain("Mediaplane's image didn't build");
+        expect(existsSync(join(box.deploy, '.env'))).toBe(false);
+        expect(result.calls.some((call) => call.includes('up -d'))).toBe(false);
+      }),
+  );
+
+  it.runIf(asYou)('accepts Compose 5 and Engine 28', () =>
+    inSandbox({ engine: '28.5.1', compose: '5.5.1' }, (box) => {
       expect(box.run().code).toBe(0);
-    } finally {
-      box.cleanup();
-    }
-  });
+    }),
+  );
 
-  it.runIf(process.getuid?.() !== 0)(
+  it.runIf(asYou)(
     'stops, with the command to run, at a home that is not yours to write',
-    async () => {
-      const box = await sandbox({ home: 'locked' });
-      try {
+    () =>
+      inSandbox({ home: 'locked' }, (box) => {
         const result = box.run();
         expect(result.code).toBe(1);
         expect(result.err).toContain(`${box.home} isn't yours to write`);
+        expect(result.err).toContain(`sudo chown`);
         expect(result.calls.some((call) => call.includes('up -d'))).toBe(false);
-      } finally {
-        box.cleanup();
-      }
-    },
+      }),
   );
 });
