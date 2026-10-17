@@ -10,14 +10,19 @@ import {
 import { z } from 'zod';
 import { secretOf } from '../_shared/secret';
 import { LIBRARIES } from '../jellyfin/integration';
+import { LIBRARIES as PLEX_LIBRARIES } from '../plex/integration';
 import { ROOT_FOLDER as MOVIES } from '../radarr/integration';
 import { ROOT_FOLDER as TV } from '../sonarr/integration';
 import { heldHost, jellyfinSettings as heldJellyfin } from './jellyfin';
+import { heldPlexHost, plexSettings as heldPlex } from './plex';
 
 const SETTINGS = '/api/v1/settings';
 
 /** The Jellyfin libraries Seerr has enabled: those Mediaplane makes, by name, in order. */
 const WANTED = LIBRARIES.map((library) => library.name);
+
+/** The Plex libraries Seerr has enabled: those Mediaplane makes, by name, in order. */
+const WANTED_PLEX = PLEX_LIBRARIES.map((library) => library.name);
 
 /**
  * The stack's own address for app `id`, and its key as a secret: the only place the
@@ -42,11 +47,14 @@ function stackApp(
 const library = z.looseObject({ id: z.string(), name: z.string(), enabled: z.boolean() });
 const jellyfinSettings = heldJellyfin.extend({ libraries: z.array(library) });
 
-/** Which of Mediaplane's libraries Seerr has enabled, as one list: the managed field. */
-function enabledOf(libraries: readonly z.infer<typeof library>[]): string {
-  return WANTED.filter((name) =>
-    libraries.some((held) => held.name === name && held.enabled),
-  ).join(',');
+/** Which of Mediaplane's libraries (`wanted`) Seerr has enabled, as one list. */
+function enabledOf(
+  libraries: readonly z.infer<typeof library>[],
+  wanted: readonly string[] = WANTED,
+): string {
+  return wanted
+    .filter((name) => libraries.some((held) => held.name === name && held.enabled))
+    .join(',');
 }
 
 /**
@@ -81,25 +89,32 @@ async function saveJellyfin(api: AppApi, desired: DesiredResource): Promise<void
 }
 
 /**
- * Enable Mediaplane's libraries in Seerr: Seerr learns Jellyfin's libraries by syncing
- * them, which keeps those it has enabled, and enables them one at a time. One it finds
- * no library of the name is refused: the Jellyfin library may have been renamed.
+ * Enable Mediaplane's libraries in Seerr, of Jellyfin or of Plex: Seerr learns the media
+ * server's libraries by syncing them, which keeps those it has enabled, and enables them
+ * one at a time. One it finds no library of the name is refused: the library may have
+ * been renamed in the media server.
  */
-async function enableLibraries(api: AppApi): Promise<void> {
-  await api.submit('POST', `${SETTINGS}/jellyfin/library/sync`);
-  const synced = await api.get(`${SETTINGS}/jellyfin/library`, z.array(library));
-  for (const name of WANTED) {
+async function enableLibraries(
+  api: AppApi,
+  server: { path: 'jellyfin' | 'plex'; name: string; wanted: readonly string[] } = {
+    path: 'jellyfin',
+    name: 'Jellyfin',
+    wanted: WANTED,
+  },
+): Promise<void> {
+  const at = `${SETTINGS}/${server.path}/library`;
+  await api.submit('POST', `${at}/sync`);
+  const synced = await api.get(at, z.array(library));
+  for (const name of server.wanted) {
     const held = synced.find((l) => l.name === name);
     if (held === undefined) {
       throw new AppApiError(
-        `${api.name} at ${api.where} finds no Jellyfin library named ${name} (POST ${SETTINGS}/jellyfin/library/sync)`,
+        `${api.name} at ${api.where} finds no ${server.name} library named ${name} (POST ${at}/sync)`,
         { kind: 'rejected' },
       );
     }
     if (!held.enabled) {
-      await api.put(`${SETTINGS}/jellyfin/library/${encodeURIComponent(held.id)}`, {
-        enabled: true,
-      });
+      await api.put(`${at}/${encodeURIComponent(held.id)}`, { enabled: true });
     }
   }
 }
@@ -159,6 +174,78 @@ const mediaServer: ResourceSpec = {
     // Another Jellyfin has other library ids, though the names match: sync them again.
     if (moved || observed.fields.libraries !== desired.fields.libraries) {
       await enableLibraries(api);
+    }
+  },
+};
+
+const PLEX = { path: 'plex', name: 'Plex', wanted: WANTED_PLEX } as const;
+
+const plexSettings = heldPlex.extend({ libraries: z.array(library) });
+
+/**
+ * Point Seerr at the stack's Plex, without TLS: Seerr saves it only once it has reached
+ * Plex there with its admin's token (your plex.tv account's, from its first sign-in), and
+ * asked it who it is. No key goes in these settings: Seerr holds none of Mediaplane's.
+ */
+async function savePlex(api: AppApi, desired: DesiredResource): Promise<void> {
+  await api.submit('POST', `${SETTINGS}/plex`, {
+    ip: desired.fields.hostname,
+    port: desired.fields.port,
+    useSsl: false,
+  });
+}
+
+/**
+ * Seerr's media server on a Plex stack (spec §6.2): Plex, at its service and container
+ * port, without TLS, and its Movies and TV Shows libraries enabled. Seerr reaches Plex
+ * with the token its admin signed in with, your plex.tv account's, which Mediaplane gives
+ * it in its first sign-in (bootstrap.ts), not in these settings: the link holds no secret
+ * of Mediaplane's, so none is checked here. With TLS, `hostname` is observed as the URL
+ * Seerr calls, so it differs, and the update puts the stack's address back.
+ * - `libraries` lists which of Mediaplane's are enabled; a library you enable is yours.
+ * - It requires Plex's name and libraries, and Seerr comes after Plex.
+ */
+const mediaServerPlex: ResourceSpec = {
+  name: 'media_server_plex',
+  fields: ['hostname', 'port', 'libraries'],
+  secrets: [],
+  requires: ['plex.server', 'plex.library_movies', 'plex.library_tv'],
+  desired: ({ stack }) => {
+    const at = stackAddress(stack, 'plex');
+    if (at === undefined) return undefined;
+    return {
+      name: 'Plex',
+      fields: { hostname: at.host, port: at.port, libraries: WANTED_PLEX.join(',') },
+      secrets: {},
+    };
+  },
+  async observe(api) {
+    const held = await api.get(`${SETTINGS}/plex`, plexSettings);
+    return held.ip === ''
+      ? undefined
+      : {
+          id: null,
+          name: 'Plex',
+          fields: {
+            hostname: heldPlexHost(held),
+            port: held.port,
+            libraries: enabledOf(held.libraries, WANTED_PLEX),
+          },
+        };
+  },
+  async create(api, desired) {
+    await savePlex(api, desired);
+    await enableLibraries(api, PLEX);
+    return { id: null };
+  },
+  async update(api, desired, observed) {
+    const moved =
+      observed.fields.hostname !== desired.fields.hostname ||
+      observed.fields.port !== desired.fields.port;
+    if (moved) await savePlex(api, desired);
+    // Another Plex has other library ids, though the names match: sync them again.
+    if (moved || observed.fields.libraries !== desired.fields.libraries) {
+      await enableLibraries(api, PLEX);
     }
   },
 };
@@ -432,7 +519,12 @@ const setup: ResourceSpec = {
   name: 'setup',
   fields: ['initialized'],
   secrets: [],
-  requires: ['seerr.media_server', 'seerr.server_sonarr', 'seerr.server_radarr'],
+  requires: [
+    'seerr.media_server',
+    'seerr.media_server_plex',
+    'seerr.server_sonarr',
+    'seerr.server_radarr',
+  ],
   desired: () => ({ name: 'setup', fields: { initialized: true }, secrets: {} }),
   async observe(api) {
     const { initialized } = await api.get(
@@ -449,13 +541,19 @@ const setup: ResourceSpec = {
 };
 
 /**
- * What Mediaplane wires in Seerr (spec §6.2): Jellyfin as its media server, with its
- * libraries; Sonarr and Radarr, each while the stack runs it; then its setup, finished.
- * Its first sign-in (bootstrap.ts) comes before, and makes its admin. It comes after
- * Jellyfin, Sonarr and Radarr, whose resources its own require, and after Prowlarr, as
- * spec §6.2 orders them.
+ * What Mediaplane wires in Seerr (spec §6.2): its media server, Jellyfin or Plex, with
+ * its libraries; Sonarr and Radarr, each while the stack runs it; then its setup,
+ * finished. Its first sign-in (bootstrap.ts) comes before, and makes its admin. It comes
+ * after the media server, Sonarr and Radarr, whose resources its own require, and after
+ * Prowlarr, as spec §6.2 orders them.
  */
 export default defineIntegration({
-  after: ['jellyfin', 'prowlarr', 'radarr', 'sonarr'],
-  resources: [mediaServer, seerrServer('sonarr'), seerrServer('radarr'), setup],
+  after: ['jellyfin', 'plex', 'prowlarr', 'radarr', 'sonarr'],
+  resources: [
+    mediaServer,
+    mediaServerPlex,
+    seerrServer('sonarr'),
+    seerrServer('radarr'),
+    setup,
+  ],
 });

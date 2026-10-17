@@ -294,9 +294,9 @@ describe('the real catalog', () => {
     const { compose } = render(source);
     expect(compose.services.plex?.environment).toMatchObject({ VERSION: 'docker' });
     expect(compose.services.jellyfin).toBeUndefined();
-    // Seerr isn't wired with Plex until Slice 7: nothing calls it, so it stays off the
-    // wiring network.
-    expect(compose.services.seerr?.networks).toBeUndefined();
+    // Seerr is wired with Plex too: it joins the wiring network, as Plex does.
+    expect(compose.services.seerr?.networks).toEqual(['default', 'wiring']);
+    expect(compose.services.plex?.networks).toEqual(['default', 'wiring']);
   });
 });
 

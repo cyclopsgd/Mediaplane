@@ -6,7 +6,10 @@ import {
   type WiringContext,
 } from '@mediaplane/engine';
 import {
+  claimFakePlex,
+  FAKE_PLEX_ACCOUNT,
   fakeJellyfinSetUp,
+  fakePlexTv,
   fakeStackApis,
   freshAppState,
   NO_SETUP_CONTEXT,
@@ -107,6 +110,138 @@ async function seerr() {
     apis.app.requests.slice(from).map((r: FakeRequest) => `${r.method} ${r.path}`);
   return { api, apis, jellyfin, sonarr, radarr, state, calls };
 }
+
+describe("Seerr's media server, with Plex", () => {
+  const spec = resource('media_server_plex');
+  const TOKEN = FAKE_PLEX_ACCOUNT.token;
+  const PLEX_STACK = STACK.replace(
+    'media_server: jellyfin',
+    'media_server: plex\nplex: { token: { file: secrets/plex-token } }',
+  );
+
+  /**
+   * The stack's fakes: Plex your account claimed, with Movies and TV Shows; Seerr signed
+   * in to by your account, its first sign-in; and a client of Seerr, with its key.
+   */
+  async function plexSeerr() {
+    const plexTv = await fakePlexTv();
+    const apis = await fakeStackApis(plexTv.state);
+    const plex = freshAppState();
+    claimFakePlex(plex.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    for (const [key, title, type] of [
+      ['1', 'Movies', 'movie'],
+      ['2', 'TV Shows', 'show'],
+    ] as const) {
+      plex.plex.sections.push({
+        key,
+        title,
+        type,
+        agent: 'fake',
+        scanner: 'fake',
+        language: 'en-US',
+        locations: [],
+      });
+    }
+    apis.apps.set('plex', plex);
+    const state: FakeAppState = { ...freshAppState(), key: SEERR_KEY };
+    apis.apps.set('seerr', state);
+    const api = createAppApi({
+      name: 'Seerr',
+      service: 'seerr',
+      port: 5055,
+      endpoint: { host: '127.0.0.1', port: apis.app.port },
+      key: { scheme: 'x-api-key', value: SEERR_KEY },
+      secrets: [SEERR_KEY, TOKEN],
+      retry: { deadlineMs: 0 },
+    });
+    await seerrBootstrap.run(api, ADMIN, contextOf(PLEX_STACK).stack, {
+      keys: { plex: { token: TOKEN } },
+      plexTv: plexTv.client,
+    });
+    const calls = () =>
+      apis.app.requests.map((r: FakeRequest) => `${r.method} ${r.path}`);
+    return { api, state, calls, plex: plex.plex };
+  }
+
+  it("is wanted only with Plex, at Plex's service and port, with both libraries, and holds no secret", () => {
+    expect(spec).toMatchObject({
+      fields: ['hostname', 'port', 'libraries'],
+      secrets: [],
+      requires: ['plex.server', 'plex.library_movies', 'plex.library_tv'],
+    });
+    expect(wanted(spec, contextOf(PLEX_STACK))).toEqual({
+      name: 'Plex',
+      fields: { hostname: 'plex', port: 32400, libraries: 'Movies,TV Shows' },
+      secrets: {},
+    });
+    expect(spec.desired(contextOf())).toBeUndefined();
+    expect(resource('media_server').desired(contextOf(PLEX_STACK))).toBeUndefined();
+  });
+
+  it("points Seerr at the stack's Plex, then syncs and enables both libraries", async () => {
+    const { api, state, calls } = await plexSeerr();
+    const desired = wanted(spec, contextOf(PLEX_STACK));
+    // Its first sign-in leaves its Plex unset.
+    expect(await spec.observe(api, undefined, desired)).toBeUndefined();
+    const before = calls().length;
+    expect(await spec.create(api, desired)).toEqual({ id: null });
+    expect(calls().slice(before)).toEqual([
+      'POST /api/v1/settings/plex',
+      'POST /api/v1/settings/plex/library/sync',
+      'GET /api/v1/settings/plex/library',
+      'PUT /api/v1/settings/plex/library/1',
+      'PUT /api/v1/settings/plex/library/2',
+    ]);
+    expect(state.seerr.plex).toMatchObject({ ip: 'plex', port: 32400, useSsl: false });
+    expect(await spec.observe(api, undefined, desired)).toEqual({
+      id: null,
+      name: 'Plex',
+      fields: { hostname: 'plex', port: 32400, libraries: 'Movies,TV Shows' },
+    });
+  });
+
+  it("puts back the stack's Plex when Seerr's is held with TLS, and a library turned off", async () => {
+    const { api, state } = await plexSeerr();
+    const desired = wanted(spec, contextOf(PLEX_STACK));
+    await spec.create(api, desired);
+    state.seerr.plex.useSsl = true;
+    const [movies] = state.seerr.plex.libraries;
+    if (movies === undefined) throw new Error('no library synced');
+    movies.enabled = false;
+    const held = await spec.observe(api, undefined, desired);
+    expect(held?.fields).toEqual({
+      hostname: 'https://plex:32400',
+      port: 32400,
+      libraries: 'TV Shows',
+    });
+    if (held === undefined) throw new Error('Seerr holds a Plex');
+    await spec.update(api, desired, held);
+    expect(await spec.observe(api, undefined, desired)).toMatchObject({
+      fields: { hostname: 'plex', libraries: 'Movies,TV Shows' },
+    });
+  });
+
+  it('refuses a library Seerr finds no Plex library of, by name', async () => {
+    const { api, plex } = await plexSeerr();
+    const desired = wanted(spec, contextOf(PLEX_STACK));
+    await spec.create(api, desired);
+    const held = await spec.observe(api, undefined, desired);
+    if (held === undefined) throw new Error('Seerr holds a Plex');
+    // Renamed in Plex: Seerr syncs it under its new name.
+    const [movies] = plex.sections;
+    if (movies === undefined) throw new Error('no Plex library');
+    movies.title = 'Films';
+    expect(
+      await thrown(
+        spec.update(api, desired, { ...held, fields: { ...held.fields, libraries: '' } }),
+      ),
+    ).toMatchObject({
+      kind: 'rejected',
+      message:
+        'Seerr at http://seerr:5055 (127.0.0.1) finds no Plex library named Movies (POST /api/v1/settings/plex/library/sync)',
+    });
+  });
+});
 
 describe("Seerr's media server", () => {
   const spec = resource('media_server');
@@ -558,6 +693,7 @@ describe("Seerr's setup", () => {
     const { api, state, calls } = await seerr();
     expect(spec.requires).toEqual([
       'seerr.media_server',
+      'seerr.media_server_plex',
       'seerr.server_sonarr',
       'seerr.server_radarr',
     ]);

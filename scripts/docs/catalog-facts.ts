@@ -1,7 +1,6 @@
 import {
   HEALTHCHECK_DEFAULTS,
   type AppDefinition,
-  parseConfig,
   type SecretSource,
 } from '@mediaplane/engine';
 
@@ -65,15 +64,6 @@ function health(def: AppDefinition): string {
   return `${code(test)}, every ${interval} (timeout ${timeout}, ${String(retries)} retries, ${start} to start)`;
 }
 
-/** A stack with Plex, whose media server is all `notWiredYet` is asked about. */
-const PLEX_STACK = (() => {
-  const result = parseConfig(
-    'version: 1\npaths: { data: /srv/data }\nmedia_server: plex\nplex: { token: { env: PLEX_TOKEN } }\n',
-  );
-  if (!result.ok) throw new Error(result.diagnostics.map((d) => d.message).join('\n'));
-  return result.config;
-})();
-
 function api(def: AppDefinition): string {
   // Not "none that Mediaplane calls": vpn-check asks Gluetun's control server, from
   // inside qBittorrent's network rather than over the wiring network.
@@ -87,10 +77,7 @@ function api(def: AppDefinition): string {
         : key.scheme === 'x-plex-token'
           ? "in Plex's `X-Plex-Token` header"
           : 'in the `X-Api-Key` header';
-  // An app not wired yet with Plex (`notWiredYet`) has no API there, until its slice.
-  const later = def.notWiredYet?.(PLEX_STACK);
-  const unless = later === undefined ? '' : `; with Plex, none until ${later.comingIn}`;
-  return `on its ${code(port)} port, which Mediaplane reaches over the stack's wiring network, with ${code(key.secret)} ${carried}${unless}`;
+  return `on its ${code(port)} port, which Mediaplane reaches over the stack's wiring network, with ${code(key.secret)} ${carried}`;
 }
 
 /** What Mediaplane manages in the app, as override keys name it (spec §4.2, §6.3). */

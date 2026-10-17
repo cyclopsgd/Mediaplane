@@ -19,10 +19,14 @@ apps:
   sonarr: {}
 `;
 
-/** qBittorrent has the shared login, Sonarr's is to come, and Jellyfin says nothing. */
+/**
+ * qBittorrent has the shared login, Sonarr's is to come, and Jellyfin says nothing; Plex
+ * takes your own Plex account, at its web path.
+ */
 const LOGINS: Record<string, AppDefinition['login']> = {
   qbittorrent: 'shared',
   sonarr: { comingIn: 'Slice 3b' },
+  plex: { own: 'Plex' },
 };
 /** Sonarr also publishes a second port, which is not its web UI. */
 const EXTRA_PORT = { name: 'rpc', container: 8990 };
@@ -30,6 +34,7 @@ const CATALOG: Catalog = fixtureCatalog.map((app) => ({
   ...app,
   login: LOGINS[app.id],
   ports: app.id === 'sonarr' ? [...app.ports, EXTRA_PORT] : app.ports,
+  ...(app.id === 'plex' ? { webPath: '/web' } : {}),
 }));
 
 /** A home with `stack`, and, when `stored`, a generated admin password in the store. */
@@ -124,6 +129,49 @@ describe('credentials', () => {
         },
       ],
     });
+  });
+
+  it('gives your own account as the login where the app takes one, and its web path', async () => {
+    const home = await homeWith({
+      stack: STACK.replace(
+        'media_server: jellyfin',
+        'media_server: plex\nplex: { token: { env: PLEX_TOKEN } }',
+      ),
+    });
+    const result = await loginFor(home, { env: { PLEX_TOKEN: 'fake-plex-token' } });
+    expect(result.ok && result.apps.find((a) => a.app === 'plex')).toEqual({
+      app: 'plex',
+      name: 'plex',
+      urls: ['http://127.0.0.1:32400/web'],
+      login: 'own',
+      account: 'Plex',
+    });
+  });
+
+  it('asks an app whose login depends on the stack, with the stack', async () => {
+    const seen: string[] = [];
+    const catalog: Catalog = CATALOG.map((app) =>
+      app.id === 'sonarr'
+        ? {
+            ...app,
+            login: (config) => {
+              seen.push(config.media_server);
+              return config.media_server === 'plex' ? { own: 'Plex' } : 'shared';
+            },
+          }
+        : app,
+    );
+    const result = await credentials({
+      home: await homeWith(),
+      catalog,
+      host: FIXTURE_HOST,
+      env: {},
+      runtime: fakeRuntime(),
+    });
+    expect(result.ok && result.apps.find((a) => a.app === 'sonarr')?.login).toBe(
+      'shared',
+    );
+    expect(seen).toEqual(['jellyfin']);
   });
 
   it("names this host's addresses when the web UIs are on every interface", async () => {

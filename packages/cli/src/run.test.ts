@@ -1519,6 +1519,50 @@ apps:
     expect(again.stdout()).toBe('No changes.\n');
   });
 
+  it('signs Seerr in with your Plex account once Plex is claimed, links it to Plex, then leaves it as it is', async () => {
+    const { home, plex, docker } = await plexHome();
+    await writeFile(join(home, 'stack.yaml'), `${PLEX_STACK}  seerr: {}\n`);
+    const seerr = freshAppState();
+    seerr.seerr.configDir = join(home, 'appdata', 'seerr');
+    apis.apps.set('seerr', seerr);
+    const first = capture();
+    expect(await run(['apply', '--home', home, '--yes'], first.io, deps(docker))).toBe(0);
+    expect(first.stdout()).toContain(
+      '  done    first-run setup: set up plex, seerr; published plex, seerr\n',
+    );
+    // Seerr's setup ran after Plex's, unpublished until both were done.
+    expect(docker.calls.filter((call) => call.startsWith('up'))).toEqual([
+      'up unpublished plex seerr with plex.PLEX_CLAIM',
+      'up',
+    ]);
+    for (const line of [
+      'seerr.media_server_plex: created',
+      'seerr.server_sonarr: created',
+      'seerr.setup: updated initialized',
+    ]) {
+      expect(first.stdout()).toContain(`  done    wiring ${line}\n`);
+    }
+    expect(seerr.seerr).toMatchObject({
+      mediaServerType: 1,
+      plexUsers: [FAKE_PLEX_ACCOUNT.id],
+      sessions: [],
+      initialized: true,
+      plex: { ip: 'plex', port: 32400, useSsl: false },
+    });
+    expect(seerr.seerr.plex.libraries.map((l) => [l.name, l.enabled])).toEqual([
+      ['Movies', true],
+      ['TV Shows', true],
+    ]);
+    expect(plex.owner).toBe(FAKE_PLEX_ACCOUNT.id);
+    expect((await readSecretStore(home)).setUp).toEqual(['plex', 'seerr']);
+    const secrets = [...(await secretsIn(home)), ...plexSecrets()];
+    expectNoSecrets(first.stdout() + first.stderr(), secrets);
+    expectNoSecrets(await readFile(join(home, RESOURCES_PATH), 'utf8'), secrets);
+    const again = capture();
+    expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
+    expect(again.stdout()).toBe('No changes.\n');
+  });
+
   it('starts nothing when plex.tv refuses your token, and says to sign in again', async () => {
     const { home, docker } = await plexHome('revoked-plex-token-0');
     const term = capture();

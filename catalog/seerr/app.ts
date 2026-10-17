@@ -40,9 +40,6 @@ export default defineApp({
     check: '/api/v1/auth/me',
   },
   bootstrap: seerrBootstrap,
-  // With Plex, it signs in with your Plex account, which comes in Slice 7.
-  notWiredYet: (config) =>
-    config.media_server === 'jellyfin' ? undefined : { comingIn: 'Slice 7' },
   integration,
   options: z.strictObject({
     sonarr_profile: z
@@ -62,6 +59,7 @@ export default defineApp({
   }),
   env: () => ({ LOG_LEVEL: 'info' }),
   extras: () => ({ init: true }),
-  login: 'shared',
+  // Through the media server: the shared admin is Jellyfin's; with Plex, your account.
+  login: (config) => (config.media_server === 'plex' ? { own: 'Plex' } : 'shared'),
   experimental: false,
 });

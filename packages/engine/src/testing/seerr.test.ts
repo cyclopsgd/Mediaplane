@@ -2,10 +2,13 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { callFake } from './http';
+import { claimFakePlex } from './plex';
+import { FAKE_PLEX_ACCOUNT, fakePlexTv } from './plextv';
 import {
   fakeJellyfinSetUp,
   SEERR_JELLYFIN,
   SEERR_NOT_CONFIGURED,
+  SEERR_PLEX,
   SET_UP_JELLYFIN,
 } from './seerr';
 import { tempDir } from './temp';
@@ -96,6 +99,9 @@ describe("fakeStackApis' Seerr", () => {
     expect((await call(port, '/api/v1/auth/me', { headers: keyed })).body).toEqual({
       id: 1,
       jellyfinUsername: 'admin',
+      plexId: null,
+      plexUsername: null,
+      email: 'user@example.com',
       permissions: 2,
     });
     // Its hostname, once set, is never taken again; a sign-in without one still works.
@@ -446,5 +452,133 @@ describe("fakeStackApis' Seerr", () => {
     expect((await call(port, '/api/v1/settings/public')).body).toMatchObject({
       initialized: true,
     });
+  });
+});
+
+describe("fakeStackApis' Seerr, with Plex", () => {
+  const TOKEN = FAKE_PLEX_ACCOUNT.token;
+  const SOMEONE = { id: 7_000_099, token: 'someone-plex-token-9' };
+
+  /** A stack's fakes: a Plex your account claimed, with two libraries, and Seerr fresh. */
+  async function plexStack() {
+    const plexTv = await fakePlexTv();
+    plexTv.state.accounts.push({ ...SOMEONE });
+    const apis = await fakeStackApis(plexTv.state);
+    const plex = freshAppState();
+    claimFakePlex(plex.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    plex.plex.friendlyName = 'Mediaplane';
+    for (const [key, title, type] of [
+      ['1', 'Movies', 'movie'],
+      ['2', 'TV Shows', 'show'],
+    ] as const) {
+      plex.plex.sections.push({
+        key,
+        title,
+        type,
+        agent: 'fake',
+        scanner: 'fake',
+        language: 'en-US',
+        locations: [],
+      });
+    }
+    apis.apps.set('plex', plex);
+    const seerr = { ...freshAppState(), key: SEERR_KEY };
+    apis.apps.set('seerr', seerr);
+    return { apis, plex, seerr, port: apis.app.port };
+  }
+
+  it('lets whoever signs in first with a plex.tv account set it up, as Seerr does', async () => {
+    const { port, seerr } = await plexStack();
+    const signIn = (authToken: string) =>
+      call(port, '/api/v1/auth/plex', { body: { authToken } });
+    // plex.tv refuses the token: Seerr can't tell whose it is.
+    expect(await signIn('revoked-plex-token-0')).toMatchObject({
+      status: 500,
+      body: { message: 'Unable to authenticate.' },
+    });
+    expect(await call(port, '/api/v1/auth/plex', { body: {} })).toMatchObject({
+      status: 400,
+    });
+    const first = await signIn(TOKEN);
+    expect(first).toMatchObject({ status: 200, body: { id: 1, permissions: 2 } });
+    expect(first.cookie).toMatch(/^connect\.sid=s%3Afake-session-1\.signed;/);
+    expect(seerr.seerr).toMatchObject({
+      mediaServerType: SEERR_PLEX,
+      plexUsers: [FAKE_PLEX_ACCOUNT.id],
+    });
+    expect((await call(port, '/api/v1/auth/me', { headers: keyed })).body).toMatchObject({
+      id: 1,
+      plexId: FAKE_PLEX_ACCOUNT.id,
+      jellyfinUsername: null,
+    });
+    // Its admin signs in again; another account is refused; Jellyfin's sign-in is off.
+    expect((await signIn(TOKEN)).status).toBe(200);
+    expect((await signIn(SOMEONE.token)).status).toBe(403);
+    expect(
+      (await call(port, '/api/v1/auth/jellyfin', { body: { username: 'admin' } })).body,
+    ).toEqual({ error: 'Jellyfin login is disabled' });
+  });
+
+  it("saves its Plex only where it reaches Plex with its admin's token, though it keeps what was sent", async () => {
+    const { port, seerr } = await plexStack();
+    await call(port, '/api/v1/auth/plex', { body: { authToken: TOKEN } });
+    const save = (body: unknown) =>
+      call(port, '/api/v1/settings/plex', { body, headers: keyed });
+    expect(await save({ ip: 'nowhere', port: 32400, useSsl: false })).toMatchObject({
+      status: 500,
+      body: { message: 'Unable to connect to Plex.' },
+    });
+    // Unsaved, but Seerr's settings hold it until it restarts (probed).
+    expect(
+      (await call(port, '/api/v1/settings/plex', { headers: keyed })).body,
+    ).toMatchObject({ ip: 'nowhere' });
+    expect(await save({ ip: 'plex', port: 32400, useSsl: false })).toMatchObject({
+      status: 200,
+      body: { ip: 'plex', machineId: 'fake-machine-identifier-0001', name: 'Mediaplane' },
+    });
+    expect(seerr.seerr.errors).toEqual(['Something went wrong testing Plex connection']);
+  });
+
+  it("syncs Plex's libraries, keeping what is enabled, and enables them one at a time", async () => {
+    const { port, seerr } = await plexStack();
+    await call(port, '/api/v1/auth/plex', { body: { authToken: TOKEN } });
+    const sync = () =>
+      call(port, '/api/v1/settings/plex/library/sync', {
+        method: 'POST',
+        headers: keyed,
+      });
+    // Not set yet: Seerr can't reach Plex.
+    expect((await sync()).status).toBe(500);
+    await call(port, '/api/v1/settings/plex', {
+      body: { ip: 'plex', port: 32400, useSsl: false },
+      headers: keyed,
+    });
+    expect((await sync()).body).toEqual([
+      { id: '1', name: 'Movies', enabled: false, type: 'movie' },
+      { id: '2', name: 'TV Shows', enabled: false, type: 'show' },
+    ]);
+    expect(
+      await call(port, '/api/v1/settings/plex/library/2', {
+        method: 'PUT',
+        body: { enabled: true },
+        headers: keyed,
+      }),
+    ).toMatchObject({ status: 200, body: { id: '2', enabled: true } });
+    expect((await sync()).body).toContainEqual({
+      id: '2',
+      name: 'TV Shows',
+      enabled: true,
+      type: 'show',
+    });
+    expect(seerr.seerr.plex.libraries).toHaveLength(2);
+  });
+
+  it('is set up by a plex.tv claimant who signs in first', async () => {
+    const { port, seerr } = await plexStack();
+    seerr.seerr.plexClaimant = { plexId: SOMEONE.id, token: SOMEONE.token };
+    expect(
+      (await call(port, '/api/v1/auth/plex', { body: { authToken: TOKEN } })).status,
+    ).toBe(403);
+    expect(seerr.seerr.plexUsers).toEqual([SOMEONE.id]);
   });
 });

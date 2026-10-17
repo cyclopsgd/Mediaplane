@@ -194,6 +194,13 @@ export interface Bootstrap {
   claimedHint?(stack: ResolvedStack, container: string): string;
 }
 
+/**
+ * How you sign in to an app's web UI: with the shared admin login (`'shared'`), with your
+ * own account of the service it names (`{ own: 'Plex' }`: your plex.tv account), or with a
+ * login a later slice brings.
+ */
+export type AppLoginKind = 'shared' | { own: string } | { comingIn: string };
+
 export interface ServiceExtras {
   cap_add?: string[];
   devices?: string[];
@@ -225,13 +232,6 @@ export interface AppDefinition<Options = Record<string, unknown>> {
   integration?: Integration;
   /** First-run setup to finish through `api` before its ports are published. */
   bootstrap?: Bootstrap;
-  /**
-   * The slice that wires the app in a stack with `config`, while Mediaplane doesn't yet,
-   * else undefined: the resolver then leaves out its `api`, `integration` and
-   * `bootstrap`, so nothing calls it there, and its `login` says that slice. Seerr with
-   * Plex, until Slice 7.
-   */
-  notWiredYet?(config: StackConfig): { comingIn: string } | undefined;
   /** App-specific settings under apps.<id> in stack.yaml. */
   options?: z.ZodType<Options>;
   /** Apps this one needs, given its options (e.g. qBittorrent with a VPN needs Gluetun). */
@@ -244,11 +244,16 @@ export interface AppDefinition<Options = Record<string, unknown>> {
   /** Files to write into its appdata folder before its first start, if absent. Pure. */
   configFiles?(ctx: ConfigFileContext<Options>): ConfigFile[];
   /**
-   * How you sign in to its web UI: 'shared' once the shared admin login works there, or
-   * the slice that brings a login. Every app with a published web UI says, and
-   * `mediaplane credentials` lists them.
+   * How you sign in to its web UI (AppLoginKind), or, when that depends on the stack, how
+   * in a stack with `config`: Seerr signs you in with your Plex account on a Plex stack.
+   * Every app with a published web UI says, and `mediaplane credentials` lists them.
    */
-  login?: 'shared' | { comingIn: string };
+  login?: AppLoginKind | ((config: StackConfig) => AppLoginKind);
+  /**
+   * Where its web UI is on its `web` port, when not at "/": Plex's is at "/web".
+   * `mediaplane credentials` gives it in the app's addresses.
+   */
+  webPath?: string;
   experimental: boolean;
 }
 

@@ -60,6 +60,8 @@ export default defineApp({
       ),
   }),
   env: () => ({ VERSION: 'docker' }),
-  login: { comingIn: 'Slice 7' },
+  // Your own plex.tv account: never the shared admin (spec §6.1).
+  login: { own: 'Plex' },
+  webPath: '/web',
   experimental: false,
 });

@@ -91,7 +91,7 @@ describe('mediaplane credentials', () => {
     );
   });
 
-  it("says Seerr's login arrives with Slice 7 on a Plex stack, as Plex's does", async () => {
+  it('says Plex and, on a Plex stack, Seerr take your own Plex account, Plex at its web path', async () => {
     const home = await makeHome({
       stack: STACK.replace(
         'media_server: jellyfin',
@@ -101,9 +101,9 @@ describe('mediaplane credentials', () => {
     const term = capture({ PLEX_TOKEN: 'fake-plex-token' });
     expect(await run(['credentials', '--home', home], term.io, deps)).toBe(0);
     expect(term.stdout().split('\n').slice(4)).toEqual([
-      'Plex         http://127.0.0.1:32400  (its login arrives in Slice 7)',
+      'Plex         http://127.0.0.1:32400/web  (sign in with your own Plex account)',
       'qBittorrent  http://127.0.0.1:8080',
-      'Seerr        http://127.0.0.1:5055  (its login arrives in Slice 7)',
+      'Seerr        http://127.0.0.1:5055  (sign in with your own Plex account)',
       'Sonarr       http://127.0.0.1:8989',
       '',
     ]);
@@ -153,7 +153,7 @@ describe('mediaplane credentials', () => {
     expect(JSON.parse(shown.stdout())).toMatchObject({ password: PASSWORD });
   });
 
-  it("gives Seerr's login as still to come in JSON on a Plex stack", async () => {
+  it("gives Seerr's login as your own Plex account in JSON on a Plex stack", async () => {
     const home = await makeHome({
       stack: STACK.replace(
         'media_server: jellyfin',
@@ -167,8 +167,8 @@ describe('mediaplane credentials', () => {
       app: 'seerr',
       name: 'Seerr',
       urls: ['http://127.0.0.1:5055'],
-      login: 'not-yet',
-      comingIn: 'Slice 7',
+      login: 'own',
+      account: 'Plex',
     });
     expect(term.stdout()).not.toContain('fake-plex-token');
   });

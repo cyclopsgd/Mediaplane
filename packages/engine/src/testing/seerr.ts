@@ -2,10 +2,13 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FakeReply, FakeRequest } from './http';
 import { libraryId, makeApiKey } from './jellyfin';
+import { plexTakes } from './plex';
+import type { FakePlexTvState } from './plextv';
 import { PORTS } from './prowlarr';
 import { freshAppState, type FakeAppState } from './wiring';
 
-/** Seerr's media-server types (its `MediaServerType`): Jellyfin is 2, none yet 4. */
+/** Seerr's media-server types (its `MediaServerType`): Plex 1, Jellyfin 2, none yet 4. */
+export const SEERR_PLEX = 1;
 export const SEERR_JELLYFIN = 2;
 export const SEERR_NOT_CONFIGURED = 4;
 
@@ -54,6 +57,28 @@ export interface FakeSeerr {
     libraries: FakeSeerrLibrary[];
     [setting: string]: unknown;
   };
+  /** Its users who signed in through Plex, by plex.tv account id: the first is its admin. */
+  plexUsers: number[];
+  /** The plex.tv token each Plex user last signed in with: what Seerr reaches Plex with. */
+  plexTokens: Record<number, string>;
+  /**
+   * Its Plex: where it is (`http(s)://<ip>:<port>`, no URL base), and its libraries; ip ''
+   * until set. `machineId` and `name` are what Plex said of itself when it was saved.
+   */
+  plex: {
+    ip: string;
+    port: number | string;
+    useSsl: boolean;
+    libraries: FakeSeerrLibrary[];
+    machineId?: string;
+    name?: string;
+    [setting: string]: unknown;
+  };
+  /**
+   * The plex.tv account that signs in first, through Plex, just before the next sign-in
+   * reaches a Seerr nobody has set up. Unset: nobody.
+   */
+  plexClaimant?: { plexId: number; token: string };
   /** Its Sonarr and Radarr servers. */
   sonarr: FakeSeerrServer[];
   radarr: FakeSeerrServer[];
@@ -124,6 +149,9 @@ export function freshSeerr(): FakeSeerr {
       apiKey: '',
       libraries: [],
     },
+    plexUsers: [],
+    plexTokens: {},
+    plex: { ip: '', port: 32400, useSsl: false, libraries: [] },
     sonarr: [],
     radarr: [],
     initialized: false,
@@ -207,6 +235,7 @@ export function fakeSeerr(
   request: FakeRequest,
   state: FakeAppState,
   peek: (service: string) => FakeAppState | undefined,
+  plexTv: FakePlexTvState,
 ): FakeReply {
   const { seerr } = state;
   const failed =
@@ -215,7 +244,7 @@ export function fakeSeerr(
       : { status: seerr.failStatus, body: { message: 'fake failure' } };
   const reply = seerr.failing.includes(request.path.split('?')[0] ?? request.path)
     ? failed
-    : answer(request, state, peek);
+    : answer(request, state, peek, plexTv);
   keepSettingsJson(seerr, state.key);
   if (!seerr.echoKey || reply.status < 400) return reply;
   const servers = [...seerr.sonarr, ...seerr.radarr];
@@ -231,6 +260,7 @@ function answer(
   request: FakeRequest,
   state: FakeAppState,
   peek: (service: string) => FakeAppState | undefined,
+  plexTv: FakePlexTvState,
 ): FakeReply {
   const { seerr } = state;
   const { method } = request;
@@ -263,6 +293,14 @@ function answer(
     }
     return signIn(body(), seerr, peek('jellyfin'));
   }
+  if (path === '/api/v1/auth/plex' && method === 'POST') {
+    if (seerr.plexClaimant !== undefined && seerr.plexUsers.length === 0) {
+      seerr.mediaServerType = SEERR_PLEX;
+      seerr.plexUsers = [seerr.plexClaimant.plexId];
+      seerr.plexTokens[seerr.plexClaimant.plexId] = seerr.plexClaimant.token;
+    }
+    return plexSignIn(body(), seerr, plexTv);
+  }
   const cookie = sessionCookie(request.headers.cookie);
   if (path === '/api/v1/auth/logout' && method === 'POST') {
     if (cookie === undefined) return refused(request);
@@ -273,14 +311,22 @@ function answer(
   const keyed =
     typeof request.headers['x-api-key'] === 'string' &&
     (state.key === '' || request.headers['x-api-key'] === state.key) &&
-    seerr.users.length > 0;
+    (seerr.users.length > 0 || seerr.plexUsers.length > 0);
   if (!keyed && (cookie === undefined || !seerr.sessions.includes(cookie))) {
     return refused(request);
   }
   if (path === '/api/v1/auth/me' && method === 'GET') {
+    const plexId = seerr.plexUsers[0];
     return {
       status: 200,
-      body: { id: 1, jellyfinUsername: seerr.users[0], permissions: 2 },
+      body: {
+        id: 1,
+        jellyfinUsername: seerr.users[0] ?? null,
+        plexId: plexId ?? null,
+        plexUsername: plexId === undefined ? null : 'fake-user',
+        email: 'user@example.com',
+        permissions: 2,
+      },
     };
   }
   if (path === '/api/v1/settings/initialize' && method === 'POST') {
@@ -289,8 +335,134 @@ function answer(
   }
   return (
     fakeSeerrJellyfin(request, path, body, seerr, peek('jellyfin')) ??
+    fakeSeerrPlex(request, path, body, seerr, peek('plex'), plexTv) ??
     fakeSeerrServers(request, path, body, seerr, peek) ?? { status: 404 }
   );
+}
+
+/**
+ * `POST /api/v1/auth/plex` (Seerr 3.5's code, probed): Seerr asks plex.tv whose `authToken`
+ * it is. A token plex.tv refuses is a 500, "Unable to authenticate."; with no user yet,
+ * its account becomes Seerr's admin, and Plex its media server; after that, only that
+ * account signs in (anyone else is a 403 here: the fake knows no one else with access to
+ * Seerr's Plex). Each sign-in keeps the token, which is what Seerr reaches Plex with.
+ */
+function plexSignIn(
+  sent: Record<string, unknown>,
+  seerr: FakeSeerr,
+  plexTv: FakePlexTvState,
+): FakeReply {
+  if (typeof sent.authToken !== 'string' || sent.authToken === '') {
+    return invalid("body must have required property 'authToken'");
+  }
+  if (
+    seerr.mediaServerType !== SEERR_NOT_CONFIGURED &&
+    seerr.mediaServerType !== SEERR_PLEX
+  ) {
+    return { status: 500, body: { error: 'Plex login is disabled' } };
+  }
+  const account = plexTv.accounts.find((a) => a.token === sent.authToken);
+  if (account === undefined) {
+    seerr.errors.push('Something went wrong authenticating with Plex account');
+    return { status: 500, body: { message: 'Unable to authenticate.' } };
+  }
+  if (seerr.plexUsers.length === 0) {
+    seerr.plexUsers = [account.id];
+    seerr.mediaServerType = SEERR_PLEX;
+  } else if (seerr.plexUsers[0] !== account.id) {
+    return { status: 403, body: { message: 'Access denied.' } };
+  }
+  seerr.plexTokens[account.id] = sent.authToken;
+  seerr.signIns += 1;
+  const session = `s%3Afake-session-${String(seerr.signIns)}.signed`;
+  seerr.sessions.push(session);
+  return {
+    status: 200,
+    body: { id: 1, plexUsername: 'fake-user', permissions: 2, userType: 1 },
+    headers: {
+      'Set-Cookie': `connect.sid=${session}; Path=/; ${EXPIRES}; HttpOnly; SameSite=Lax`,
+    },
+  };
+}
+
+/**
+ * Whether Seerr reaches the stack's Plex at its settings, with its admin's token: its
+ * service, while it runs, at 32400, without TLS (Seerr's Plex has no URL base), and a
+ * token the fake Plex takes.
+ */
+function reachesPlex(
+  seerr: FakeSeerr,
+  plex: FakeAppState | undefined,
+  plexTv: FakePlexTvState,
+): plex is FakeAppState {
+  const admin = seerr.plexUsers[0];
+  return (
+    plex !== undefined &&
+    plex.up &&
+    seerr.plex.ip === 'plex' &&
+    seerr.plex.port === 32400 &&
+    !seerr.plex.useSsl &&
+    admin !== undefined &&
+    plexTakes(plex.plex, seerr.plexTokens[admin], plexTv)
+  );
+}
+
+/**
+ * Seerr's Plex settings and its libraries (Seerr 3.5's code, probed). A save takes what is
+ * sent into Seerr's settings first, then asks Plex, with its admin's token, who it is: one
+ * it can't reach is a 500, "Unable to connect to Plex.", and isn't saved, though Seerr's
+ * settings hold what was sent until it restarts (probed). Libraries are synced from Plex,
+ * keeping what is enabled, and enabled one at a time.
+ */
+function fakeSeerrPlex(
+  request: FakeRequest,
+  path: string,
+  body: () => Record<string, unknown>,
+  seerr: FakeSeerr,
+  plex: FakeAppState | undefined,
+  plexTv: FakePlexTvState,
+): FakeReply | undefined {
+  const { method } = request;
+  const settings = '/api/v1/settings/plex';
+  if (path === settings && method === 'GET') return { status: 200, body: seerr.plex };
+  if (path === settings && method === 'POST') {
+    Object.assign(seerr.plex, body());
+    if (!reachesPlex(seerr, plex, plexTv)) {
+      seerr.errors.push('Something went wrong testing Plex connection');
+      return { status: 500, body: { message: 'Unable to connect to Plex.' } };
+    }
+    seerr.plex.machineId = plex.plex.machineId;
+    seerr.plex.name = plex.plex.friendlyName;
+    return { status: 200, body: seerr.plex };
+  }
+  if (path === `${settings}/library` && method === 'GET') {
+    return { status: 200, body: seerr.plex.libraries };
+  }
+  if (path === `${settings}/library/sync` && method === 'POST') {
+    if (!reachesPlex(seerr, plex, plexTv)) {
+      seerr.errors.push('Something went wrong syncing Plex libraries');
+      return { status: 500, body: { message: 'UNKNOWN' } };
+    }
+    seerr.plex.libraries = plex.plex.sections.map((section) => ({
+      id: section.key,
+      name: section.title,
+      enabled: seerr.plex.libraries.find((l) => l.id === section.key)?.enabled ?? false,
+      type: section.type,
+    }));
+    return { status: 200, body: seerr.plex.libraries };
+  }
+  const library = /^\/api\/v1\/settings\/plex\/library\/([^/]+)$/.exec(path);
+  if (library !== null && method === 'PUT') {
+    const { enabled } = body();
+    if (typeof enabled !== 'boolean') return invalid('body/enabled must be boolean');
+    const held = seerr.plex.libraries.find((l) => l.id === library[1]);
+    if (held === undefined) {
+      return { status: 404, body: { message: 'Library does not exist.' } };
+    }
+    held.enabled = enabled;
+    return { status: 200, body: held };
+  }
+  return undefined;
 }
 
 /** Where Seerr reaches Jellyfin, as its settings or a first sign-in name it. */

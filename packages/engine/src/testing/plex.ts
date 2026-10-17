@@ -155,7 +155,11 @@ export function claimFakePlex(
 }
 
 /** Whether the fake Plex takes `token`: its claim's account's, or its own. */
-function plexTakes(plex: FakePlex, token: unknown, plexTv: FakePlexTvState): boolean {
+export function plexTakes(
+  plex: FakePlex,
+  token: unknown,
+  plexTv: FakePlexTvState,
+): boolean {
   const account = plexTv.accounts.find((a) => a.token === token);
   return (
     plex.owner !== null &&

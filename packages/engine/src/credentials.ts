@@ -36,9 +36,13 @@ const WEB_PORT = 'web';
 export type AppLogin = {
   app: string;
   name: string;
-  /** Where its web UI is published: one URL per address. */
+  /** Where its web UI is published: one URL per address, with its web path. */
   urls: string[];
-} & ({ login: 'shared' } | { login: 'not-yet'; comingIn: string });
+} & (
+  | { login: 'shared' }
+  | { login: 'own'; account: string }
+  | { login: 'not-yet'; comingIn: string }
+);
 
 export type CredentialsResult =
   | {
@@ -105,15 +109,23 @@ function describeRef(ref: SecretRef): string {
 }
 
 function appLogin(app: ResolvedApp, addresses: readonly string[]): AppLogin[] {
-  const { login, id, name } = app.def;
+  const { id, name } = app.def;
+  const login =
+    typeof app.def.login === 'function'
+      ? app.def.login(app.context.config)
+      : app.def.login;
   if (login === undefined) return [];
   // The web UI only: an app may publish other ports, such as a peer or an API port.
+  const path = app.def.webPath ?? '';
   const urls = app.ports
     .filter((port) => port.name === WEB_PORT)
-    .flatMap((port) => addresses.map((address) => `http://${address}:${port.host}`));
+    .flatMap((port) =>
+      addresses.map((address) => `http://${address}:${String(port.host)}${path}`),
+    );
+  if (login === 'shared') return [{ app: id, name, urls, login: 'shared' }];
   return [
-    login === 'shared'
-      ? { app: id, name, urls, login: 'shared' }
+    'own' in login
+      ? { app: id, name, urls, login: 'own', account: login.own }
       : { app: id, name, urls, login: 'not-yet', comingIn: login.comingIn },
   ];
 }

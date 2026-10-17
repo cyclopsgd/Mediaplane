@@ -396,7 +396,9 @@ export async function fakeStackApis(plexTv: FakePlexTvState = freshPlexTv()): Pr
     const state = stateOf(service);
     if (service === 'qbittorrent') return fakeQbittorrent(request, state);
     if (service === 'jellyfin') return fakeJellyfin(request, state);
-    if (service === 'seerr') return fakeSeerr(request, state, (other) => apps.get(other));
+    if (service === 'seerr') {
+      return fakeSeerr(request, state, (other) => apps.get(other), plexTv);
+    }
     if (service === 'plex') return fakePlex(request, state.plex, plexTv);
     const keyed =
       headers['x-api-key'] !== undefined || headers.authorization !== undefined;

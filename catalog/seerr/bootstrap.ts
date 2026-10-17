@@ -1,14 +1,17 @@
 import {
   AppApiError,
+  PlexTvError,
   SetupWaiting,
   stackAddress,
   type AppApi,
   type AppApiErrorKind,
   type Bootstrap,
+  type BootstrapContext,
   type ResolvedStack,
 } from '@mediaplane/engine';
 import { z } from 'zod';
 import { atStackJellyfin, jellyfinSettings } from './jellyfin';
+import { atStackPlex, plexSettings } from './plex';
 
 /** Seerr's media-server types (`MediaServerType`): Jellyfin's, and none yet. */
 const JELLYFIN = 2;
@@ -17,8 +20,15 @@ const NOT_CONFIGURED = 4;
 /** The sign-in through Jellyfin: Seerr's first one sets it up. */
 const SIGN_IN = '/api/v1/auth/jellyfin';
 
+/** The sign-in with a plex.tv account: on a Plex stack, Seerr's first one sets it up. */
+const PLEX_SIGN_IN = '/api/v1/auth/plex';
+
 const publicSettings = z.looseObject({ mediaServerType: z.number() });
-const me = z.looseObject({ jellyfinUsername: z.string().nullable().optional() });
+const me = z.looseObject({
+  jellyfinUsername: z.string().nullable().optional(),
+  plexId: z.number().nullable().optional(),
+  plexToken: z.string().nullable().optional(),
+});
 
 /** Failures of a question Seerr didn't answer: Mediaplane couldn't tell. */
 const UNANSWERED: ReadonlySet<AppApiErrorKind> = new Set([
@@ -84,11 +94,151 @@ async function ownSetup(
 }
 
 /**
- * What to do about a Seerr set up with a login Mediaplane can't show is its own: make
- * that login the shared admin's, or the shared admin Seerr's admin, at the stack's
- * Jellyfin; and only last, start Seerr afresh.
+ * What a failure to call plex.tv at all says (a helper or Docker error, not plex.tv's
+ * answer): only the kind of error. Its own text is never shown, as what the helper or
+ * Docker said may hold anything.
+ */
+function failedCall(cause: unknown): string {
+  return `the call to plex.tv failed (${cause instanceof Error ? cause.name : 'not an Error'})`;
+}
+
+/**
+ * Refuse (`auth`) a Seerr on a Plex stack that is set up but not Mediaplane's: its admin
+ * (its first user) isn't your plex.tv account, or its Plex is set and isn't the stack's,
+ * without TLS. Your account is plex.tv's answer to your token, and Seerr's admin is the
+ * plex.tv account it signed in with, which only that account's token can make it: neither
+ * is an answer Seerr's admin can shape. It is asked with Seerr's key, never by signing in,
+ * which would hand your token to that Seerr. A question that goes unanswered (a timeout,
+ * a 5xx, no connection), Seerr's or plex.tv's, or a failure to call plex.tv at all (a helper
+ * or Docker error), is refused as `unsure`; another answer that
+ * doesn't show Seerr is Mediaplane's, as not its own.
+ */
+async function ownPlexSetup(
+  api: AppApi,
+  ctx: BootstrapContext,
+  token: string,
+  plex: { host: string; port: number },
+): Promise<void> {
+  let held: z.infer<typeof me>;
+  let settings: z.infer<typeof plexSettings>;
+  try {
+    held = await api.get('/api/v1/auth/me', me);
+    settings = await api.get('/api/v1/settings/plex', plexSettings);
+    if (typeof held.plexToken === 'string') api.addSecret(held.plexToken);
+  } catch (cause) {
+    // Not shown to be Mediaplane's is not Mediaplane's: whatever the failure, Seerr
+    // stays unpublished.
+    if (!(cause instanceof AppApiError) || cause.kind === 'auth') throw cause;
+    if (UNANSWERED.has(cause.kind)) {
+      throw new AppApiError(
+        `${api.name} at ${api.where} is set up, and Mediaplane couldn't tell whether it is its own: ${cause.message}`,
+        { kind: 'auth', unsure: true },
+      );
+    }
+    throw new AppApiError(
+      `${api.name} at ${api.where} is set up, and its answers don't show that it is Mediaplane's: ${cause.message}`,
+      { kind: 'auth' },
+    );
+  }
+  let account: number;
+  try {
+    account = await ctx.plexTv.accountId(token);
+  } catch (cause) {
+    // An answer from plex.tv that isn't unsure (a 401, one not understood) is refused as
+    // not Mediaplane's; anything else, a helper or Docker error included, is as if
+    // plex.tv hadn't answered.
+    if (cause instanceof PlexTvError && !cause.unsure) {
+      throw new AppApiError(
+        cause.kind === 'refused'
+          ? `${api.name} at ${api.where} is set up, and plex.tv refused your Plex token when asked whose it is: ${cause.message}. Run "mediaplane plex-login" to sign in again`
+          : `${api.name} at ${api.where} is set up, and plex.tv's answer doesn't say whose your Plex token is: ${cause.message}`,
+        { kind: 'rejected' },
+      );
+    }
+    throw new AppApiError(
+      `${api.name} at ${api.where} is set up, and Mediaplane couldn't tell whether it is its own: ${cause instanceof PlexTvError ? cause.message : failedCall(cause)}`,
+      { kind: 'auth', unsure: true },
+    );
+  }
+  // Mediaplane's own sign-in leaves Seerr's Plex unset: its wire step sets it.
+  const atPlex = settings.ip === '' || atStackPlex(settings, plex);
+  if (held.plexId !== account || !atPlex) {
+    throw new AppApiError(
+      `${api.name} at ${api.where} was set up with another plex.tv account or another Plex (GET /api/v1/auth/me, GET /api/v1/settings/plex)`,
+      { kind: 'auth' },
+    );
+  }
+}
+
+/**
+ * Seerr's first-run setup on a Plex stack (spec §6.1): its first sign-in, with your
+ * plex.tv token (`POST /api/v1/auth/plex`), which makes your account Seerr's admin and
+ * Plex its media server type; then signs out. Seerr asks plex.tv whose token it is: one
+ * it can't check (a 500) fails the setup. A Seerr set up already, or found set up once
+ * the sign-in fails, must be Mediaplane's (`ownPlexSetup`).
+ */
+async function runPlex(
+  api: AppApi,
+  stack: ResolvedStack,
+  ctx: BootstrapContext,
+): Promise<void> {
+  const plex = stackAddress(stack, 'plex');
+  const token = ctx.keys.plex?.token;
+  if (plex === undefined || token === undefined) {
+    throw new AppApiError(
+      `${api.name} at ${api.where} can't be set up: the stack runs no Plex, or Mediaplane has no Plex token, for it to sign in with`,
+      { kind: 'rejected' },
+    );
+  }
+  if (!(await openOrSetUp(api))) {
+    await ownPlexSetup(api, ctx, token, plex);
+    return;
+  }
+  let session: AppApi | undefined;
+  try {
+    session = await api.session(PLEX_SIGN_IN, { authToken: token }, 'connect.sid', [
+      token,
+    ]);
+  } catch (cause) {
+    if (!(cause instanceof AppApiError)) throw cause;
+    if (!(await openOrSetUp(api))) {
+      await ownPlexSetup(api, ctx, token, plex);
+      return;
+    }
+    if (cause.status === 500) {
+      throw new AppApiError(
+        `${api.name} at ${api.where} couldn't sign in with your Plex token, which it checks at plex.tv: ${cause.message}. Check that Seerr reaches plex.tv, then run apply again`,
+        { kind: 'rejected' },
+      );
+    }
+    throw cause;
+  }
+  if (session === undefined) {
+    throw new AppApiError(
+      `${api.name} at ${api.where} refused the sign-in with your Plex token (POST ${PLEX_SIGN_IN})`,
+      { kind: 'rejected' },
+    );
+  }
+  try {
+    await session.submit('POST', '/api/v1/auth/logout');
+  } catch (cause) {
+    if (!(cause instanceof AppApiError)) throw cause;
+  }
+}
+
+/**
+ * What to do about a Seerr set up with a login Mediaplane can't show is its own: on a
+ * Jellyfin stack, make that login the shared admin's, or the shared admin Seerr's admin,
+ * at the stack's Jellyfin; on a Plex stack, sign in to Plex as the account it was set up
+ * with. Only last, start Seerr afresh.
  */
 function claimedHint(stack: ResolvedStack): string {
+  if (stack.config.media_server === 'plex') {
+    const plex = stackAddress(stack, 'plex');
+    const at =
+      plex === undefined ? "the stack's Plex" : `${plex.host}:${String(plex.port)}`;
+    return `First: if the plex.tv account it was set up with is yours, run "mediaplane plex-login" and sign in as it, with its Plex unset or at ${at}, with no TLS; then run apply again. Last, if you did not set it up: start it afresh, as the runbook says`;
+  }
   const jellyfin = stackAddress(stack, 'jellyfin');
   const at =
     jellyfin === undefined
@@ -130,7 +280,11 @@ export const seerrBootstrap: Bootstrap = {
   done: { path: 'settings.json', pattern: /"mediaServerType":\s*[123]\b/ },
   open,
   claimedHint,
-  async run(api, admin, stack) {
+  async run(api, admin, stack, ctx) {
+    if (stack.config.media_server === 'plex') {
+      await runPlex(api, stack, ctx);
+      return undefined;
+    }
     const jellyfin = stackAddress(stack, 'jellyfin');
     if (jellyfin === undefined) {
       throw new AppApiError(

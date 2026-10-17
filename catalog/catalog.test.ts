@@ -83,7 +83,7 @@ describe('catalog', () => {
     }
   });
 
-  it("isn't wired with Plex yet, Seerr, whose login there comes with Slice 7", () => {
+  it('wires Seerr with Plex as with Jellyfin, and you sign in to it with your own Plex account there', () => {
     const seerr = (server: string) =>
       wiringStack(
         catalog,
@@ -96,18 +96,20 @@ apps:
   qbittorrent: { vpn: false }
   seerr: {}
 `,
-      ).apps.find((app) => app.def.id === 'seerr')?.def;
+      ).apps.find((app) => app.def.id === 'seerr');
     const plex = seerr('media_server: plex\nplex: { token: { env: PLEX_TOKEN } }');
-    expect([plex?.api, plex?.integration, plex?.bootstrap]).toEqual([
-      undefined,
-      undefined,
-      undefined,
-    ]);
-    expect(plex?.login).toEqual({ comingIn: 'Slice 7' });
     const jellyfin = seerr('media_server: jellyfin');
-    expect(jellyfin?.api).toBeDefined();
-    expect(jellyfin?.bootstrap).toBeDefined();
-    expect(jellyfin?.login).toBe('shared');
+    for (const app of [plex, jellyfin]) {
+      expect(app?.def.api).toBeDefined();
+      expect(app?.def.integration).toBeDefined();
+      expect(app?.def.bootstrap).toBeDefined();
+    }
+    const loginIn = (app: typeof plex) =>
+      typeof app?.def.login === 'function'
+        ? app.def.login(app.context.config)
+        : app?.def.login;
+    expect(loginIn(plex)).toEqual({ own: 'Plex' });
+    expect(loginIn(jellyfin)).toBe('shared');
   });
 
   it("waits for Jellyfin's server itself: its /health says 200 Degraded at every start", () => {
@@ -128,16 +130,16 @@ apps:
     for (const app of catalog) visit(app.id, []);
   });
 
-  it('names the slice that brings each login still to come', () => {
+  it("has no login still to come, and Plex's is your own Plex account, at /web", () => {
     expect(
-      Object.fromEntries(
-        catalog.flatMap((app) =>
-          app.login === undefined || app.login === 'shared'
-            ? []
-            : [[app.id, app.login.comingIn]],
-        ),
-      ),
-    ).toEqual({ plex: 'Slice 7' });
+      catalog.filter((app) => typeof app.login === 'object' && 'comingIn' in app.login),
+    ).toEqual([]);
+    const plex = catalog.find((app) => app.id === 'plex');
+    expect(plex?.login).toEqual({ own: 'Plex' });
+    expect(plex?.webPath).toBe('/web');
+    expect(
+      catalog.filter((app) => app.webPath !== undefined).map((app) => app.id),
+    ).toEqual(['plex']);
   });
 
   it("gives each Cloudflare solver a health check, and its API on the port Prowlarr's proxy names", () => {

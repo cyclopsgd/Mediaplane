@@ -50,7 +50,8 @@ export function printCredentials(
 
 function where(entry: AppLogin): string {
   const urls = entry.urls.length === 0 ? 'not published' : entry.urls.join(', ');
-  return entry.login === 'shared'
-    ? urls
+  if (entry.login === 'shared') return urls;
+  return entry.login === 'own'
+    ? `${urls}  (sign in with your own ${entry.account} account)`
     : `${urls}  (its login arrives in ${entry.comingIn})`;
 }
