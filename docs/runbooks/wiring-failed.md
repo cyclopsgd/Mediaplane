@@ -7,7 +7,10 @@ client, their root folders and their connection to Jellyfin, in Prowlarr, its li
 Sonarr and Radarr and its indexer proxy, in Jellyfin, its first-run setup, before its
 port is published, and the Movies and Shows libraries, and in Seerr, its first sign-in
 through Jellyfin, before its port is published, its links to Jellyfin, Sonarr and
-Radarr, and its setup, finished. Slice 7 adds Plex.
+Radarr, and its setup, finished. On a Plex stack, Plex is claimed for your plex.tv
+account before its port is published, and gets its name and its Movies and TV Shows
+libraries; Sonarr and Radarr get their connection to Plex, and Seerr signs in with your
+Plex token, before its port is published, and links to Plex.
 
 ## Symptoms
 
@@ -98,6 +101,26 @@ Radarr, and its setup, finished. Slice 7 adds Plex.
     skipped wiring seerr.media_server: seerr's first-run setup waits
   ```
 
+- **`mediaplane apply` stops at the containers step** on a Plex stack, before anything
+  changes, with
+  `Plex's first start needs a claim token from plex.tv, which Mediaplane couldn't get, so nothing was started`
+  or `Plex can't be claimed: Mediaplane has no Plex token, so nothing was started`. Plex
+  starts unpublished, with a claim token of your plex.tv account that `apply` fetches
+  the moment before, and here it had none to give. A Plex that runs, and isn't yet shown
+  to be yours, is stopped, so that it isn't left published, such as one that an `apply`
+  before Slice 7 published unclaimed. The message says so
+  (`Mediaplane stopped plex, which ran, but isn't shown to be yours`), or, when it
+  couldn't be stopped, says that, and you stop it yourself.
+- **`mediaplane apply` stops at the first-run setup step** on a Plex stack, with Plex
+  unpublished, and an error such as `didn't claim itself as it started`,
+  `is claimed by another plex.tv account than yours`,
+  `is claimed, and Mediaplane couldn't tell whether by your plex.tv account`, or
+  `is yours, but` and a setting that lets a client in without a sign-in
+  (`allowedNetworks`, `enableLocalSecurity` or `DlnaEnabled`). Plex is published only
+  once plex.tv says the token its claim gave it is your account's, and none of those
+  settings lets a client in without a sign-in. Plex's setup asks Plex without your
+  token: the one read of its settings, once plex.tv has said it is yours, is the first
+  call that carries it.
 - **`apply` stops at the same step** with a setup that reported success. Before
   publishing an app, Mediaplane asks it once more whether its setup is still open, and
   publishes it only if it is not. Jellyfin's key is already kept. The error:
@@ -227,10 +250,18 @@ differ, and a `reason` when it is `unknown`.
    - `ls -l appdata/jellyfin/system.xml` shows whether the user Mediaplane runs as can
      read it (`MEDIAPLANE_UID` in the image, or your own user from source);
    - for Seerr, `docker port mediaplane-seerr-1` likewise, and
-     `grep mediaServerType appdata/seerr/settings.json` says `2` (Jellyfin) once its
-     first sign-in is done, `4` before; `ls -l appdata/seerr/settings.json` and
+     `grep mediaServerType appdata/seerr/settings.json` says `2` (Jellyfin) or `1` (Plex)
+     once its first sign-in is done, `4` before; `ls -l appdata/seerr/settings.json` and
      `ls -ld appdata appdata/seerr` show whether the user Mediaplane runs as can read it;
+   - for Plex, `docker port mediaplane-plex-1` likewise, and
+     `grep -c PlexOnlineToken "appdata/plex/Library/Application Support/Plex Media Server/Preferences.xml"`
+     prints `1` once Plex is claimed, `0` before (it counts, and prints no token); Plex's
+     log (check 3) says why a claim failed;
    - `mediaplane history <id>` shows the first-run setup step's result and error.
+6. **Whether your Plex token works:** `mediaplane plex-login` keeps a saved token that
+   plex.tv still takes, and says so, without opening a sign-in. Your plex.tv account's
+   devices (in Plex's web app, Settings, Authorized Devices) list each Plex claimed for
+   it, by the name Mediaplane gives it (`Mediaplane`, or `apps.plex.server_name`).
 
 ## Fix
 
@@ -363,9 +394,10 @@ differ, and a `reason` when it is `unknown`.
   then. Mediaplane asks Seerr once more after it waits: if someone else set Seerr up in
   the meantime, the setup fails with the message below instead, and Seerr stays
   unpublished.
-- **`Seerr waits for Jellyfin's first-run setup, which isn't done`.** Jellyfin's setup
-  failed in the same `apply`, so Mediaplane didn't try Seerr's, which goes through it.
-  Fix Jellyfin's error, which comes first, then run `apply` again.
+- **`Seerr waits for Jellyfin's first-run setup, which isn't done`** (or Plex's).
+  Jellyfin's setup, or Plex's, failed in the same `apply`, so Mediaplane didn't try
+  Seerr's, which goes through it. Fix that error, which comes first, then run `apply`
+  again.
 - **`refused the request (HTTP 404): INVALID_URL (POST /api/v1/auth/jellyfin)`**
   (`apply.bootstrap-failed`). Seerr can't reach Jellyfin at `jellyfin:8096`, with no
   URL base and no TLS, on the stack's network. Check that Jellyfin is healthy
@@ -374,6 +406,147 @@ differ, and a `reason` when it is `unknown`.
   it does when its setup fails in any other way, even if Seerr then looks set up:
   Seerr's key is Mediaplane's own, so nothing but a setup that succeeds shows that Seerr
   is Mediaplane's.
+- **`plex.token: file secrets/plex-token is missing, empty or unreadable`**
+  (`secret.missing`, from `plan`, and from the plan `apply` makes first). Mediaplane has
+  no Plex token. Run `mediaplane plex-login`, which signs you in to plex.tv and saves
+  your token there, then run `apply` again.
+- **`Plex can't be claimed: Mediaplane has no Plex token`.** The same, found at the
+  containers step: the token file went missing after the plan. Run
+  `mediaplane plex-login`, then run `apply` again. Nothing was started, and a Plex that
+  ran is stopped (see Symptoms).
+- **`needs a claim token from plex.tv, which Mediaplane couldn't get`.** Nothing was
+  started, and a Plex that ran is stopped (see Symptoms); the next `apply` that gets a
+  claim token starts it again, unpublished. Only a 401 from plex.tv is a refusal of your
+  token. What follows the colon says which:
+  - `plex.tv refused the Plex token (HTTP 401)`: it was revoked (signed out of every
+    device, or the password changed), or it is not one. Run `mediaplane plex-login` to
+    sign in again; it replaces a token plex.tv refuses. Then run `apply` again.
+  - Anything else: plex.tv didn't answer (`could not be reached`,
+    `did not answer within …`), answered with an error of its own (HTTP 5xx), asked
+    Mediaplane to wait (HTTP 429), refused the request in a way that isn't about the
+    token (HTTP 403, as a firewall or a geo-block may), or the call failed on the way
+    (`the plex.tv helper did not finish within …`, `the plex.tv helper failed: …`, or
+    `the call to plex.tv failed (…)`). Mediaplane can't tell whether your token works,
+    so it starts nothing. In the image, the call goes from a short-lived helper on
+    Docker's default `bridge` network: check that containers there reach the internet
+    (a firewall, or `"bridge": "none"` in Docker's `daemon.json`, stops them), then run
+    `apply` again.
+- **`didn't claim itself as it started, so it stays unpublished`.** Plex had its claim
+  token, but didn't trade it at plex.tv while `apply` waited: it couldn't reach plex.tv,
+  or the token, which lasts four minutes, ran out first. Plex's log (check 3) says which.
+  Run `apply` again: it fetches a new claim token, and starts Plex with it, unpublished.
+- **`is claimed, and Mediaplane couldn't tell whether by your plex.tv account`.** plex.tv
+  didn't answer (a timeout, an error of its own, no connection), asked Mediaplane to wait
+  (HTTP 429), refused the request in a way that isn't about a token (HTTP 403), or the
+  call to it failed on the way (the plex.tv helper, or Docker). Run `apply` again first:
+  Plex stays unpublished until plex.tv says it is yours.
+- **`is claimed, and its Preferences.xml holds no token of its claim`.** Plex says it is
+  claimed, but its file doesn't hold the token its claim gave it, so nothing can tell
+  whose it is. Run `apply` again; if it says the same, follow the ways out of
+  `is claimed by another plex.tv account than yours`, below, the safe ones first.
+- **`is claimed, and Mediaplane can't read appdata/plex/… (…) to tell by whose plex.tv account`.**
+  First check who owns `appdata/plex` and the `Preferences.xml` in it (`ls -ln`) against
+  `user:` in `stack.yaml`: Plex writes the file 0600, as `user:`, so Mediaplane must run
+  as that user (in the image, `MEDIAPLANE_UID`). Give the folder back to `user:`, or run
+  Mediaplane as it, then run `apply` again.
+- **`plex.tv's answer doesn't say by whose account`.** plex.tv answered in a shape
+  Mediaplane doesn't understand. Run `apply` again; if it says the same, plex.tv may have
+  changed, and the ways out of `is claimed by another plex.tv account than yours`, below,
+  still apply.
+- **`is yours, but …`, naming `allowedNetworks`, `enableLocalSecurity` or
+  `DlnaEnabled`.** Plex is yours, but one of its settings lets a client in without a
+  sign-in. Mediaplane never sets them, and anyone who reached Plex while it was
+  unclaimed could have, and they survive the claim. So Plex stays unpublished, on every
+  `apply` until each is safe:
+  - `lets … in without a sign-in (allowedNetworks)`: its list of networks allowed
+    without auth isn't empty;
+  - `has enableLocalSecurity at …, not -1 or 1`: it may let a local client in without a
+    sign-in. Plex's default, `-1`, refuses a client that hasn't signed in (probed on a
+    claimed Plex);
+  - `has DlnaEnabled at …, not false`: DLNA is on, and DLNA streams without a sign-in.
+
+  Stop Plex (`mediaplane status plex` names its container: `docker stop` it). In
+  `appdata/plex/Library/Application Support/Plex Media Server/Preferences.xml`, delete
+  each attribute the message names, or set it to its default as the file writes it:
+  `allowedNetworks=""`, `enableLocalSecurity="-1"`, `DlnaEnabled="0"`. Then run
+  `apply`. Mediaplane checks these only before Plex is first published, never on later
+  applies: one you set afterwards, in Plex's settings, is left alone.
+
+- **`plex.tv refused your Plex token when asked whose it is`.** Run
+  `mediaplane plex-login` to sign in again, then run `apply` again.
+- **`is claimed by another plex.tv account than yours`**, or
+  **`is claimed by no plex.tv account of yours`** (`apply.bootstrap-failed`). Plex holds
+  a claim, and plex.tv says the token its claim gave it is another account's, or refuses
+  it (as it does once the server is removed from its account). It stays unpublished, on
+  every `apply` until it is yours. It was claimed before Mediaplane came to it: by
+  someone who reached it while it was unclaimed, or by you, with another account, by
+  hand. Three ways out, the safe ones first:
+  - If that plex.tv account is yours too, run `mediaplane plex-login --force` and sign in
+    as it (without `--force`, `plex-login` keeps a saved token plex.tv still takes),
+    then run `apply` again. Plex and everything it holds stay as they are.
+  - Or keep what Plex holds, and claim it for your account: stop it
+    (`docker stop mediaplane-plex-1`, as the message names it), and in
+    `appdata/plex/Library/Application Support/Plex Media Server/Preferences.xml`
+    remove every attribute whose name starts with `PlexOnline` (such as
+    `PlexOnlineToken="…"`), then run `apply`. It starts Plex unpublished with a claim
+    token of yours; Plex keeps its libraries and its machine identifier.
+  - Last, only if you don't need what it holds: stop it, remove `appdata/plex`, and
+    run `apply`. That loses Plex's libraries' metadata and its watch history, but none
+    of your media.
+- **`refused Mediaplane's API key (HTTP 401 or 403)`, for Plex.** Plex's key is your Plex
+  token, and Plex checks it with plex.tv: the token was revoked, or Plex was claimed
+  for another account since. Run `mediaplane plex-login`; if the error stays, see
+  `is claimed by another plex.tv account than yours` above.
+- **`Plex at http://plex:32400 … is still starting (GET /identity)`.** Plex answers
+  before it has started for good, and takes no change until then. Run `apply` again.
+- **`has a library named Movies that holds …, not movie`** (or TV Shows, not show).
+  Plex can't change what a library holds. Rename or remove that library in Plex, and the
+  next `apply` makes `Movies` (or `TV Shows`) again, on the stack's folder.
+- **`AuthToken: Authentication Token is invalid`, for `<arr>.connection_plex`.** The arr's
+  own test of its connection to Plex failed with the token it holds, and with yours:
+  Plex refuses your token too. Run `mediaplane plex-login`, then run `apply` again.
+- **`Host: Unable to connect to Plex Media Server`, for `<arr>.connection_plex`.** Sonarr
+  or Radarr can't reach Plex at `plex:32400`. Check that Plex is healthy
+  (`mediaplane status plex`), and that no override takes either off the stack's network.
+- **`At least one TV library is required`** (Sonarr) or
+  **`At least one Movie library is required`** (Radarr), for `<arr>.connection_plex`.
+  The arr's test needs a Plex library of its kind, which `plex.library_tv` (or
+  `library_movies`) makes first: it was removed in Plex meanwhile. Run `apply` again,
+  which makes it.
+- **`plan` shows `<arr>.connection_jellyfin` or `<arr>.connection_plex` to update,**
+  with a `host` that is a whole URL, such as `https://jellyfin:8096`. The connection was
+  set by hand to use TLS or a URL base, and Mediaplane reads that as moved: it sends the
+  key only to the stack's own address. The next `apply` puts back the media server's
+  service and port, without TLS or a URL base.
+- **`couldn't sign in with your Plex token, which it checks at plex.tv`**, for Seerr.
+  Seerr asks plex.tv whose your token is, and couldn't. Check that Seerr reaches the
+  internet (it does from the stack's own network), and that `mediaplane plex-login` keeps
+  your token, then run `apply` again. Seerr stays unpublished until then.
+- **`signed Mediaplane in as a user that isn't its admin, so someone set it up before Mediaplane did`**,
+  for Seerr (`apply.bootstrap-failed`), through Jellyfin or with your Plex token alike.
+  Seerr's first sign-in makes its admin, so Mediaplane's must be its first user. This
+  one wasn't: someone signed in between Mediaplane's look at Seerr and its sign-in.
+  Mediaplane signs out again, and Seerr stays unpublished, as one set up by someone
+  else. The message ends with the ways out, the safe ones first, as for
+  `was set up with another …`, below. If Seerr couldn't say whose the session is, the
+  message says `couldn't tell whether as its admin` instead: run `apply` again first.
+- **`was set up with another plex.tv account or another Plex`**, for Seerr
+  (`apply.bootstrap-failed`). Seerr was set up already, and its admin (its first user)
+  isn't your plex.tv account, as plex.tv says your token is, or its Plex is set and isn't
+  `plex:32400` without TLS. Mediaplane asks it with Seerr's key, and never signs in to it,
+  which would hand your token to whoever set it up. Seerr stays unpublished. The safe
+  way out first:
+  - If that plex.tv account is yours, run `mediaplane plex-login --force`, sign in as
+    it, and set Seerr's Plex to `plex`, port 32400, without TLS (or leave it unset),
+    then run `apply` again.
+  - Last, if you did not set Seerr up, start it afresh, as below.
+
+  On a Plex stack, `is set up, and Mediaplane couldn't tell whether it is its own` and
+  `its answers don't show that it is Mediaplane's` mean what they mean below: the first
+  covers plex.tv not answering too, as for Plex above. And
+  `plex.tv refused your Plex token when asked whose it is` means: run
+  `mediaplane plex-login`, then `apply` again.
+
 - **Seerr is set up, but Mediaplane can't show that it is its own**
   (`apply.bootstrap-failed`). The message says
   `was set up with another login or another Jellyfin`,
@@ -426,6 +599,14 @@ differ, and a `reason` when it is `unknown`.
   is the stack's (Seerr's settings, Jellyfin: `jellyfin`, port 8096), and that the
   library is in Jellyfin's dashboard, as `jellyfin.library_shows` keeps it, then run
   `apply` again.
+- **`finds no Plex library named TV Shows`** (or Movies), for `seerr.media_server_plex`.
+  The same, on a Plex stack: check that Seerr's Plex is the stack's (`plex`, port 32400),
+  and that the library is in Plex, as `plex.library_tv` keeps it, then run `apply` again.
+- **`plan` shows `seerr.media_server` or `seerr.media_server_plex` to create,** though
+  Seerr's settings show a server. Seerr keeps the address it was given even when it
+  couldn't save the link, but it sets the server's own id (`serverId` for Jellyfin,
+  `machineId` for Plex) only once it has. A link with no id reads as not linked, and
+  `apply` links it again.
 - **`Mediaplane can't read the file in Jellyfin's appdata`** (`bootstrap.unreadable`).
   With Jellyfin's key stored, `plan` takes its setup as done, but it can't check: the
   user Mediaplane runs as can't read `appdata/jellyfin/system.xml`. That is
@@ -493,7 +674,8 @@ differ, and a `reason` when it is `unknown`.
   or Prowlarr has an application called `Sonarr (Mediaplane)` or `Radarr (Mediaplane)`
   of another kind, or an indexer proxy called `Cloudflare (Mediaplane)` that isn't a
   FlareSolverr one, or Sonarr or Radarr has a connection called `Jellyfin (Mediaplane)`
-  that isn't an Emby / Jellyfin one. Rename or remove it in the app's web UI, then run
+  that isn't an Emby / Jellyfin one, or one called `Plex (Mediaplane)` that isn't a Plex
+  Media Server one. Rename or remove it in the app's web UI, then run
   `apply` again.
 - **`could not be reached`, `cut the connection` or `did not answer within … s`.** The
   app isn't up, or Mediaplane can't get to it.
@@ -609,12 +791,16 @@ Then run `mediaplane apply`. It plans again and does only what is left
   or a container of your own on the stack's networks. Either one prevents the two
   `apply.bootstrap-failed` errors about a wizard finished with another login. See
   [T16](../security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
-- **Let `apply` sign Seerr in,** on a Jellyfin stack: don't finish Seerr's setup page by
-  hand. It goes through Jellyfin's admin, so keep that login the shared one.
-- **Keep `appdata/jellyfin` and `appdata/seerr` readable** by the user Mediaplane runs
-  as, so `plan` can tell whether their setup is open. Seerr's folder belongs to uid
-  1000, and its files are readable by all, as Seerr writes them. Until Mediaplane can
-  read Seerr's `settings.json`, every `apply` fails at verify.
+- **Let `apply` sign Seerr in:** don't finish Seerr's setup page by hand. On a Jellyfin
+  stack it goes through Jellyfin's admin, so keep that login the shared one; on a Plex
+  stack, it signs in with your Plex token.
+- **Let `apply` claim Plex.** Don't claim it by hand, nor give it `PLEX_CLAIM` in
+  `apps.plex.env`: `apply` fetches a claim token as Plex first starts. Run
+  `mediaplane plex-login` once, before the first `apply`.
+- **Keep `appdata/jellyfin`, `appdata/plex` and `appdata/seerr` readable** by the user
+  Mediaplane runs as, so `plan` can tell whether their setup is open. Seerr's folder
+  belongs to uid 1000, and its files are readable by all, as Seerr writes them. Until
+  Mediaplane can read Seerr's `settings.json`, every `apply` fails at verify.
 - **Leave the wiring network out of `compose.override.yaml`**
   ([ADR 0011](../adr/0011-a-private-wiring-network.md)).
 - **Bring `mediaplane-system` down before the stack.** While Mediaplane is on the wiring

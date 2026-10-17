@@ -74,7 +74,8 @@ network with containers that have one. The owner chose how to reach the apps on
 - **Mediaplane stays offline,** which means it has no route of its own. The apps on the
   wiring network can still fetch for it: see T14 in the
   [threat model](../security/threat-model.md). It needs no internet in M1 except
-  plex.tv, in Slice 7, which a short-lived helper will reach for it. The apps' own
+  plex.tv, which a short-lived helper on Docker's default bridge network reaches for it
+  ([ADR 0012](0012-reach-plex-tv-through-a-short-lived-helper.md)). The apps' own
   internet traffic is unchanged.
 - **The apps can reach Mediaplane's container on the wiring network.** It listens on
   nothing in M1. The socket proxy is on another network and answers only the address the

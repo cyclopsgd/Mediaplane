@@ -26,31 +26,118 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
 ## What Mediaplane does today
 
 - **It runs Plex** whenever `media_server` is `plex`, listed under `apps` or not, with
-  your data folder at `/data`. It publishes its web UI as `network.bind` says.
+  your data folder at `/data`. It publishes its web UI as `network.bind` says, at
+  `/web`, once Plex is claimed for your account.
+- **Your token.** Run `mediaplane plex-login` before the first `apply`: it signs you in
+  to plex.tv with a link you open in a browser, and saves your Plex token where
+  `plex.token` says (`secrets/plex-token`, which `init` writes). It never prints the
+  token. A saved token plex.tv still takes is kept, unless you add `--force`, and so is
+  one plex.tv can't say about (no answer, a 403, a 429 or an error of its own): it says
+  so, and `--force` signs in anyway.
+- **It claims Plex for your account before its web UI is published.** An unclaimed Plex
+  lets whoever reaches it claim it for their own plex.tv account, with no sign-in. So on
+  its first start, Plex has no published port:
+
+  ```text
+  apply
+    │ asks plex.tv for a claim
+    │ token, with your token
+    ▼
+  up: Plex, no port,
+  PLEX_CLAIM set
+    │ the image trades it at
+    │ plex.tv, and saves a
+    │ token of your account
+    ▼
+  first-run setup
+    │ waits until Plex is
+    │ claimed; asks plex.tv
+    │ whether it is yours
+    ▼
+  up again: Plex
+    published, no PLEX_CLAIM
+  ```
+
+  The claim token lasts four minutes and works once, so `apply` fetches it the moment
+  before Plex starts, and passes it through Compose's environment: it is never in
+  `compose.yaml`, `.env` or any record. In the image, plex.tv is reached through a
+  short-lived helper on Docker's default bridge network
+  ([ADR 0012](../../docs/adr/0012-reach-plex-tv-through-a-short-lived-helper.md)).
+  `plan` lists Plex under `First-run setup:`, and never calls plex.tv.
+
+- **It publishes Plex only once plex.tv says it is yours:** plex.tv, asked with the token
+  Plex's claim gave it (in its `Preferences.xml`), answers with your account. Plex's
+  admin can change what Plex says of itself, its machine identifier too, but can't make
+  it hold a token of your account. A Plex claimed by another account stays unpublished,
+  and so does one plex.tv couldn't be asked about (only a 401 is plex.tv refusing a
+  token; a 403, a 429, a 5xx, no answer, or a failure of the helper or of Docker is
+  "couldn't tell"), or one that didn't claim itself while `apply` waited. When `apply`
+  can't get a claim token at all, it starts nothing, and stops a Plex that runs and
+  isn't yet shown to be yours, such as one an older `apply` published unclaimed; the
+  error says so. Plex counts as set up when its `Preferences.xml` holds a token
+  (`PlexOnlineToken`) and Mediaplane's record does (`setUp` in `state/secrets.json`).
+- **Before Plex is first published, it must let no client in without a sign-in.**
+  Anyone who reached it while it was unclaimed could have changed these settings, with
+  no token, and they survive the claim. So the setup checks, once Plex is yours:
+  - `allowedNetworks`, the networks let in without a sign-in: empty;
+  - `enableLocalSecurity`: `-1`, Plex's default, or `1` (a probe showed a claimed Plex
+    at `-1` refuses a client that hasn't signed in);
+  - `DlnaEnabled`: off, since DLNA streams without a sign-in.
+
+  Otherwise Plex stays unpublished, and the error names each setting. To fix it, stop
+  Plex (`mediaplane status plex` names its container), and in
+  `appdata/plex/Library/Application Support/Plex Media Server/Preferences.xml` delete
+  the attribute, or set it to its default as the file writes it: `allowedNetworks=""`,
+  `enableLocalSecurity="-1"`, `DlnaEnabled="0"`. Then run `apply`. This is checked
+  before the first publish only, never on a later `apply`: what you change afterwards
+  in Plex's settings is yours.
+
+- **Where this holds:** when `apply` runs the stack. The threat model lists what voids
+  it: [T16](../../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
+  The [runbook](../../docs/runbooks/wiring-failed.md) has the ways out, the ones that
+  keep what Plex holds first.
+- **Its key is your Plex token,** which Plex checks with plex.tv. Mediaplane sends it in
+  Plex's `X-Plex-Token` header, over the wiring network, and only once plex.tv has said
+  Plex is yours: Plex's setup asks Plex without it, but for the one read of its settings
+  above.
+- **Its name** (`plex.server`): `Mediaplane`, or `apps.plex.server_name`, so it isn't
+  taken for another Plex of yours. A new Plex shows its container's random hostname.
+- **Its libraries** (`plex.library_movies`, `plex.library_tv`): `Movies` on
+  `/data/media/movies` and `TV Shows` on `/data/media/tv`, the folders Radarr and Sonarr
+  fill, with the agent and scanner Plex's web UI gives a new library, in English. Their
+  other settings are yours.
+- **Sonarr's and Radarr's connections to it:** each arr gets `Plex (Mediaplane)`, which
+  has Plex update its library on each import, with your token (see
+  [Sonarr's README](../sonarr/README.md)). The first test of each lists the arr among
+  Plex's devices (Settings, Authorized Devices), as one from the arr's web UI does.
+- **Seerr signs in with your Plex account.** With Seerr in the stack, once Plex is
+  claimed, `apply` signs Seerr in with your token before Seerr is published, and links
+  it to Plex (see [Seerr's README](../seerr/README.md)).
+- **Its login is your own plex.tv account,** never the shared admin.
+  `mediaplane credentials` says so, with Plex's address.
+- **Remote access** stays as Plex sets it: off. So do the settings that may let a client
+  skip Plex's sign-in (above). Plex's relay is on by default; the
+  [threat model](../../docs/security/threat-model.md#t2-someone-on-the-lan-reaches-an-app)
+  says what it allows.
 - **Listing Jellyfin as well** is an error, unless Jellyfin says `enabled: false`.
 - **`VERSION=docker`** leaves the Plex version to Docker, so Plex changes only when the
   pinned image does.
-- **Your token.** `plan` checks that `plex.token` points at a secret that exists, but the
-  token is not used yet.
 
 ## Not built yet
 
-- **Slice 7:**
-  - `mediaplane plex-login`, which signs in through plex.tv and saves your token;
-  - claiming the server with it on first start;
-  - the Movies and TV Shows libraries;
-  - the connections from Sonarr and Radarr;
-  - with Seerr in the stack, its sign-in with your token, and its link to Plex.
+- **Slice 8:** drift detection and Keep mine for what it manages here.
 
 See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Changing it
 
-- **In `stack.yaml`,** under `apps.plex`, you can set `port`, `version` and `env`. The
-  media server that `media_server` names can't be turned off with `enabled: false`:
-  change `media_server` instead. A different `version` is an untested combination, and
-  `plan` warns about it. See the
+- **In `stack.yaml`,** under `apps.plex`, you can set `port`, `version`, `env` and
+  `server_name`. The media server that `media_server` names can't be turned off with
+  `enabled: false`: change `media_server` instead. A different `version` is an untested
+  combination, and `plan` warns about it. See the
   [`stack.yaml` reference](../../docs/reference/stack-yaml.md).
+- **What Mediaplane manages** (its name, and its libraries' names, kinds and folders) is
+  put back by the next `apply` when changed in Plex. Keep mine comes in Slice 8.
 - **Anything else** goes in `compose.override.yaml` in the Mediaplane home. For example,
   hardware transcoding needs the GPU device:
 
@@ -63,15 +150,15 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Known issues
 
-- **Plex starts unclaimed.** Until Slice 7 claims it for you, you can claim it yourself.
-  Get a claim token at `https://plex.tv/claim`. It expires within four minutes, so save it
-  to `secrets/plex-claim` in the home and run `mediaplane apply` straight away, with:
-
-  ```yaml
-  apps:
-    plex:
-      env:
-        PLEX_CLAIM: { file: secrets/plex-claim }
-  ```
-
-  Remove the line afterwards. `plan` shows Plex being recreated when you do.
+- **Your token is in several places.** Sonarr, Radarr and Seerr hold it, and Plex holds
+  a token of your account: each opens your plex.tv account, and every Plex it reaches.
+  Use a plex.tv account of its own for the stack if that matters to you. The
+  [threat model](../../docs/security/threat-model.md#t4-an-app-is-compromised) says more.
+- **A new token from `plex-login` reaches the arrs only once the old one is refused.**
+  Sonarr and Radarr keep the token they hold while Plex takes it, and get yours at the
+  next `apply` when Plex refuses theirs. Seerr keeps the token it signed in with, and
+  Mediaplane can't give it another yet (Slice 8).
+- **A Plex claimed outside `apply`,** with another account, stays unpublished: see the
+  [runbook](../../docs/runbooks/wiring-failed.md).
+- **The first `apply` needs plex.tv,** from Docker's default bridge network in the image:
+  for the claim token, and for Plex itself to trade it.

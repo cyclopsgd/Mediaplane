@@ -80,7 +80,23 @@ LinuxServer.io image, unmodified.
     failure is Radarr's own message, such as Jellyfin out of its reach. A test that
     fails records a failure in Radarr's status of the connection, as a test from its
     web UI does, and a later pass resets it.
-- **Seerr's link to it.** With Seerr in the stack and Jellyfin as the media server,
+- **Its connection to Plex** (`radarr.connection_plex`), with Plex as the media server.
+  Once Plex is claimed and has its Movies library, `apply` adds `Plex (Mediaplane)`, a
+  Plex Media Server connection, to Radarr:
+  - its host is `plex`, at Plex's own port, without TLS, and it has Plex update its
+    library ("Update Library");
+  - it is made with the same events as Jellyfin's: a film imported, upgraded or
+    renamed, or a film or its file deleted. Which events it has after
+    that is yours;
+  - its token is your Plex token, which Radarr shows masked. `plan` and `apply` check it
+    with Radarr's own test of the connection, as for Jellyfin's, never by comparing it.
+    Radarr's test needs a Movie library in Plex, so the connection comes after it. The
+    first test lists Radarr among Plex's devices (Settings, Authorized Devices), as a test
+    from Radarr's web UI does;
+  - Mediaplane sends your token only to `plex` at its port: a connection held with TLS
+    or a URL base counts as moved, and `apply` puts it back. The same now holds for the
+    connection to Jellyfin.
+- **Seerr's link to it.** With Seerr in the stack,
   `apply` adds `Radarr (Mediaplane)` to Seerr (`seerr.server_radarr`, see
   [Seerr's README](../seerr/README.md)), with Radarr's key, its root folder, and the
   `HD-1080p` quality profile (else `Any`, else Radarr's first) unless
@@ -92,9 +108,8 @@ LinuxServer.io image, unmodified.
 
 ## Not built yet
 
-The rest of the wiring arrives in Slice 7 (see the [roadmap](../../docs/plans/m1-roadmap.md)):
-
-- **Slice 7:** the same connection for Plex, and Seerr's link to it with Plex.
+- **Slice 8:** drift detection and Keep mine for what it manages here. See the
+  [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Changing it
 

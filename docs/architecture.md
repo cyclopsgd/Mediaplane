@@ -1,7 +1,7 @@
 # Architecture
 
 This page is a condensed version of the [M1 design](design/m1-engine-cli.md), §3 to §6,
-covering what is built so far (Slices 1 to 5). The design describes the whole of M1;
+covering what is built so far (Slices 1 to 7). The design describes the whole of M1;
 this page describes what exists.
 
 ## The idea
@@ -13,9 +13,10 @@ You describe the stack you want in one file, `stack.yaml`. Mediaplane then works
   it joins the stack's wiring network, to ask the apps: see [The wiring](#the-wiring)).
   Checking a key or a password can leave small marks in an app: a post-import category
   made in qBittorrent, a failure recorded in an app's status of a client, link or
-  connection, a sign-in in Jellyfin's activity log, and a line in Seerr's log for each of
-  its checks that fails (and one in the arr's, for a key the arr refuses). It never runs
-  an app's first-run setup, nor finishes Seerr's. The
+  connection, a sign-in in Jellyfin's activity log, a line in Seerr's log for each of
+  its checks that fails (and one in the arr's, for a key the arr refuses), and an arr
+  listed among Plex's devices, by the arr's first test of its connection to Plex. It
+  never runs an app's first-run setup, nor finishes Seerr's, and never calls plex.tv. The
   [threat model](security/threat-model.md#what-runs-and-who-can-reach-it) says more;
 - `apply` makes those changes, then plans again to check that nothing is left.
 
@@ -40,9 +41,14 @@ host (Docker)
 │    and its wiring network,
 │    which mediaplane joins
 │
-└─ host helper        container
-     throwaway, during init,
-     plan, apply, vpn-check
+├─ host helper        container
+│    throwaway, during init,
+│    plan, apply, vpn-check
+│
+└─ plex.tv helper     container
+     throwaway, one plex.tv
+     call each, on Docker's
+     default bridge network
 ```
 
 - **`mediaplane-system`** is Mediaplane's own Compose project. Apply never manages it,
@@ -78,11 +84,21 @@ host (Docker)
       rules and their file modes allow;
   - runs as Mediaplane's user, with no capabilities and a read-only root;
   - never pulls an image, and is removed when it exits.
+- **The plex.tv helper.** plex.tv is the one outside service Mediaplane calls: for
+  `plex-login`, for Plex's claim token, and to ask whose a Plex or a Seerr is. Each call
+  runs a throwaway container of its own image, `mediaplane plex-tv`, on Docker's default
+  `bridge` network, which has a route out and reaches none of the stack's networks
+  ([ADR 0012](adr/0012-reach-plex-tv-through-a-short-lived-helper.md)). It can reach
+  what any container there can: the host's published ports, your LAN, and other
+  containers on that bridge. That is harmless while its code is Mediaplane's own and it
+  calls only plex.tv's fixed address. The request, your token in it, goes on its
+  standard input, and the answer comes back as JSON on its standard output. It has no
+  mount and no capabilities, a read-only root, and never pulls an image.
 - **Running from source** (`pnpm mediaplane`, for development), `MEDIAPLANE_IMAGE` is
-  unset. There is no container and no host helper: the CLI runs under Node on the host,
-  and looks at the host itself. It reaches the apps on the wiring network from the host,
-  which reaches every container on a Docker bridge network. That is checked on Docker
-  29.8; CI checks it on Docker 28.
+  unset. There is no container and no helper: the CLI runs under Node on the host, looks
+  at the host itself, and calls plex.tv itself. It reaches the apps on the wiring network
+  from the host, which reaches every container on a Docker bridge network. That is checked
+  on Docker 29.8; CI checks it on Docker 28.
 
 ## The engine
 
@@ -123,7 +139,9 @@ Each part, and where its code is:
 - **status** (`packages/engine/src/status.ts`): each app's container state and health,
   and the last apply.
 - **credentials** (`packages/engine/src/credentials.ts`): the shared admin login, and
-  where each app's web UI is.
+  where each app's web UI is, with its web path (Plex's is `/web`).
+- **plex.tv** (`packages/engine/src/plextv`): the client for plex.tv (its PIN sign-in, a
+  claim token, and whose account a token is), and the helper that runs it in the image.
 - **http** (`packages/engine/src/http`): the client for the apps' APIs (see
   [The wiring](#the-wiring)).
 - **integrations** (`packages/engine/src/integrations`, and `catalog/<app>/integration.ts`):
@@ -134,10 +152,7 @@ Each part, and where its code is:
 - **CLI** (`packages/cli`): the commands, human and `--json` output, and exit codes
   ([reference](reference/cli.md)).
 
-Not built yet:
-
-- Plex, and the links to it (Slice 7); until then, a Plex stack's Seerr isn't wired;
-- drift detection, with Keep mine (Slice 8).
+Not built yet: drift detection, with Keep mine (Slice 8).
 
 ## `plan`
 
@@ -307,9 +322,10 @@ Shows and Movies libraries.
 ## Bootstrap before publish
 
 Jellyfin's startup wizard answers whoever reaches it, and whoever finishes it owns the
-server. So does Seerr's setup: until its first sign-in, anyone who reaches it can sign
-in through a Jellyfin of their own, and be its admin. So `apply` publishes neither
-while it is open (see
+server. An unclaimed Plex lets whoever reaches it claim it for their own plex.tv
+account. So does Seerr's setup: until its first sign-in, anyone who reaches it can sign
+in through a Jellyfin or a Plex account of their own, and be its admin. So `apply`
+publishes none of them while it is open (see
 [T16](security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)
 for what voids that):
 
@@ -317,28 +333,36 @@ for what voids that):
 plan
   │ Jellyfin: system.xml says
   │ the wizard isn't done;
+  │ Plex: Preferences.xml
+  │ holds no token;
   │ Seerr: settings.json names
-  │ no media server, or
+  │ no media server; or
   │ Mediaplane has no record
-  │ that it set Seerr up
+  │ that it set Plex or Seerr
+  │ up
   ▼
 up --wait
-  │ both with no port
+  │ each with no port
   │ published: one more
   │ Compose file, on stdin,
-  │ resets their ports
+  │ resets their ports (and
+  │ gives Plex PLEX_CLAIM)
   ▼
 first-run setup, over the
 wiring network, in order
   │ Jellyfin: the wizard, as
   │ the shared admin; make
   │ the key, keep it
+  │ Plex: wait for its claim;
+  │ plex.tv must say it is
+  │ yours
   │ Seerr: sign in through
-  │ Jellyfin, as that admin;
+  │ Jellyfin, as that admin,
+  │ or with your Plex token;
   │ sign out
   ▼
 up --wait again
-  both published
+  each published
 ```
 
 - **Which apps.** An app with a `bootstrap` in its catalog entry, whose key isn't stored,
@@ -358,18 +382,52 @@ up --wait again
   (exit 1), until the file is readable. An app with a setup can't run inside another
   app's network, which would publish its ports: `plan` fails with
   `bootstrap.network-via`.
+- **Plex** (spec §6.4). Its first start gets `PLEX_CLAIM`: a claim token of your plex.tv
+  account, which `apply` fetches with your Plex token (`plex.token`) the moment before,
+  through the plex.tv helper, since it lasts four minutes and works once. The extra file
+  on Compose's standard input sets it, as `"${MP_START_PLEX_PLEX_CLAIM}"`, which Compose
+  takes from its own environment, so it is in no file. The start step asks for it before
+  it changes anything. Without one (no token, plex.tv refusing your token or not
+  answering, or the helper failing), it fails, and stops a Plex that runs and isn't yet
+  shown to be yours, such as one an `apply` before this slice published unclaimed. The
+  image trades the claim token at plex.tv for a token of your account, which it saves in
+  `Preferences.xml`. The setup waits, as long as `apply` waits for an app, until Plex
+  says it is claimed, asking `/identity` without your token, then asks plex.tv whose
+  account the token in Plex's `Preferences.xml` is: it must be yours. That is plex.tv's
+  answer, which Plex's admin can't shape: they can change Plex's machine identifier
+  (probed), but not give Plex a token of your account. Only a 401 from plex.tv counts as
+  a refusal; a 403, a 429, a 5xx, no answer, or a failure of the helper or of Docker on
+  the way is "couldn't tell", and keeps Plex unpublished too. Only then does Plex get
+  your token, on one call: the read of its settings (`GET /:/prefs`). The setup checks
+  that none lets a client in without a sign-in: `allowedNetworks` empty,
+  `enableLocalSecurity` at `-1` (Plex's default) or `1`, and `DlnaEnabled` off. Anyone
+  could set them while Plex was unclaimed, and they survive the claim. It checks them
+  before Plex's first publish only, never on a later `apply`. Plex is set up when
+  `Preferences.xml` holds a token and Mediaplane's record names it. Its setup makes no
+  key: Plex's key is your token.
+- **Seerr on a Plex stack** signs in with your Plex token (`POST /api/v1/auth/plex`),
+  which makes your plex.tv account its admin, and Plex its media server type; then it
+  signs out. A Seerr set up already is checked with its key: its admin's plex.tv account
+  must be the one plex.tv says your token is, and its Plex unset or the stack's, without
+  TLS. It is never signed in to, which would give your token to whoever set it up.
+- **Seerr's first sign-in must be its admin's,** through Jellyfin or with your Plex
+  token: Mediaplane asks the session it got whose it is (`GET /api/v1/auth/me`), and
+  anything but Seerr's first user means someone signed in first. Mediaplane then signs
+  out, and Seerr is treated as set up by someone else: it stays unpublished, and the
+  error gives the safe ways out first.
 - **In order.** The setups go in the order of the apps' integrations: Seerr comes after
-  Jellyfin. A setup that can't run yet waits: Seerr's, while Jellyfin refuses the shared
-  admin's password, or after Jellyfin's own setup failed. The app stays as it was,
-  unpublished; the step warns (`bootstrap.waiting`), the wire step wires the rest and
-  skips its resources, and verify fails with the setup left to do. The next `apply` sets
-  it up, once the wire step has set Jellyfin's admin. Mediaplane asks the app once more
-  after it waits: if someone else finished its setup meanwhile, the step fails as for a
-  claimed setup (below), and the app stays unpublished.
+  Jellyfin, or Plex. A setup that can't run yet waits: Seerr's, while Jellyfin refuses the
+  shared admin's password, or after Jellyfin's or Plex's own setup failed. The app stays
+  as it was, unpublished; the step warns (`bootstrap.waiting`), the wire step wires the
+  rest and skips its resources, and verify fails with the setup left to do. The next
+  `apply` sets it up, once the wire step has set Jellyfin's admin. Mediaplane asks the app
+  once more after it waits: if someone else finished its setup meanwhile, the step fails
+  as for a claimed setup (below), and the app stays unpublished.
 - **No port at all.** The file Compose gets on its standard input, after
   `compose.override.yaml`, sets the app's `ports` to `!reset []`, so the override's ports
   go too. `compose.yaml` itself always has the ports, so the stack runs as written
-  without Mediaplane, and then Jellyfin and Seerr start published with their setup open.
+  without Mediaplane, and then Jellyfin, Plex and Seerr start published with their setup
+  open.
   The reset covers `ports` only: an override with `network_mode: host`, or a network
   shared with a service that publishes, voids the guarantee (see
   [T16](security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)).
@@ -406,7 +464,9 @@ the shared admin login in Sonarr, Radarr, Prowlarr, qBittorrent and Jellyfin; th
 download path: qBittorrent's settings and categories, and Sonarr's and Radarr's download
 client and root folder; the indexers: Prowlarr's links to Sonarr and Radarr, and its
 indexer proxy; the media server: Jellyfin's libraries, and Sonarr's and Radarr's
-connection to it; and the requests app: Seerr's links to Jellyfin, Sonarr and Radarr.
+connection to it, or on a Plex stack, Plex's name and libraries, and Sonarr's and
+Radarr's connection to it; and the requests app: Seerr's links to its media server,
+Sonarr and Radarr.
 
 ```text
 mediaplane-system
@@ -519,7 +579,45 @@ mediaplane (the stack)
     connection that has Jellyfin update its library when a file is imported, upgraded,
     renamed or deleted. Its key is checked with the arr's own test, which calls Jellyfin
     with it. It needs Jellyfin's admin in place: while Jellyfin is still to be set up,
-    `plan` leaves the connection's key for `apply` to check.
+    `plan` leaves the connection's key for `apply` to check. A connection set by hand to
+    TLS or a URL base reads as moved, and the next `apply` puts back `jellyfin:8096`
+    without either, so the key goes only to the stack's own address.
+
+- **The media server, on a Plex stack:**
+
+  ```text
+  sonarr, radarr
+    │ "Plex (Mediaplane)":
+    │ your Plex token, update
+    │ the library on import
+    ▼
+  plex
+    named "Mediaplane"
+    Movies, TV Shows
+  ```
+
+  - Plex's name (`plex.server`) is `Mediaplane`, or `apps.plex.server_name`: a new Plex
+    shows its container's random hostname, which could be taken for another Plex of
+    yours. It is set with `PUT /:/prefs`, with your token.
+  - Its libraries (`plex.library_movies`, `plex.library_tv`) are `Movies` and `TV Shows`,
+    on `/data/media/movies` and `/data/media/tv`, with the agent and scanner Plex's web
+    UI gives a new one (`tv.plex.agents.movie` and `Plex Movie`,
+    `tv.plex.agents.series` and `Plex TV Series`), in English (`en-US`). A library is
+    known by name; one that holds another kind is refused, since Plex can't change it.
+  - Plex answers before it has started for good, and takes no change then (`400`, "the
+    server is still starting up"). So the wire step waits until `/identity` no longer
+    says `startState`.
+  - Sonarr's and Radarr's connections to Plex (`<arr>.connection_plex`) reach it at
+    `plex:32400`, without TLS or a URL base, with your Plex token, and have Plex update
+    its library on each import. They share their code with the Jellyfin connections
+    (`catalog/_shared/servarr-connection.ts`). The token is checked with the arr's own
+    test, never compared, and an arr's test needs a Plex library of its kind, so each
+    requires that library. A connection held with TLS or a URL base reads as moved, so
+    the token is never sent to an address read from the arr.
+  - Mediaplane never sets Plex's remote access, nor the settings that let a client in
+    without a sign-in (`allowedNetworks`, `enableLocalSecurity`, `DlnaEnabled`): Plex's
+    defaults stay. Its first-run setup checks the second three before Plex is first
+    published (above).
 
 - **The requests app:**
 
@@ -565,6 +663,13 @@ mediaplane (the stack)
     web UI stops offering its admin the setup wizard.
   - A request goes from Seerr to the arr through TMDB, an outside service: the end-to-end
     tests stop at the links, and Seerr's own test of each.
+  - On a Plex stack, its media server (`seerr.media_server_plex`) is Plex, at
+    `plex:32400` without TLS (Seerr's Plex has no URL base), with the Movies and TV Shows
+    libraries enabled. Seerr reaches Plex with its admin's token, yours, from its first
+    sign-in: the link holds no secret of Mediaplane's.
+  - Seerr keeps the address it is given even when it couldn't save the link, but sets the
+    server's own id (`serverId` for Jellyfin, `machineId` for Plex) only once it has. A
+    link with an empty id reads as not linked, and `apply` links it again.
 
 - **Each resource** is one of:
   - `create` or `update`: the app lacks it, or a managed field or a secret differs. A
@@ -656,7 +761,6 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
-- Plex (Slice 7);
 - drift detection (Slice 8);
 - releases (Slice 9);
 - the web panel (M2).

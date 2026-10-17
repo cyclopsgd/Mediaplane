@@ -53,6 +53,33 @@ The Jellyfin test (`test/e2e/jellyfin.e2e.test.ts`) shows Jellyfin set up before
 port is published, its libraries, and Sonarr's and Radarr's connections to it, each put
 back after a change by hand. It needs no outside account.
 
+The Plex test (`test/e2e/plex.e2e.test.ts`) runs a real Plex against a fake plex.tv, so
+it needs no account either. Plex's image sends the fake claim token to the real plex.tv,
+which refuses it, so Plex never claims itself, and the test checks that it is never
+published. The deploy test runs `mediaplane plex-login` from the image, through its
+helper and the proxy: it asks the real plex.tv for one PIN, which needs no account, and
+passes when plex.tv is down too.
+
+A real claim needs a real account's token, which a pull request from a fork must never
+get. So the same file's last test runs only in the nightly Plex job
+(`.github/workflows/plex.yml`), and is skipped without a token:
+
+- it runs on `main` only, on a schedule or by hand, never for a pull request, and does
+  nothing without the `PLEX_TOKEN` secret;
+- it names `environment: plex`, a GitHub environment that can hold the secret and
+  limit it to `main`;
+- it claims a real Plex with the test account, wires the stack, checks each link, and
+  checks that the Plex it publishes holds no `PLEX_CLAIM`;
+- it hides each value it makes from the token (`::add-mask::`), as GitHub hides only
+  the secret itself;
+- its two architectures run one at a time, sharing the test account, and each removes
+  only the servers it noted, in a last step that runs whatever happened.
+
+Set `PLEX_TOKEN` to the token of a plex.tv account kept for tests, never your own. To
+run that test locally, put such a token in a file only you can read, and point
+`MEDIAPLANE_E2E_PLEX_TOKEN_FILE` at it. The test removes the server it claimed from the
+account when it ends, passed or not.
+
 The indexers test (`test/e2e/indexers.e2e.test.ts`) serves made-up indexers of its own,
 from a container outside the stack, so it never touches a real one. It needs the
 internet all the same, and so does the apply test (`test/e2e/apply.e2e.test.ts`), which
@@ -85,6 +112,8 @@ CI runs these jobs:
 - an image build on each of the two, scanned with Trivy (its Alpine packages and its Go
   binaries), which fails on a critical vulnerability that has a fix;
 - gitleaks, over the full history.
+
+Apart from these, the nightly Plex job (above) runs on `main` only.
 
 A change to docs only skips the end-to-end and image jobs. Branch protection should
 require only the last job, `All checks passed`, because the per-architecture checks

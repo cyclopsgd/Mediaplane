@@ -540,14 +540,14 @@ in `compose.override.yaml` is therefore wired automatically.
 | Command | Purpose |
 |---|---|
 | `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt, including the format of `--vpn-addresses` (on a terminal, only the refusal of `--vpn-addresses` without `--vpn-provider`, and whether `--lan-subnet` fits this host, wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file. It also checks the home first, creates the data folder, adds a note before each question, and takes the WireGuard key on a hidden prompt (§11, Slice 3b) |
-| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key or password check can leave a mark in an app: §11, Slices 3c, 4, 5 and 6); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
+| `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key or password check can leave a mark in an app: §11, Slices 3c, 4, 5, 6 and 7; it never calls plex.tv); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
 | `apply` | Converge on `stack.yaml` (§5) |
 | `status [app]` | Container health, VPN state, and the last apply's outcome |
 | `drift` | Report drift only (§6.3) |
 | `keep <path>` | Keep mine: record a drifted value or a deletion as an override |
 | `history [id]` | List change records, or show one in full |
 | `credentials [app]` | Show the shared admin login and per-app URLs (never printed in `--json` unless `--reveal` is given) |
-| `plex-login` | Run the plex.tv PIN flow and save the token to `secrets/plex-token` |
+| `plex-login` | Run the plex.tv PIN flow and save the token where `plex.token` names a file (`secrets/plex-token`), through a short-lived helper in the image (§11, Slice 7) |
 | `vpn-check` | Check that qBittorrent reaches the internet only through the VPN: its network, Gluetun's state and the route into the tunnel, then its egress IP against the host's (`--no-egress` skips that) |
 | `migrate` | Rewrite `stack.yaml` to the current schema version, preserving comments |
 
@@ -1508,9 +1508,10 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     wire step, and the next `apply` signs Seerr in. The roadmap's sign-in that `requires`
     `jellyfin.admin` is this wait: a setup runs before the wire step, so it can't require
     a resource; Seerr's link to Jellyfin requires it.
-  - **With Plex, Seerr isn't wired until Slice 7** (`notWiredYet`): the resolver leaves
-    out its API, integration and setup on a Plex stack, so nothing calls it there, and
-    its `login` says Slice 7. Its login is `'shared'` with Jellyfin, through Jellyfin.
+  - **With Plex, Seerr wasn't wired by this slice:** the resolver left out its API,
+    integration and setup on a Plex stack, so nothing called it there, and its `login`
+    said Slice 7, until Slice 7 wired it and removed that (below). Its login is
+    `'shared'` with Jellyfin, through Jellyfin.
 - **Seerr's resources** (§6.2), after Jellyfin, Sonarr and Radarr, and Prowlarr when the
   stack has it (so §6.2's order doesn't rest on an id tie-break):
   - `seerr.media_server`: Jellyfin at its service and port (`hostname` and `port`, as
@@ -1579,3 +1580,185 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   the key Seerr made itself in Jellyfin, and the keys Seerr shows for its servers.
 - **No new Docker API call:** Seerr's setup is the same unpublished `up` and recreate as
   Jellyfin's (§7.2(2)).
+
+### Slice 7: Plex (2026-10-16)
+
+- **plex.tv, from the image, through a short-lived helper** (§3, §7.2, ADR 0012).
+  Mediaplane's container has no route out (ADR 0011), and the proxy's allow-list stays
+  as it is. Each plex.tv call is one `docker run --rm --interactive` of Mediaplane's own
+  image, `mediaplane plex-tv`, on Docker's default `bridge` network: it has a route
+  out, and reaches neither the wiring network nor the stack's own (probed), where the
+  host network reaches both (probed). It has no mount, no socket, no capability, a
+  read-only root, `no-new-privileges`, Mediaplane's user, `--pull never`, and the label
+  `io.mediaplane.helper=plex-tv`. Its request, with any token in it, is one line of JSON
+  on its standard input (`mediaplane.plex-tv/v1`), never on a command line or in its
+  environment, and its answer one line on its standard output. It takes four strict
+  requests (a PIN, the wait for its sign-in, a claim token, and the account a token is
+  of), and fixes the address: plex.tv's own. Each run may take as long as the client's
+  three tries and the waits between them, with a minute more for the container (170 s);
+  a helper that runs out of time is plex.tv unanswered (`unreachable`, so unsure), as the
+  client would have said. `docker run -i` uses `create`, `attach`, `start` and `wait`,
+  which the allow-list has for the host helper. The default bridge reaches the host's
+  published ports, the LAN and other containers on it too, which is harmless while the
+  helper's code and plex.tv's address are fixed. Run from source, the CLI calls plex.tv
+  itself: ADR 0011 keeps only the container offline. The client has an HTTPS agent of
+  its own, reads at most 1 MiB, tries a GET twice more after 5 and 15 seconds when
+  plex.tv didn't answer, failed (5xx), asked it to wait (429) or refused the request
+  but not the token (403), never a POST, and its messages name the method and path
+  only, never a query or a value.
+- **What plex.tv's answers mean.** Only a 401 is "refused" (`refused`). A 403, a 429, a
+  5xx or no answer is "couldn't tell" (`unsure`), and so is any helper or Docker error
+  on the way to plex.tv (`failedCall`, which names only the error's kind): it keeps
+  Plex and Seerr unpublished. A 404 for a sign-in's PIN is `expired`; another answer
+  is `protocol`.
+- **`mediaplane plex-login`** (§5.2, §6.1). It asks plex.tv for a strong PIN (25
+  characters, 30 minutes, probed), prints a link to `app.plex.tv/auth` with it, and asks
+  every two seconds until someone signs in, the PIN runs out, or `--timeout` seconds
+  (1 to 1800) pass. The PIN belongs to a client id made for that sign-in
+  (`mediaplane-<uuid>`), which only can read it (probed: another id gets 404), and to the
+  product `Mediaplane`; the account's other calls use the fixed id `mediaplane`, which
+  adds no device (probed). The token is the account's long-lived one, which the PIN
+  gives (§10). It is saved, 0600, never half-written, where `plex.token` names a file;
+  `secrets/` is made 0700. A saved token plex.tv takes is kept unless `--force`; one it
+  refuses (401) is replaced; one plex.tv can't say about ("couldn't tell", above) is
+  kept, and the message says so, with `--force` as the way past. "Couldn't reach
+  plex.tv" means no answer at all. A token file or `secrets/` folder that can't be read
+  stops it before any PIN, even with `--force`. A `plex.token` read from the environment
+  is refused: there is nowhere to save it. It prints the link, never the token, and
+  with `--json`, `mediaplane.plex-login/v1`, with the link on stderr.
+- **Plex is claimed before it is published** (§5 step 9, §6.1, §6.4). An unclaimed Plex
+  answers anyone who reaches it at an address, and `POST /myplex/claim` claims it for
+  the caller's account with no sign-in (probed: 200). So Plex has a `bootstrap`, keyless
+  as Seerr's (its key is your token), and starts unpublished.
+  - **The claim token** is fetched by the start step, just before `up`, with your token
+    (`GET /api/claim/token.json`), and only for an app the plan starts unpublished whose
+    setup isn't done (`Bootstrap.firstStart`). It lasts four minutes and works once. It
+    reaches Plex as `PLEX_CLAIM`, in the extra Compose file on standard input, as
+    `"${MP_START_PLEX_PLEX_CLAIM}"`, which Compose takes from its environment (Compose
+    2.38.2 and 5.5.1, probed); the publishing `up` doesn't pass it. It is redacted in
+    `up`'s errors. It is fetched before the start step changes anything (before
+    Mediaplane leaves the wiring network, and before the VPN's guests are stopped). With
+    no token, or no claim token, the step fails, and stops a running app it was for, and
+    says so: a Plex whose setup isn't done isn't shown to be yours, and must not stay
+    published, as one an `apply` before this slice published unclaimed would. Plex's
+    setup never holds your token: only the one read of its settings, once ownership is
+    proven, carries it.
+  - **The setup** waits, as long as `apply` waits for an app (`AppApi.until`), until
+    `/identity`, asked without your token (`until`'s `anonymous`, as `open` and the
+    re-check before publishing ask it), says `claimed`: the image starts Plex once for its
+    config, unclaimed, and the container can be healthy then (probed). Then plex.tv is
+    asked whose account (`GET /api/v2/user`) the token in Plex's `Preferences.xml`
+    (`PlexOnlineToken`) is, which plex.tv answers with the server's owner (probed), and
+    whose your token is. Not the same is claimed (`auth`). Plex's admin can set its
+    machine identifier (`PUT /:/prefs?MachineIdentifier=…`, probed), so that can't decide,
+    nor can anything else Plex says; Plex can hold a token of your account only through a
+    claim token of yours. Plex's token refused (401, as once the server is removed from
+    its account, probed) is claimed too; plex.tv unsure (a timeout, a 5xx, a 429, a 403,
+    no connection, or a helper or Docker error) is `unsure`, as is a claimed Plex whose
+    file holds no token; your token refused, or the file unreadable, is `rejected`. All
+    keep Plex unpublished, as any failure of a keyless setup does. Only then does Plex get
+    your token: the setup reads its preferences (`GET /:/prefs`), and refuses (`rejected`)
+    a Plex that could let a client in without a sign-in: `allowedNetworks` not empty,
+    `enableLocalSecurity` other than `-1` (Plex's default; a claimed Plex at `-1` refused
+    a client with no token, probed) or `1`, or `DlnaEnabled` not off, or any of them
+    missing or of another type (`OPEN_SETTINGS`). Anyone could set them over
+    `PUT /:/prefs` while Plex was unclaimed, and they survive the claim (probed). The
+    message names each, and the remedy: stop Plex, delete the attribute in
+    `Preferences.xml` or set its default as the file writes it (`allowedNetworks=""`,
+    `enableLocalSecurity="-1"`, `DlnaEnabled="0"`), then `apply`. They are checked in the
+    setup only, before the first publish, so a value set later, on purpose, stays. One
+    that never says `claimed` stays unpublished, and the next `apply` fetches a new claim
+    token.
+  - **Done** is `Preferences.xml` holding `PlexOnlineToken`, and `setUp` naming Plex.
+  - **Claimed by another account:** the remedies are, in order, `plex-login` as that
+    account if it is yours; removing Plex's `PlexOnline*` attributes, which the next
+    `apply` claims again with your account, keeping Plex's libraries and machine
+    identifier (probed); and, last, starting it afresh (`Bootstrap.claimedHint`).
+- **Plex's resources** (§6.2):
+  - `plex.server`: `name`, Plex's `FriendlyName` (`PUT /:/prefs`, probed), `Mediaplane`
+    or `apps.plex.server_name` (a new option, 1 to 64 characters), so it isn't taken for
+    another Plex of yours: a new Plex shows its container's random hostname (probed).
+  - `plex.library_movies` and `plex.library_tv`: `Movies` on `/data/media/movies` and
+    `TV Shows` on `/data/media/tv` (`name`, `type`, `location`), with the agent and
+    scanner Plex's web UI gives (`tv.plex.agents.movie` and `Plex Movie`,
+    `tv.plex.agents.series` and `Plex TV Series`) and `en-US`, which Plex needs (400
+    without, probed). Known by name; one of the other kind is refused, as Plex can't
+    change it (400, probed). An update sends the agent it holds, which Plex needs, and
+    replaces the locations.
+  - Plex takes no change until it has started (`/identity` without `startState`): it
+    answers 400 "the server is still starting up" before (found by the nightly test).
+    So an app's API may say when it has started (`ApiSpec.started`), and the wire step
+    waits for that.
+  - **Never set:** remote access (`PublishServerOnPlexOnlineKey`, off by default) and
+    the networks allowed without auth (`allowedNetworks`, none by default): Plex's
+    defaults stay (probed), the second checked empty by the setup. Its relay
+    (`RelayEnabled`, on) is left to you.
+- **Sonarr's and Radarr's connections to Plex** (§6.2): `<arr>.connection_plex`,
+  `Plex (Mediaplane)`, a `PlexServer` connection at `plex:32400`, without TLS or a URL base,
+  with `updateLibrary` and the Jellyfin connection's events, and `authToken`: your Plex
+  token, a secret the arr shows masked, checked with the arr's own test, never compared.
+  The test takes your token or Plex's own (probed), and needs a Plex library of the
+  arr's kind ("At least one TV library is required", found by the nightly test), so
+  each requires that library. Both connections now share `servarrMediaServer`
+  (`catalog/_shared/servarr-connection.ts`). The address held is observed with TLS and
+  the URL base, so a connection held with either reads as moved, and the update sends
+  `useSsl: false` and `urlBase: ''`: the key goes only to the stack's address. That is
+  new for the Jellyfin connection too.
+- **Seerr on a Plex stack** (§6.1, §6.2). S6's stand-in, which left Seerr unwired on a
+  Plex stack, is gone.
+  - **Its setup** signs in with your token (`POST /api/v1/auth/plex`, probed on Seerr
+    3.5), once Plex's setup is done (Seerr comes after Plex), which makes your plex.tv
+    account its admin, then signs out. Seerr checks the token at plex.tv, and answers
+    500 when it can't, which fails the setup. A Seerr found set up is Mediaplane's only
+    when its admin's `plexId` (`GET /api/v1/auth/me`) is your account's id, which
+    plex.tv gives for your token (`GET /api/v2/user`), and its Plex is unset or the
+    stack's without TLS (`GET /api/v1/settings/plex`), asked with its key: it is never
+    signed in to, which would hand your token to whoever set it up. Only that account's
+    token makes it Seerr's admin, so Seerr's admin can't shape the answer. Questions
+    fail closed, as on a Jellyfin stack.
+  - **Its first sign-in must be its admin's,** on either stack (tightening S6's
+    Jellyfin path): the session Mediaplane gets is asked whose it is
+    (`GET /api/v1/auth/me`), and anything but Seerr's first user (`id` 1) is someone
+    who signed in first. Mediaplane signs out, and the setup fails as claimed (`auth`,
+    or `unsure` when Seerr didn't answer), with the safe remedies first
+    (`Bootstrap.claimedHint`, which now holds Seerr's own, the engine keeping a plain
+    fallback).
+  - `seerr.media_server_plex` (a resource of its own, since a resource's name can't
+    change with the stack): Plex at `plex:32400`, without TLS (Seerr's Plex has no URL
+    base, probed), with Movies and TV Shows enabled. Seerr reaches Plex with its admin's
+    token, so the link holds no secret of Mediaplane's. With TLS, `hostname` is the URL
+    Seerr calls, so it differs and is put back. It requires `plex.server` and both
+    libraries.
+  - A media-server link with an empty `machineId` (Plex) or `serverId` (Jellyfin) reads
+    as not linked: Seerr keeps an address it couldn't save a link for (probed for Plex),
+    and sets the id only once it has. `apply` links it again.
+- **Logins** (§6.1): an app's `login` is `'shared'`, `{ own: 'Plex' }` (your plex.tv
+  account), or `{ comingIn: … }`, or a function of the stack: Plex's is your own, and
+  Seerr's is Plex's on a Plex stack. `mediaplane credentials` says "sign in with your
+  own Plex account". An app may have a web path (`webPath`): Plex's is `/web`.
+- **`plan`'s marks** (§5.2): an arr's first test of its connection to Plex lists the arr
+  among Plex's devices (probed), as a test from its web UI does. `plan` never calls
+  plex.tv, never claims Plex and never signs Seerr in: a claim token works once.
+- **Secrets** (§6.3, §7): your Plex token is a user secret, read once per run
+  (`userSecrets`), redacted everywhere, and sent only in Plex's `X-Plex-Token` header,
+  once Plex is shown to be yours,
+  (a new key scheme, `x-plex-token`), in request bodies to the arrs and Seerr, and to
+  plex.tv. Claim tokens, plex.tv's answers and Seerr's cookie are redacted too. None is
+  in `compose.yaml`, `.env`, a record, `resources.json` or the output. Every secret you
+  give is redacted, but only those an app's API takes as its key (`api.key.secret`)
+  reach setups and resources as keys (`stackKeys`): the VPN key never does.
+- **Tests** (§8). The every-PR end-to-end test runs Plex against a fake plex.tv, whose
+  claim token Plex's image sends to the real plex.tv, which refuses it (no account is
+  involved), and checks that Plex, unclaimable, is never published. The deploy test
+  runs `plex-login` through its helper from the image: one PIN from the real plex.tv,
+  or, when plex.tv is down, its "couldn't reach plex.tv", so an outage fails no pull
+  request. A real claim needs a real account's token, which fork PRs must never get.
+  The nightly job (`.github/workflows/plex.yml`), on `main` (on a schedule, or by hand,
+  by a maintainer; the job checks the branch), in the GitHub environment `plex`, with
+  the `PLEX_TOKEN` secret, does nothing without it, masks each value it derives
+  (`::add-mask::`), claims a Plex with the real plex.tv, and checks that the Plex it
+  publishes holds no `PLEX_CLAIM`. It runs on amd64 and arm64, one at a time, since
+  both share the test account, and each removes only the servers it noted, in a last
+  step that runs whatever happened (`DELETE /devices/<id>.xml`, probed).
+- **No new Docker API call:** the helper uses the host helper's, and Plex's setup is the
+  same unpublished `up` and recreate as Jellyfin's (§7.2(2)).

@@ -22,12 +22,13 @@ Detailed plans so far:
 - Slice 4: [`m1-s4-indexers.md`](m1-s4-indexers.md) (done).
 - Slice 5: [`m1-s5-jellyfin.md`](m1-s5-jellyfin.md) (done).
 - Slice 6: [`m1-s6-requests.md`](m1-s6-requests.md) (done).
+- Slice 7: [`m1-s7-plex.md`](m1-s7-plex.md) (done).
 
 Where M1 stands (the README shows the same):
 
-- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4, S5 and S6.
-- **Next:** S7 (Plex).
-- **After that:** S8 and S9.
+- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4, S5, S6 and S7.
+- **Next:** S8 (drift detection).
+- **After that:** S9.
 
 ## Slices
 
@@ -185,7 +186,9 @@ and its final review an S5 item, two S8 items, a probe in two others, two S9 tes
 and an S9 docs item. Slice 5 (2026-10-15) added an S6 item, six S8 items and an S9
 item, and extended one, and its final review an S8 item and four S9 items. Slice 6
 (2026-10-16) added an S7 item and changed one, added five S8 items and changed one, and
-added an S9 item and changed one, and its final review an S8 item and an S9 item. Each
+added an S9 item and changed one, and its final review an S8 item and an S9 item. Slice 7
+(2026-10-16) marked the S7 items done, and added five S8 items and three S9 items, and
+its conflict check an S9 item. Each
 slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
@@ -416,22 +419,50 @@ password, which are S3c's (and listed again below).
   route out today (S2c), and stays offline under S3b's decision above (a private wiring
   network). So make the plex.tv calls from a short-lived helper, and record that in the
   threat model.
+  - **Done in S7:** each plex.tv call is a throwaway container of Mediaplane's image on
+    Docker's default bridge network, which reaches none of the stack's networks, with
+    the request on its standard input (ADR 0012, threat model T14). The proxy allows
+    nothing new.
 - **A login of your own for Plex, and for Seerr on Plex.** Plex's login is always
   your plex.tv account, never the shared admin (spec §6.1). With Plex, Seerr's
   first sign-in uses that account too. The catalog's `login` (S3a) is `'shared'`
   or the slice that brings it, so `credentials` says their login arrives in
   Slice 7. Give `login` a value for your own account, and use it for both. Since S6,
-  Seerr's `login` is `'shared'` on a Jellyfin stack, and on a Plex stack the catalog's
-  `notWiredYet` drops Seerr's API, integration and setup and makes its login say
-  Slice 7: remove that once Seerr's Plex sign-in is built.
+  Seerr's `login` was `'shared'` on a Jellyfin stack, and on a Plex stack the catalog
+  dropped Seerr's API, integration and setup and made its login say Slice 7, to be
+  removed once Seerr's Plex sign-in was built.
+  - **Done in S7:** `login` may be `{ own: 'Plex' }`, or a function of the stack; Plex's
+    is your own, and Seerr's is too on a Plex stack. S6's stand-in that dropped Seerr
+    on a Plex stack is gone.
 - **Seerr's Plex sign-in is open too** (S6, from Seerr 3.5's code). Before its first
   user, `POST /api/v1/auth/plex` makes whoever signs in with a plex.tv account Seerr's
   admin, as its Jellyfin sign-in does. Make it a first-run setup before Seerr is
   published, as S6 made the Jellyfin one, and give Seerr's resources a Plex media server.
+  - **Done in S7:** Seerr signs in with your token before it is published, and
+    `seerr.media_server_plex` links it to Plex.
 - **Plex's web UI is at `/web`.** `credentials` prints `http://<address>:<port>`
   for every app, so give the catalog a per-app web path.
+  - **Done in S7:** `webPath`, which `credentials` adds.
 
 **S8:**
+
+- **Seerr keeps the Plex token it signed in with** (S7). After `plex-login` saves a new
+  token, Seerr still holds the old one, which it uses to reach Plex, and Mediaplane can't
+  check it with Seerr's key. When the old one is revoked, Seerr's libraries stop
+  syncing. Decide how drift finds it, and whether Mediaplane signs Seerr in again (which
+  needs the setup's care: never to a Seerr that isn't Mediaplane's).
+- **The arrs keep a Plex token while Plex takes it** (S7): a new token from `plex-login`
+  reaches them only once the old one is refused. Decide whether drift moves them to it.
+- **Plex's libraries are known by name** (S7), as Jellyfin's are: one renamed by hand
+  is left, and the next `apply` makes `Movies` or `TV Shows` again on the same folder.
+  Decide whether drift reports the renamed one. A folder added by hand is put back:
+  Keep mine must cover `location`.
+- **Plex's devices grow** (S7): each arr's first test of its connection to Plex lists
+  it among Plex's devices, and a Plex made anew lists them again. Decide whether drift
+  reports old ones.
+- **A Plex claimed by another account stays unpublished on every `apply`** (S7), with
+  its remedies in the error. Decide whether drift reports a Plex whose `PlexOnline`
+  settings were removed by hand while it runs, which then looks unclaimed to it.
 
 - Override field names are case-sensitive, so the managed-field comparison must
   match them exactly.
@@ -565,6 +596,24 @@ password, which are S3c's (and listed again below).
   `Locations` in `update`, with Keep mine's change to how `paths` is held.
 
 **S9 (before going public):**
+
+- **The nightly Plex job** (S7) needs the secret `PLEX_TOKEN` (owner): the token of a
+  plex.tv account kept for tests, never your real one. Until it is set, the job does
+  nothing. It claims a server each night on each architecture, one at a time, since
+  both share the account, and each removes only the servers it noted, in its last
+  step; a run killed before that step leaves one on the account, which the next run
+  doesn't remove. Decide whether a weekly sweep removes every server of the test
+  account.
+- **Keep `PLEX_TOKEN` in the `plex` environment, limited to `main`** (S7, owner). The
+  job already names `environment: plex`, so this needs no workflow change. The job
+  checks its branch, but only the environment's limit stops a branch's own copy of the
+  workflow from reading the secret, for whoever can push a branch.
+- **A 429 from plex.tv counts as "couldn't tell"** (S7): it is retried after 5 and 15
+  seconds, and still fails closed, but its error says to run `apply` again rather than
+  that plex.tv refused. Revisit if plex.tv's limits bite.
+- **Docker's default bridge network** (S7): the plex.tv helper needs it. A daemon set up
+  with `"bridge": "none"` fails the helper. Decide whether `plan` checks for it on a Plex
+  stack.
 
 - **Repo setup (owner):** enable GitHub private vulnerability reporting, which
   `SECURITY.md` relies on. Choose GPL-3.0-only or GPL-3.0-or-later and add the

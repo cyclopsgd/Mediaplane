@@ -11,18 +11,17 @@ Mediaplane runs as two containers in their own Compose project, `mediaplane-syst
 The stack Mediaplane deploys is a separate Compose project, `mediaplane`, so `apply` can
 never touch Mediaplane itself.
 
-> Mediaplane is pre-alpha. Sonarr and Radarr are linked to qBittorrent and Jellyfin,
-> Prowlarr to them, and Seerr to all three; Plex is not wired yet (Slice 7). On a home
-> network, `init` suggests publishing the web UIs on your LAN. When `apply` runs the
-> stack, Jellyfin's startup wizard and Seerr's setup are not published while they are
-> open: Mediaplane finishes them first. The threat model says what voids that:
+> Mediaplane is pre-alpha. Sonarr and Radarr are linked to qBittorrent and the media
+> server, Jellyfin or Plex, Prowlarr to them, and Seerr to all three. On a home network,
+> `init` suggests publishing the web UIs on your LAN. When `apply` runs the stack,
+> Jellyfin's startup wizard, an unclaimed Plex and Seerr's setup are not published while
+> they are open: Mediaplane finishes them first. The threat model says what voids that:
 > [T16](../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
-> With Plex, until Slice 7, Seerr's setup is open to anyone on your LAN until you
-> complete it, so complete it first.
 >
 > qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin have the shared admin login, and
-> Seerr through Jellyfin: `mediaplane credentials` shows it. To keep the web UIs on this
-> machine only, answer `localhost` when `init` asks (see [First run](#first-run)).
+> Seerr through Jellyfin: `mediaplane credentials` shows it. With Plex, you sign in to
+> Plex and Seerr with your own plex.tv account. To keep the web UIs on this machine only,
+> answer `localhost` when `init` asks (see [First run](#first-run)).
 
 ## What you need
 
@@ -102,6 +101,7 @@ It adds `-t` only on a terminal, so it works in scripts too.
 
 ```bash
 mediaplane init         # asks a few questions, then writes /opt/mediaplane/stack.yaml
+mediaplane plex-login   # with Plex: signs you in to plex.tv, saves your token
 mediaplane plan         # checks the host and shows what apply would do
 mediaplane apply        # asks before it changes anything; --yes skips the question
 mediaplane status
@@ -143,8 +143,17 @@ nothing. Without a terminal it asks nothing: pass the flags in the
   - With `lan`, it also asks whether your own network must sign in too
     (`security.login_on_lan`; `--no-login-on-lan` says no).
 
-  With Plex, until Slice 7, Seerr's setup is open to anyone on your LAN until you
-  complete it. Complete it right after the first `apply`.
+- **Your Plex token.** With `media_server: plex`, run `mediaplane plex-login` before the
+  first `apply`. It prints a link: open it in a browser, on any device, and sign in to
+  Plex. It then saves your token where `plex.token` says (`secrets/plex-token`), readable
+  by you only, and never prints it. It waits as long as the link lasts, 30 minutes, or
+  `--timeout` seconds. A saved token that plex.tv still takes is kept, unless you add
+  `--force`; one plex.tv refuses (HTTP 401) is replaced. When plex.tv can't say whether
+  the saved token works (no answer, a 403, a 429, or an error of its own), it keeps the
+  token and says so: run it again later, or add `--force` to sign in anyway. A token
+  file or `secrets/` folder it can't read stops it before it asks plex.tv for a link.
+  `apply` claims Plex for that account before its web UI is published, and signs Seerr
+  in with it.
 
 - **The admin login.** `init` asks for its user name (`--admin-user`), and whether
   Mediaplane should generate its password or read yours from a file in the home
@@ -155,7 +164,8 @@ nothing. Without a terminal it asks nothing: pass the flags in the
   and Seerr through Jellyfin. qBittorrent gets it before its first start, Jellyfin in its
   first-run setup, and Seerr in its first sign-in. `apply` sets it in the first five
   through their API once they run, and sets it again whenever it changes; Seerr follows
-  Jellyfin.
+  Jellyfin. With Plex, you sign in to Plex, and Seerr, with your own plex.tv account
+  instead: `mediaplane credentials` says so.
   - Removing your own `admin.password` brings back the password Mediaplane generated
     before, if it generated one. It keeps it, and never generates another.
 - **The VPN address.** With a VPN provider, `init` asks for your WireGuard address
@@ -196,9 +206,12 @@ host
 │  ├─ mediaplane    the CLI, idle
 │  └─ socket-proxy  Docker API, filtered
 ├─ mediaplane       your stack's apps
-└─ host helper      seconds, during
-                    init, plan, apply
-                    and vpn-check
+├─ host helper      seconds, during
+│                   init, plan, apply
+│                   and vpn-check
+└─ plex.tv helper   seconds, with
+                    Plex: plex-login,
+                    apply
 ```
 
 - **The host helper.** From inside its container, Mediaplane can't see the host's
@@ -215,6 +228,17 @@ host
   device files under `/dev` stay writable where Docker's device rules and their file
   modes allow.
 
+- **The plex.tv helper.** Mediaplane's container has no route out, so for each call to
+  plex.tv (`plex-login`, and with Plex, the claim token and the checks of whose a Plex or
+  a Seerr is, in `apply`) it starts a throwaway container of its own image on Docker's
+  default `bridge` network, which has a route out and reaches none of the stack's
+  networks. Like any container there, it can reach the host's published ports, your
+  LAN and other containers on that bridge, which is harmless while it runs only
+  Mediaplane's own code against plex.tv's fixed address. Your token goes on its standard
+  input, never on a command line. It has no
+  mount, runs as Mediaplane's user, with no capabilities and a read-only root, never
+  pulls an image, and is removed when it exits
+  ([ADR 0012](../docs/adr/0012-reach-plex-tv-through-a-short-lived-helper.md)).
 - **Mediaplane's networks** are internal: the proxy's, and the stack's wiring network
   ([How Mediaplane reaches the apps](#how-mediaplane-reaches-the-apps)). The container
   has no route out. Image pulls happen in the Docker daemon, which has the host's
@@ -251,6 +275,22 @@ stops. The
 [wiring failed runbook](../docs/runbooks/wiring-failed.md) has the ways out. What voids
 the guarantee that Seerr is not published while its setup is open is in
 [T16](../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup).
+
+An update that brings Plex's wiring changes three things you may see:
+
+- A Plex an older `apply` published unclaimed has no token of its claim in its
+  `Preferences.xml`. The next `apply` recreates it unpublished, with a claim token of
+  your account, so run `mediaplane plex-login` first. If it can't get a claim token, it
+  starts nothing, stops that Plex, and says so.
+- A Plex you claimed by hand has no record of Mediaplane's. The next `apply` recreates
+  it once, unpublished, and publishes it again only once plex.tv says the token its
+  claim gave it is your account's, and it lets no client in without a sign-in. If not,
+  it stays unpublished, and the
+  [wiring failed runbook](../docs/runbooks/wiring-failed.md) has the ways out, the
+  ones that keep what Plex holds first.
+- Sonarr's and Radarr's connection to Jellyfin: a TLS setting or a URL base you set in
+  it by hand now reads as moved, and the next `apply` puts back `jellyfin:8096` without
+  either, so Jellyfin's key goes only to the stack's own address.
 
 ## Running without the socket proxy
 
@@ -334,6 +374,48 @@ Each item is a message you may see, then what to do.
 - `the host helper failed: … No such image`
 
   `MEDIAPLANE_IMAGE` must name an image on this host: check `docker image ls`.
+
+- `the plex.tv helper failed: … network bridge not found`, or
+  `the plex.tv helper did not finish within …`
+
+  The plex.tv helper runs on Docker's default `bridge` network. Check that Docker has
+  it (`docker network ls`; `"bridge": "none"` in `daemon.json` removes it), and that
+  containers on it reach the internet.
+
+- `nobody signed in within …; run plex-login again for a new link`, or
+  `the link ran out before you signed in`
+
+  From `mediaplane plex-login`. Run it again, and open the new link: each lasts 30
+  minutes, and works once.
+
+- `couldn't reach plex.tv: …`
+
+  From `mediaplane plex-login`: plex.tv didn't answer at all (no connection, or not in
+  time). In the image, check the plex.tv helper's network, above. When it was checking
+  a saved token, the message adds that the token is kept.
+
+- `plex.tv answered with HTTP …, so Mediaplane can't tell whether the Plex token in … still works. It is kept.`
+
+  plex.tv answered, but with an error of its own, a 429 or a 403, which say nothing of
+  the token. Run `plex-login` again later, or add `--force` to sign in anyway.
+
+- `can't read the Plex token file … (…)`, or `can't make the folder … for the Plex token (…)`
+
+  `plex-login` reads the saved token before it calls plex.tv, even with `--force`, and
+  asks plex.tv for no link while it can't. Check who owns the file and `secrets/`
+  (`ls -ln`): give them back to the user Mediaplane runs as (`MEDIAPLANE_UID`), then
+  run it again.
+
+- `plex.token: file secrets/plex-token is missing, empty or unreadable`
+
+  From `plan`, or the plan `apply` makes first, on a Plex stack: run
+  `mediaplane plex-login`.
+
+- `plex.token is read from the environment variable …, where plex-login can't save it`
+
+  `plex-login` saves your token in a file. Set
+  `plex: { token: { file: secrets/plex-token } }` in `stack.yaml`, or put a token there
+  yourself.
 
 - `the host helper did not finish within 60 s`
 
