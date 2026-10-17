@@ -65,11 +65,13 @@ you only a home it has just created, never a folder that was already there. With
 `stack.yaml` yet, on a terminal, it ends by offering to run `mediaplane init`.
 
 - **Another home:** set `MEDIAPLANE_HOME=/srv/mediaplane` for the first run. It must be
-  an absolute path, without quotes, `$`, `#` or backslashes. The installer writes it into
-  `deploy/.env`, and later runs keep it from there.
+  an absolute path, without quotes, `$`, `#`, backslashes or spaces at either end. The
+  installer writes it into `deploy/.env`, and later runs keep it from there: a
+  different `MEDIAPLANE_HOME` is refused. To move the home, edit `deploy/.env`.
 - **Updating:** run it again after `git pull`. It rebuilds the image, keeps your
   `deploy/.env` as it is, and never touches your stack.
-- **An image of your own:** set `MEDIAPLANE_IMAGE` and it builds nothing.
+- **An image of your own:** set `MEDIAPLANE_IMAGE` for the first run and it builds
+  nothing. Later runs take the image from `deploy/.env`, so change it there.
 - **If `mediaplane` then runs something else** in your shell, `type -a mediaplane` shows
   what, such as an old alias.
 
@@ -546,13 +548,15 @@ only after `apply`, because `plan` joins the network to ask the apps. Bring
 `docker compose -f deploy/mediaplane.compose.yaml down` removes Mediaplane and the proxy,
 and takes Mediaplane off the stack's wiring network. Your stack keeps running. The
 command in the header of `/opt/mediaplane/generated/compose.yaml` manages it without
-Mediaplane. Then remove the command and the deployment's settings:
+Mediaplane.
+
+That command uses your host's Compose. If it is not the version in Mediaplane's image
+(5.5.1), its first `up -d` may recreate most apps once, for the reason in Updating.
+Compose 2.38 does. Their data stays where it is. `docker compose version` shows yours.
+
+To remove the `mediaplane` command and the deployment's settings too:
 
 ```bash
 sudo rm /usr/local/bin/mediaplane
 rm deploy/.env
 ```
-
-That command uses your host's Compose. If it is not the version in Mediaplane's image
-(5.5.1), its first `up -d` may recreate most apps once, for the reason in Updating.
-Compose 2.38 does. Their data stays where it is. `docker compose version` shows yours.

@@ -535,6 +535,30 @@ exit 0
       }),
   );
 
+  it.each([
+    ['export MEDIAPLANE_HOME=/srv/fake-x\n'],
+    ['MEDIAPLANE_HOME="/srv/fake-x"\n'],
+    ['MEDIAPLANE_HOME = /srv/fake-x\n'],
+  ])('refuses a deploy/.env home it would read otherwise than Compose: %j', (env) =>
+    inSandbox({ env, homeVar: null }, (box) => {
+      const result = box.run();
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(
+        "deploy/.env sets MEDIAPLANE_HOME in a form the installer doesn't read",
+      );
+      expect(result.calls).toEqual([]);
+    }),
+  );
+
+  it.runIf(asYou)('reads a deploy/.env home with Windows line ends as Compose does', () =>
+    inSandbox({ homeVar: null }, (box) => {
+      writeFileSync(join(box.deploy, '.env'), `MEDIAPLANE_HOME=${box.home}\r\n`);
+      const result = box.run();
+      expect(result.code, result.err).toBe(0);
+      expect(statSync(box.home).isDirectory()).toBe(true);
+    }),
+  );
+
   it('refuses a MEDIAPLANE_HOME that differs from the home deploy/.env keeps', () =>
     inSandbox({ env: 'MEDIAPLANE_HOME=/srv/fake-elsewhere\n' }, (box) => {
       const result = box.run();
@@ -560,14 +584,17 @@ exit 0
       'Docker Compose v2.20.3 is too old: Mediaplane needs 2.24 or newer',
     ],
     [{ rootless: true }, 'this Docker is rootless'],
-  ] as const)('refuses %o before it changes anything', (options, said) =>
-    inSandbox(options, (box) => {
+  ] as const)('refuses %o before it changes anything', async (options, said) => {
+    // As root, the root check comes first, so only that one is for root.
+    if (!asYou && !('uid' in options)) return;
+    await inSandbox(options, (box) => {
       const result = box.run();
       expect(result.code).toBe(1);
       expect(result.err).toContain(said);
       changedNothing(box, result.calls);
-    }),
-  );
+      expect(existsSync(box.home)).toBe(false);
+    });
+  });
 
   it.runIf(asYou)(
     'stops at a build that fails, before deploy/.env or the container',

@@ -4,7 +4,7 @@
 #
 # Settings, from a .env file next to this one or from the environment:
 #   MEDIAPLANE_IMAGE  the Mediaplane image to run (required: none is published yet)
-#   DOCKER_GID        the group that owns the Docker socket: stat -c %g /var/run/docker.sock
+#   DOCKER_GID        the group that owns the Docker socket: stat -L -c %g /var/run/docker.sock
 #   MEDIAPLANE_HOME   the Mediaplane home, mounted at the same path (default /opt/mediaplane)
 #   MEDIAPLANE_UID    the user that owns the home (default 1000)
 #   MEDIAPLANE_GID    its group (default 1000)
@@ -24,7 +24,7 @@ services:
   socket-proxy:
     image: wollomatic/socket-proxy:1.13.1@sha256:3935b709275e4ec35d6ed5a5c4a1f0d01ed31eec5e7234efc3357ecd47689002
     restart: unless-stopped
-    user: '65534:${DOCKER_GID:?set DOCKER_GID to the group of the Docker socket (stat -c %g /var/run/docker.sock)}'
+    user: '65534:${DOCKER_GID:?set DOCKER_GID to the group of the Docker socket (stat -L -c %g /var/run/docker.sock)}'
     read_only: true
     cap_drop: [ALL]
     security_opt: ['no-new-privileges:true']

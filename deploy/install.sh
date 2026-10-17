@@ -31,10 +31,16 @@ at_least() {
   case $minor in '' | *[!0-9]*) return 1 ;; esac
   [ "$major" -gt "$2" ] || { [ "$major" -eq "$2" ] && [ "$minor" -ge "$3" ]; }
 }
-# The value deploy/.env gives `name`, or nothing.
+# The value deploy/.env gives `name`, or nothing. Only a plain NAME=value line is read,
+# so the installer never reads it otherwise than Compose does: any other form is refused.
 from_env_file() {
   [ -e "$env_file" ] || return 0
-  sed -n "s/^$1=//p" "$env_file" | tail -n 1
+  if grep -Eq "^[[:space:]]*(export[[:space:]]+)?$1[[:space:]]*=" "$env_file" &&
+    ! grep -Eq "^$1=[^[:space:]\"'][^\"']*\$" "$env_file"; then
+    fail "deploy/.env sets $1 in a form the installer doesn't read: write it as one line, $1=value, with no quotes, spaces or export, then run this again"
+  fi
+  # Without a Windows line end or trailing blanks, which Compose drops too.
+  sed -n "s/^$1=//p" "$env_file" | tail -n 1 | tr -d '\r' | sed 's/[[:space:]]*$//'
 }
 
 # The home: the one deploy/.env names once it exists, so a re-run keeps it.
@@ -52,7 +58,7 @@ case $home in
   *) fail "the home must be an absolute path, such as /opt/mediaplane, not \"$home\"" ;;
 esac
 case $home in
-  / | *[\"\'\$\#\\\`]* | *'
+  / | *[\"\'\$\#\\\`]* | *[[:space:]] | *[[:cntrl:]]* | *'
 '*) fail "the home \"$home\" won't do: use a folder below /, with no quotes, \$, #, \\ or backquotes in its name" ;;
 esac
 image=$(from_env_file MEDIAPLANE_IMAGE)
@@ -86,7 +92,8 @@ me="$(id -u):$(id -g)"
 if [ ! -d "$home" ] && ! mkdir -p -- "$home" 2>/dev/null; then
   say "Creating $home, owned by you, needs sudo:"
   sudo mkdir -p -- "$(dirname -- "$home")"
-  sudo mkdir -- "$home"
+  sudo mkdir -- "$home" ||
+    fail "$home is already there, in a folder you can't look into: if it is meant to be Mediaplane's home, run: sudo chown $me \"$home\", then run this again"
   sudo chown -- "$me" "$home"
 fi
 [ -w "$home" ] ||
