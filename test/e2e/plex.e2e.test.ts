@@ -35,6 +35,7 @@ import {
   PLEX_TOKEN_FILE,
   plexToken,
   removeServers,
+  serversToRemove,
 } from './plex-account';
 
 const PROJECT = `mediaplane-e2e-${String(process.pid)}-plex`;
@@ -68,9 +69,10 @@ async function saveToken(home: string, token: string): Promise<void> {
 }
 
 /**
- * Plex's container now: whether its port is published, whether a PLEX_CLAIM is in its
- * environment (yes or no, never its value), and whether it says it is claimed, asked at
- * its address on the wiring network (from source, the host reaches it there).
+ * Plex's container now: whether its port is published, whether a PLEX_CLAIM with a value
+ * is in its environment (yes or no, never its value; an empty one is none), and whether
+ * it says it is claimed, asked at its address on the wiring network (from source, the
+ * host reaches it there).
  */
 async function plexState(runtime: Runtime): Promise<string> {
   const container = (await runtime.containers()).find((c) => c.service === 'plex');
@@ -80,7 +82,9 @@ async function plexState(runtime: Runtime): Promise<string> {
     ['inspect', '--format', '{{range .Config.Env}}{{println .}}{{end}}', container.id],
     { cwd: '/' },
   );
-  const claim = env.stdout.split('\n').some((line) => line.startsWith('PLEX_CLAIM='));
+  const claim = env.stdout
+    .split('\n')
+    .some((line) => line.startsWith('PLEX_CLAIM=') && line !== 'PLEX_CLAIM=');
   const address = (await runtime.wiringAddresses([container.id]))[container.id] ?? '';
   const answer = await fetch(`http://${address}:${String(PLEX)}/identity`, {
     headers: { Accept: 'application/json' },
@@ -135,7 +139,8 @@ describe('Plex that a claim token from plex.tv can not claim', () => {
     try {
       await writeFile(join(home, 'stack.yaml'), plexStack(home));
       // Every PR runs without a plex.tv account: a fake plex.tv hands out a claim token
-      // that the real plex.tv, which Plex's image trades it at, doesn't know.
+      // that the real plex.tv, which Plex's image trades it at, doesn't know. Its server
+      // is closed as this test finishes, passed or failed (fakeHttpApp's onTestFinished).
       const fake = await fakePlexTv();
       await saveToken(home, FAKE_PLEX_ACCOUNT.token);
       const docker = createDockerRuntime({ home, project: PROJECT });
@@ -238,6 +243,47 @@ function noting(client: PlexTv, claims: string[], home: string): PlexTv {
   };
 }
 
+/**
+ * `runtime`, noting Plex's server in `home` for the cleanup as soon as it is known, in the
+ * `up` that starts Plex with its claim token: while that `up` runs, and for up to 30
+ * seconds after, as soon as Plex's Preferences.xml names its machine identifier, which
+ * Plex writes as it first starts, before it is claimed. So the cleanup knows the server
+ * even when the run is cancelled before Plex's setup asks plex.tv whose Plex is.
+ * `noted.atStart` says whether it was noted so.
+ */
+function notingAtStart(
+  runtime: Runtime,
+  home: string,
+  noted: { atStart: boolean },
+): Runtime {
+  return {
+    ...runtime,
+    up: async (seconds, values, unpublished = [], startEnv = {}) => {
+      if (startEnv.plex === undefined) {
+        return runtime.up(seconds, values, unpublished, startEnv);
+      }
+      let until = Number.POSITIVE_INFINITY;
+      const watch = (async () => {
+        while (Date.now() < until) {
+          const { machineId } = await preferencesIn(home);
+          if (machineId !== '') {
+            await noteServer(machineId);
+            noted.atStart = true;
+            return;
+          }
+          await new Promise((wait) => setTimeout(wait, 1000));
+        }
+      })();
+      try {
+        return await runtime.up(seconds, values, unpublished, startEnv);
+      } finally {
+        until = Date.now() + 30_000;
+        await watch;
+      }
+    },
+  };
+}
+
 interface Connection {
   id: number;
   name: string;
@@ -250,6 +296,29 @@ interface Section {
   type: string;
   Location?: { path: string }[];
 }
+
+describe("the nightly job's cleanup", () => {
+  it('removes only the servers the run noted: never another server on the account, nor a device that is no server', () => {
+    // The nightly job's two legs share one test account, and its owner may have more.
+    const devices = [
+      { id: 1, clientIdentifier: 'fake-machine-0001', provides: 'server' },
+      { id: 2, clientIdentifier: 'fake-machine-0002', provides: 'server' },
+      { id: 3, clientIdentifier: 'fake-machine-0003', provides: 'client,player' },
+      { id: 4, clientIdentifier: 'fake-machine-0004', provides: null },
+      { id: 5, clientIdentifier: 'fake-machine-0005', provides: 'server,sync-target' },
+    ];
+    expect(
+      serversToRemove(devices, [
+        'fake-machine-0001',
+        'fake-machine-0003',
+        'fake-machine-0004',
+        'fake-machine-0005',
+        'fake-machine-0006',
+      ]).map((d) => d.id),
+    ).toEqual([1, 5]);
+    expect(serversToRemove(devices, [])).toEqual([]);
+  });
+});
 
 describe.skipIf(PLEX_TOKEN_FILE === undefined)(
   'Plex, claimed for the plex.tv test account (the nightly job)',
@@ -282,12 +351,14 @@ describe.skipIf(PLEX_TOKEN_FILE === undefined)(
         await saveToken(home, token);
         const claims: string[] = [];
         const plexTv = noting(plexTvClient(), claims, home);
+        const docker = createDockerRuntime({ home, project: PROJECT });
+        const noted = { atStart: false };
         const options: ApplyOptions = {
           home,
           catalog,
           host: detectHostFacts(),
           env: process.env,
-          runtime: createDockerRuntime({ home, project: PROJECT }),
+          runtime: notingAtStart(docker, home, noted),
           probe: nodeProbe,
           project: PROJECT,
           plexTv,
@@ -307,7 +378,15 @@ describe.skipIf(PLEX_TOKEN_FILE === undefined)(
         expect(first.actions.find((a) => a.step === 'bootstrap')?.detail).toBe(
           'set up plex, seerr; published plex, seerr',
         );
+        expect(
+          noted.atStart,
+          "Plex's server noted for the cleanup at its first start",
+        ).toBe(true);
         expect(serverToken !== '', 'Plex holds a token from its claim').toBe(true);
+        // The container that publishes Plex was made without its claim token.
+        expect(await plexState(docker)).toBe(
+          `ports 127.0.0.1:${String(PLEX)}, claim none, claimed`,
+        );
         // Whose plex.tv says Plex's own token is: the account's. Ids, never tokens, are
         // compared, and only a yes or no is shown.
         const owner = await plexTv.accountId(serverToken);
@@ -408,13 +487,14 @@ describe.skipIf(PLEX_TOKEN_FILE === undefined)(
 
         // Seerr: its admin is your account, its Plex the stack's, both libraries enabled.
         const seerrKey = { 'X-Api-Key': store.apps.seerr?.apiKey ?? '' };
-        const me = await getJson<{ id?: unknown; plexId?: unknown }>(
+        // Seerr answers its key as user 1, its admin: that user is your account. With
+        // apply's success, whose setup required its sign-in's own session to be user 1,
+        // that shows Seerr's first sign-in, through Plex, made your account its admin.
+        const me = await getJson<{ plexId?: unknown }>(
           SEERR,
           '/api/v1/auth/me',
           seerrKey,
         );
-        // Its first sign-in, through Plex, made your account its admin, user 1.
-        expect(me.id).toBe(1);
         expect(
           me.plexId === (await plexTv.accountId(token)),
           "Seerr's admin is yours",
@@ -471,6 +551,7 @@ describe.skipIf(PLEX_TOKEN_FILE === undefined)(
           'wiring changed',
         ).toEqual([]);
         expect(again.outcome).toBe('no-changes');
+        expect(claims.length, 'no claim token asked for by the second apply').toBe(1);
       } catch (failure) {
         await removeAll().catch((also: unknown) => {
           console.error('teardown failed too:', also);

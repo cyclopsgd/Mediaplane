@@ -13,7 +13,8 @@ permissions:
   contents: read
 
 # One run at a time, never cancelled: a cancelled run could skip its cleanup. Its two jobs
-# run side by side, each with a server of its own.
+# share the test account, so they run one after the other, each with a server of its own,
+# and each removes only the servers it noted.
 concurrency:
   group: plex-nightly
   cancel-in-progress: false
@@ -24,8 +25,12 @@ jobs:
     # This repository's main only: a dispatch runs the chosen branch's copy of this file,
     # so the job checks the branch too. Only a maintainer can dispatch it.
     if: github.repository == 'cyclopsgd/Mediaplane' && github.ref == 'refs/heads/main'
+    # PLEX_TOKEN can move into this environment, limited to main, with no change here; a
+    # repository secret reaches it meanwhile.
+    environment: plex
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - arch: amd64
