@@ -1,6 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FakeReply, FakeRequest } from './http';
+import { testPlexConnection } from './plex';
+import type { FakePlexTvState } from './plextv';
 import {
   fakeProviders,
   fieldValue,
@@ -469,6 +471,29 @@ const TRIGGERS: Readonly<Record<string, readonly string[]>> = {
   ],
 };
 
+/** Sonarr's or Radarr's template for a "Plex Media Server" connection (probed). */
+function plexServerTemplate(service: string) {
+  return {
+    name: '',
+    implementation: 'PlexServer',
+    tags: [],
+    presets: [],
+    ...Object.fromEntries((TRIGGERS[service] ?? []).map((t) => [t, false])),
+    fields: [
+      { name: 'server' },
+      { name: 'host', value: '' },
+      { name: 'port', value: 32400 },
+      { name: 'useSsl', value: false },
+      { name: 'urlBase' },
+      { name: 'authToken' },
+      { name: 'signIn', value: 'startOAuth' },
+      { name: 'updateLibrary', value: true },
+      { name: 'mapFrom' },
+      { name: 'mapTo' },
+    ],
+  };
+}
+
 /** Sonarr's or Radarr's template for an "Emby / Jellyfin" connection. */
 function mediaBrowserTemplate(service: string) {
   return {
@@ -506,10 +531,15 @@ function testConnection(
 ): FakeRefusal | undefined {
   const value = (name: string) => fieldValue(sent, name);
   if (state.testFailure !== '') return refusal('Host', state.testFailure);
+  const base = value('urlBase');
   const why = unreachable(
     `${String(value('host'))}:${String(value('port'))}`,
     {
-      resolves: value('host') === 'jellyfin' && jellyfin.up,
+      // A URL base is another URL than Jellyfin's: `@<host>` is another host.
+      resolves:
+        value('host') === 'jellyfin' &&
+        jellyfin.up &&
+        (base === undefined || base === ''),
       portOpen: value('port') === 8096,
       tls: value('useSsl') === true,
     },
@@ -527,19 +557,23 @@ function testConnection(
 /**
  * Sonarr's and Radarr's connections, as fakeStackApis answers them, as strictly as the
  * arrs: served as their other providers are, one with a trigger on tested as it is saved
- * (one with none is saved untested), and tested against `jellyfin`.
+ * (one with none is saved untested), and tested against `media.jellyfin`, or for a Plex
+ * one, `media.plex` with the tokens `media.plexTv` knows.
  */
 export function fakeServarrConnections(
   request: FakeRequest,
   service: string,
   state: FakeAppState,
-  jellyfin: FakeAppState,
+  media: { jellyfin: FakeAppState; plex: FakeAppState; plexTv: FakePlexTvState },
 ): FakeReply | undefined {
   return fakeProviders<FakeConnection>(request, {
     path: '/api/v3/notification',
     held: state.connections,
-    templates: () => [mediaBrowserTemplate(service)],
-    test: (sent, key) => testConnection(sent, key, state, jellyfin),
+    templates: () => [mediaBrowserTemplate(service), plexServerTemplate(service)],
+    test: (sent, key) =>
+      sent.implementation === 'PlexServer'
+        ? testPlexConnection(sent, key, state, media.plex, media.plexTv)
+        : testConnection(sent, key, state, media.jellyfin),
     testedOnCreate: (sent) =>
       Object.entries(sent).some(([name, on]) => name.startsWith('on') && on === true),
   });

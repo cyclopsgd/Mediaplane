@@ -13,6 +13,7 @@ import {
   readResources,
   readSecretStore,
   renderEnvFile,
+  RESOURCES_PATH,
   secretValues,
   withGeneratedSecrets,
   writePrestartFiles,
@@ -1475,6 +1476,30 @@ apps:
     );
     expect(plex.owner).toBe(FAKE_PLEX_ACCOUNT.id);
     expect((await readSecretStore(home)).setUp).toEqual(['plex']);
+    // Then wired: its name, its libraries, and Sonarr's connection to it with your token.
+    for (const line of [
+      'plex.server: updated name',
+      'plex.library_movies: created',
+      'plex.library_tv: created',
+      'sonarr.connection_plex: created',
+    ]) {
+      expect(first.stdout()).toContain(`  done    wiring ${line}\n`);
+    }
+    expect(plex.friendlyName).toBe('Mediaplane');
+    expect(plex.sections.map((s) => [s.title, s.locations])).toEqual([
+      ['Movies', ['/data/media/movies']],
+      ['TV Shows', ['/data/media/tv']],
+    ]);
+    const connection = apis.apps.get('sonarr')?.connections[0];
+    expect(connection).toMatchObject({
+      name: 'Plex (Mediaplane)',
+      implementation: 'PlexServer',
+    });
+    expect(connection?.fields).toContainEqual({
+      name: 'authToken',
+      value: FAKE_PLEX_ACCOUNT.token,
+    });
+    expectNoSecrets(await readFile(join(home, RESOURCES_PATH), 'utf8'), plexSecrets());
     // One claim token, fetched with your token, and used.
     expect(plexTv.state.claims).toEqual([
       { token: plexTv.state.claims[0]?.token, account: FAKE_PLEX_ACCOUNT.id, used: true },

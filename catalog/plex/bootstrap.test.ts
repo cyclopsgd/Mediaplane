@@ -84,7 +84,8 @@ async function plexOf(deadlineMs = 0) {
     service: 'plex',
     port: 32400,
     endpoint: { host: '127.0.0.1', port: apis.app.port },
-    key: { scheme: 'x-plex-token', value: TOKEN },
+    // As the setup's own client is: Plex's key is yours, which it doesn't carry.
+    key: { scheme: 'x-plex-token' },
     secrets: [TOKEN],
     retry: {
       deadlineMs,
@@ -223,6 +224,21 @@ describe("Plex's first-run setup", () => {
     state.plex.claimingFor = 2;
     expect(await plexBootstrap.run(api, ADMIN, stack, ctx)).toBeUndefined();
     expect(state.plex.claimingFor).toBe(0);
+  });
+
+  it('keeps a Plex of yours unpublished that lets a network in without a sign-in, naming the setting and what to do', async () => {
+    const { api, state, plexTv, ctx, stack } = await plexOf();
+    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    // Set while it was unclaimed, by whoever reached it: it survives the claim (probed).
+    state.plex.allowedNetworks = '192.0.2.0/255.255.255.0';
+    const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
+    expect(failed).toMatchObject({
+      kind: 'rejected',
+      message: `Plex at http://plex:32400 (127.0.0.1) is yours, but lets 192.0.2.0/255.255.255.0 in without a sign-in (allowedNetworks), which Mediaplane never sets: it may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it, clear allowedNetworks in appdata/plex/${PLEX_PREFERENCES}, then run apply again`,
+    });
+    // Cleared, it is taken.
+    state.plex.allowedNetworks = '';
+    expect(await plexBootstrap.run(api, ADMIN, stack, ctx)).toBeUndefined();
   });
 
   it("keeps a Plex that didn't claim itself unpublished, saying why", async () => {
@@ -524,7 +540,25 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
     });
     const published: string[][] = [];
     const given = { plex: { token: TOKEN } };
-    const ctx: BootstrapContext = { keys: given, plexTv: plexTv.client };
+    /** How many of Plex's settings were asked for so far. */
+    const prefsAsked = () =>
+      apis.app.requests.filter(
+        (r) => r.headers.host?.startsWith('plex') === true && r.path === '/:/prefs',
+      ).length;
+    /** That count, as plex.tv started and ended each ask whose a token is. */
+    const prefsWhenAsked: number[] = [];
+    const client: PlexTv = {
+      ...plexTv.client,
+      accountId: async (token) => {
+        prefsWhenAsked.push(prefsAsked());
+        try {
+          return await plexTv.client.accountId(token);
+        } finally {
+          prefsWhenAsked.push(prefsAsked());
+        }
+      },
+    };
+    const ctx: BootstrapContext = { keys: given, plexTv: client };
     const run = async (from: SecretStore) => {
       const pending = (await inspectBootstrap(stack, from)).changes;
       // The start step: Plex's first start, with what its setup gives it.
@@ -536,7 +570,7 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
         store: from,
         values: {},
         given,
-        plexTv: plexTv.client,
+        plexTv: client,
         env: {},
         runtime,
         project: 'mediaplane',
@@ -549,7 +583,19 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
       });
       return { pending, env, ...set };
     };
-    return { home, state, plexTv, published, run, store, ctx, stack, apis };
+    return {
+      home,
+      state,
+      plexTv,
+      published,
+      run,
+      store,
+      ctx,
+      stack,
+      apis,
+      prefsAsked,
+      prefsWhenAsked,
+    };
   }
 
   it('claims a fresh Plex with its claim token, records it, and publishes it', async () => {
@@ -562,13 +608,14 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
     );
     expect(identity.length).toBeGreaterThanOrEqual(3);
     expect(identity.filter((r) => r.headers['x-plex-token'] !== undefined)).toEqual([]);
-    // Plex never got your token: nothing else was asked of it.
+    // Plex got your token only once plex.tv said it is yours: to check that it lets no
+    // network in without a sign-in.
     expect(
       apis.app.requests
         .filter((r) => r.headers.host?.startsWith('plex') === true)
         .filter((r) => r.headers['x-plex-token'] !== undefined)
         .map((r) => r.path),
-    ).toEqual([]);
+    ).toEqual(['/:/prefs']);
     expect(first.pending).toEqual([{ app: 'plex', unpublished: true }]);
     expect(Object.keys(first.env)).toEqual(['plex']);
     expect(state.plex.owner).toBe(FAKE_PLEX_ACCOUNT.id);
@@ -613,7 +660,7 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
   });
 
   it("never hands your token to Plex's setup client, which needs none", async () => {
-    const { run, apis, stack, store } = await stepOf();
+    const { run, apis, stack, store, prefsWhenAsked, prefsAsked } = await stepOf();
     // A setup that, by mistake, asks Plex with the key its client has: none is sent.
     const index = stack.apps.findIndex((app) => app.def.id === 'plex');
     const plex = stack.apps[index] as ResolvedApp;
@@ -635,7 +682,16 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
     await run(store);
     const toPlex = apis.app.requests.filter((r) => r.headers.host?.startsWith('plex'));
     expect(toPlex.some((r) => r.path === '/library/sections')).toBe(true);
-    expect(toPlex.filter((r) => r.headers['x-plex-token'] !== undefined)).toEqual([]);
+    // Only the one read of Plex's settings carries it: nothing else of the setup's.
+    expect(
+      toPlex.filter((r) => r.headers['x-plex-token'] !== undefined).map((r) => r.path),
+    ).toEqual(['/:/prefs']);
+    // And that read comes after plex.tv has said whose Plex it is: Plex had been asked
+    // for none of its settings when both of the setup's asks (yours, Plex's) started and
+    // ended.
+    expect(prefsWhenAsked.slice(0, 4)).toEqual([0, 0, 0, 0]);
+    expect(prefsWhenAsked.length).toBeGreaterThanOrEqual(4);
+    expect(prefsAsked()).toBe(1);
   });
 
   it("asks for a claim token while Mediaplane can't read Preferences.xml, which can't say Plex is claimed", async () => {

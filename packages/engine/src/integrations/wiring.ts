@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { error, warning, type Diagnostic } from '../diagnostics';
 import { dockerUnavailable } from '../host/failure';
 import {
@@ -227,11 +228,24 @@ export function knownSecrets(
 
 export { redactionValues };
 
-/** The app is up, and still takes Mediaplane's key (spec §6.3, "the source"). */
+/**
+ * The app is up, has started if it says when (`started`), and still takes Mediaplane's
+ * key (spec §6.3, "the source"). One still starting at the deadline is unreachable for
+ * now, as one that doesn't answer is.
+ */
 export async function checkApp(reached: ReachedApp): Promise<void> {
   const spec = reached.app.def.api;
   if (spec === undefined) return;
   await reached.api.ready(spec.ready);
+  if (spec.started !== undefined) {
+    const { path, done } = spec.started;
+    if (!done(await reached.api.until(path, z.unknown(), done))) {
+      throw new AppApiError(
+        `${reached.api.name} at ${reached.api.where} is still starting (GET ${path})`,
+        { kind: 'unreachable', transient: true },
+      );
+    }
+  }
   await reached.api.check(spec.check);
 }
 

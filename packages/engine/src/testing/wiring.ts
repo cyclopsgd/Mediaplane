@@ -429,7 +429,11 @@ export async function fakeStackApis(plexTv: FakePlexTvState = freshPlexTv()): Pr
       service === 'prowlarr'
         ? fakeProwlarr(request, state, peek)
         : (fakeServarrDownloads(request, service, state, peek('qbittorrent')) ??
-          fakeServarrConnections(request, service, state, peek('jellyfin')));
+          fakeServarrConnections(request, service, state, {
+            jellyfin: peek('jellyfin'),
+            plex: peek('plex'),
+            plexTv,
+          }));
     return answered ?? { status: 404 };
   });
   return {

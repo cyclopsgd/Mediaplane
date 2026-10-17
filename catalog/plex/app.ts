@@ -1,5 +1,21 @@
 import { defineApp } from '@mediaplane/engine';
+import { z } from 'zod';
 import { plexBootstrap } from './bootstrap';
+import integration from './integration';
+
+/**
+ * Whether Plex has started: /identity answers as soon as Plex listens, with a `startState`
+ * while it still starts its plugins, and Plex refuses a new library until it has none
+ * ("the server is still starting up", probed).
+ */
+function started(answer: unknown): boolean {
+  const parsed = z
+    .looseObject({
+      MediaContainer: z.looseObject({ startState: z.unknown().optional() }),
+    })
+    .safeParse(answer);
+  return parsed.success && parsed.data.MediaContainer.startState === undefined;
+}
 
 export default defineApp({
   id: 'plex',
@@ -29,8 +45,20 @@ export default defineApp({
     ready: '/identity',
     key: { secret: 'token', scheme: 'x-plex-token' },
     check: '/library/sections',
+    started: { path: '/identity', done: started },
   },
   bootstrap: plexBootstrap,
+  integration,
+  options: z.strictObject({
+    server_name: z
+      .string()
+      .min(1)
+      .max(64)
+      .optional()
+      .describe(
+        'The name Plex shows for this server, in its apps and your plex.tv account. Default Mediaplane.',
+      ),
+  }),
   env: () => ({ VERSION: 'docker' }),
   login: { comingIn: 'Slice 7' },
   experimental: false,

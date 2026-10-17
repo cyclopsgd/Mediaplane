@@ -8,7 +8,10 @@ import {
   type WiringContext,
 } from '@mediaplane/engine';
 import {
+  claimFakePlex,
+  FAKE_PLEX_ACCOUNT,
   fakeContainer,
+  fakePlexTv,
   fakeRuntime,
   fakeStackApis,
   freshAppState,
@@ -18,9 +21,14 @@ import {
 } from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { catalog } from '../index';
-import { JELLYFIN_TRIGGERS as RADARR_TRIGGERS } from '../radarr/integration';
-import { JELLYFIN_TRIGGERS } from '../sonarr/integration';
-import { JELLYFIN_CONNECTION_NAME, servarrJellyfin } from './servarr-connection';
+import { LIBRARY_TRIGGERS as RADARR_TRIGGERS } from '../radarr/integration';
+import { LIBRARY_TRIGGERS } from '../sonarr/integration';
+import {
+  JELLYFIN_CONNECTION_NAME,
+  PLEX_CONNECTION_NAME,
+  servarrJellyfin,
+  servarrPlex,
+} from './servarr-connection';
 
 const SONARR_KEY = '0'.repeat(32);
 const JELLYFIN_KEY = '7'.repeat(32);
@@ -54,7 +62,7 @@ function contextOf(
   };
 }
 
-const connection = servarrJellyfin(JELLYFIN_TRIGGERS);
+const connection = servarrJellyfin(LIBRARY_TRIGGERS);
 
 function wanted(ctx: WiringContext = contextOf()) {
   const desired = connection.desired(ctx);
@@ -185,7 +193,7 @@ describe("an arr's connection to Jellyfin", () => {
 
   it("refuses a trigger the arr's template lacks, saying which, before it sends anything", async () => {
     const { api, state } = await sonarr();
-    const odd = servarrJellyfin([...JELLYFIN_TRIGGERS, 'onFictional']);
+    const odd = servarrJellyfin([...LIBRARY_TRIGGERS, 'onFictional']);
     const failure = await odd.create(api, wanted()).catch((cause: unknown) => cause);
     expect(failure).toBeInstanceOf(Error);
     const said = (failure as Error).message;
@@ -314,6 +322,144 @@ describe("an arr's connection to Jellyfin", () => {
       detail: 'jellyfin.admin failed',
     });
     expect(apis.app.requests.filter((r) => r.path.includes('notification'))).toEqual([]);
+  });
+});
+
+describe("an arr's connection to Jellyfin, at another address", () => {
+  it("reads a URL base or TLS as another host, and the update puts the stack's address back", async () => {
+    const { api, state } = await sonarr();
+    const desired = wanted();
+    await connection.create(api, desired);
+    const [made] = state.connections;
+    if (made === undefined) throw new Error('no connection made');
+    // `@<host>` in the URL base takes the arr, and Jellyfin's key, to another host.
+    made.fields = made.fields.map((f) =>
+      f.name === 'urlBase' ? { ...f, value: '@198.51.100.7' } : f,
+    );
+    const held = await connection.observe(api, undefined);
+    expect(held?.fields.host).toBe('http://jellyfin:8096@198.51.100.7');
+    if (held === undefined) throw new Error('the connection is there');
+    await connection.update(api, desired, held);
+    expect(await connection.observe(api, undefined)).toMatchObject({
+      fields: { host: 'jellyfin', port: 8096 },
+    });
+    expect(state.connections[0]?.fields).toContainEqual({ name: 'urlBase', value: '' });
+    expect(state.connections[0]?.fields).toContainEqual({ name: 'useSsl', value: false });
+  });
+});
+
+describe("an arr's connection to Plex", () => {
+  const plexConnection = servarrPlex(LIBRARY_TRIGGERS, 'plex.library_tv');
+  const TOKEN = FAKE_PLEX_ACCOUNT.token;
+
+  /** Sonarr and a Plex your account claimed, with a TV library, as fakeStackApis fakes them. */
+  async function sonarrWithPlex() {
+    const plexTv = await fakePlexTv();
+    const apis = await fakeStackApis(plexTv.state);
+    const state = freshAppState();
+    apis.apps.set('sonarr', state);
+    const plex = freshAppState();
+    claimFakePlex(plex.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    plex.plex.sections.push({
+      key: '2',
+      title: 'TV Shows',
+      type: 'show',
+      agent: 'tv.plex.agents.series',
+      scanner: 'Plex TV Series',
+      language: 'en-US',
+      locations: ['/data/media/tv'],
+    });
+    apis.apps.set('plex', plex);
+    return { api: clientOf(apis), apis, state, plex };
+  }
+
+  const plexWanted = (keys: WiringContext['keys'] = { plex: { token: TOKEN } }) => {
+    const desired = plexConnection.desired(contextOf(stack('plex'), keys));
+    if (desired === undefined) throw new Error('the connection is wanted');
+    return desired;
+  };
+
+  it('reaches Plex by its service and container port, updates its library, and holds your token', () => {
+    expect(plexConnection).toMatchObject({
+      name: 'connection_plex',
+      fields: ['host', 'port', 'updateLibrary'],
+      secrets: ['authToken'],
+      requires: ['plex.server', 'plex.library_tv'],
+    });
+    expect(plexWanted()).toEqual({
+      name: PLEX_CONNECTION_NAME,
+      fields: { host: 'plex', port: 32400, updateLibrary: true },
+      secrets: { authToken: TOKEN },
+    });
+    expect(plexConnection.desired(contextOf(stack('jellyfin')))).toBeUndefined();
+    expect(connection.desired(contextOf(stack('plex')))).toBeUndefined();
+  });
+
+  it("is made from the arr's template with its triggers on, tested with your token as it is saved", async () => {
+    const { api, state } = await sonarrWithPlex();
+    await expect(
+      plexConnection.create(api, plexWanted({ plex: { token: 'revoked-plex-token-0' } })),
+    ).rejects.toThrow(
+      'refused the request (HTTP 400): AuthToken: Authentication Token is invalid',
+    );
+    expect(await plexConnection.create(api, plexWanted())).toEqual({ id: 1 });
+    expect(state.connections[0]).toMatchObject({
+      name: PLEX_CONNECTION_NAME,
+      implementation: 'PlexServer',
+      onDownload: true,
+      onRename: true,
+      onSeriesDelete: true,
+      onGrab: false,
+    });
+    expect(state.connections[0]?.fields).toContainEqual({
+      name: 'authToken',
+      value: TOKEN,
+    });
+    expect(await plexConnection.observe(api, undefined)).toEqual({
+      id: 1,
+      name: PLEX_CONNECTION_NAME,
+      fields: { host: 'plex', port: 32400, updateLibrary: true },
+    });
+  });
+
+  it("checks your token with the arr's own test, never compared: a refused one is an update", async () => {
+    const { api, state } = await sonarrWithPlex();
+    const desired = plexWanted();
+    await plexConnection.create(api, desired);
+    const held = await plexConnection.observe(api, undefined);
+    if (held === undefined) throw new Error('the connection is there');
+    expect(await plexConnection.verify?.(api, desired, held)).toBe(true);
+    const [made] = state.connections;
+    if (made === undefined) throw new Error('no connection made');
+    made.fields = made.fields.map((f) =>
+      f.name === 'authToken' ? { ...f, value: 'someone-elses-token' } : f,
+    );
+    expect(await plexConnection.verify?.(api, desired, held)).toBe(false);
+    await plexConnection.update(api, desired, held);
+    expect(state.connections[0]?.fields).toContainEqual({
+      name: 'authToken',
+      value: TOKEN,
+    });
+  });
+
+  it('is refused by the arr while Plex has no library of what the arr files', async () => {
+    const { api, plex } = await sonarrWithPlex();
+    plex.plex.sections = [];
+    await expect(plexConnection.create(api, plexWanted())).rejects.toThrow(
+      'refused the request (HTTP 400): Host: At least one TV library is required',
+    );
+  });
+
+  it("says the arr's own words when it can't reach Plex", async () => {
+    const { api, plex } = await sonarrWithPlex();
+    const desired = plexWanted();
+    await plexConnection.create(api, desired);
+    const held = await plexConnection.observe(api, undefined);
+    if (held === undefined) throw new Error('the connection is there');
+    plex.up = false;
+    await expect(plexConnection.verify?.(api, desired, held)).rejects.toThrow(
+      'Sonarr at http://sonarr:8989 (127.0.0.1) tested Plex (Mediaplane), and it failed: Host: Unable to connect to Plex Media Server (Resource temporarily unavailable (plex:32400)) (POST /api/v3/notification/test)',
+    );
   });
 });
 

@@ -587,6 +587,64 @@ describe('planWiring', () => {
     ]);
   });
 
+  it('waits for an app that says when it has started, and checks it after it has, or says it is still starting', async () => {
+    let asked = 0;
+    const app = await fakeHttpApp((request) => {
+      if (request.path === '/ping') return { status: 200 };
+      if (request.path === '/started') {
+        asked += 1;
+        return { status: 200, body: { starting: asked < 3 } };
+      }
+      return request.path === '/api/v3/system/status'
+        ? { status: 200, body: {} }
+        : { status: 200, body: { user: 'admin' } };
+    });
+    const started = {
+      path: '/started',
+      done: (answer: unknown) =>
+        typeof answer === 'object' &&
+        answer !== null &&
+        (answer as { starting?: unknown }).starting === false,
+    };
+    const catalog: Catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr' ? { ...def, api: { ...FIXTURE_API, started } } : def,
+    );
+    let clock = 0;
+    const waiting = {
+      seams: {
+        endpoint: () => ({ host: '127.0.0.1', port: app.port }),
+        retry: {
+          deadlineMs: 60_000,
+          now: () => clock,
+          sleep: (ms: number) => {
+            clock += ms;
+            return Promise.resolve();
+          },
+        },
+      },
+      addresses: { 'fake-sonarr': '127.0.0.1' },
+    };
+    const planned = await planWiring(options(waiting, { stack: stackOf(catalog) }));
+    expect(planned.diagnostics).toEqual([]);
+    expect(asked).toBe(3);
+    // Out of time while it is still starting: unknown, with why.
+    asked = -100;
+    const early = await planWiring(
+      options(
+        { ...waiting, seams: { ...waiting.seams, retry: { deadlineMs: 0 } } },
+        { stack: stackOf(catalog) },
+      ),
+    );
+    expect(early.changes).toEqual([
+      {
+        resource: 'sonarr.login',
+        action: 'unknown',
+        reason:
+          'sonarr at http://sonarr:8989 (127.0.0.1) is still starting (GET /started)',
+      },
+    ]);
+  });
+
   it('checks after the start an app whose container apply changes, or that is not ready', async () => {
     const sonarr = await fakeSonarr({ key: KEY });
     const after = [{ resource: 'sonarr.login', action: 'after-start' }];

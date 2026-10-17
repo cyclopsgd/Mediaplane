@@ -80,7 +80,9 @@ describe('renderFacts', () => {
     expect(renderFacts(wired)).toContain(
       '- **Managed in the app:** `prowlarr.admin`: fields `prowlarr.admin.username`; the secret `password`, checked and never shown\n',
     );
-    expect(renderFacts(app('plex'))).toContain('- **Managed in the app:** nothing yet\n');
+    expect(renderFacts(app('byparr'))).toContain(
+      '- **Managed in the app:** nothing yet\n',
+    );
   });
 
   it('shows what an app turns on with its default settings', () => {

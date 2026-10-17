@@ -2,6 +2,14 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { FakeReply, FakeRequest } from './http';
 import type { FakePlexTvState } from './plextv';
+import {
+  fieldValue,
+  refusal,
+  unreachable,
+  type FakeProviderBase,
+  type FakeRefusal,
+} from './providers';
+import type { FakeAppState } from './wiring';
 
 /** One of Plex's libraries (its "sections"), as Plex keeps it. */
 export interface FakePlexSection {
@@ -24,12 +32,21 @@ export interface FakePlex {
   serverToken: string;
   /** Its name; '' leaves it the container's hostname, as Plex does. */
   friendlyName: string;
+  /** Whether its remote access is on (`PublishServerOnPlexOnlineKey`): off, at first. */
+  remoteAccess: boolean;
+  /** The networks allowed in without signing in (`allowedNetworks`): none, at first. */
+  allowedNetworks: string;
   sections: FakePlexSection[];
   /**
    * How many more times /identity says it is unclaimed though it is claimed: Plex stops a
    * server it started for its config, claims itself, then starts again (probed).
    */
   claimingFor: number;
+  /**
+   * How many more times /identity says it is still starting (`startState`), and a new
+   * library is refused, as Plex does for a few seconds after every start (probed).
+   */
+  startingFor: number;
   /**
    * Its appdata folder: the fake keeps Preferences.xml there as Plex does, with its
    * machine identifier, and its token once claimed. Unset: nowhere.
@@ -51,8 +68,11 @@ export function freshPlex(): FakePlex {
     owner: null,
     serverToken: '',
     friendlyName: '',
+    remoteAccess: false,
+    allowedNetworks: '',
     sections: [],
     claimingFor: 0,
+    startingFor: 0,
   };
 }
 
@@ -63,6 +83,12 @@ export const FAKE_SERVER_TOKEN = 'fake-server-token-01';
 const UNAUTHORIZED: FakeReply = {
   status: 401,
   body: '<html><head><title>Unauthorized</title></head><body><h1>401 Unauthorized</h1></body></html>',
+};
+
+/** Plex's refusal of a request it can't take, such as a section without its agent. */
+const BAD_REQUEST: FakeReply = {
+  status: 400,
+  body: '<html><head><title>Bad Request</title></head><body><h1>400 Bad Request</h1></body></html>',
 };
 
 /**
@@ -107,6 +133,58 @@ export function claimFakePlex(
   return true;
 }
 
+/** Whether the fake Plex takes `token`: its claim's account's, or its own. */
+function plexTakes(plex: FakePlex, token: unknown, plexTv: FakePlexTvState): boolean {
+  const account = plexTv.accounts.find((a) => a.token === token);
+  return (
+    plex.owner !== null &&
+    typeof token === 'string' &&
+    token !== '' &&
+    (account?.id === plex.owner || token === plex.serverToken)
+  );
+}
+
+/**
+ * Sonarr's or Radarr's test of a connection to Plex, `sent` holding `token` in clear: its
+ * refusal, or undefined when it passes. As theirs does (probed), it reaches Plex by its
+ * service (plex), while it runs, at 32400, without TLS or a URL base, and asks for its
+ * libraries with the token: one Plex refuses is `AuthToken: Authentication Token is
+ * invalid`. A `testFailure` set on the arr overrides every check.
+ */
+export function testPlexConnection(
+  sent: FakeProviderBase,
+  token: unknown,
+  state: FakeAppState,
+  plex: FakeAppState,
+  plexTv: FakePlexTvState,
+): FakeRefusal | undefined {
+  const value = (name: string) => fieldValue(sent, name);
+  if (state.testFailure !== '') return refusal('Host', state.testFailure);
+  const base = value('urlBase');
+  const why = unreachable(
+    `${String(value('host'))}:${String(value('port'))}`,
+    {
+      resolves:
+        value('host') === 'plex' && plex.up && (base === undefined || base === ''),
+      portOpen: value('port') === 32400,
+      tls: value('useSsl') === true,
+    },
+    'Resource temporarily unavailable',
+  );
+  if (why !== undefined) {
+    return refusal('Host', 'Unable to connect to Plex Media Server', why);
+  }
+  if (!plexTakes(plex.plex, token, plexTv)) {
+    return refusal('AuthToken', 'Authentication Token is invalid');
+  }
+  // The arr needs a library of what it files (probed): Sonarr a TV one, Radarr a Movie one.
+  const radarr = 'onMovieDelete' in sent;
+  const holds = radarr ? 'movie' : 'show';
+  return plex.plex.sections.some((s) => s.type === holds)
+    ? undefined
+    : refusal('Host', `At least one ${radarr ? 'Movie' : 'TV'} library is required`);
+}
+
 function sectionShown(section: FakePlexSection) {
   return {
     key: section.key,
@@ -127,7 +205,11 @@ function sectionShown(section: FakePlexSection) {
  * - everything else takes only a token of the account that claimed it (from `plexTv`), or
  *   its own server token: no token, another account's, or any call while it is unclaimed
  *   (the `Host` is a name, so Plex's DNS-rebinding check refuses it) is a 401 page;
- * - `/library/sections` lists its libraries.
+ * - `/:/prefs` lists its settings, and a PUT sets them (an unknown one is a 400);
+ * - `/library/sections` lists its libraries; a POST makes one, which needs its type,
+ *   agent, scanner and language (400 without), and takes a second of one name and a
+ *   folder that doesn't exist; a PUT of one needs its agent, sets its name and folders,
+ *   and can't change its type (400); a DELETE removes one.
  */
 export function fakePlex(
   request: FakeRequest,
@@ -137,29 +219,77 @@ export function fakePlex(
   keepPreferences(plex);
   const url = new URL(request.path, 'http://plex');
   const { method } = request;
+  const query = (name: string) => url.searchParams.get(name) ?? '';
   if (url.pathname === '/identity' && method === 'GET') {
-    const starting = plex.claimingFor > 0;
-    if (starting) plex.claimingFor -= 1;
+    const claiming = plex.claimingFor > 0;
+    if (claiming) plex.claimingFor -= 1;
+    const starting = plex.startingFor > 0;
+    if (starting) plex.startingFor -= 1;
     return {
       status: 200,
       body: {
         MediaContainer: {
           size: 0,
           apiVersion: '1.2.3',
-          claimed: plex.owner !== null && !starting,
+          claimed: plex.owner !== null && !claiming,
           machineIdentifier: plex.machineId,
+          ...(starting ? { startState: 'startingPlugins' } : {}),
           version: '1.43.4.10903-e5521bd8c',
         },
       },
     };
   }
-  const token = request.headers['x-plex-token'];
-  const account = plexTv.accounts.find((a) => a.token === token);
-  const takes =
-    plex.owner !== null &&
-    typeof token === 'string' &&
-    (account?.id === plex.owner || token === plex.serverToken);
-  if (!takes) return UNAUTHORIZED;
+  if (!plexTakes(plex, request.headers['x-plex-token'], plexTv)) return UNAUTHORIZED;
+  if (url.pathname === '/' && method === 'GET') {
+    return {
+      status: 200,
+      body: {
+        MediaContainer: {
+          friendlyName: plex.friendlyName === '' ? FAKE_PLEX_HOSTNAME : plex.friendlyName,
+          machineIdentifier: plex.machineId,
+        },
+      },
+    };
+  }
+  if (url.pathname === '/:/prefs' && method === 'GET') {
+    return {
+      status: 200,
+      body: {
+        MediaContainer: {
+          size: 3,
+          Setting: [
+            { id: 'FriendlyName', type: 'text', default: '', value: plex.friendlyName },
+            {
+              id: 'PublishServerOnPlexOnlineKey',
+              type: 'bool',
+              default: false,
+              value: plex.remoteAccess,
+            },
+            {
+              id: 'allowedNetworks',
+              type: 'text',
+              default: '',
+              value: plex.allowedNetworks,
+            },
+          ],
+        },
+      },
+    };
+  }
+  if (url.pathname === '/:/prefs' && method === 'PUT') {
+    for (const [name, value] of url.searchParams) {
+      if (name === 'FriendlyName') plex.friendlyName = value;
+      else if (name === 'PublishServerOnPlexOnlineKey') plex.remoteAccess = value === '1';
+      else if (name === 'allowedNetworks') plex.allowedNetworks = value;
+      else {
+        return {
+          status: 400,
+          body: `cannot set preference value for unknown preference ${name}`,
+        };
+      }
+    }
+    return { status: 200 };
+  }
   if (url.pathname === '/library/sections' && method === 'GET') {
     return {
       status: 200,
@@ -173,6 +303,55 @@ export function fakePlex(
         },
       },
     };
+  }
+  if (url.pathname === '/library/sections' && method === 'POST') {
+    if (plex.startingFor > 0) {
+      return {
+        status: 400,
+        body: 'the server is still starting up. Please retry later\n',
+      };
+    }
+    const type = query('type');
+    if (
+      (type !== 'movie' && type !== 'show') ||
+      query('agent') === '' ||
+      query('scanner') === '' ||
+      query('language') === '' ||
+      query('name') === ''
+    ) {
+      return BAD_REQUEST;
+    }
+    const made: FakePlexSection = {
+      key: String(Math.max(0, ...plex.sections.map((s) => Number(s.key))) + 1),
+      title: query('name'),
+      type,
+      agent: query('agent'),
+      scanner: query('scanner'),
+      language: query('language'),
+      locations: url.searchParams.getAll('location'),
+    };
+    plex.sections.push(made);
+    return {
+      status: 201,
+      body: { MediaContainer: { size: 1, Directory: [sectionShown(made)] } },
+    };
+  }
+  const one = /^\/library\/sections\/(\d+)$/.exec(url.pathname);
+  const section = plex.sections.find((s) => s.key === one?.[1]);
+  if (one !== null && method === 'PUT') {
+    if (section === undefined) return { status: 404 };
+    if (query('agent') === '') return BAD_REQUEST;
+    if (url.searchParams.has('type') && query('type') !== section.type)
+      return BAD_REQUEST;
+    if (url.searchParams.has('name')) section.title = query('name');
+    const locations = url.searchParams.getAll('location');
+    if (locations.length > 0) section.locations = locations;
+    return { status: 200 };
+  }
+  if (one !== null && method === 'DELETE') {
+    if (section === undefined) return { status: 404 };
+    plex.sections.splice(plex.sections.indexOf(section), 1);
+    return { status: 200 };
   }
   return { status: 404 };
 }

@@ -20,6 +20,12 @@ export const PREFERENCES =
  */
 const SERVER_TOKEN = /\sPlexOnlineToken="([^"]+)"/;
 
+const prefs = z.looseObject({
+  MediaContainer: z.looseObject({
+    Setting: z.array(z.looseObject({ id: z.string(), value: z.unknown() })),
+  }),
+});
+
 const identity = z.looseObject({
   MediaContainer: z.looseObject({ claimed: z.boolean() }),
 });
@@ -119,6 +125,10 @@ async function accountOf(
  *   Plex stays unpublished: another account's token, or one plex.tv refuses, as it does
  *   once the server is removed from its account (probed). plex.tv unanswered (a timeout, a
  *   5xx, no connection) is `unsure`, as is a claimed Plex whose file holds no token.
+ * - Before it is done, a Plex of yours must let no network in without a sign-in
+ *   (`allowedNetworks` empty): anyone could set that while it was unclaimed. Plex's
+ *   settings are asked for with your token, on that one call, once plex.tv has said this
+ *   Plex is yours: the setup's client carries no token of yours.
  * - It is done once Preferences.xml holds a token (`PlexOnlineToken`), and Mediaplane's
  *   record names Plex: the token is yours, never one Mediaplane made.
  */
@@ -184,6 +194,20 @@ export const plexBootstrap: Bootstrap = {
       throw new AppApiError(
         `${api.name} at ${api.where} is claimed by another plex.tv account than yours: plex.tv says the token its claim gave it is another account's`,
         { kind: 'auth' },
+      );
+    }
+    // Yours, so it may have your token now, on this one call (the setup's client carries
+    // none). While it was unclaimed, anyone who reached it could change its settings, and
+    // they survive the claim (probed): a network let in without a sign-in would be open
+    // once it is published. Asked here only, so one you set later, on purpose, is left
+    // alone.
+    const allowed = (
+      await api.withKey(token).get('/:/prefs', prefs)
+    ).MediaContainer.Setting.find((s) => s.id === 'allowedNetworks')?.value;
+    if (allowed !== '') {
+      throw new AppApiError(
+        `${api.name} at ${api.where} is yours, but lets ${typeof allowed === 'string' ? allowed : 'networks it does not name'} in without a sign-in (allowedNetworks), which Mediaplane never sets: it may have been set while Plex was unclaimed, so Plex stays unpublished. Stop it, clear allowedNetworks in appdata/plex/${PREFERENCES}, then run apply again`,
+        { kind: 'rejected' },
       );
     }
     return undefined;

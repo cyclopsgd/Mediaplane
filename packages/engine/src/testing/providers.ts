@@ -66,12 +66,17 @@ export function refusal(
   };
 }
 
+/** The settings a provider holds a secret in: a key, or Plex's token. */
+const SECRET_FIELDS: ReadonlySet<string> = new Set(['apiKey', 'authToken']);
+
 /** A provider as the app shows it: its key masked. */
 export function maskedProvider<P extends FakeProviderBase>(held: P): P {
   return {
     ...held,
     fields: held.fields.map((f) =>
-      f.name === 'apiKey' && f.value !== undefined ? { ...f, value: '********' } : f,
+      SECRET_FIELDS.has(f.name) && f.value !== undefined
+        ? { ...f, value: '********' }
+        : f,
     ),
   };
 }
@@ -115,11 +120,11 @@ export function fakeProviders<P extends FakeProviderBase>(
     return { status: 200, body: held.map(maskedProvider) };
   }
   const keyOf = (sent: P) => {
-    const key = sent.fields.find((f) => f.name === 'apiKey')?.value;
+    const field = sent.fields.find((f) => SECRET_FIELDS.has(f.name));
     const stored = held
       .find((p) => p.id === sent.id)
-      ?.fields.find((f) => f.name === 'apiKey')?.value;
-    return key === '********' ? stored : key;
+      ?.fields.find((f) => f.name === field?.name)?.value;
+    return field?.value === '********' ? stored : field?.value;
   };
   const taken = () => refusal('Name', 'Should be unique');
   const one = new RegExp(`^${path}/(\\d+)(\\?forceSave=true)?$`).exec(request.path);
@@ -142,11 +147,13 @@ export function fakeProviders<P extends FakeProviderBase>(
     const sent = JSON.parse(request.body) as P;
     if (held.some((p) => p.name === sent.name && p.id !== found.id)) return taken();
     // "********" keeps the key it holds.
-    const key = found.fields.find((f) => f.name === 'apiKey')?.value;
+    const kept = (name: string) => found.fields.find((f) => f.name === name)?.value;
     Object.assign(found, {
       ...sent,
       fields: sent.fields.map((f) =>
-        f.name === 'apiKey' && f.value === '********' ? { ...f, value: key } : f,
+        SECRET_FIELDS.has(f.name) && f.value === '********'
+          ? { ...f, value: kept(f.name) }
+          : f,
       ),
     });
     return { status: 202, body: maskedProvider(found) };

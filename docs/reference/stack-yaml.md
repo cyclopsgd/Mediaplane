@@ -53,6 +53,7 @@ Under `apps.<app>`, where `<app>` is one of the apps listed at the end of this p
 
 ## One app's own settings
 
+- `apps.plex.server_name` (string): The name Plex shows for this server, in its apps and your plex.tv account. Default Mediaplane.
 - `apps.qbittorrent.vpn` (boolean; default `true`): Route qBittorrent through Gluetun's VPN, so it has no network when the VPN is down. true needs a vpn: block; false makes plan warn every time.
 - `apps.seerr.sonarr_profile` (string): The Sonarr quality profile Seerr requests with, by name. Unset: HD-1080p, else Any, else Sonarr's first.
 - `apps.seerr.radarr_profile` (string): The Radarr quality profile Seerr requests with, by name. Unset: HD-1080p, else Any, else Radarr's first.

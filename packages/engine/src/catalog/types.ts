@@ -116,6 +116,13 @@ export interface ApiSpec {
   key: { secret: string; scheme: KeyScheme };
   /** A path that answers 200 only with the key: it shows the key still works. */
   check: string;
+  /**
+   * For an app that answers `ready` before it takes changes, what says it has started:
+   * the answer of `path`, asked with the key, that `done` takes. Plex answers /identity
+   * while it still starts its plugins (`startState`), and refuses a new library until then
+   * (probed). Asked after `ready`, again until `done` or the deadline.
+   */
+  started?: { path: string; done: (answer: unknown) => boolean };
 }
 
 /** What a first-run setup can use besides the app's API. It holds secrets: never print it. */

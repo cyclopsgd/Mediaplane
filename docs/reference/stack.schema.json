@@ -594,6 +594,12 @@
                       }
                     ]
                   }
+                },
+                "server_name": {
+                  "description": "The name Plex shows for this server, in its apps and your plex.tv account. Default Mediaplane.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
                 }
               },
               "additionalProperties": false,
