@@ -1,5 +1,16 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +20,7 @@ import { parse } from 'yaml';
 
 const FILE = fileURLToPath(new URL('./mediaplane.compose.yaml', import.meta.url));
 const SHIM = fileURLToPath(new URL('./mediaplane', import.meta.url));
+const INSTALL = fileURLToPath(new URL('./install.sh', import.meta.url));
 
 interface Service {
   image?: string;
@@ -316,6 +328,205 @@ describe('the host shim', () => {
         'mediaplane',
         'apply',
       ]);
+    },
+  );
+});
+
+describe('the installer', () => {
+  /**
+   * A checkout of its own, with stand-ins first on PATH: docker answers as `versions` say and
+   * logs every call, sudo logs and runs, and id answers `uid`. The home and the command's
+   * folder are under the same temporary folder, and the Docker socket is a real socket.
+   */
+  async function sandbox(
+    options: {
+      engine?: string;
+      compose?: string;
+      rootless?: boolean;
+      uid?: string;
+      env?: string;
+      home?: 'missing' | 'locked';
+    } = {},
+  ) {
+    const top = mkdtempSync(join(tmpdir(), 'mediaplane-install-'));
+    const deploy = join(top, 'checkout', 'deploy');
+    const bin = join(top, 'bin');
+    const commands = join(top, 'usr-local-bin');
+    for (const dir of [deploy, bin, commands]) mkdirSync(dir, { recursive: true });
+    for (const name of ['install.sh', 'mediaplane', 'mediaplane.compose.yaml']) {
+      copyFileSync(
+        fileURLToPath(new URL(`./${name}`, import.meta.url)),
+        join(deploy, name),
+      );
+    }
+    chmodSync(join(deploy, 'install.sh'), 0o755);
+    chmodSync(join(deploy, 'mediaplane'), 0o755);
+    if (options.env !== undefined) writeFileSync(join(deploy, '.env'), options.env);
+    const log = join(top, 'calls.log');
+    const engine = options.engine ?? '29.8.0';
+    const compose = options.compose ?? '2.38.2';
+    const security =
+      options.rootless === true ? '[name=seccomp name=rootless]' : '[name=seccomp]';
+    writeFileSync(
+      join(bin, 'docker'),
+      `#!/bin/sh
+printf 'docker %s\\n' "$*" >> '${log}'
+case "$*" in
+  'version --format {{.Server.Version}}') echo '${engine}' ;;
+  'compose version --short') echo '${compose}' ;;
+  'info --format {{.SecurityOptions}}') echo '${security}' ;;
+esac
+exit 0
+`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      join(bin, 'sudo'),
+      `#!/bin/sh\nprintf 'sudo %s\\n' "$*" >> '${log}'\nexec "$@"\n`,
+      { mode: 0o755 },
+    );
+    if (options.uid !== undefined) {
+      writeFileSync(
+        join(bin, 'id'),
+        `#!/bin/sh\nif [ "$1" = -u ]; then echo ${options.uid}; else exec /usr/bin/id "$@"; fi\n`,
+        { mode: 0o755 },
+      );
+    }
+    const home = join(top, 'home');
+    if (options.home === 'locked') {
+      mkdirSync(home);
+      chmodSync(home, 0o555);
+    }
+    const socketPath = join(top, 'docker.sock');
+    const server = createServer();
+    await new Promise<void>((done) => server.listen(socketPath, done));
+    const runIt = () => {
+      const result = spawnSync(join(deploy, 'install.sh'), [], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${bin}:${commands}:${process.env.PATH ?? ''}`,
+          MEDIAPLANE_HOME: home,
+          MEDIAPLANE_BIN_DIR: commands,
+          MEDIAPLANE_DOCKER_SOCKET: socketPath,
+          MEDIAPLANE_IMAGE: '',
+        },
+      });
+      return {
+        code: result.status,
+        out: result.stdout,
+        err: result.stderr,
+        calls: existsSync(log) ? readFileSync(log, 'utf8').trimEnd().split('\n') : [],
+      };
+    };
+    const cleanup = () => {
+      server.close();
+      if (options.home === 'locked') chmodSync(home, 0o755);
+      rmSync(top, { recursive: true, force: true });
+    };
+    return { top, deploy, home, commands, run: runIt, cleanup };
+  }
+
+  it('is executable, and plain sh', () => {
+    expect(statSync(INSTALL).mode & 0o111).not.toBe(0);
+    expect(readFileSync(INSTALL, 'utf8').split('\n')[0]).toBe('#!/bin/sh');
+    expect(spawnSync('sh', ['-n', INSTALL]).status).toBe(0);
+  });
+
+  it('builds, makes the home, writes deploy/.env, starts Mediaplane and installs the command', async () => {
+    const box = await sandbox();
+    try {
+      const result = box.run();
+      expect(result.code, result.err).toBe(0);
+      expect(result.calls).toContain(
+        `docker build --tag mediaplane:local ${join(box.top, 'checkout')}`,
+      );
+      expect(result.calls).toContain(
+        `docker compose -f ${join(box.deploy, 'mediaplane.compose.yaml')} up -d`,
+      );
+      expect(statSync(box.home).isDirectory()).toBe(true);
+      const env = readFileSync(join(box.deploy, '.env'), 'utf8');
+      expect(env).toContain('MEDIAPLANE_IMAGE=mediaplane:local\n');
+      expect(env).toMatch(/^MEDIAPLANE_UID=\d+$/m);
+      expect(env).toMatch(/^DOCKER_GID=\d+$/m);
+      expect(env).toContain(`MEDIAPLANE_HOME=${box.home}\n`);
+      expect(readFileSync(join(box.commands, 'mediaplane'), 'utf8')).toBe(
+        readFileSync(SHIM, 'utf8'),
+      );
+      // Not on a terminal: it says what's next rather than asking.
+      expect(result.out).toContain(
+        `Next: "mediaplane init --home ${box.home}" asks a few questions`,
+      );
+      // Everything went in without root here, so it never asked for sudo.
+      expect(result.calls.filter((call) => call.startsWith('sudo'))).toEqual([]);
+    } finally {
+      box.cleanup();
+    }
+  });
+
+  it('keeps a deploy/.env that is there, and says plan next once there is a stack', async () => {
+    const box = await sandbox({ env: 'MEDIAPLANE_IMAGE=mediaplane:local\nTZ=Etc/UTC\n' });
+    try {
+      mkdirSync(box.home);
+      writeFileSync(join(box.home, 'stack.yaml'), 'version: 1\n');
+      const result = box.run();
+      expect(result.code, result.err).toBe(0);
+      expect(readFileSync(join(box.deploy, '.env'), 'utf8')).toBe(
+        'MEDIAPLANE_IMAGE=mediaplane:local\nTZ=Etc/UTC\n',
+      );
+      expect(result.out).toContain('Keeping your deploy/.env as it is.');
+      expect(result.out).toContain('Next: "mediaplane plan" checks your stack');
+    } finally {
+      box.cleanup();
+    }
+  });
+
+  it.each([
+    [{ uid: '0' }, 'run this as your normal user, not root'],
+    [
+      { engine: '23.0.6' },
+      'Docker Engine 23.0.6 is too old: Mediaplane needs 24 or newer',
+    ],
+    [
+      { compose: 'v2.20.3' },
+      'Docker Compose v2.20.3 is too old: Mediaplane needs 2.24 or newer',
+    ],
+    [{ rootless: true }, 'this Docker is rootless'],
+  ] as const)('refuses %o before it changes anything', async (options, said) => {
+    const box = await sandbox(options);
+    try {
+      const result = box.run();
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(said);
+      expect(result.calls.some((call) => / build | up -d/.test(` ${call}`))).toBe(false);
+      expect(existsSync(join(box.deploy, '.env'))).toBe(false);
+      expect(existsSync(box.home)).toBe(false);
+    } finally {
+      box.cleanup();
+    }
+  });
+
+  it('accepts Compose 5 and Engine 28', async () => {
+    const box = await sandbox({ engine: '28.5.1', compose: '5.5.1' });
+    try {
+      expect(box.run().code).toBe(0);
+    } finally {
+      box.cleanup();
+    }
+  });
+
+  it.runIf(process.getuid?.() !== 0)(
+    'stops, with the command to run, at a home that is not yours to write',
+    async () => {
+      const box = await sandbox({ home: 'locked' });
+      try {
+        const result = box.run();
+        expect(result.code).toBe(1);
+        expect(result.err).toContain(`${box.home} isn't yours to write`);
+        expect(result.calls.some((call) => call.includes('up -d'))).toBe(false);
+      } finally {
+        box.cleanup();
+      }
     },
   );
 });

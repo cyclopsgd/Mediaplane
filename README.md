@@ -312,15 +312,19 @@ Sonarr       http://127.0.0.1:8989
 ## Run it in a container
 
 Mediaplane runs as its own container next to a Docker socket proxy, in a Compose
-project of its own. No image is published yet (that comes in Slice 9), so build one from
-a checkout:
+project of its own. No image is published yet (that comes in Slice 9), so install it from
+a checkout, as your normal user:
 
 ```bash
-docker build --tag mediaplane:local .
+git clone https://github.com/cyclopsgd/Mediaplane.git
+cd Mediaplane
+./deploy/install.sh
 ```
 
-Then follow [`deploy/README.md`](deploy/README.md) to start it and run
-`mediaplane plan` inside it.
+The installer checks Docker, builds the image, starts Mediaplane and installs the
+`mediaplane` command, then offers to run `mediaplane init`. That asks a few questions,
+including your own admin password if you'd rather type one, and with Plex signs you in.
+[`deploy/README.md`](deploy/README.md) has the details, and the same steps by hand.
 
 ## Try it (from source)
 

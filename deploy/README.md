@@ -40,7 +40,34 @@ never touch Mediaplane itself.
 
 ## Install
 
-No image is published yet: releases arrive in Slice 9. Build one from a checkout:
+No image is published yet: releases arrive in Slice 9. So you install from a checkout,
+as your normal user, not root:
+
+```bash
+git clone https://github.com/cyclopsgd/Mediaplane.git
+cd Mediaplane
+./deploy/install.sh
+```
+
+`install.sh` does everything the next section does by hand:
+
+- checks Docker: Engine 24 or newer, Compose 2.24 or newer, rootful, its socket at
+  `/var/run/docker.sock`;
+- creates the home, `/opt/mediaplane` or `MEDIAPLANE_HOME`, owned by you;
+- builds the image, and writes `deploy/.env` with your ids, the Docker socket's group and
+  your timezone;
+- starts Mediaplane's container, and installs the `mediaplane` command in
+  `/usr/local/bin`.
+
+It asks for `sudo` only to create the home under `/opt` and to install the command. With
+no `stack.yaml` yet, on a terminal, it ends by offering to run `mediaplane init`. Run it
+again after `git pull` to update. It keeps your `deploy/.env` as it is and never touches
+your stack. If `mediaplane` then runs something else in your shell, `type -a mediaplane`
+shows what, such as an old alias.
+
+### By hand
+
+Build the image from a checkout:
 
 ```bash
 git clone https://github.com/cyclopsgd/Mediaplane.git
@@ -256,7 +283,15 @@ host
 
 ## Updating
 
-Rebuild the image, then recreate the project:
+Pull, then run the installer again. It rebuilds the image and recreates Mediaplane's
+container:
+
+```bash
+git pull
+./deploy/install.sh
+```
+
+By hand, that is:
 
 ```bash
 git pull
