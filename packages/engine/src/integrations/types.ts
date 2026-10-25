@@ -98,6 +98,12 @@ export interface ResourceSpec {
   locked?: Readonly<Record<string, string>>;
   /** The secrets it holds, by name: applied and checked with verify, never compared. */
   secrets: readonly string[];
+  /**
+   * At most how often `mediaplane drift` checks its secrets, in ms, when they last passed:
+   * a check that leaves a mark in the app each time, such as Jellyfin's sign-in, in its
+   * activity log. Plan and apply check every time.
+   */
+  checkEvery?: number;
   /** Resources ("<app>.<name>") that must be in place first: one that failed skips this. */
   requires?: readonly string[];
   /** What the stack wants, or undefined when it wants none. Pure. */
@@ -138,6 +144,11 @@ export interface ResourceSpec {
     observed: ObservedResource,
     ctx?: VerifyContext,
   ): Promise<boolean | Unchecked>;
+  /**
+   * What the app's own health check says is wrong with it, read and never run: drift warns
+   * of it. Prowlarr's tests its indexer proxies itself (probed). Throws AppApiError.
+   */
+  health?(api: AppApi, observed: ObservedResource): Promise<string | undefined>;
   /** Make it. The id the app gave it, or null for a singleton. */
   create(api: AppApi, desired: DesiredResource): Promise<{ id: string | number | null }>;
   /**

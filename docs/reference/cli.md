@@ -43,6 +43,25 @@ Exit codes:
 - 1: a step failed, or the apply was cancelled
 - 1: any other error: stack.yaml or the host, a held lock, Docker unreachable
 
+## `mediaplane drift`
+
+Report what changed in the apps outside Mediaplane since it applied them, without putting it back; it changes nothing in the apps but for the marks its checks leave (see docs/security/threat-model.md), and keeps what its checks found in state/resources.json, so it checks a secret it found refused no more until apply sets it.
+
+```text
+mediaplane drift [options]
+```
+
+| Option         | Description                                            |
+| -------------- | ------------------------------------------------------ |
+| `--home <dir>` | Mediaplane home directory (default: "/opt/mediaplane") |
+| `--json`       | print machine-readable JSON                            |
+
+Exit codes:
+
+- 0: nothing changed outside Mediaplane, and every resource was checked
+- 2: drift found, or a resource or secret was not checked
+- 1: an error; nothing was changed
+
 ## `mediaplane status`
 
 Show each app's container, and the last apply.

@@ -85,6 +85,25 @@ describe('acquireLock', () => {
     );
   });
 
+  it('says which command holds it, and records its own', async () => {
+    const holder = {
+      pid: process.pid,
+      host: hostname(),
+      startedAt: '2026-10-09T09:00:00.000Z',
+      command: 'drift',
+    };
+    const home = await homeWithLock(JSON.stringify(holder));
+    await expect(acquireLock(home, NOW, 'keep')).rejects.toThrow(
+      `mediaplane drift is running (pid ${String(process.pid)} on ${hostname()}, started 2026-10-09T09:00:00.000Z)`,
+    );
+    const free = await tempDir('mediaplane-lock-');
+    const lock = await acquireLock(free, NOW, 'drift');
+    expect(JSON.parse(await readFile(join(free, LOCK_PATH), 'utf8'))).toMatchObject({
+      command: 'drift',
+    });
+    await lock.release();
+  });
+
   it('clears a lock left by a process that has died', async () => {
     const holder = {
       pid: deadPid(),

@@ -16,7 +16,7 @@ import type { ContainerState, RuntimeError, Runtime } from '../runtime/types';
 import type { SecretStore } from '../secrets/store';
 import { foundSecrets, redact, redactionValues, type FoundSecrets } from '../util/redact';
 import { compare } from '../util/sort';
-import { desiredOf, withOverrides } from './overrides';
+import { desiredOf, isUnmanaged, withOverrides } from './overrides';
 import type { KnownResource, KnownResources } from './resources';
 import type {
   DesiredResource,
@@ -29,6 +29,9 @@ import type {
 
 /** Where a failed wiring step sends you. */
 export const WIRING_RUNBOOK = runbookUrl('wiring-failed');
+
+/** Where drift found in the apps sends you. */
+export const DRIFT_RUNBOOK = runbookUrl('drift-reported');
 
 /** How long plan waits for an app that is starting, in ms: apply waits APP_DEADLINE_MS. */
 export const PLAN_DEADLINE_MS = 15_000;
@@ -64,12 +67,17 @@ export interface WiringChange {
  *   it since, `applied` is the value Mediaplane applied;
  * - `missing`: the app no longer holds it;
  * - `secret`: the app's own check refuses one of its secrets (`since`: when drift found
- *   it, for one it doesn't check again).
+ *   it, for one it doesn't check again);
+ * - `key`: an app refuses its own key, which Mediaplane holds (`resource` is the app, and
+ *   `secret` the key's name), or a resource holds that key (`source`): a shared key
+ *   changed at its source;
+ * - `left`: the app still holds a resource Mediaplane made that the stack no longer
+ *   wants, such as Prowlarr's link to an arr taken out of the stack.
  */
 export interface Drift {
-  /** "<app>.<resource>". */
+  /** "<app>.<resource>", or "<app>" for an app that refuses its key. */
   resource: string;
-  kind: 'field' | 'missing' | 'secret';
+  kind: 'field' | 'missing' | 'secret' | 'key' | 'left';
   field?: string;
   /** The value apply sets: what the stack wants (D). */
   expected?: Scalar;
@@ -81,6 +89,8 @@ export interface Drift {
   redacted?: boolean;
   secret?: string;
   since?: string;
+  /** key: the app whose key the resource holds. */
+  source?: string;
 }
 
 /**
@@ -356,6 +366,11 @@ export interface ExamineOptions {
    * record's `checks`) is taken as refused, without another check, until apply sets it.
    */
   context?: VerifyContext;
+  /**
+   * `mediaplane drift`'s, which checks again a secret that passed only once the resource's
+   * `checkEvery` has gone by, from `now`.
+   */
+  drift?: { now: () => Date };
 }
 
 /** Apply's VerifyContext, without another app: what a check gets by default. */
@@ -565,6 +580,26 @@ async function checkSecrets(
   if (options.verify === false) {
     return all('unchecked', 'what it requires is yet to be put in place');
   }
+  // Drift checks again what passed only once its time has gone by: each check of
+  // Jellyfin's admin signs in, which its activity log keeps (the owner's decision).
+  const every = spec.checkEvery;
+  if (options.drift !== undefined && every !== undefined) {
+    const now = options.drift.now().getTime();
+    const passed = spec.secrets.map((secret) => known?.checks?.[secret]);
+    if (
+      passed.every(
+        (check) =>
+          check?.verdict === 'passed' && now - new Date(check.at).getTime() < every,
+      )
+    ) {
+      return spec.secrets.map((secret, i) => ({
+        resource: address,
+        secret,
+        verdict: 'passed',
+        at: passed[i]?.at ?? '',
+      }));
+    }
+  }
   // The catalog's tests make every resource with secrets give a verify.
   if (spec.verify === undefined) return all('unchecked', 'it has no check');
   const verdict = await spec.verify(api, desired, observed, context);
@@ -657,6 +692,11 @@ export interface PlanWiringOptions {
   /** What the run finds in the apps' answers (FoundSecrets); plan's own, by default. */
   found?: FoundSecrets;
   known: KnownResources;
+  /**
+   * `mediaplane drift`'s, which checks a secret that passed again only once its resource's
+   * `checkEvery` has gone by, and reads the apps' own health checks (`health`).
+   */
+  drift?: { now: () => Date };
   seams?: WiringSeams;
 }
 
@@ -715,6 +755,8 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       redacted: true,
     };
   };
+  /** The keys of the apps that refuse their own, as Mediaplane holds them: by value. */
+  const refusedKeys = new Map<string, string>();
   /**
    * Resources apply would make or change, that couldn't be looked at, or whose secrets
    * went unchecked: not known to be in place.
@@ -735,6 +777,9 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
     };
     // Only what the stack wants is listed: a resource it doesn't want isn't wiring.
     const targets = wiringTargets(ctx);
+    // A resource that holds the key of an app that refuses it: drift on the consumer
+    // too (§6.3), whether or not its own app can be asked.
+    drift.push(...holdingRefused(ctx, refusedKeys));
     const client = reached.get(app.def.id);
     if (client === undefined && ready.includes(app)) {
       // Running, and apply leaves it as it is, but it isn't on the network.
@@ -758,6 +803,13 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       diagnostics.push(unreachableWarning(app, cause));
       for (const resource of targets) {
         add({ resource, action: 'unknown', reason: cause.message });
+      }
+      // The app refuses the key Mediaplane holds for it: changed at its source (§6.3).
+      const name = app.def.api?.key.secret;
+      const key = name === undefined ? undefined : options.keys[app.def.id]?.[name];
+      if (cause.kind === 'auth' && name !== undefined && key !== undefined) {
+        drift.push({ resource: app.def.id, kind: 'key', secret: name });
+        refusedKeys.set(key, app.def.id);
       }
       continue;
     }
@@ -788,6 +840,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
         result = await examine(spec, client.api, ctx, options.known[address], {
           verify: !waiting,
           context,
+          ...(options.drift === undefined ? {} : { drift: options.drift }),
         });
       } catch (cause) {
         if (!(cause instanceof AppApiError)) throw cause;
@@ -828,7 +881,105 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       // Its secrets went unchecked, so it isn't known to be in place either: what
       // requires it waits too.
       if (waiting) pending.add(address);
+      if (options.drift !== undefined && spec.health !== undefined && result.observed) {
+        const said = await healthOf(spec, client.api, result.observed);
+        if (said !== undefined) {
+          diagnostics.push(
+            warning(
+              'drift.health',
+              redact(
+                `${address}: ${said}`,
+                redactionValues([...options.secrets, ...found.values]),
+              ),
+              {
+                hint: `the app's own health check found it, and apply can't put it right: see the app's own health page, and ${DRIFT_RUNBOOK}`,
+              },
+            ),
+          );
+        }
+      }
     }
+    const left = await leftIn(ctx, client.api, options.known, [
+      ...options.secrets,
+      ...found.values,
+    ]);
+    drift.push(...left.drift);
+    diagnostics.push(...left.diagnostics);
+    for (const change of left.unknown) add(change);
   }
   return { changes, diagnostics, drift, checks };
+}
+
+/**
+ * The resources of `ctx`'s app that the stack wants with a key that its source app
+ * refuses (`refused`, by value), as `key` drift that names the source.
+ */
+function holdingRefused(
+  ctx: WiringContext,
+  refused: ReadonlyMap<string, string>,
+): Drift[] {
+  if (refused.size === 0) return [];
+  return wantedResources(ctx).flatMap((spec) =>
+    Object.entries(desiredOf(spec, ctx)?.secrets ?? {}).flatMap(
+      ([secret, value]): Drift[] => {
+        const source = refused.get(value);
+        return source === undefined
+          ? []
+          : [{ resource: resourceAddress(ctx.app, spec), kind: 'key', secret, source }];
+      },
+    ),
+  );
+}
+
+/** What the app's own health check says of a resource, or undefined if it can't say. */
+async function healthOf(
+  spec: ResourceSpec,
+  api: AppApi,
+  observed: ObservedResource,
+): Promise<string | undefined> {
+  try {
+    return await spec.health?.(api, observed);
+  } catch (cause) {
+    if (!(cause instanceof AppApiError)) throw cause;
+    return `its app's own health check could not be read: ${cause.message}`;
+  }
+}
+
+/**
+ * The resources Mediaplane made in `ctx`'s app, by its record, that the stack no longer
+ * wants and the app still holds (`left`): apply doesn't remove them. One you stopped it
+ * managing (`unmanaged`) is yours. One the app can't say about is a warning, and a change
+ * it couldn't check (`unknown`), never said to be gone: drift isn't clear then.
+ */
+async function leftIn(
+  ctx: WiringContext,
+  api: AppApi,
+  known: KnownResources,
+  secrets: readonly string[],
+): Promise<{ drift: Drift[]; diagnostics: Diagnostic[]; unknown: WiringChange[] }> {
+  const drift: Drift[] = [];
+  const diagnostics: Diagnostic[] = [];
+  const unknown: WiringChange[] = [];
+  for (const spec of ctx.app.def.integration?.resources ?? []) {
+    const address = resourceAddress(ctx.app, spec);
+    const record = known[address];
+    if (record === undefined || isUnmanaged(ctx.stack, address)) continue;
+    if (desiredOf(spec, ctx) !== undefined) continue;
+    try {
+      if ((await spec.observe(api, record)) !== undefined) {
+        drift.push({ resource: address, kind: 'left' });
+      }
+    } catch (cause) {
+      if (!(cause instanceof AppApiError)) throw cause;
+      const said = redact(
+        `Mediaplane made ${address}, which the stack no longer wants, and couldn't tell whether ${ctx.app.def.name} still holds it: ${cause.message}`,
+        redactionValues(secrets),
+      );
+      diagnostics.push(
+        warning('drift.left-unknown', said, { hint: `see ${DRIFT_RUNBOOK}` }),
+      );
+      unknown.push({ resource: address, action: 'unknown', reason: said });
+    }
+  }
+  return { drift, diagnostics, unknown };
 }

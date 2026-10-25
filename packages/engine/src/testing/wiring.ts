@@ -154,6 +154,8 @@ export interface FakeAppState {
   proxies: FakeProvider[];
   /** Prowlarr's tags. */
   tags: { id: number; label: string }[];
+  /** What Prowlarr's own health check found when it last ran: `GET /api/v1/health`. */
+  health: { source: string; type: string; message: string }[];
   /**
    * Jellyfin's startup wizard: `new` until its first user is made (asking for it makes
    * it), `open` with that user, `done` once completed. Its admin is `user` and `password`.
@@ -221,6 +223,7 @@ export function freshAppState(): FakeAppState {
     applications: [],
     proxies: [],
     tags: [],
+    health: [],
     wizard: 'new',
     apiKeys: [],
     sessions: {},

@@ -1,6 +1,7 @@
 import {
   NONE_NEEDED,
   unhealthyServices,
+  WIRING_RUNBOOK,
   type ActionResult,
   type ApplyResult,
   type ApplyStep,
@@ -8,6 +9,7 @@ import {
   type ContainerAction,
   type Diagnostic,
   type Drift,
+  type DriftResult,
   type PlanResult,
   type StatusResult,
   type StepEvent,
@@ -21,6 +23,7 @@ export const ERROR_JSON_SCHEMA = 'mediaplane.error/v1';
 export const APPLY_JSON_SCHEMA = 'mediaplane.apply/v1';
 export const STATUS_JSON_SCHEMA = 'mediaplane.status/v1';
 export const HISTORY_JSON_SCHEMA = 'mediaplane.history/v1';
+export const DRIFT_JSON_SCHEMA = 'mediaplane.drift/v1';
 
 const MARKS: Record<ContainerAction, string> = {
   create: '+',
@@ -68,7 +71,37 @@ export function driftLine(drift: Drift): string {
       return `  - ${drift.resource}: deleted outside Mediaplane`;
     case 'secret':
       return `  ! ${drift.resource}.${drift.secret ?? ''}: refused by the app's own check${drift.since === undefined ? '' : ` (found by drift at ${drift.since}; not checked again until apply sets it)`}`;
+    case 'key':
+      return drift.source === undefined
+        ? `  ! ${drift.resource}: refuses the key Mediaplane holds for it (${drift.secret ?? ''}), as if it was changed in the app`
+        : `  ! ${drift.resource}.${drift.secret ?? ''}: holds ${drift.source}'s key, which ${drift.source} refuses`;
+    case 'left':
+      return `  ? ${drift.resource}: still in the app, though the stack no longer wants it; apply leaves it`;
   }
+}
+
+/**
+ * What puts right the drift found, one line for each kind of it there is: apply puts back
+ * a field, a resource or a secret changed in an app; it gives no app back a key changed
+ * there, and removes nothing the stack no longer wants, so it is never said to.
+ */
+export function driftAdvice(drift: readonly Drift[]): string[] {
+  const has = (...kinds: Drift['kind'][]) => drift.some((d) => kinds.includes(d.kind));
+  return [
+    ...(has('field', 'missing', 'secret')
+      ? ['apply puts back each field, resource and secret changed in the apps']
+      : []),
+    ...(has('key')
+      ? [
+          `apply doesn't give an app back its own key: put back the key Mediaplane holds, as ${WIRING_RUNBOOK} shows`,
+        ]
+      : []),
+    ...(has('left')
+      ? [
+          "apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it",
+        ]
+      : []),
+  ];
 }
 
 export function formatDiagnostic(diagnostic: Diagnostic): string {
@@ -151,7 +184,7 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
   if (result.drift.length > 0) {
     io.stdout('Drift, changed outside Mediaplane since it was applied:\n');
     for (const drift of result.drift) io.stdout(`${driftLine(drift)}\n`);
-    io.stdout('  apply puts each back.\n');
+    for (const line of driftAdvice(result.drift)) io.stdout(`  ${line}.\n`);
   }
   const wiring = result.wiring.filter((change) => change.action !== 'unchanged');
   if (wiring.length > 0) {
@@ -173,6 +206,73 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
     count(tally('unknown'), 'wiring check', 'that could not be made'),
   ].filter((part): part is string => part !== undefined);
   io.stdout(parts.length === 0 ? 'No changes.\n' : `Plan: ${parts.join(', ')}.\n`);
+}
+
+/**
+ * What `mediaplane drift` found: each change made outside Mediaplane, what it couldn't
+ * check, and how the secrets fared, by name only.
+ */
+export function printDrift(
+  result: DriftResult,
+  options: { json: boolean },
+  io: Io,
+): void {
+  if (options.json) {
+    io.stdout(`${JSON.stringify({ schema: DRIFT_JSON_SCHEMA, ...result }, null, 2)}\n`);
+    return;
+  }
+  for (const diagnostic of result.diagnostics) io.stderr(formatDiagnostic(diagnostic));
+  if (!result.ok) {
+    io.stderr('\nDrift could not look. Fix the errors above and run it again.\n');
+    return;
+  }
+  if (result.drift.length > 0) {
+    io.stdout('Changed outside Mediaplane since it was applied:\n');
+    for (const drift of result.drift) io.stdout(`${driftLine(drift)}\n`);
+  }
+  if (result.unchecked.length > 0) {
+    io.stdout('Not checked:\n');
+    for (const { resource, reason } of result.unchecked) {
+      io.stdout(`  ? ${resource}: ${reason}\n`);
+    }
+  }
+  const verdicts = (verdict: string) =>
+    result.checks.filter((check) => check.verdict === verdict);
+  const unchecked = verdicts('unchecked');
+  // A secret that passed lately isn't checked again until its time is up (checkEvery).
+  const recalled = verdicts('passed').filter((check) => check.at !== undefined);
+  const passed = verdicts('passed').length;
+  const secrets = [
+    [
+      passed,
+      recalled.length === 0
+        ? 'passed'
+        : `passed (${String(recalled.length)} as last checked)`,
+    ] as const,
+    [verdicts('refused').length, 'refused'] as const,
+    [unchecked.length, 'not checked'] as const,
+  ].flatMap(([n, what]) => (n === 0 ? [] : [`${String(n)} ${what}`]));
+  if (secrets.length > 0) {
+    io.stdout(`Secrets, checked with each app's own check: ${secrets.join(', ')}.\n`);
+    for (const { resource, secret, at } of recalled) {
+      io.stdout(
+        `  = ${resource}.${secret}: passed when drift last checked it, at ${at ?? ''}; it isn't checked again until its time is up\n`,
+      );
+    }
+    for (const { resource, secret, reason } of unchecked) {
+      io.stdout(`  - ${resource}.${secret}: ${reason ?? 'not checked'}\n`);
+    }
+  }
+  if (result.clear) {
+    io.stdout('No drift: the apps hold what Mediaplane applied.\n');
+  } else if (result.drift.length > 0) {
+    io.stdout('Drift found.\n');
+    for (const line of driftAdvice(result.drift)) io.stdout(`  ${line}.\n`);
+  } else {
+    io.stdout(
+      'No drift found where Mediaplane could look, but it could not look at everything, or check every secret: see above.\n',
+    );
+  }
 }
 
 function count(n: number, noun: string, verb: string): string | undefined {

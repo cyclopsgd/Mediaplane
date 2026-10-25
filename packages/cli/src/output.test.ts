@@ -1,8 +1,14 @@
-import type { ActionResult, ChangeRecord, PlanResult } from '@mediaplane/engine';
+import type {
+  ActionResult,
+  ChangeRecord,
+  DriftResult,
+  PlanResult,
+} from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
 import {
   driftLine,
   printApply,
+  printDrift,
   printHistory,
   printPlan,
   printRecord,
@@ -146,10 +152,44 @@ describe('printPlan: drift', () => {
         '  - qbittorrent.category_movies: deleted outside Mediaplane',
         "  ! radarr.download_client.apiKey: refused by the app's own check",
         "  ! qbittorrent.admin.password: refused by the app's own check (found by drift at 2026-10-20T08:00:00.000Z; not checked again until apply sets it)",
-        '  apply puts each back.',
+        '  apply puts back each field, resource and secret changed in the apps.',
         'Wiring:',
         '  ~ update      sonarr.download_client (category)',
         'Plan: 1 resource to wire.',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('says an app refuses its own key, which those that hold it hold too, and what is left, and that apply puts back neither', () => {
+    const term = capture();
+    printPlan(
+      {
+        ...PLAN,
+        files: [],
+        drift: [
+          { resource: 'qbittorrent', kind: 'key', secret: 'apiKey' },
+          {
+            resource: 'sonarr.download_client',
+            kind: 'key',
+            secret: 'apiKey',
+            source: 'qbittorrent',
+          },
+          { resource: 'prowlarr.application_radarr', kind: 'left' },
+        ],
+      },
+      { json: false },
+      term.io,
+    );
+    expect(term.stdout()).toBe(
+      [
+        'Drift, changed outside Mediaplane since it was applied:',
+        '  ! qbittorrent: refuses the key Mediaplane holds for it (apiKey), as if it was changed in the app',
+        "  ! sonarr.download_client.apiKey: holds qbittorrent's key, which qbittorrent refuses",
+        '  ? prowlarr.application_radarr: still in the app, though the stack no longer wants it; apply leaves it',
+        "  apply doesn't give an app back its own key: put back the key Mediaplane holds, as https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md shows.",
+        "  apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it.",
+        'No changes.',
         '',
       ].join('\n'),
     );
@@ -160,6 +200,106 @@ describe('printPlan: drift', () => {
     printPlan(DRIFTED, { json: true }, term.io);
     const shown = JSON.parse(term.stdout()) as PlanResult;
     expect([shown.drift, shown.checks]).toEqual([DRIFTED.drift, DRIFTED.checks]);
+  });
+});
+
+describe('printDrift', () => {
+  const FOUND: DriftResult = {
+    ok: true,
+    clear: false,
+    drift: [
+      {
+        resource: 'sonarr.download_client',
+        kind: 'field',
+        field: 'category',
+        expected: 'tv',
+        actual: 'television',
+      },
+    ],
+    checks: [
+      { resource: 'sonarr.admin', secret: 'password', verdict: 'passed' },
+      {
+        resource: 'sonarr.download_client',
+        secret: 'apiKey',
+        verdict: 'unchecked',
+        reason: 'a managed field differs: apply sets the secrets with it',
+      },
+    ],
+    unchecked: [{ resource: 'radarr.admin', reason: "its app isn't running" }],
+    diagnostics: [],
+  };
+
+  it('says what changed, what it could not check, and how the secrets fared, by name', () => {
+    const term = capture();
+    printDrift(FOUND, { json: false }, term.io);
+    expect(term.stdout()).toBe(
+      [
+        'Changed outside Mediaplane since it was applied:',
+        '  ~ sonarr.download_client.category: expected "tv", actual "television"',
+        'Not checked:',
+        "  ? radarr.admin: its app isn't running",
+        "Secrets, checked with each app's own check: 1 passed, 1 not checked.",
+        '  - sonarr.download_client.apiKey: a managed field differs: apply sets the secrets with it',
+        'Drift found.',
+        '  apply puts back each field, resource and secret changed in the apps.',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('says when it found none, and when it found none only where it could look', () => {
+    const clear = capture();
+    printDrift(
+      { ...FOUND, clear: true, drift: [], unchecked: [], checks: [] },
+      { json: false },
+      clear.io,
+    );
+    expect(clear.stdout()).toBe('No drift: the apps hold what Mediaplane applied.\n');
+    const partly = capture();
+    printDrift({ ...FOUND, drift: [], checks: [] }, { json: false }, partly.io);
+    expect(partly.stdout()).toContain(
+      'No drift found where Mediaplane could look, but it could not look at everything, or check every secret: see above.\n',
+    );
+  });
+
+  it('says which secrets passed when drift last checked them, and when, rather than now', () => {
+    const term = capture();
+    printDrift(
+      {
+        ...FOUND,
+        clear: true,
+        drift: [],
+        unchecked: [],
+        checks: [
+          { resource: 'sonarr.admin', secret: 'password', verdict: 'passed' },
+          {
+            resource: 'jellyfin.admin',
+            secret: 'password',
+            verdict: 'passed',
+            at: '2026-10-20T08:00:00.000Z',
+          },
+        ],
+      },
+      { json: false },
+      term.io,
+    );
+    expect(term.stdout()).toBe(
+      [
+        "Secrets, checked with each app's own check: 2 passed (1 as last checked).",
+        "  = jellyfin.admin.password: passed when drift last checked it, at 2026-10-20T08:00:00.000Z; it isn't checked again until its time is up",
+        'No drift: the apps hold what Mediaplane applied.',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('gives all of it in JSON, versioned', () => {
+    const term = capture();
+    printDrift(FOUND, { json: true }, term.io);
+    expect(JSON.parse(term.stdout())).toEqual({
+      schema: 'mediaplane.drift/v1',
+      ...FOUND,
+    });
   });
 });
 

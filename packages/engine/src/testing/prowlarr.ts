@@ -193,6 +193,10 @@ export function fakeProwlarr(
       defaults: { tags: [] },
     });
   if (answered !== undefined) return answered;
+  // What its own health check found when it last ran, every six hours (probed).
+  if (request.path === '/api/v1/health' && request.method === 'GET') {
+    return { status: 200, body: state.health };
+  }
   if (request.path === '/api/v1/tag' && request.method === 'GET') {
     return { status: 200, body: state.tags };
   }

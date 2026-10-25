@@ -56,6 +56,8 @@ const PROXIES: ProviderKind = {
 const REQUEST_TIMEOUT = 60;
 
 const TAGS = '/api/v1/tag';
+const HEALTH = '/api/v1/health';
+const health = z.array(z.looseObject({ source: z.string(), message: z.string() }));
 const tag = z.looseObject({ id: z.number(), label: z.string() });
 const tagIds = z.array(z.number());
 
@@ -219,6 +221,16 @@ const indexerProxy: ResourceSpec = {
             .join(',')
         : read.refuse('tags', 'not a list of tag ids'),
     });
+  },
+  // Prowlarr's own health check tests its proxies, every six hours (probed): drift reads
+  // what it found, and never tests the proxy itself, which would need the internet.
+  async health(api) {
+    const found = (await api.get(HEALTH, health)).find(
+      (item) => item.source === 'IndexerProxyStatusCheck',
+    );
+    return found === undefined
+      ? undefined
+      : `Prowlarr's own health check, which runs every six hours, says: ${found.message} (GET ${HEALTH})`;
   },
   async create(api, desired) {
     const { settings, top } = await proxyBody(api, desired);

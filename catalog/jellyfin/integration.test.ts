@@ -2,6 +2,7 @@ import { request as httpRequest } from 'node:http';
 import {
   AppApiError,
   createAppApi,
+  examine,
   type ResourceSpec,
   type WiringContext,
 } from '@mediaplane/engine';
@@ -591,6 +592,43 @@ describe("Jellyfin's libraries", () => {
     if (held === undefined) throw new Error('Shows is there');
     await shows.update(api, kept, held);
     expect(state.libraries[0]?.Locations).toEqual(['/data/media/tv', '/data/media/more']);
+  });
+
+  it("is checked by drift once a day at most, while it passes: each check is in Jellyfin's activity log", async () => {
+    const { api, app } = await jellyfin(setUp(), true);
+    const spec = resource('admin');
+    const observed = await spec.observe(api, undefined, wanted(spec));
+    if (observed === undefined) throw new Error('no admin');
+    const at = '2026-10-20T08:00:00.000Z';
+    const known = {
+      id: observed.id,
+      name: 'admin',
+      fields: { username: 'admin' },
+      secrets: ['password'],
+      appliedAt: at,
+      checks: { password: { verdict: 'passed' as const, at } },
+    };
+    const signIns = () =>
+      calls(app).filter((call) => call === 'POST /Users/AuthenticateByName').length;
+    const look = { readOnly: true, peer: () => undefined };
+    const driftAfter = (hours: number) =>
+      examine(spec, api, contextOf(), known, {
+        context: look,
+        drift: { now: () => new Date(Date.parse(at) + hours * 60 * 60 * 1000) },
+      });
+    // Within a day of the check that passed: taken from then, without signing in.
+    expect((await driftAfter(23))?.checks).toEqual([
+      { resource: 'jellyfin.admin', secret: 'password', verdict: 'passed', at },
+    ]);
+    expect(signIns()).toBe(0);
+    // A day on, it signs in again.
+    expect((await driftAfter(25))?.checks).toEqual([
+      { resource: 'jellyfin.admin', secret: 'password', verdict: 'passed' },
+    ]);
+    expect(signIns()).toBe(1);
+    // plan checks it every time.
+    await examine(spec, api, contextOf(), known, { context: look });
+    expect(signIns()).toBe(2);
   });
 
   it("says Jellyfin can't change what a library of that name holds", async () => {

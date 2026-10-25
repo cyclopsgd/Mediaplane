@@ -50,6 +50,7 @@ export * from './apply/prestart';
 export * from './apply/pull';
 export * from './apply/apply';
 export * from './status';
+export * from './drift';
 export * from './credentials';
 export * from './vpn/egress';
 export * from './vpn/probe';

@@ -8,6 +8,7 @@ import {
   credentials,
   DEFAULT_VPN_CHECK_URL,
   detectHostFacts,
+  drift,
   EGRESS_TIMEOUT_MS,
   fetchEgress,
   helperEgress,
@@ -40,6 +41,7 @@ import { plexLogin, PLEX_LOGIN_MAX_SECONDS } from './plex-login';
 import {
   printApply,
   printDiagnostics,
+  printDrift,
   printError,
   printHistory,
   printPlan,
@@ -104,6 +106,11 @@ export const EXIT_CODES: Readonly<Record<string, readonly string[]>> = {
     '1: any other error: stack.yaml or the host, a held lock, Docker unreachable',
   ],
   status: ['0: the containers were listed', '1: an error, or no container for that app'],
+  drift: [
+    '0: nothing changed outside Mediaplane, and every resource was checked',
+    '2: drift found, or a resource or secret was not checked',
+    '1: an error; nothing was changed',
+  ],
   history: ['0: the records were listed or shown', '1: an error, or no such record'],
   credentials: [
     '0: the login was shown',
@@ -323,6 +330,30 @@ export function createProgram(
       setExitCode(
         result.outcome === 'success' || result.outcome === 'no-changes' ? 0 : 1,
       );
+    });
+
+  program
+    .command('drift')
+    .description(
+      'Report what changed in the apps outside Mediaplane since it applied them, without putting it back; it changes nothing in the apps but for the marks its checks leave (see docs/security/threat-model.md), and keeps what its checks found in state/resources.json, so it checks a secret it found refused no more until apply sets it',
+    )
+    .option('--home <dir>', 'Mediaplane home directory', defaultHome)
+    .option('--json', 'print machine-readable JSON')
+    .addHelpText('after', exitCodesHelp('drift'))
+    .action(async (options: { home: string; json?: boolean }) => {
+      const home = resolve(options.home);
+      const runtime = deps.runtime(home, project);
+      const result = await drift({
+        home,
+        catalog,
+        host: () => deps.host(runtime),
+        env: io.env,
+        runtime,
+        probe: deps.probe(runtime, home),
+        ...(deps.wiring === undefined ? {} : { wiring: deps.wiring }),
+      });
+      printDrift(result, { json: options.json === true }, io);
+      setExitCode(result.ok ? (result.clear ? 0 : 2) : 1);
     });
 
   program

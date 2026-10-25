@@ -64,6 +64,13 @@ export interface PlanOptions {
   probe: HostProbe;
   /** For tests: where the apps' APIs are reached, and how long their calls are tried. */
   wiring?: WiringSeams;
+  /**
+   * `mediaplane drift`'s plan (spec §6.3, "the planner in observe-only mode"), from
+   * `now`: no preflight, every running and healthy app asked, even one apply would
+   * change, a secret that passed checked again only once its `checkEvery` has gone by,
+   * and the apps' own health checks read.
+   */
+  drift?: { now: () => Date };
 }
 
 export interface PlanResult {
@@ -146,13 +153,16 @@ export async function planStack(
   }
 
   diagnostics.push(...otherHomes(current, home));
+  // Drift asks what the apps hold now: the host's ports and folders don't change that.
   try {
-    diagnostics.push(
-      ...(await runPreflight(
-        { stack, versions, ownPorts: ownPorts(current) },
-        options.probe,
-      )),
-    );
+    if (options.drift === undefined) {
+      diagnostics.push(
+        ...(await runPreflight(
+          { stack, versions, ownPorts: ownPorts(current) },
+          options.probe,
+        )),
+      );
+    }
   } catch (cause) {
     const failure = await helperOrDockerFailure(cause, options);
     if (failure === undefined) throw cause;
@@ -251,8 +261,11 @@ export async function planStack(
     diagnostics.push(...checkOverrides(stack, options.catalog, { admin, keys }));
     if (hasErrors(diagnostics)) return failed(diagnostics);
     // An app to set up is asked once it is: without its key, it can't be asked now.
+    // Drift asks the others as they run now, even one apply would change.
     const changing = new Set([
-      ...containers.filter((c) => c.action !== 'unchanged').map((c) => c.service),
+      ...(options.drift === undefined
+        ? containers.filter((c) => c.action !== 'unchanged').map((c) => c.service)
+        : []),
       ...bootstrap.map((b) => b.app),
     ]);
     // The join is plan's one change to Docker, and only an app that is settled is asked:
@@ -277,6 +290,7 @@ export async function planStack(
         admin,
         secrets: knownSecrets(values, preview, admin, given),
         known,
+        ...(options.drift === undefined ? {} : { drift: options.drift }),
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });
       ({ drift, checks } = planned);

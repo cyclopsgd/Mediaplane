@@ -13,18 +13,24 @@ import { signIn } from './bootstrap';
 
 const user = z.looseObject({ Id: z.string(), Name: z.unknown() });
 
+/** How often drift checks the admin's password at most, while it passes: once a day. */
+export const CHECK_ADMIN_EVERY = 24 * 60 * 60 * 1000;
+
 /**
  * The shared admin (spec §6.1): the user Mediaplane made in Jellyfin's startup wizard,
  * known by the id resources.json records, else by the shared admin's user name. Its name
  * is a managed field, and its password a secret, checked by signing in, then out again.
  * Both are set with the key, which needs neither the old password nor a restart. Jellyfin
  * doesn't lock its admin out after failed sign-ins (probed: none after seven), but its
- * activity log records each sign-in, as it records any.
+ * activity log records each sign-in, as it records any: three lines for each check that
+ * passes, one for each that fails (probed). So drift checks it once a day at most, while
+ * it passes (the owner's decision of 2026-10-17); plan and apply check it every time.
  */
 const admin: ResourceSpec = {
   name: 'admin',
   fields: ['username'],
   secrets: ['password'],
+  checkEvery: CHECK_ADMIN_EVERY,
   desired: ({ admin: login }) => ({
     name: 'admin',
     fields: { username: login.username },

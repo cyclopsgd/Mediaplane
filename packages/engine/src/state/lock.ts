@@ -9,22 +9,28 @@ export interface LockInfo {
   pid: number;
   host: string;
   startedAt: string;
+  /** The command that holds it, such as "drift"; apply's, in a lock that doesn't say. */
+  command?: string;
 }
 
 export interface Lock {
   release(): Promise<void>;
 }
 
-/** Another apply holds the lock; `holder` says who, when the lock file can be read. */
+/** Another command holds the lock; `holder` says who, when the lock file can be read. */
 export class LockedError extends Error {
   override readonly name = 'LockedError';
   readonly holder: LockInfo | undefined;
 
   constructor(holder: LockInfo | undefined) {
+    const who =
+      holder?.command === undefined || holder.command === 'apply'
+        ? 'another apply'
+        : `mediaplane ${holder.command}`;
     super(
       holder === undefined
         ? `${LOCK_PATH} exists but cannot be read`
-        : `another apply is running (pid ${String(holder.pid)} on ${holder.host}, started ${holder.startedAt})`,
+        : `${who} is running (pid ${String(holder.pid)} on ${holder.host}, started ${holder.startedAt})`,
     );
     this.holder = holder;
   }
@@ -35,11 +41,13 @@ const MAX_ATTEMPTS = 3;
 
 /**
  * Take the single-writer lock (spec §5, stage 1): create state/lock exclusively, recording
- * the pid, host and start time. A lock left by a dead process on this host is cleared.
+ * the pid, host, start time and `command` (apply's, `drift`'s, `keep`'s). A lock left by
+ * a dead process on this host is cleared.
  */
 export async function acquireLock(
   home: string,
   now: () => Date = () => new Date(),
+  command = 'apply',
 ): Promise<Lock> {
   await ensureDir(join(home, STATE_DIR), 0o700);
   const path = join(home, LOCK_PATH);
@@ -47,6 +55,7 @@ export async function acquireLock(
     pid: process.pid,
     host: hostname(),
     startedAt: now().toISOString(),
+    ...(command === 'apply' ? {} : { command }),
   };
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     // Exclusive, and never empty or half written: a reader always finds who holds it.
@@ -107,7 +116,12 @@ async function readHolder(path: string): Promise<LockInfo | undefined | 'gone'> 
       typeof data.host === 'string' &&
       typeof data.startedAt === 'string'
     ) {
-      return { pid: data.pid, host: data.host, startedAt: data.startedAt };
+      return {
+        pid: data.pid,
+        host: data.host,
+        startedAt: data.startedAt,
+        ...(typeof data.command === 'string' ? { command: data.command } : {}),
+      };
     }
     return undefined;
   } catch {

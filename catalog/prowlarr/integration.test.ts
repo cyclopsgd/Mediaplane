@@ -477,6 +477,32 @@ describe('the indexer proxy', () => {
     expect((await proxy.observe(api, undefined))?.fields).toEqual(wanted(proxy).fields);
   });
 
+  it("reads what Prowlarr's own health check found of its proxies, and tests none itself", async () => {
+    const { api, app, state } = await prowlarr();
+    await proxy.create(api, wanted(proxy));
+    const observed = await proxy.observe(api, undefined);
+    if (observed === undefined) throw new Error('no proxy observed');
+    expect(await proxy.health?.(api, observed)).toBeUndefined();
+    // As Prowlarr says it after its check found the solver down (probed).
+    state.health.push(
+      { source: 'IndexerCheck', type: 'error', message: 'No indexers enabled' },
+      {
+        source: 'IndexerProxyStatusCheck',
+        type: 'error',
+        message: 'All indexer proxies are unavailable due to failures',
+      },
+    );
+    const tests = app.requests.filter(
+      (r) => r.path === '/api/v1/indexerproxy/test',
+    ).length;
+    expect(await proxy.health?.(api, observed)).toBe(
+      "Prowlarr's own health check, which runs every six hours, says: All indexer proxies are unavailable due to failures (GET /api/v1/health)",
+    );
+    expect(
+      app.requests.filter((r) => r.path === '/api/v1/indexerproxy/test').length,
+    ).toBe(tests);
+  });
+
   it("reads tags it can't as such, never as none", async () => {
     const { api, state } = await prowlarr();
     await proxy.create(api, wanted(proxy));

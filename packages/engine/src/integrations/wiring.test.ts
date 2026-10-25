@@ -1378,3 +1378,166 @@ describe('planWiring: overrides (spec §4.2, §6.3)', () => {
     expect(planned.drift).toEqual([]);
   });
 });
+
+describe('planWiring: what drift adds (spec §6.3)', () => {
+  const AT = '2026-10-20T08:00:00.000Z';
+  const DAY = 24 * 60 * 60 * 1000;
+  const passed = {
+    'sonarr.login': {
+      ...RECORDED['sonarr.login'],
+      checks: { password: { verdict: 'passed', at: AT } },
+    },
+  } as KnownResources;
+
+  it('checks a secret that passed again only once its resource says it may', async () => {
+    const seldom: ResourceSpec = { ...FAKE_LOGIN, checkEvery: DAY };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const at = (iso: string) => ({ now: () => new Date(iso) });
+    const soon = await planWiring(
+      options(sonarr, {
+        stack: sonarrWith([seldom]),
+        known: passed,
+        drift: at('2026-10-20T20:00:00.000Z'),
+      }),
+    );
+    expect(soon.checks).toEqual([
+      { resource: 'sonarr.login', secret: 'password', verdict: 'passed', at: AT },
+    ]);
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
+    // A day on, it signs in again; and plan always does.
+    const later = await planWiring(
+      options(sonarr, {
+        stack: sonarrWith([seldom]),
+        known: passed,
+        drift: at('2026-10-21T08:00:00.000Z'),
+      }),
+    );
+    expect(later.checks).toEqual([
+      { resource: 'sonarr.login', secret: 'password', verdict: 'passed' },
+    ]);
+    const signIns = sonarr.app.requests.filter((r) => r.path === '/login').length;
+    await planWiring(options(sonarr, { stack: sonarrWith([seldom]), known: passed }));
+    expect(sonarr.app.requests.filter((r) => r.path === '/login').length).toBe(
+      signIns + 1,
+    );
+  });
+
+  it('says an app refuses the key Mediaplane holds for it, and which resources hold that key', async () => {
+    // Sonarr refuses its key, changed in Sonarr; qBittorrent's resource holds it.
+    const holds: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'link',
+      desired: (ctx) => ({
+        name: 'link',
+        fields: { user: 'admin' },
+        secrets: { password: ctx.keys.sonarr?.apiKey ?? '' },
+      }),
+    };
+    const catalog: Catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'qbittorrent'
+        ? {
+            ...def,
+            api: FIXTURE_API,
+            integration: { after: ['sonarr'], resources: [holds] },
+          }
+        : def,
+    );
+    const QBT = '7'.repeat(32);
+    const sonarr = await fakeSonarr({ key: QBT, user: 'admin', password: KEY });
+    const planned = await planWiring(
+      options(sonarr, {
+        stack: stackOf(catalog),
+        keys: { sonarr: { apiKey: KEY }, qbittorrent: { apiKey: QBT } },
+        secrets: [KEY, QBT, PASSWORD],
+      }),
+    );
+    expect(planned.drift).toEqual([
+      { resource: 'sonarr', kind: 'key', secret: 'apiKey' },
+      {
+        resource: 'qbittorrent.link',
+        kind: 'key',
+        secret: 'password',
+        source: 'sonarr',
+      },
+    ]);
+    expect(planned.changes[0]).toMatchObject({
+      resource: 'sonarr.login',
+      action: 'unknown',
+    });
+    expect(JSON.stringify(planned)).not.toContain(KEY);
+  });
+
+  it('says what Mediaplane made that the stack no longer wants is still in the app', async () => {
+    const gone: ResourceSpec = { ...FAKE_LOGIN, name: 'gone', desired: () => undefined };
+    const vanished: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'vanished',
+      desired: () => undefined,
+      observe: () => Promise.resolve(undefined),
+    };
+    const failing: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'failing',
+      desired: () => undefined,
+      observe: () => Promise.reject(new AppApiError('no', { kind: 'rejected' })),
+    };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const record = (name: string) => ({ ...RECORDED['sonarr.login'], name }) as never;
+    const planned = await planWiring(
+      options(sonarr, {
+        stack: sonarrWith([FAKE_LOGIN, gone, vanished, failing]),
+        known: {
+          ...RECORDED,
+          'sonarr.gone': record('gone'),
+          'sonarr.vanished': record('vanished'),
+          'sonarr.failing': record('failing'),
+        },
+      }),
+    );
+    expect(planned.drift).toEqual([{ resource: 'sonarr.gone', kind: 'left' }]);
+    // One the app can't say about is never said to be gone: it couldn't be looked at.
+    const said =
+      "Mediaplane made sonarr.failing, which the stack no longer wants, and couldn't tell whether sonarr still holds it: no";
+    expect(planned.changes).toEqual([
+      { resource: 'sonarr.login', action: 'unchanged' },
+      { resource: 'sonarr.failing', action: 'unknown', reason: said },
+    ]);
+    expect(planned.diagnostics).toEqual([
+      expect.objectContaining({
+        severity: 'warning',
+        code: 'drift.left-unknown',
+        message: said,
+      }),
+    ]);
+  });
+
+  it("reads the app's own health check in drift only, and says what it found", async () => {
+    const watched: ResourceSpec = {
+      ...FAKE_LOGIN,
+      health: () => Promise.resolve(`the proxy is down, ${PASSWORD}`),
+    };
+    const failing: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'other',
+      health: () => Promise.reject(new AppApiError('no', { kind: 'server' })),
+    };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const stack = sonarrWith([watched, failing]);
+    expect((await planWiring(options(sonarr, { stack }))).diagnostics).toEqual([]);
+    const found = await planWiring(
+      options(sonarr, { stack, drift: { now: () => new Date(AT) } }),
+    );
+    expect(found.diagnostics).toEqual([
+      expect.objectContaining({
+        severity: 'warning',
+        code: 'drift.health',
+        message: 'sonarr.login: the proxy is down, ***',
+      }),
+      // One it can't read is said to be, never taken as healthy.
+      expect.objectContaining({
+        code: 'drift.health',
+        message: "sonarr.other: its app's own health check could not be read: no",
+      }),
+    ]);
+  });
+});

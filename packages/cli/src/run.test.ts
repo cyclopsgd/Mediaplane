@@ -1693,6 +1693,110 @@ apps:
   });
 });
 
+describe('mediaplane drift', () => {
+  const current = () =>
+    fakeRuntime({ hashes: { ok: true, hashes: HASHES }, containers: running(HASHES) });
+
+  it('exits 0, saying so, when the apps hold what Mediaplane applied', async () => {
+    const runtime = current();
+    const home = await currentHome(runtime);
+    const term = capture();
+    expect(await run(['drift', '--home', home], term.io, deps(runtime))).toBe(0);
+    expect(term.stdout()).toBe(
+      "Secrets, checked with each app's own check: 5 passed.\nNo drift: the apps hold what Mediaplane applied.\n",
+    );
+    // What each check found is kept, by name: none is checked again sooner than it may be.
+    const known = await readResources(home);
+    expect(known['jellyfin.admin']?.checks?.password?.verdict).toBe('passed');
+    expect(JSON.stringify(known)).not.toContain(
+      (await readSecretStore(home)).shared?.adminPassword ?? '',
+    );
+  });
+
+  it('exits 2 with what changed in an app, what was applied and what it holds, and no secret', async () => {
+    const runtime = current();
+    const home = await currentHome(runtime);
+    const client = apis.apps.get('sonarr')?.downloadClients[0];
+    if (client === undefined) throw new Error('no download client faked');
+    client.fields = client.fields.map((f) =>
+      f.name === 'tvCategory' ? { ...f, value: 'television' } : f,
+    );
+    const term = capture();
+    expect(await run(['drift', '--home', home], term.io, deps(runtime))).toBe(2);
+    expect(term.stdout()).toContain(
+      'Changed outside Mediaplane since it was applied:\n  ~ sonarr.download_client.category: expected "tv", actual "television"\n',
+    );
+    expect(term.stdout()).toContain(
+      'Drift found.\n  apply puts back each field, resource and secret changed in the apps.\n',
+    );
+    const json = capture();
+    expect(await run(['drift', '--home', home, '--json'], json.io, deps(runtime))).toBe(
+      2,
+    );
+    expect(JSON.parse(json.stdout())).toMatchObject({
+      schema: 'mediaplane.drift/v1',
+      ok: true,
+      clear: false,
+      drift: [
+        {
+          resource: 'sonarr.download_client',
+          kind: 'field',
+          field: 'category',
+          expected: 'tv',
+          actual: 'television',
+        },
+      ],
+    });
+    expectNoSecrets(term.stdout() + term.stderr() + json.stdout(), await secretsIn(home));
+    // plan shows it too, as what apply would put back.
+    const plan = capture();
+    expect(await run(['plan', '--home', home], plan.io, deps(runtime))).toBe(2);
+    expect(plan.stdout()).toContain(
+      '  ~ sonarr.download_client.category: expected "tv", actual "television"\n',
+    );
+  });
+
+  it('signs in to qBittorrent no more once it found its password refused, and to Jellyfin once a day', async () => {
+    // The owner's decisions of 2026-10-17: five failed sign-ins in a row ban Mediaplane
+    // from qBittorrent, and each check of Jellyfin's admin is in its activity log.
+    const runtime = current();
+    const home = await currentHome(runtime);
+    const qbittorrent = apis.apps.get('qbittorrent');
+    if (qbittorrent === undefined) throw new Error('no qBittorrent faked');
+    qbittorrent.password = 'fake-changed-by-hand';
+    const signIns = (path: string) =>
+      apis.app.requests.filter((r) => r.path === path && r.method === 'POST').length;
+    const term = capture();
+    expect(await run(['drift', '--home', home], term.io, deps(runtime))).toBe(2);
+    expect(term.stdout()).toContain(
+      "  ! qbittorrent.admin.password: refused by the app's own check\n",
+    );
+    expect([signIns('/api/v2/auth/login'), signIns('/Users/AuthenticateByName')]).toEqual(
+      [1, 1],
+    );
+    for (let more = 0; more < 5; more++) {
+      expect(await run(['drift', '--home', home], capture().io, deps(runtime))).toBe(2);
+    }
+    expect([signIns('/api/v2/auth/login'), signIns('/Users/AuthenticateByName')]).toEqual(
+      [1, 1],
+    );
+    expect(qbittorrent.signInFailures).toBe(1);
+    // plan takes it as refused too, without signing in: apply sets it.
+    const plan = capture();
+    expect(await run(['plan', '--home', home], plan.io, deps(runtime))).toBe(2);
+    expect(plan.stdout()).toContain('  ~ update      qbittorrent.admin (password)\n');
+    expect(signIns('/api/v2/auth/login')).toBe(1);
+  });
+
+  it('exits 1 when it cannot look, changing nothing', async () => {
+    const home = await tempDir('mediaplane-cli-');
+    const term = capture();
+    expect(await run(['drift', '--home', home, '--json'], term.io, deps())).toBe(1);
+    expect(JSON.parse(term.stdout())).toMatchObject({ ok: false, clear: false });
+    expect(await readdir(home)).toEqual([]);
+  });
+});
+
 describe('mediaplane status', () => {
   async function appliedHome() {
     const home = await makeHome();

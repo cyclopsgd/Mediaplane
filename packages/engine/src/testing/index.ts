@@ -2,6 +2,7 @@
 export * from './bootstrap';
 export * from './fixtures';
 export * from './fakes';
+export * from './home';
 export * from './http';
 export * from './jellyfin';
 export * from './plex';
