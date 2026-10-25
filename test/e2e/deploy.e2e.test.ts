@@ -397,7 +397,10 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
       '/api/v3/downloadclient',
       store.apps.sonarr?.apiKey ?? '',
       { name: 'tvCategory', value: 'television' },
-      Object.values(store.apps).flatMap((held) => Object.values(held)),
+      [
+        ...Object.values(store.apps).flatMap((held) => Object.values(held)),
+        store.shared?.adminPassword ?? '',
+      ],
     );
     const drifted = await mediaplane('drift', '--json');
     expect(drifted.code, drifted.stderr).toBe(2);

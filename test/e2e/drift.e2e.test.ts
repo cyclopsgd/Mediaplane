@@ -10,7 +10,7 @@ import {
   nodeProbe,
   readSecretStore,
   type ApplyOptions,
-  type DriftResult,
+  type Drift,
 } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
 import {
@@ -55,10 +55,11 @@ apps:
 }
 
 /**
- * What drift found, as the test compares it: each change by its address, kind and, for a
- * field, what was applied and what the app holds. A secret is named, never shown.
+ * What drift (or a plan) found, as the test compares it: each change by its address, kind
+ * and, for a field, what was applied and what the app holds. A secret is named, never
+ * shown.
  */
-function found(result: DriftResult): string[] {
+function found(result: { drift: readonly Drift[] }): string[] {
   return result.drift.map((d) =>
     d.kind === 'field'
       ? `${d.resource}.${d.field ?? ''}: ${JSON.stringify(d.expected)} → ${JSON.stringify(d.actual)}`
@@ -211,20 +212,18 @@ describe('drift, Re-apply and Keep mine (success criterion 4)', () => {
       ]);
       expect([changed.ok, changed.clear]).toEqual([true, false]);
       expectNoSecret('what drift found', JSON.stringify(changed), secrets);
-      // A secret it found refused isn't checked again until apply sets it.
+      // A secret it found refused isn't checked again until apply sets it: the same
+      // drift, the refused key now taken from the last check.
+      const recalled = found(changed).map((line) =>
+        line === 'radarr.connection_jellyfin.apiKey: secret' ? `${line} (since)` : line,
+      );
       const again = await driftNow();
-      expect(found(again)).toContain('radarr.connection_jellyfin.apiKey: secret (since)');
+      expect(found(again)).toEqual(recalled);
       // plan shows the same drift, as what apply would put back.
       const restored = await apply(options);
       expect(restored.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
       expect(restored.outcome).toBe('success');
-      expect(restored.plan.drift.map((d) => `${d.resource} ${d.kind}`)).toEqual([
-        'jellyfin.library_movies field',
-        'qbittorrent.preferences field',
-        'qbittorrent.category_movies missing',
-        'radarr.connection_jellyfin secret',
-        'sonarr.download_client field',
-      ]);
+      expect(found(restored.plan)).toEqual(recalled);
       expectNoSecret("the restoring apply's result", JSON.stringify(restored), secrets);
       // Re-apply put each back.
       expect(await categoryOf()).toBe('tv');
@@ -319,6 +318,13 @@ describe('drift, Re-apply and Keep mine (success criterion 4)', () => {
           .map((w) => `${w.resource} ${w.action} ${(w.changes ?? []).join(',')}`),
         'apply after keep',
       ).toEqual(['qbittorrent.category_tv create ']);
+      // Nor does it change a container.
+      expect(
+        made.plan.containers
+          .filter((c) => c.action !== 'unchanged')
+          .map((c) => `${c.service} ${c.action}`),
+        'containers after keep',
+      ).toEqual([]);
       expect(made.outcome).toBe('success');
       expect((await qbt()).categories).toEqual(['movies', 'television', 'tv']);
       const cleared = await driftNow();
@@ -334,9 +340,13 @@ describe('drift, Re-apply and Keep mine (success criterion 4)', () => {
       expect(settled.outcome).toBe('no-changes');
       expect(await categoryOf()).toBe('television');
       expect(await moviesFolders()).toEqual(['/data/media/extra', '/data/media/movies']);
-      expect(await getJson<unknown[]>(SONARR, '/api/v3/rootfolder', sonarrKey)).toEqual(
-        [],
+      // Only the paths: the arr's answer holds more than the test needs to print.
+      const roots = await getJson<{ path: string }[]>(
+        SONARR,
+        '/api/v3/rootfolder',
+        sonarrKey,
       );
+      expect(roots.map((r) => r.path)).toEqual([]);
       const records = await readFile(join(home, 'state', 'resources.json'), 'utf8');
       expectNoSecret('resources.json', records, secrets);
       expectNoSecret(
