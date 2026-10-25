@@ -1,6 +1,6 @@
 import { join, resolve } from 'node:path';
 import { error, warning, type Diagnostic } from './diagnostics';
-import { readResources, writeResources } from './integrations/resources';
+import { readState, writeResources } from './integrations/resources';
 import {
   DRIFT_RUNBOOK,
   type Drift,
@@ -70,7 +70,7 @@ export async function drift(options: DriftOptions): Promise<DriftResult> {
     if (!result.ok) return failedDrift(result.diagnostics);
     const diagnostics = [...result.diagnostics];
     try {
-      await keepChecks(home, result.checks, now());
+      await keepChecks(home, result.checks, result.drift, now());
     } catch (cause) {
       diagnostics.push(
         warning(
@@ -115,32 +115,46 @@ function notLooked(change: WiringChange): { resource: string; reason: string }[]
   return [];
 }
 
+/** A check drift ran now, rather than took from the last one. */
+type Ran = SecretCheck & { verdict: 'passed' | 'refused'; at?: undefined };
+
 /**
  * Keep the verdict and time of each check drift ran now, in the record of its resource:
  * what lets the next drift leave a refused secret, or one that passed lately, unchecked.
- * Written only when something changed, and only for resources Mediaplane recorded.
+ * And each app found now refusing its own key (`key` drift on the app), by "<app>.<key>":
+ * neither plan nor drift sends it that key again until apply checks it. Written only when
+ * something changed, and only for resources Mediaplane recorded.
  */
 async function keepChecks(
   home: string,
   checks: readonly SecretCheck[],
+  drift: readonly Drift[],
   at: Date,
 ): Promise<void> {
   const ran = checks.filter(
-    (check) => check.at === undefined && check.verdict !== 'unchecked',
+    (check): check is Ran => check.at === undefined && check.verdict !== 'unchecked',
   );
-  if (ran.length === 0) return;
-  const known = await readResources(home);
+  const refusing = drift.filter(
+    (d) => d.kind === 'key' && d.source === undefined && d.since === undefined,
+  );
+  if (ran.length === 0 && refusing.length === 0) return;
+  const { resources: known, keys } = await readState(home);
+  const when = at.toISOString();
   let changed = false;
   for (const check of ran) {
     const record = known[check.resource];
-    if (record === undefined || check.verdict === 'unchecked') continue;
+    if (record === undefined) continue;
     record.checks = {
       ...record.checks,
-      [check.secret]: { verdict: check.verdict, at: at.toISOString() },
+      [check.secret]: { verdict: check.verdict, at: when },
     };
     changed = true;
   }
-  if (changed) await writeResources(home, known);
+  for (const { resource, secret = '' } of refusing) {
+    keys[`${resource}.${secret}`] = { verdict: 'refused', at: when };
+    changed = true;
+  }
+  if (changed) await writeResources(home, known, keys);
 }
 
 function failedDrift(diagnostics: Diagnostic[]): DriftResult {

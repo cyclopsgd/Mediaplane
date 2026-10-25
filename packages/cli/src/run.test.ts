@@ -1814,6 +1814,33 @@ describe('mediaplane drift', () => {
     );
   });
 
+  it('sends qBittorrent no more the key it refused, until apply checks it', async () => {
+    // The owner's decision on qBittorrent's ban, for Mediaplane's own key too.
+    const runtime = current();
+    const home = await currentHome(runtime);
+    const qbittorrent = apis.apps.get('qbittorrent');
+    if (qbittorrent === undefined) throw new Error('no qBittorrent faked');
+    const held = qbittorrent.key;
+    qbittorrent.key = 'fake-key-changed-in-qbittorrent';
+    const sent = () =>
+      apis.app.requests.filter((r) => r.headers.authorization === `Bearer ${held}`)
+        .length;
+    const term = capture();
+    expect(await run(['drift', '--home', home], term.io, deps(runtime))).toBe(2);
+    expect(term.stdout()).toContain(
+      '  ! qbittorrent: refuses the key Mediaplane holds for it (apiKey), as if it was changed in the app\n',
+    );
+    const once = sent();
+    const again = capture();
+    expect(await run(['drift', '--home', home], again.io, deps(runtime))).toBe(2);
+    expect(await run(['plan', '--home', home], capture().io, deps(runtime))).toBe(2);
+    expect(sent()).toBe(once);
+    expect(again.stdout()).toMatch(
+      /! qbittorrent: refuses the key Mediaplane holds for it \(apiKey\), as if it was changed in the app \(found at .+; not sent again until apply checks it\)\n/,
+    );
+    expectNoSecrets(term.stdout() + again.stdout(), await secretsIn(home));
+  });
+
   it('exits 1 when it cannot look, changing nothing', async () => {
     const home = await tempDir('mediaplane-cli-');
     const term = capture();
@@ -1866,7 +1893,7 @@ describe('mediaplane keep', () => {
     const waiting = capture();
     expect(await run(['drift', '--home', home], waiting.io, deps(runtime))).toBe(2);
     expect(waiting.stdout()).toContain(
-      '  - sonarr.download_client.apiKey: what it requires is yet to be put in place, which apply does first\n',
+      '  ? sonarr.download_client.apiKey: what it requires is yet to be put in place, which apply does first\n',
     );
     expect(waiting.stdout()).not.toContain('Changed outside Mediaplane');
     // Put in place, as apply does: drift is clear, with the client's key checked.

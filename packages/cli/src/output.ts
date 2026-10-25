@@ -79,7 +79,7 @@ export function driftLine(drift: Drift): string {
       return `  ! ${drift.resource}.${drift.secret ?? ''}: refused by the app's own check${drift.since === undefined ? '' : ` (found by drift at ${drift.since}; not checked again until apply sets it)`}`;
     case 'key':
       return drift.source === undefined
-        ? `  ! ${drift.resource}: refuses the key Mediaplane holds for it (${drift.secret ?? ''}), as if it was changed in the app`
+        ? `  ! ${drift.resource}: refuses the key Mediaplane holds for it (${drift.secret ?? ''}), as if it was changed in the app${drift.since === undefined ? '' : ` (found at ${drift.since}; not sent again until apply checks it)`}`
         : `  ! ${drift.resource}.${drift.secret ?? ''}: holds ${drift.source}'s key, which ${drift.source} refuses`;
     case 'left':
       return `  ? ${drift.resource}: still in the app, though the stack no longer wants it; apply leaves it`;
@@ -268,7 +268,7 @@ export function printDrift(
       );
     }
     for (const { resource, secret, reason } of unchecked) {
-      io.stdout(`  - ${resource}.${secret}: ${reason ?? 'not checked'}\n`);
+      io.stdout(`  ? ${resource}.${secret}: ${reason ?? 'not checked'}\n`);
     }
   }
   if (result.clear) {

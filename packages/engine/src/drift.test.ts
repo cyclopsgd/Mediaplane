@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { drift } from './drift';
 import { AppApiError } from './http/client';
-import { readResources, writeResources } from './integrations/resources';
+import { readResources, readState, writeResources } from './integrations/resources';
 import type { ResourceSpec } from './integrations/types';
 import { LOCK_PATH, RESOURCES_PATH } from './paths';
 import type { HostProbe } from './preflight/probe';
@@ -109,6 +109,71 @@ describe('drift', () => {
     ]);
     expect(signIns()).toBe(before);
     expect(JSON.stringify([first, second])).not.toContain(PASSWORD);
+  });
+
+  it('keeps that an app refuses its own key, and sends it no more until apply checks it', async () => {
+    const dir = await home();
+    const sonarr = await fakeSonarr({ key: '1'.repeat(32) });
+    const first = await driftOf(dir, sonarr);
+    expect(first).toMatchObject({
+      ok: true,
+      clear: false,
+      drift: [{ resource: 'sonarr', kind: 'key', secret: 'apiKey' }],
+    });
+    expect((await readState(dir)).keys).toEqual({
+      'sonarr.apiKey': { verdict: 'refused', at: AT.toISOString() },
+    });
+    const keyed = () => sonarr.app.requests.filter((r) => r.headers['x-api-key'] === KEY);
+    const sent = keyed().length;
+    const second = await driftOf(dir, sonarr);
+    expect(keyed().length).toBe(sent);
+    expect(second).toMatchObject({
+      clear: false,
+      drift: [
+        { resource: 'sonarr', kind: 'key', secret: 'apiKey', since: AT.toISOString() },
+      ],
+      unchecked: [{ resource: 'sonarr.login' }],
+    });
+    expect(JSON.stringify([first, second])).not.toContain(KEY);
+  });
+
+  it("is clear beside a warning of the app's own health check, which apply can't put right", async () => {
+    const dir = await home();
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const watched: ResourceSpec = {
+      ...FAKE_LOGIN,
+      health: () => Promise.resolve('the proxy is down'),
+    };
+    const catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr'
+        ? { ...def, integration: { after: [], resources: [watched] } }
+        : def,
+    );
+    const result = await drift({
+      home: dir,
+      catalog,
+      host: FIXTURE_HOST,
+      env: {},
+      runtime: runtimeFor(sonarr.addresses),
+      probe: fakeProbe(),
+      wiring: sonarr.seams,
+      now: () => AT,
+    });
+    expect(result).toMatchObject({ ok: true, clear: true, drift: [] });
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ severity: 'warning', code: 'drift.health' }),
+    ]);
+  });
+
+  it('keeps no check of a resource Mediaplane has no record of', async () => {
+    const dir = await home();
+    await writeResources(dir, {});
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const result = await driftOf(dir, sonarr);
+    expect(result.checks).toEqual([
+      { resource: 'sonarr.login', secret: 'password', verdict: 'passed' },
+    ]);
+    expect(await readResources(dir)).toEqual({});
   });
 
   it("says what it couldn't look at, and isn't clear then", async () => {
@@ -266,6 +331,8 @@ describe('drift', () => {
       now: () => AT,
     });
     expect(result.ok).toBe(true);
+    // Nothing found: clear, and drift exits 0, though it couldn't keep what it found.
+    expect(result.clear).toBe(true);
     expect(result.diagnostics).toEqual([
       expect.objectContaining({ severity: 'warning', code: 'drift.checks-not-kept' }),
     ]);

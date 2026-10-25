@@ -1,5 +1,5 @@
 import { error, type Diagnostic } from '../diagnostics';
-import { AppApiError, APP_DEADLINE_MS } from '../http/client';
+import { AppApiError, APP_DEADLINE_MS, type AppApi } from '../http/client';
 import type { ActionResult } from '../history/records';
 import { PROJECT_NAME, WIRING_NETWORK } from '../render/compose';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
@@ -9,7 +9,12 @@ import type { SecretStore } from '../secrets/store';
 import { stackKeys } from '../secrets/values';
 import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
 import { desiredOf } from './overrides';
-import { readResources, writeResources, type KnownResources } from './resources';
+import {
+  readState,
+  writeResources,
+  type KeyChecks,
+  type KnownResources,
+} from './resources';
 import type {
   DesiredResource,
   Fields,
@@ -93,8 +98,9 @@ export async function wire(options: WireOptions): Promise<string[]> {
   const order = wiringOrder(stack);
   if (order.length === 0) return [];
   let known: KnownResources;
+  let keys: KeyChecks;
   try {
-    known = await readResources(options.home);
+    ({ resources: known, keys } = await readState(options.home));
   } catch (cause) {
     throw new WiringFailed(
       'state/resources.json could not be read, so nothing was wired',
@@ -104,7 +110,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
   }
   const admin = await adminLogin(stack.config, options.home, options.store, options.env);
   const given = options.given ?? {};
-  const keys = stackKeys(stack, options.store, given);
+  const appKeys = stackKeys(stack, options.store, given);
   const secrets = knownSecrets(options.values, options.store, admin, given);
   const found = options.found ?? foundSecrets();
   let reached: Map<string, ReachedApp>;
@@ -119,7 +125,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
     reached = await reachApps(order, {
       runtime,
       current: await runtime.containers(),
-      keys,
+      keys: appKeys,
       secrets,
       found,
       deadlineMs: APP_DEADLINE_MS,
@@ -141,7 +147,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
   const waited: string[] = [];
   const done: string[] = [];
   /** The apps that took Mediaplane's key: what a check may ask of another app. */
-  const checked = new Map<string, ReachedApp['api']>();
+  const checked = new Map<string, AppApi>();
   const context: VerifyContext = { readOnly: false, peer: (id) => checked.get(id) };
   const values = redactionValues(secrets);
   // Every failure's message is redacted once, here, whoever wrote it: the client, a
@@ -168,8 +174,31 @@ export async function wire(options: WireOptions): Promise<string[]> {
     }
     return new WiringFailed(message, diagnostics);
   };
+  /**
+   * A secret drift found refused that apply's own check now passes, taken out of the
+   * resource's record, as it is when the record is written: drift is clear then, and the
+   * next plan has nothing to do for it.
+   */
+  const forgetPassed = async (address: string, result: Examined) => {
+    const record = known[address];
+    const kept = record?.checks;
+    if (record === undefined || kept === undefined) return;
+    const passed = result.checks
+      .filter((check) => check.verdict === 'passed')
+      .map((check) => check.secret);
+    const left = Object.fromEntries(
+      Object.entries(kept).filter(
+        ([secret, check]) => check.verdict !== 'refused' || !passed.includes(secret),
+      ),
+    );
+    if (Object.keys(left).length === Object.keys(kept).length) return;
+    const { checks: _checks, ...rest } = record;
+    known[address] = Object.keys(left).length === 0 ? rest : { ...rest, checks: left };
+    // A failure to save it stops the step, as any error that isn't the app's.
+    await writeResources(options.home, known, keys);
+  };
   for (const app of order) {
-    const ctx: WiringContext = { stack, app, admin, keys };
+    const ctx: WiringContext = { stack, app, admin, keys: appKeys };
     const targets = wiringTargets(ctx);
     if (options.waiting?.includes(app.def.id) === true) {
       for (const target of targets) {
@@ -198,6 +227,17 @@ export async function wire(options: WireOptions): Promise<string[]> {
       continue;
     }
     checked.set(app.def.id, client.api);
+    // It takes its key: one drift found it refusing is no longer, so plan and drift send
+    // it again.
+    const own = `${app.def.id}.${app.def.api?.key.secret ?? ''}`;
+    if (Object.hasOwn(keys, own)) {
+      Reflect.deleteProperty(keys, own);
+      try {
+        await writeResources(options.home, known, keys);
+      } catch (cause) {
+        throw stop(targets, cause, 'state/resources.json could not be saved: ');
+      }
+    }
     for (const spec of wantedResources(ctx)) {
       const address = resourceAddress(app, spec);
       const blocker = (spec.requires ?? []).find(
@@ -234,6 +274,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
         });
         if (result === undefined) continue;
         if (result.action === 'unchanged') {
+          await forgetPassed(address, result);
           options.record({
             step: 'wire',
             resource: address,
@@ -272,7 +313,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
         appliedAt: options.now().toISOString(),
       };
       try {
-        await writeResources(options.home, known);
+        await writeResources(options.home, known, keys);
       } catch (cause) {
         // The app holds it now, as the next plan will find (adopt): say so.
         throw stop(

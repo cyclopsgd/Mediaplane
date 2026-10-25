@@ -316,6 +316,24 @@ apps:
       expect(tv.desired(contextOf(unmanaged))?.name).toBe('tv');
     });
 
+    it('looks one the stack no longer wants up by its record: a kept category, its arr gone', async () => {
+      // Made as "shows", kept so in Sonarr's client; then Sonarr left the stack.
+      const record = {
+        id: 'shows',
+        name: 'shows',
+        fields: { savePath: '/data/torrents/shows' },
+        secrets: [],
+        appliedAt: '2026-10-10T12:00:00.000Z',
+      };
+      const both = await qbittorrent({
+        categories: { tv: '/data/torrents/tv', shows: '/data/torrents/shows' },
+      });
+      expect((await tv.observe(both.api, record))?.name).toBe('shows');
+      // The category tv, yours, isn't taken for it.
+      const yours = await qbittorrent({ categories: { tv: '/data/torrents/tv' } });
+      expect(await tv.observe(yours.api, record)).toBeUndefined();
+    });
+
     it("says qBittorrent's own words when it refuses", async () => {
       const { api } = await qbittorrent({ categories: { tv: '/data/torrents/tv' } });
       const desired = tv.desired(contextOf());

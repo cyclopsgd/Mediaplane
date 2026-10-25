@@ -218,8 +218,10 @@ function category(arr: string, name: string): ResourceSpec {
         secrets: {},
       };
     },
-    async observe(api, _known, desired) {
-      const named = desired?.name ?? name;
+    // By the name the stack wants, or, for one it no longer wants, the name it was made
+    // with, which its record keeps (a category kept as another, whose arr left).
+    async observe(api, known, desired) {
+      const named = desired?.name ?? known?.name ?? name;
       const held = (await api.get(CATEGORIES_PATH, categories))[named];
       if (held === undefined) return undefined;
       const read = fieldReader();

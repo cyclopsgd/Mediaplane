@@ -38,9 +38,23 @@ const knownSchema = z.strictObject({
     .optional(),
 });
 
+/** "<app>.<key>": an app's own key, by the name the secrets store keeps it under. */
+export const KEY_ADDRESS = /^[a-z0-9-]+\.[A-Za-z][A-Za-z0-9_]*$/;
+
 const fileSchema = z.strictObject({
   schema: z.literal(RESOURCES_SCHEMA),
   resources: z.record(z.string().regex(RESOURCE_ADDRESS), knownSchema),
+  /**
+   * The apps' own keys that plan or drift found the app refuses (spec §6.3, a key changed
+   * at its source), by "<app>.<key>", and since when: neither sends it to the app again
+   * until apply checks it and it passes, which takes it out. Never a value.
+   */
+  keys: z
+    .record(
+      z.string().regex(KEY_ADDRESS),
+      z.strictObject({ verdict: z.literal('refused'), at: z.iso.datetime() }),
+    )
+    .optional(),
 });
 
 /** What Mediaplane last applied to one resource, as state/resources.json keeps it. */
@@ -49,14 +63,28 @@ export type KnownResource = z.infer<typeof knownSchema>;
 /** Every resource Mediaplane manages, by address. */
 export type KnownResources = Record<string, KnownResource>;
 
+/** The apps' own keys found refused, by "<app>.<key>" (KEY_ADDRESS), and since when. */
+export type KeyChecks = Record<string, { verdict: 'refused'; at: string }>;
+
+/** Everything state/resources.json holds. */
+export interface ResourcesState {
+  resources: KnownResources;
+  keys: KeyChecks;
+}
+
 /**
- * state/resources.json, or nothing when it doesn't exist yet. It holds no secret, so an
- * error may name what is wrong in it.
+ * state/resources.json's resources, or none when it doesn't exist yet. It holds no
+ * secret, so an error may name what is wrong in it.
  */
 export async function readResources(home: string): Promise<KnownResources> {
+  return (await readState(home)).resources;
+}
+
+/** state/resources.json: its resources, and the apps' keys found refused (readResources). */
+export async function readState(home: string): Promise<ResourcesState> {
   const path = join(home, RESOURCES_PATH);
   const text = await readIfExists(path);
-  if (text === undefined) return {};
+  if (text === undefined) return { resources: {}, keys: {} };
   let data: unknown;
   try {
     data = JSON.parse(text) as unknown;
@@ -72,18 +100,26 @@ export async function readResources(home: string): Promise<KnownResources> {
       `${path} is not a Mediaplane resources file (${RESOURCES_SCHEMA}): ${faults.join('; ')}`,
     );
   }
-  return parsed.data.resources;
+  return { resources: parsed.data.resources, keys: parsed.data.keys ?? {} };
 }
 
-/** Save it atomically, sorted, private to its owner: state/ 0700, the file 0600. */
+/**
+ * Save it atomically, sorted, private to its owner: state/ 0700, the file 0600. Without
+ * `keys`, the apps' keys found refused that the file holds are kept as they are.
+ */
 export async function writeResources(
   home: string,
   resources: KnownResources,
+  keys?: KeyChecks,
 ): Promise<void> {
-  const sorted = Object.fromEntries(
-    Object.entries(resources).sort(([a], [b]) => compare(a, b)),
-  );
-  const checked = fileSchema.parse({ schema: RESOURCES_SCHEMA, resources: sorted });
+  const kept = keys ?? (await readState(home).catch(() => ({ keys: {} }))).keys;
+  const sorted = <T>(record: Record<string, T>) =>
+    Object.fromEntries(Object.entries(record).sort(([a], [b]) => compare(a, b)));
+  const checked = fileSchema.parse({
+    schema: RESOURCES_SCHEMA,
+    resources: sorted(resources),
+    ...(Object.keys(kept).length === 0 ? {} : { keys: sorted(kept) }),
+  });
   await ensureDir(join(home, STATE_DIR), 0o700);
   await writeFileAtomic(
     join(home, RESOURCES_PATH),

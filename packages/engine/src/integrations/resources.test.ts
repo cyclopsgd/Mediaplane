@@ -3,7 +3,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { RESOURCES_PATH } from '../paths';
 import { tempDir } from '../testing/temp';
-import { readResources, writeResources, type KnownResources } from './resources';
+import {
+  readResources,
+  readState,
+  writeResources,
+  type KnownResources,
+} from './resources';
 
 const AT = '2026-10-10T12:00:00.000Z';
 const ADMIN = {
@@ -39,6 +44,29 @@ describe('resources.json', () => {
     expect(text.indexOf('radarr.admin')).toBeLessThan(text.indexOf('sonarr.admin'));
     expect((await stat(join(home, RESOURCES_PATH))).mode & 0o777).toBe(0o600);
     expect((await stat(join(home, 'state'))).mode & 0o777).toBe(0o700);
+  });
+
+  it('keeps the apps found refusing their own key, by name, until told otherwise', async () => {
+    const home = await tempDir('mediaplane-resources-');
+    const keys = { 'sonarr.apiKey': { verdict: 'refused' as const, at: AT } };
+    await writeResources(home, { 'sonarr.admin': ADMIN }, keys);
+    expect(await readState(home)).toEqual({ resources: { 'sonarr.admin': ADMIN }, keys });
+    // Written without them, it keeps the ones it holds; given none, it has none.
+    await writeResources(home, {});
+    expect((await readState(home)).keys).toEqual(keys);
+    await writeResources(home, {}, {});
+    expect(JSON.parse(await readFile(join(home, RESOURCES_PATH), 'utf8'))).toEqual({
+      schema: 'mediaplane.resources/v1',
+      resources: {},
+    });
+    const odd = await homeWith(
+      JSON.stringify({
+        schema: 'mediaplane.resources/v1',
+        resources: {},
+        keys: { sonarr: { verdict: 'refused', at: AT } },
+      }),
+    );
+    await expect(readResources(odd)).rejects.toThrow('keys.sonarr:');
   });
 
   it("keeps what drift found of each secret, by name, and refuses a check it can't read", async () => {

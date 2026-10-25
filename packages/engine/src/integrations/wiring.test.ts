@@ -1602,6 +1602,140 @@ describe('planWiring: what drift adds (spec §6.3)', () => {
     ]);
   });
 
+  it('sends an app no key it was found refusing, until apply checks it, nor checks what holds it', async () => {
+    // qBittorrent's resource holds Sonarr's key, and asks Sonarr with it to say a value.
+    let resolved = 0;
+    const holds: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'link',
+      desired: (ctx) => ({
+        name: 'link',
+        fields: { user: 'admin' },
+        secrets: { password: ctx.keys.sonarr?.apiKey ?? '' },
+      }),
+      resolve: (_api, desired) => {
+        resolved++;
+        return Promise.resolve(desired);
+      },
+      verify: () => Promise.reject(new Error('never checked while the key is refused')),
+    };
+    const catalog: Catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'qbittorrent'
+        ? {
+            ...def,
+            api: FIXTURE_API,
+            integration: { after: ['sonarr'], resources: [holds] },
+          }
+        : def,
+    );
+    const QBT = '7'.repeat(32);
+    // One fake answers for both: it takes qBittorrent's key.
+    const sonarr = await fakeSonarr({ key: QBT, user: 'admin', password: PASSWORD });
+    const both = {
+      ...sonarr,
+      // qBittorrent is reached through Gluetun, whose network it shares.
+      addresses: { ...sonarr.addresses, 'fake-gluetun': '127.0.0.1' },
+    };
+    const planned = await planWiring(
+      options(both, {
+        stack: stackOf(catalog),
+        keys: { sonarr: { apiKey: KEY }, qbittorrent: { apiKey: QBT } },
+        secrets: [KEY, QBT, PASSWORD],
+        known: {
+          ...RECORDED,
+          'sonarr.gone': { ...(RECORDED['sonarr.login'] as KnownResource), name: 'gone' },
+        },
+        refusedKeys: { 'sonarr.apiKey': { verdict: 'refused', at: AT } },
+      }),
+    );
+    // Sonarr isn't sent its key at all.
+    expect(sonarr.app.requests.filter((r) => r.headers['x-api-key'] === KEY)).toEqual([]);
+    expect(planned.drift).toEqual([
+      { resource: 'sonarr', kind: 'key', secret: 'apiKey', since: AT },
+      { resource: 'qbittorrent.link', kind: 'key', secret: 'password', source: 'sonarr' },
+    ]);
+    const reason = `sonarr refused the key Mediaplane holds for it (apiKey) at ${AT}, so it isn't sent again until apply checks it; see ${WIRING_RUNBOOK}`;
+    expect(planned.changes.slice(0, 1)).toEqual([
+      { resource: 'sonarr.login', action: 'unknown', reason },
+    ]);
+    // What only the holder's app can say isn't asked, nor are its secrets checked.
+    expect(resolved).toBe(0);
+    expect(planned.checks).toEqual([
+      {
+        resource: 'qbittorrent.link',
+        secret: 'password',
+        verdict: 'unchecked',
+        reason: `sonarr refuses its own key, which this holds, so neither is checked until the key is put back, as ${WIRING_RUNBOOK} shows`,
+      },
+    ]);
+  });
+
+  it('asks nothing only the app can say of a resource with a secret found refused, until apply', async () => {
+    let resolved = 0;
+    const asks: ResourceSpec = {
+      ...FAKE_LOGIN,
+      resolve: (_api, desired) => {
+        resolved++;
+        return Promise.resolve(desired);
+      },
+    };
+    const found = {
+      'sonarr.login': {
+        ...RECORDED['sonarr.login'],
+        checks: { password: { verdict: 'refused', at: AT } },
+      },
+    } as KnownResources;
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const planned = await planWiring(
+      options(sonarr, { stack: sonarrWith([asks]), known: found }),
+    );
+    expect(resolved).toBe(0);
+    expect(planned.changes).toEqual([
+      { resource: 'sonarr.login', action: 'update', changes: ['password'] },
+    ]);
+    // Without one found refused, it is asked.
+    await planWiring(options(sonarr, { stack: sonarrWith([asks]), known: RECORDED }));
+    expect(resolved).toBe(1);
+  });
+
+  it("asks nothing more of an app that stopped answering: what is left there isn't looked at", async () => {
+    let looked = 0;
+    const stops: ResourceSpec = {
+      ...FAKE_LOGIN,
+      observe: () =>
+        Promise.reject(new AppApiError('gone quiet', { kind: 'unreachable' })),
+    };
+    const gone: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'gone',
+      desired: () => undefined,
+      observe: () => {
+        looked++;
+        return Promise.resolve(undefined);
+      },
+    };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const planned = await planWiring(
+      options(sonarr, {
+        stack: sonarrWith([stops, gone]),
+        known: {
+          ...RECORDED,
+          'sonarr.gone': { ...(RECORDED['sonarr.login'] as KnownResource), name: 'gone' },
+        },
+      }),
+    );
+    expect(looked).toBe(0);
+    expect(planned.changes).toEqual([
+      { resource: 'sonarr.login', action: 'unknown', reason: 'gone quiet' },
+      {
+        resource: 'sonarr.gone',
+        action: 'unknown',
+        reason:
+          "Mediaplane made sonarr.gone, which the stack no longer wants, and couldn't ask sonarr whether it still holds it: gone quiet",
+      },
+    ]);
+  });
+
   it("reads the app's own health check in drift only, and says what it found", async () => {
     const watched: ResourceSpec = {
       ...FAKE_LOGIN,

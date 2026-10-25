@@ -17,7 +17,7 @@ import type { SecretStore } from '../secrets/store';
 import { foundSecrets, redact, redactionValues, type FoundSecrets } from '../util/redact';
 import { compare } from '../util/sort';
 import { desiredOf, isUnmanaged, withOverrides } from './overrides';
-import type { KnownResource, KnownResources } from './resources';
+import type { KeyChecks, KnownResource, KnownResources } from './resources';
 import type {
   DesiredResource,
   ObservedResource,
@@ -377,10 +377,47 @@ export interface ExamineOptions {
    * (`resolve`, which may use the app's own test, as Seerr's does) is what was applied.
    */
   secrets?: boolean;
+  /**
+   * Why its secrets aren't checked, nor what only the app can say asked (`resolve`): it
+   * holds a key that the key's own app refuses, so a check would only fail, leaving a
+   * mark in both apps.
+   */
+  blocked?: string;
 }
 
 /** Apply's VerifyContext, without another app: what a check gets by default. */
 const APPLYING: VerifyContext = { readOnly: false, peer: () => undefined };
+
+/** A verdict on a secret, without what it is on. */
+type Verdict = Omit<SecretCheck, 'resource' | 'secret'>;
+
+/** Why a secret beside one found refused isn't checked. */
+const WITH_REFUSED: Verdict = {
+  verdict: 'unchecked',
+  reason: 'apply sets it with the refused one',
+};
+
+/** Each of the resource's secrets, with its verdict. */
+function eachSecret(
+  spec: ResourceSpec,
+  resource: string,
+  verdictOf: (secret: string) => Verdict,
+): SecretCheck[] {
+  return spec.secrets.map((secret) => ({ resource, secret, ...verdictOf(secret) }));
+}
+
+/** Every one of the resource's secrets, with one verdict. */
+function everySecret(
+  spec: ResourceSpec,
+  resource: string,
+  verdict: SecretCheck['verdict'],
+  reason?: string,
+): SecretCheck[] {
+  return eachSecret(spec, resource, () => ({
+    verdict,
+    ...(reason === undefined ? {} : { reason }),
+  }));
+}
 
 /**
  * Look at one resource: observe it, compare its managed fields with what the stack wants
@@ -400,8 +437,21 @@ export async function examine(
   if (wanted === undefined) return undefined;
   const address = resourceAddress(ctx.app, spec);
   // What only the app can say, then the overrides again: Keep mine's value wins. Keep
-  // takes it from what was applied instead, and so asks the app nothing more.
+  // takes it from what was applied instead, and so asks the app nothing more. It isn't
+  // asked while what the resource requires is yet to be put in place, while it holds a
+  // key its own app refuses, nor in plan and drift while one of its secrets is known
+  // refused: the app could use that secret to say it, and a key known wrong leaves no new
+  // failing mark (the owner's decision of 2026-10-17). Apply asks it.
   const keeping = options.secrets === false && spec.resolve !== undefined;
+  const recalled =
+    options.context?.readOnly === true &&
+    spec.secrets.some((secret) => known?.checks?.[secret]?.verdict === 'refused');
+  const resolving =
+    spec.resolve !== undefined &&
+    !keeping &&
+    options.verify !== false &&
+    options.blocked === undefined &&
+    !recalled;
   const desired = keeping
     ? withOverrides(
         spec,
@@ -409,7 +459,7 @@ export async function examine(
         { ...wanted, fields: { ...known?.fields, ...wanted.fields } },
         ctx.stack.config.overrides,
       )
-    : options.verify !== false && spec.resolve !== undefined
+    : resolving && spec.resolve !== undefined
       ? withOverrides(
           spec,
           address,
@@ -422,13 +472,7 @@ export async function examine(
   // category, once Sonarr's is kept as another: what differs from it is the stack's own
   // change, which apply makes, not one made in the app.
   const record = known?.name === desired.name ? known : undefined;
-  const unchecked = (reason: string): SecretCheck[] =>
-    spec.secrets.map((secret) => ({
-      resource: address,
-      secret,
-      verdict: 'unchecked',
-      reason,
-    }));
+  const unchecked = (reason: string) => everySecret(spec, address, 'unchecked', reason);
   if (observed === undefined) {
     return {
       desired,
@@ -441,7 +485,7 @@ export async function examine(
   }
   // A field left to a `resolve` that wasn't run isn't known yet: it isn't compared.
   // Every other field is, set or not.
-  const unresolved = spec.resolve !== undefined && options.verify === false && !keeping;
+  const unresolved = spec.resolve !== undefined && !keeping && !resolving;
   const compared = unresolved
     ? spec.fields.filter((field) => desired.fields[field] !== undefined)
     : spec.fields;
@@ -554,41 +598,25 @@ async function checkSecrets(
   options: ExamineOptions,
 ): Promise<SecretCheck[]> {
   const context = options.context ?? APPLYING;
-  const all = (verdict: SecretCheck['verdict'], reason?: string): SecretCheck[] =>
-    spec.secrets.map((secret) => ({
-      resource: address,
-      secret,
-      verdict,
-      ...(reason === undefined ? {} : { reason }),
-    }));
+  const all = (verdict: SecretCheck['verdict'], reason?: string) =>
+    everySecret(spec, address, verdict, reason);
   if (options.secrets === false) return all('unchecked', 'keep checks no secret');
+  if (options.blocked !== undefined) return all('unchecked', options.blocked);
   const planned = (options.refused ?? []).filter((name) => spec.secrets.includes(name));
   if (planned.length > 0) {
-    return spec.secrets.map((secret) =>
-      planned.includes(secret)
-        ? { resource: address, secret, verdict: 'refused' }
-        : {
-            resource: address,
-            secret,
-            verdict: 'unchecked',
-            reason: 'apply sets it with the refused one',
-          },
+    return eachSecret(spec, address, (secret) =>
+      planned.includes(secret) ? { verdict: 'refused' } : WITH_REFUSED,
     );
   }
   const found = context.readOnly
     ? spec.secrets.filter((secret) => known?.checks?.[secret]?.verdict === 'refused')
     : [];
   if (found.length > 0) {
-    return spec.secrets.map((secret): SecretCheck => {
+    return eachSecret(spec, address, (secret) => {
       const at = known?.checks?.[secret]?.at;
       return found.includes(secret) && at !== undefined
-        ? { resource: address, secret, verdict: 'refused', at }
-        : {
-            resource: address,
-            secret,
-            verdict: 'unchecked',
-            reason: 'apply sets it with the refused one',
-          };
+        ? { verdict: 'refused', at }
+        : WITH_REFUSED;
     });
   }
   if (options.verify === false) {
@@ -609,11 +637,9 @@ async function checkSecrets(
           check?.verdict === 'passed' && now - new Date(check.at).getTime() < every,
       )
     ) {
-      return spec.secrets.map((secret, i) => ({
-        resource: address,
-        secret,
+      return eachSecret(spec, address, (secret) => ({
         verdict: 'passed',
-        at: passed[i]?.at ?? '',
+        at: known?.checks?.[secret]?.at ?? '',
       }));
     }
   }
@@ -710,6 +736,11 @@ export interface PlanWiringOptions {
   found?: FoundSecrets;
   known: KnownResources;
   /**
+   * The apps' own keys found refused (state/resources.json's `keys`): such an app isn't
+   * sent its key again, until apply checks it and it passes.
+   */
+  refusedKeys?: KeyChecks;
+  /**
    * `mediaplane drift`'s, which checks a secret that passed again only once its resource's
    * `checkEvery` has gone by, and reads the apps' own health checks (`health`).
    */
@@ -760,7 +791,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
     peer: (app) => checked.get(app),
   };
   /** The keys of the apps that refuse their own, as Mediaplane holds them: by value. */
-  const refusedKeys = new Map<string, string>();
+  const refusing = new Map<string, string>();
   /**
    * Resources apply would make or change, that couldn't be looked at, or whose secrets
    * went unchecked: not known to be in place.
@@ -787,8 +818,15 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
         ? wiringTargets(ctx)
         : wiringTargets(ctx).filter((target) => target === only);
     // A resource that holds the key of an app that refuses it: drift on the consumer
-    // too (§6.3), whether or not its own app can be asked.
-    drift.push(...holdingRefused(ctx, refusedKeys));
+    // too (§6.3), whether or not its own app can be asked. Its secrets aren't checked.
+    const holding = holdingRefused(ctx, refusing);
+    drift.push(...holding);
+    const blocked = new Map(
+      holding.map((entry) => [
+        entry.resource,
+        `${entry.source ?? ''} refuses its own key, which this holds, so neither is checked until the key is put back, as ${WIRING_RUNBOOK} shows`,
+      ]),
+    );
     const client = reached.get(app.def.id);
     if (client === undefined && ready.includes(app)) {
       // Running, and apply leaves it as it is, but it isn't on the network.
@@ -799,10 +837,35 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
         }),
       );
       for (const resource of targets) add({ resource, action: 'unknown', reason });
+      for (const change of leftUnasked(ctx, options.known, only, reason)) add(change);
       continue;
     }
     if (client === undefined) {
       for (const resource of targets) add({ resource, action: 'after-start' });
+      // Drift and keep say they couldn't look at what is left there either; apply's
+      // wire step doesn't look at it.
+      if (options.drift !== undefined) {
+        for (const change of leftUnasked(ctx, options.known, only)) add(change);
+      }
+      continue;
+    }
+    const name = app.def.api?.key.secret;
+    const key = name === undefined ? undefined : options.keys[app.def.id]?.[name];
+    /** What couldn't be looked at in the app: its resources, and what is left there. */
+    const notAsked = (reason: string) => {
+      for (const resource of targets) add({ resource, action: 'unknown', reason });
+      for (const change of leftUnasked(ctx, options.known, only, reason)) add(change);
+    };
+    // The app refused its key when last asked: it isn't sent again until apply checks it
+    // (the owner's decision on qBittorrent's ban, which counts failed sign-ins).
+    const recalled =
+      name === undefined ? undefined : options.refusedKeys?.[`${app.def.id}.${name}`];
+    if (recalled !== undefined && name !== undefined) {
+      drift.push({ resource: app.def.id, kind: 'key', secret: name, since: recalled.at });
+      if (key !== undefined) refusing.set(key, app.def.id);
+      notAsked(
+        `${app.def.name} refused the key Mediaplane holds for it (${name}) at ${recalled.at}, so it isn't sent again until apply checks it; see ${WIRING_RUNBOOK}`,
+      );
       continue;
     }
     try {
@@ -810,15 +873,11 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
     } catch (cause) {
       if (!(cause instanceof AppApiError)) throw cause;
       diagnostics.push(unreachableWarning(app, cause));
-      for (const resource of targets) {
-        add({ resource, action: 'unknown', reason: cause.message });
-      }
+      notAsked(cause.message);
       // The app refuses the key Mediaplane holds for it: changed at its source (§6.3).
-      const name = app.def.api?.key.secret;
-      const key = name === undefined ? undefined : options.keys[app.def.id]?.[name];
       if (cause.kind === 'auth' && name !== undefined && key !== undefined) {
         drift.push({ resource: app.def.id, kind: 'key', secret: name });
-        refusedKeys.set(key, app.def.id);
+        refusing.set(key, app.def.id);
       }
       continue;
     }
@@ -827,16 +886,18 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       (spec) => only === undefined || resourceAddress(app, spec) === only,
     );
     if (wanted.length === 0) add({ resource: app.def.id, action: 'unchanged' });
+    /** Why the app stopped answering, when it did: what is left of it isn't asked. */
+    let stopped: string | undefined;
     for (const [index, spec] of wanted.entries()) {
       const address = resourceAddress(app, spec);
       // What the wire step would refuse, before anything is sent: plan says so first.
       const desired = desiredOf(spec, ctx);
-      const held =
+      const secretField =
         desired === undefined
           ? undefined
           : fieldHoldingSecret(spec, desired, options.secrets);
-      if (held !== undefined) {
-        const reason = secretFieldReason(address, held);
+      if (secretField !== undefined) {
+        const reason = secretFieldReason(address, secretField);
         diagnostics.push(
           warning('wire.secret-field', reason, { hint: `see ${WIRING_RUNBOOK}` }),
         );
@@ -846,6 +907,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       // Its secrets are checked only once what it requires is in place: plan changes
       // nothing, and the check could make what is missing (spec §5.2, §6.3).
       const waiting = (spec.requires ?? []).some((needed) => pending.has(needed));
+      const held = blocked.get(address);
       let result: Examined | undefined;
       try {
         result = await examine(spec, client.api, ctx, options.known[address], {
@@ -853,6 +915,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
           context,
           ...(options.drift === undefined ? {} : { drift: options.drift }),
           ...(only === undefined ? {} : { secrets: false }),
+          ...(held === undefined ? {} : { blocked: held }),
         });
       } catch (cause) {
         if (!(cause instanceof AppApiError)) throw cause;
@@ -867,6 +930,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
               reason: cause.message,
             });
           }
+          stopped = cause.message;
           break;
         }
         // The app answered, about this resource: its others are still asked. A resource
@@ -892,7 +956,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       checks.push(...result.checks);
       // Its secrets went unchecked, so it isn't known to be in place either: what
       // requires it waits too.
-      if (waiting) pending.add(address);
+      if (waiting || held !== undefined) pending.add(address);
       if (options.drift !== undefined && spec.health !== undefined && result.observed) {
         const said = await healthOf(spec, client.api, result.observed);
         if (said !== undefined) {
@@ -912,7 +976,9 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       }
     }
     // Keep looks for its one resource among those left, when the stack doesn't want it.
-    if (only === undefined || wanted.length === 0) {
+    if (stopped !== undefined) {
+      for (const change of leftUnasked(ctx, options.known, only, stopped)) add(change);
+    } else if (only === undefined || wanted.length === 0) {
       const left = await leftIn(
         ctx,
         client.api,
@@ -999,6 +1065,43 @@ async function healthOf(
   }
 }
 
+/** The resources Mediaplane recorded in `ctx`'s app that the stack no longer wants. */
+function leftOf(
+  ctx: WiringContext,
+  known: KnownResources,
+  only?: string,
+): { spec: ResourceSpec; address: string; record: KnownResource }[] {
+  return (ctx.app.def.integration?.resources ?? []).flatMap((spec) => {
+    const address = resourceAddress(ctx.app, spec);
+    const record = known[address];
+    if (only !== undefined && address !== only) return [];
+    if (record === undefined || isUnmanaged(ctx.stack, address)) return [];
+    return desiredOf(spec, ctx) === undefined ? [{ spec, address, record }] : [];
+  });
+}
+
+/**
+ * What Mediaplane made in `ctx`'s app that the stack no longer wants, when the app can't
+ * be asked: a check it couldn't make each, as `unknown` with why (`reason`), or after the
+ * start; never said to be gone.
+ */
+function leftUnasked(
+  ctx: WiringContext,
+  known: KnownResources,
+  only: string | undefined,
+  reason?: string,
+): WiringChange[] {
+  return leftOf(ctx, known, only).map(({ address }) =>
+    reason === undefined
+      ? { resource: address, action: 'after-start' }
+      : {
+          resource: address,
+          action: 'unknown',
+          reason: `Mediaplane made ${address}, which the stack no longer wants, and couldn't ask ${ctx.app.def.name} whether it still holds it: ${reason}`,
+        },
+  );
+}
+
 /**
  * The resources Mediaplane made in `ctx`'s app, by its record, that the stack no longer
  * wants and the app still holds (`left`): apply doesn't remove them. One you stopped it
@@ -1015,12 +1118,7 @@ async function leftIn(
   const drift: Drift[] = [];
   const diagnostics: Diagnostic[] = [];
   const unknown: WiringChange[] = [];
-  for (const spec of ctx.app.def.integration?.resources ?? []) {
-    const address = resourceAddress(ctx.app, spec);
-    if (only !== undefined && address !== only) continue;
-    const record = known[address];
-    if (record === undefined || isUnmanaged(ctx.stack, address)) continue;
-    if (desiredOf(spec, ctx) !== undefined) continue;
+  for (const { spec, address, record } of leftOf(ctx, known, only)) {
     try {
       if ((await spec.observe(api, record)) !== undefined) {
         drift.push({ resource: address, kind: 'left' });

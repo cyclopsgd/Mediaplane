@@ -116,7 +116,7 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
     if (!(cause instanceof LockedError)) throw cause;
     return stopped('invalid', emptyPlan(), [
       error('apply.locked', cause.message, {
-        hint: 'wait for it to finish; if no apply is running, delete state/lock',
+        hint: 'wait for it to finish; if no Mediaplane command is running (apply, drift or keep), delete state/lock',
       }),
     ]);
   }

@@ -425,7 +425,11 @@ describe('apply', () => {
     const result = await apply(options(home, fakeDocker(home), { confirm }));
     expect(result.outcome).toBe('invalid');
     expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'apply.locked' }),
+      expect.objectContaining({
+        code: 'apply.locked',
+        // drift and keep hold it too: deleting it is safe only with none running.
+        hint: 'wait for it to finish; if no Mediaplane command is running (apply, drift or keep), delete state/lock',
+      }),
     );
     expect(confirm).not.toHaveBeenCalled();
     expect(await readFile(join(home, LOCK_PATH), 'utf8')).toContain(

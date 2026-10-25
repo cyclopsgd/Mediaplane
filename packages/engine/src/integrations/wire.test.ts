@@ -18,7 +18,14 @@ import {
   WIRING_RUNNING as RUNNING,
   wiringStack as stackOf,
 } from '../testing/wiring';
-import { readResources, writeResources, type KnownResources } from './resources';
+import {
+  readResources,
+  readState,
+  writeResources,
+  type KeyChecks,
+  type KnownResource,
+  type KnownResources,
+} from './resources';
 import type { ResourceSpec } from './types';
 import { wire, WiringFailed, type WireOptions } from './wire';
 import type { WiringSeams } from './wiring';
@@ -44,14 +51,15 @@ async function wireWith(
   extra: Partial<WireOptions> & {
     join?: FakeRuntimeOptions['join'];
     known?: KnownResources;
+    keys?: KeyChecks;
   } = {},
 ) {
   const { seams, addresses } = fake;
   const home = await tempDir('mediaplane-wire-');
   const actions: ActionResult[] = [];
   const calls: string[] = [];
-  const { join: joined = 'not-needed', known, ...rest } = extra;
-  if (known !== undefined) await writeResources(home, known);
+  const { join: joined = 'not-needed', known, keys, ...rest } = extra;
+  if (known !== undefined) await writeResources(home, known, keys);
   const run = wire({
     home,
     stack: stackOf(),
@@ -143,6 +151,69 @@ describe('wire', () => {
     expect(await run).toEqual(['sonarr.login updated password']);
     expect(sonarr.state.password).toBe(PASSWORD);
     expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
+  });
+
+  it('forgets a secret drift found refused once its own check passes, and leaves the rest', async () => {
+    // Drift found it refused; apply's plan checked it after the start, and it now passes
+    // (re-entered in the app, say): drift is clear after, and the next plan unchanged.
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const at = '2026-10-20T08:00:00.000Z';
+    const found: KnownResources = {
+      'sonarr.login': {
+        ...(RECORDED['sonarr.login'] as KnownResource),
+        secrets: ['password', 'token'],
+        checks: {
+          password: { verdict: 'refused', at },
+          token: { verdict: 'passed', at },
+        },
+      },
+    };
+    const { run, home, actions } = await wireWith(sonarr, {
+      known: found,
+      planned: [{ resource: 'sonarr.login', action: 'after-start' }],
+    });
+    expect(await run).toEqual([]);
+    expect(actions).toEqual([
+      { step: 'wire', resource: 'sonarr.login', result: 'done', detail: 'unchanged' },
+    ]);
+    expect((await readResources(home))['sonarr.login']?.checks).toEqual({
+      token: { verdict: 'passed', at },
+    });
+    // With none left, the record has none.
+    const only: KnownResources = {
+      'sonarr.login': {
+        ...(RECORDED['sonarr.login'] as KnownResource),
+        checks: { password: { verdict: 'refused', at } },
+      },
+    };
+    const again = await wireWith(sonarr, { known: only });
+    expect(await again.run).toEqual([]);
+    expect(await readResources(again.home)).toEqual(RECORDED);
+  });
+
+  it('forgets that an app refused its own key once it takes it, and only then', async () => {
+    const at = '2026-10-20T08:00:00.000Z';
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const taken = await wireWith(sonarr, {
+      known: RECORDED,
+      keys: {
+        'sonarr.apiKey': { verdict: 'refused', at },
+        'radarr.apiKey': { verdict: 'refused', at },
+      },
+    });
+    expect(await taken.run).toEqual([]);
+    expect((await readState(taken.home)).keys).toEqual({
+      'radarr.apiKey': { verdict: 'refused', at },
+    });
+    const refusing = await fakeSonarr({ key: '1'.repeat(32) });
+    const refused = await wireWith(refusing, {
+      known: RECORDED,
+      keys: { 'sonarr.apiKey': { verdict: 'refused', at } },
+    });
+    await expect(refused.run).rejects.toThrow(WiringFailed);
+    expect((await readState(refused.home)).keys).toEqual({
+      'sonarr.apiKey': { verdict: 'refused', at },
+    });
   });
 
   it('checks again a field its plan found differing: only the secrets it found refused go unchecked', async () => {

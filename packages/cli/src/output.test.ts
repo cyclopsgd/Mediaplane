@@ -239,7 +239,7 @@ describe('printDrift', () => {
         'Not checked:',
         "  ? radarr.admin: its app isn't running",
         "Secrets, checked with each app's own check: 1 passed, 1 not checked.",
-        '  - sonarr.download_client.apiKey: a managed field differs: apply sets the secrets with it',
+        '  ? sonarr.download_client.apiKey: a managed field differs: apply sets the secrets with it',
         'Drift found.',
         '  apply puts back each field, resource and secret changed in the apps; mediaplane keep <app>.<resource>.<field> keeps what the app holds instead, and <app>.<resource> stops Mediaplane managing one deleted.',
         '',

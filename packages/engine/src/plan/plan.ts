@@ -18,7 +18,7 @@ import { prestartFilesFor } from '../render/prestart';
 import { composeToYaml } from '../render/yaml';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { checkOverrides } from '../integrations/overrides';
-import { readResources, type KnownResources } from '../integrations/resources';
+import { readState, type ResourcesState } from '../integrations/resources';
 import {
   joinFailure,
   knownSecrets,
@@ -247,9 +247,9 @@ export async function planStack(
   let checks: SecretCheck[] = [];
   const order = wiringOrder(stack);
   if (order.length > 0) {
-    let known: KnownResources;
+    let known: ResourcesState;
     try {
-      known = await readResources(home);
+      known = await readState(home);
     } catch (cause) {
       return failed([...diagnostics, resourcesInvalid(cause)]);
     }
@@ -294,7 +294,8 @@ export async function planStack(
         keys,
         admin,
         secrets: knownSecrets(values, preview, admin, given),
-        known,
+        known: known.resources,
+        refusedKeys: known.keys,
         ...(options.drift === undefined ? {} : { drift: options.drift }),
         ...(options.only === undefined ? {} : { only: options.only }),
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
