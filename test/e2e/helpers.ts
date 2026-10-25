@@ -273,6 +273,61 @@ export async function servarrFailure(
     );
 }
 
+/**
+ * Change one setting of the first provider at `path` of a Servarr app by hand, with its
+ * key, as its web UI does: the provider sent back whole, with forceSave, so the arr saves
+ * it untested. A failure gives the status and the arr's own messages, with every one of
+ * `secrets` replaced (servarrFailure).
+ */
+export async function setServarrSetting(
+  port: number,
+  path: string,
+  key: string,
+  setting: { name: string; value: unknown },
+  secrets: readonly string[],
+): Promise<void> {
+  const keyed = { 'X-Api-Key': key };
+  const [held] = await getJson<
+    { id: number; fields: { name: string; value?: unknown }[] }[]
+  >(port, path, keyed);
+  if (held === undefined) throw new Error(`nothing at ${path} on port ${String(port)}`);
+  const saved = await api(port, `${path}/${String(held.id)}?forceSave=true`, keyed, {
+    method: 'PUT',
+    body: JSON.stringify({
+      ...held,
+      fields: held.fields.map((f) =>
+        f.name === setting.name ? { ...f, value: setting.value } : f,
+      ),
+    }),
+    type: 'application/json',
+  });
+  expect(saved.status, await servarrFailure(saved, secrets)).toBe(202);
+}
+
+/**
+ * POST a form to qBittorrent's API by hand, with its key, as its web UI does: a category
+ * made or removed, its preferences set. A failure gives the status only: qBittorrent's
+ * answer to a refused form is plain text that could repeat what it was sent.
+ */
+export async function qbittorrentForm(
+  port: number,
+  path: string,
+  key: string,
+  fields: Record<string, string>,
+): Promise<void> {
+  const sent = await api(
+    port,
+    path,
+    { Authorization: `Bearer ${key}` },
+    {
+      method: 'POST',
+      body: new URLSearchParams(fields).toString(),
+      type: 'application/x-www-form-urlencoded',
+    },
+  );
+  expect(sent.status, `POST ${path} on port ${String(port)}`).toBe(200);
+}
+
 /** What `apply --json` says, and `apply` returns: its outcome, and each action. */
 export interface WireActions {
   outcome: string;

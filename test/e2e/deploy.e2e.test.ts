@@ -19,9 +19,11 @@ import {
   ejectArguments,
   expectWiringRemoved,
   parseRevealed,
+  qbittorrentForm,
   removeAsRoot,
   removeHome,
   REPO,
+  setServarrSetting,
   TEARDOWN_MS,
 } from './helpers';
 
@@ -373,6 +375,50 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     expect((JSON.parse(keyless.stdout) as { bootstrap: unknown }).bootstrap).toEqual([
       { app: 'jellyfin', unpublished: false },
     ]);
+
+    // Slice 8, from the image: drift finds nothing changed; a category changed in Sonarr
+    // by hand, it reports it; keep writes it in stack.yaml there, as Mediaplane's user,
+    // keeping the file's mode; and drift is clear again.
+    const clear = await mediaplane('drift', '--json');
+    expect(clear.code, clear.stdout + clear.stderr).toBe(0);
+    // Sonarr's download client changed by hand: it files under "television", a category
+    // made in qBittorrent first, with the save path Mediaplane gives one of that name.
+    await qbittorrentForm(
+      8080,
+      '/api/v2/torrents/createCategory',
+      store.apps.qbittorrent?.apiKey ?? '',
+      {
+        category: 'television',
+        savePath: '/data/torrents/television',
+      },
+    );
+    await setServarrSetting(
+      8989,
+      '/api/v3/downloadclient',
+      store.apps.sonarr?.apiKey ?? '',
+      { name: 'tvCategory', value: 'television' },
+      Object.values(store.apps).flatMap((held) => Object.values(held)),
+    );
+    const drifted = await mediaplane('drift', '--json');
+    expect(drifted.code, drifted.stderr).toBe(2);
+    expect((JSON.parse(drifted.stdout) as { drift: unknown }).drift).toEqual([
+      {
+        resource: 'sonarr.download_client',
+        kind: 'field',
+        field: 'category',
+        expected: 'tv',
+        actual: 'television',
+      },
+    ]);
+    const mode = (await stat(join(home, 'stack.yaml'))).mode & 0o777;
+    const kept = await mediaplane('keep', 'sonarr.download_client.category', '--json');
+    expect(kept.code, kept.stdout + kept.stderr).toBe(0);
+    expect(await readFile(join(home, 'stack.yaml'), 'utf8')).toBe(
+      `${smallStack(data)}overrides:\n  sonarr.download_client.category: television\n`,
+    );
+    expect((await stat(join(home, 'stack.yaml'))).mode & 0o777).toBe(mode);
+    const cleared = await mediaplane('drift', '--json');
+    expect(cleared.code, cleared.stdout + cleared.stderr).toBe(0);
 
     // Slice 3b, through the proxy: Mediaplane joined the stack's wiring network to set
     // the shared login in Sonarr, and checked qBittorrent's key there. Its container is
