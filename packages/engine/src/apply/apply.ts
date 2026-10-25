@@ -605,6 +605,8 @@ function emptyPlan(): PlanResult {
     secrets: { generate: [] },
     unhealthy: [],
     wiring: [],
+    drift: [],
+    checks: [],
     bootstrap: [],
     diagnostics: [],
   };

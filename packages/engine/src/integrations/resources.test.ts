@@ -41,6 +41,29 @@ describe('resources.json', () => {
     expect((await stat(join(home, 'state'))).mode & 0o777).toBe(0o700);
   });
 
+  it("keeps what drift found of each secret, by name, and refuses a check it can't read", async () => {
+    const home = await tempDir('mediaplane-resources-');
+    const checked: KnownResources = {
+      'sonarr.admin': { ...ADMIN, checks: { password: { verdict: 'refused', at: AT } } },
+    };
+    await writeResources(home, checked);
+    expect(await readResources(home)).toEqual(checked);
+    const odd = await homeWith(
+      JSON.stringify({
+        schema: 'mediaplane.resources/v1',
+        resources: {
+          'sonarr.admin': {
+            ...ADMIN,
+            checks: { password: { verdict: 'maybe', at: AT } },
+          },
+        },
+      }),
+    );
+    await expect(readResources(odd)).rejects.toThrow(
+      'resources.sonarr.admin.checks.password.verdict:',
+    );
+  });
+
   it('refuses a file of another schema or shape, saying where', async () => {
     const other = await homeWith(
       JSON.stringify({ schema: 'mediaplane.resources/v9', resources: {} }),

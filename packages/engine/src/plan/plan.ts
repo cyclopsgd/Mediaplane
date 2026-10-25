@@ -25,6 +25,8 @@ import {
   resourcesInvalid,
   settled,
   wiringOrder,
+  type Drift,
+  type SecretCheck,
   type WiringChange,
   type WiringSeams,
 } from '../integrations/wiring';
@@ -78,6 +80,13 @@ export interface PlanResult {
   unhealthy: string[];
   /** What apply would do to each managed resource in the apps (spec §5 step 5). */
   wiring: WiringChange[];
+  /**
+   * What changed in the apps outside Mediaplane since it applied them (spec §6.3): apply
+   * puts it back, as `wiring` says.
+   */
+  drift: Drift[];
+  /** How each secret of each resource plan looked at was checked: names, never values. */
+  checks: SecretCheck[];
   /** The apps whose first-run setup apply would finish before publishing them. */
   bootstrap: BootstrapChange[];
   diagnostics: Diagnostic[];
@@ -218,6 +227,8 @@ export async function planStack(
   const unhealthy = notYetHealthy(current, containers);
 
   let wiring: WiringChange[] = [];
+  let drift: Drift[] = [];
+  let checks: SecretCheck[] = [];
   const order = wiringOrder(stack);
   if (order.length > 0) {
     let known: KnownResources;
@@ -262,6 +273,7 @@ export async function planStack(
         known,
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });
+      ({ drift, checks } = planned);
       wiring = planned.changes;
       diagnostics.push(...planned.diagnostics);
     } catch (cause) {
@@ -284,6 +296,8 @@ export async function planStack(
       secrets: { generate },
       unhealthy,
       wiring,
+      drift,
+      checks,
       bootstrap,
       diagnostics,
     },
@@ -301,6 +315,8 @@ function failed(diagnostics: Diagnostic[]): { result: PlanResult; context: undef
       secrets: { generate: [] },
       unhealthy: [],
       wiring: [],
+      drift: [],
+      checks: [],
       bootstrap: [],
       diagnostics,
     },

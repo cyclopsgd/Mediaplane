@@ -161,6 +161,33 @@ describe('wire', () => {
     expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(true);
   });
 
+  it("tells an update what differs, and a check that it is apply's, with the apps it may ask", async () => {
+    const seen: unknown[] = [];
+    const told: ResourceSpec = {
+      ...FAKE_LOGIN,
+      verify: (api, desired, observed, ctx) => {
+        seen.push(ctx?.readOnly, ctx?.peer('sonarr')?.name, ctx?.peer('qbittorrent'));
+        return FAKE_LOGIN.verify?.(api, desired, observed, ctx) ?? Promise.resolve(false);
+      },
+      update: (api, desired, observed, changes) => {
+        seen.push(changes);
+        return FAKE_LOGIN.update(api, desired, observed);
+      },
+    };
+    const stack = stackOf(
+      WIRED_CATALOG.map((def) =>
+        def.id === 'sonarr'
+          ? { ...def, integration: { after: [], resources: [told] } }
+          : def,
+      ),
+    );
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: 'fake-other' });
+    const { run } = await wireWith(sonarr, { stack, known: RECORDED });
+    expect(await run).toEqual(['sonarr.login updated password']);
+    // The fixture's Sonarr is named by its id; qBittorrent isn't up in this stack.
+    expect(seen).toEqual([false, 'sonarr', undefined, ['password']]);
+  });
+
   it('changes nothing, and writes nothing, when all is as wanted', async () => {
     const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
     const { run, home, actions } = await wireWith(sonarr, { known: RECORDED });

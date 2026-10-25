@@ -957,6 +957,45 @@ describe('plan: the wiring', () => {
     });
   });
 
+  it('says what changed in an app since it was applied, and how each secret was checked', async () => {
+    const sonarr = await fakeSonarr({
+      key: '0'.repeat(32),
+      user: 'someone',
+      password: 'fake-admin-password',
+    });
+    const runtime = current([], sonarr.addresses);
+    const home = await wiredHome(runtime, sonarr.seams);
+    await writeResources(home, {
+      'sonarr.login': {
+        id: null,
+        name: 'login',
+        fields: { user: 'admin' },
+        secrets: ['password'],
+        appliedAt: '2026-10-10T12:00:00.000Z',
+      },
+    });
+    const result = await planFor(home, {
+      runtime,
+      catalog: WIRED_CATALOG,
+      wiring: sonarr.seams,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      changed: true,
+      wiring: [{ resource: 'sonarr.login', action: 'update', changes: ['user'] }],
+      drift: [
+        {
+          resource: 'sonarr.login',
+          kind: 'field',
+          field: 'user',
+          expected: 'admin',
+          actual: 'someone',
+        },
+      ],
+      checks: [{ resource: 'sonarr.login', secret: 'password', verdict: 'unchecked' }],
+    });
+  });
+
   it('checks the wiring after the start on a first plan, asking no app', async () => {
     const sonarr = await fakeSonarr();
     const result = await planFor(await makeHome(), {

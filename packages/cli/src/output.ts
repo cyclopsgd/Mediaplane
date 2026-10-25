@@ -7,6 +7,7 @@ import {
   type ChangeRecord,
   type ContainerAction,
   type Diagnostic,
+  type Drift,
   type PlanResult,
   type StatusResult,
   type StepEvent,
@@ -43,6 +44,31 @@ const WIRING_MARKS: Record<WiringAction, string> = {
 function wiringLine(change: WiringChange): string {
   const what = change.changes === undefined ? '' : ` (${change.changes.join(', ')})`;
   return `  ${WIRING_MARKS[change.action]} ${change.action.replace('-', ' ').padEnd(11)} ${change.resource}${what}`;
+}
+
+/** A value as drift shows it: text in quotes, so that an empty one shows. */
+function shownValue(value: Drift['actual']): string {
+  return typeof value === 'string' ? JSON.stringify(value) : String(value);
+}
+
+/**
+ * One change made outside Mediaplane, as plan and drift show it: the field, what was
+ * applied and what the app holds; a resource deleted; or a secret the app refuses.
+ */
+export function driftLine(drift: Drift): string {
+  switch (drift.kind) {
+    case 'field': {
+      const actual =
+        drift.unreadable === undefined
+          ? shownValue(drift.actual ?? null)
+          : `one Mediaplane can't read (${drift.unreadable})`;
+      return `  ~ ${drift.resource}.${drift.field ?? ''}: expected ${shownValue(drift.expected ?? null)}, actual ${actual}${drift.applied === undefined ? '' : ` (Mediaplane applied ${shownValue(drift.applied)}; stack.yaml has changed it since)`}`;
+    }
+    case 'missing':
+      return `  - ${drift.resource}: deleted outside Mediaplane`;
+    case 'secret':
+      return `  ! ${drift.resource}.${drift.secret ?? ''}: refused by the app's own check${drift.since === undefined ? '' : ` (found by drift at ${drift.since}; not checked again until apply sets it)`}`;
+  }
 }
 
 export function formatDiagnostic(diagnostic: Diagnostic): string {
@@ -121,6 +147,11 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
         : 'signing in as the admin, to make its key';
       io.stdout(`  + ${app} (${how})\n`);
     }
+  }
+  if (result.drift.length > 0) {
+    io.stdout('Drift, changed outside Mediaplane since it was applied:\n');
+    for (const drift of result.drift) io.stdout(`${driftLine(drift)}\n`);
+    io.stdout('  apply puts each back.\n');
   }
   const wiring = result.wiring.filter((change) => change.action !== 'unchanged');
   if (wiring.length > 0) {

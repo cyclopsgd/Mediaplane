@@ -30,6 +30,27 @@ export interface ObservedResource {
   id: string | number | null;
   name: string;
   fields: Fields;
+  /**
+   * The managed fields the app holds in a shape Mediaplane can't read, by name, with what
+   * it found: each is left out of `fields`, so it differs, and is never read as empty.
+   */
+  unreadable?: Readonly<Record<string, string>>;
+}
+
+/** What a resource's verify may use besides its own app's API. */
+export interface VerifyContext {
+  /**
+   * True in plan and drift, which change nothing in the apps but for the marks their
+   * checks leave (spec §5.2): a check that would change more is left undone.
+   */
+  readOnly: boolean;
+  /** Another app of the stack, as this run reached it, once it took Mediaplane's key. */
+  peer(app: string): AppApi | undefined;
+}
+
+/** A check of a resource's secrets left undone, and why: plan and drift say so. */
+export interface Unchecked {
+  unchecked: string;
 }
 
 /** What a resource's desired() sees. It holds secrets: never log, print or keep it. */
@@ -87,23 +108,29 @@ export interface ResourceSpec {
    * Whether the app takes the desired secrets: a sign-in, or the app's own test of what it
    * holds (`observed`) (spec §6.3, "secrets are verified, never compared"). Required when
    * `secrets` isn't empty. Asked only while every managed field matches: update sets the
-   * secrets with the fields. Throws AppApiError when the app can't say.
+   * secrets with the fields. Throws AppApiError when the app can't say. Unchecked, when it
+   * leaves the check undone: in plan and drift (`ctx.readOnly`), for one that would change
+   * more than its marks. Without `ctx`, it is apply's.
    */
   verify?(
     api: AppApi,
     desired: DesiredResource,
     observed: ObservedResource,
-  ): Promise<boolean>;
+    ctx?: VerifyContext,
+  ): Promise<boolean | Unchecked>;
   /** Make it. The id the app gave it, or null for a singleton. */
   create(api: AppApi, desired: DesiredResource): Promise<{ id: string | number | null }>;
   /**
    * Make what the app holds match: the managed fields and the secrets, always both, since
-   * the secrets go unchecked when a field differs. Idempotent.
+   * the secrets go unchecked when a field differs. Idempotent. `changes` names what
+   * differs, fields and secrets, as plan says it: a secret named there was found refused,
+   * and needs no other check.
    */
   update(
     api: AppApi,
     desired: DesiredResource,
     observed: ObservedResource,
+    changes?: readonly string[],
   ): Promise<void>;
 }
 

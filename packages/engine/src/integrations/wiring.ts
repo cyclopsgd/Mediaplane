@@ -21,6 +21,8 @@ import type {
   DesiredResource,
   ObservedResource,
   ResourceSpec,
+  Scalar,
+  VerifyContext,
   WiringContext,
 } from './types';
 
@@ -50,6 +52,47 @@ export interface WiringChange {
   changes?: string[];
   /** Why it couldn't be checked. */
   reason?: string;
+}
+
+/**
+ * What changed in an app outside Mediaplane since Mediaplane last applied a resource
+ * (spec §6.3: O ≠ L), never a secret's value:
+ * - `field`: a managed field holds another value than the one applied, and than the one
+ *   the stack now wants (`expected`, what apply sets): `actual`, or null with `unreadable`
+ *   when the app holds it in a shape Mediaplane can't read. When stack.yaml has changed
+ *   it since, `applied` is the value Mediaplane applied;
+ * - `missing`: the app no longer holds it;
+ * - `secret`: the app's own check refuses one of its secrets (`since`: when drift found
+ *   it, for one it doesn't check again).
+ */
+export interface Drift {
+  /** "<app>.<resource>". */
+  resource: string;
+  kind: 'field' | 'missing' | 'secret';
+  field?: string;
+  /** The value apply sets: what the stack wants (D). */
+  expected?: Scalar;
+  /** What Mediaplane applied (L), when the stack now wants another value. */
+  applied?: Scalar;
+  actual?: Scalar | null;
+  unreadable?: string;
+  /** true when `actual` or `unreadable` held one of the run's secrets, shown as ***. */
+  redacted?: boolean;
+  secret?: string;
+  since?: string;
+}
+
+/**
+ * How one secret of a resource was checked (spec §6.3, "verified, never compared"): passed
+ * or refused by the app's own check, or unchecked, with why. `at`: when drift last checked
+ * it, for a verdict it took from then, rather than check again now.
+ */
+export interface SecretCheck {
+  resource: string;
+  secret: string;
+  verdict: 'passed' | 'refused' | 'unchecked';
+  reason?: string;
+  at?: string;
 }
 
 /** For tests: where an app is reached, and how long its calls take and are tried. */
@@ -257,6 +300,10 @@ export interface Examined {
   action: 'create' | 'update' | 'adopt' | 'unchanged';
   /** The managed fields and secrets that differ, by name. */
   changes: string[];
+  /** What changed in the app since Mediaplane last applied it; none without a record. */
+  drift: Drift[];
+  /** How each of its secrets was checked. */
+  checks: SecretCheck[];
 }
 
 /** How examine treats a resource's secrets. */
@@ -274,12 +321,23 @@ export interface ExamineOptions {
    * password that fails counts towards its ban.
    */
   refused?: readonly string[];
+  /**
+   * What the resource's verify may use (VerifyContext); apply's, which may change things,
+   * by default. Plan and drift give `readOnly`, and then a secret drift found refused (the
+   * record's `checks`) is taken as refused, without another check, until apply sets it.
+   */
+  context?: VerifyContext;
 }
 
+/** Apply's VerifyContext, without another app: what a check gets by default. */
+const APPLYING: VerifyContext = { readOnly: false, peer: () => undefined };
+
 /**
- * Look at one resource: observe it, compare its managed fields, and check its secrets by
- * using them (spec §6.3), unless `options` say not to. Undefined when the stack wants
- * none. Throws AppApiError.
+ * Look at one resource: observe it, compare its managed fields with what the stack wants
+ * (D against O), and check its secrets by using them (spec §6.3), unless `options` say
+ * not to. Against its record (L), say what changed in the app outside Mediaplane: drift,
+ * a field that differs from both what was applied and what is wanted now. Undefined when
+ * the stack wants none. Throws AppApiError.
  */
 export async function examine(
   spec: ResourceSpec,
@@ -290,13 +348,28 @@ export async function examine(
 ): Promise<Examined | undefined> {
   const wanted = spec.desired(ctx);
   if (wanted === undefined) return undefined;
+  const address = resourceAddress(ctx.app, spec);
   const desired =
     options.verify !== false && spec.resolve !== undefined
       ? await spec.resolve(api, wanted, ctx)
       : wanted;
   const observed = await spec.observe(api, known, desired);
+  const unchecked = (reason: string): SecretCheck[] =>
+    spec.secrets.map((secret) => ({
+      resource: address,
+      secret,
+      verdict: 'unchecked',
+      reason,
+    }));
   if (observed === undefined) {
-    return { desired, observed, action: 'create', changes: [] };
+    return {
+      desired,
+      observed,
+      action: 'create',
+      changes: [],
+      drift: known === undefined ? [] : [{ resource: address, kind: 'missing' }],
+      checks: unchecked('the app has none to check: apply makes it with them'),
+    };
   }
   // A field left to a `resolve` that wasn't run isn't known yet: it isn't compared.
   // Every other field is, set or not.
@@ -307,22 +380,147 @@ export async function examine(
   const changes = compared.filter(
     (field) => observed.fields[field] !== desired.fields[field],
   );
+  const drift =
+    known === undefined ? [] : fieldDrift(address, compared, known, desired, observed);
   // A field that differs makes it an update, which sets the secrets too: checking them
   // would change nothing, and could mislead. A sign-in with a user name the app doesn't
   // have yet fails as if the password were wrong.
-  if (changes.length === 0 && spec.secrets.length > 0) {
-    const refused = (options.refused ?? []).filter((name) => spec.secrets.includes(name));
-    if (refused.length > 0) {
-      changes.push(...refused);
-    } else if (options.verify !== false && spec.verify !== undefined) {
-      if (!(await spec.verify(api, desired, observed))) changes.push(...spec.secrets);
-    }
+  const checks =
+    spec.secrets.length === 0
+      ? []
+      : changes.length > 0
+        ? unchecked('a managed field differs: apply sets the secrets with it')
+        : await checkSecrets(spec, api, address, desired, observed, known, options);
+  const refused = checks.filter((check) => check.verdict === 'refused');
+  changes.push(...refused.map((check) => check.secret));
+  if (known !== undefined) {
+    drift.push(
+      ...refused.map((check): Drift => ({
+        resource: address,
+        kind: 'secret',
+        secret: check.secret,
+        ...(check.at === undefined ? {} : { since: check.at }),
+      })),
+    );
   }
-  if (changes.length > 0) return { desired, observed, action: 'update', changes };
+  if (changes.length > 0) {
+    return { desired, observed, action: 'update', changes, drift, checks };
+  }
   const recorded =
     known !== undefined &&
     compared.every((field) => known.fields[field] === desired.fields[field]);
-  return { desired, observed, action: recorded ? 'unchanged' : 'adopt', changes };
+  return {
+    desired,
+    observed,
+    action: recorded ? 'unchanged' : 'adopt',
+    changes,
+    drift,
+    checks,
+  };
+}
+
+/**
+ * The managed fields that changed in the app since they were applied (O ≠ L), unless the
+ * app now holds what the stack wants (O = D: stack.yaml was changed to match). A field
+ * the app holds in a shape Mediaplane can't read has drifted too, with no value.
+ */
+function fieldDrift(
+  address: string,
+  compared: readonly string[],
+  known: KnownResource,
+  desired: DesiredResource,
+  observed: ObservedResource,
+): Drift[] {
+  return compared.flatMap((field): Drift[] => {
+    const applied = known.fields[field];
+    if (applied === undefined) return [];
+    // What apply would set; and what it applied, when stack.yaml has changed it since.
+    const wanted = desired.fields[field];
+    const expected = wanted ?? applied;
+    const was = wanted === undefined || wanted === applied ? {} : { applied };
+    const unreadable =
+      observed.unreadable?.[field] ??
+      (observed.fields[field] === undefined ? 'the app gave none' : undefined);
+    if (unreadable !== undefined) {
+      return [
+        {
+          resource: address,
+          kind: 'field',
+          field,
+          expected,
+          ...was,
+          actual: null,
+          unreadable,
+        },
+      ];
+    }
+    const actual = observed.fields[field];
+    if (actual === applied || actual === wanted) return [];
+    return [{ resource: address, kind: 'field', field, expected, ...was, actual }];
+  });
+}
+
+/**
+ * Check a resource's secrets by using them, once every managed field matches: refused
+ * ones that apply's own plan found (`refused`), or, in plan and drift, that drift found
+ * (the record's `checks`), are taken as refused without another check; secrets waiting
+ * for what they require stay unchecked.
+ */
+async function checkSecrets(
+  spec: ResourceSpec,
+  api: AppApi,
+  address: string,
+  desired: DesiredResource,
+  observed: ObservedResource,
+  known: KnownResource | undefined,
+  options: ExamineOptions,
+): Promise<SecretCheck[]> {
+  const context = options.context ?? APPLYING;
+  const all = (verdict: SecretCheck['verdict'], reason?: string): SecretCheck[] =>
+    spec.secrets.map((secret) => ({
+      resource: address,
+      secret,
+      verdict,
+      ...(reason === undefined ? {} : { reason }),
+    }));
+  const planned = (options.refused ?? []).filter((name) => spec.secrets.includes(name));
+  if (planned.length > 0) {
+    return spec.secrets.map((secret) =>
+      planned.includes(secret)
+        ? { resource: address, secret, verdict: 'refused' }
+        : {
+            resource: address,
+            secret,
+            verdict: 'unchecked',
+            reason: 'apply sets it with the refused one',
+          },
+    );
+  }
+  const found = context.readOnly
+    ? spec.secrets.filter((secret) => known?.checks?.[secret]?.verdict === 'refused')
+    : [];
+  if (found.length > 0) {
+    return spec.secrets.map((secret): SecretCheck => {
+      const at = known?.checks?.[secret]?.at;
+      return found.includes(secret) && at !== undefined
+        ? { resource: address, secret, verdict: 'refused', at }
+        : {
+            resource: address,
+            secret,
+            verdict: 'unchecked',
+            reason: 'apply sets it with the refused one',
+          };
+    });
+  }
+  if (options.verify === false) {
+    return all('unchecked', 'what it requires is yet to be put in place');
+  }
+  // The catalog's tests make every resource with secrets give a verify.
+  if (spec.verify === undefined) return all('unchecked', 'it has no check');
+  const verdict = await spec.verify(api, desired, observed, context);
+  if (verdict === true) return all('passed');
+  if (verdict === false) return all('refused');
+  return all('unchecked', verdict.unchecked);
 }
 
 /**
@@ -412,14 +610,23 @@ export interface PlanWiringOptions {
   seams?: WiringSeams;
 }
 
+/** What planWiring found: apply's changes, and what drift found on the way. */
+export interface PlannedWiring {
+  changes: WiringChange[];
+  diagnostics: Diagnostic[];
+  /** What changed in the apps outside Mediaplane since it applied them (spec §6.3). */
+  drift: Drift[];
+  /** How each secret of each resource it looked at was checked. */
+  checks: SecretCheck[];
+}
+
 /**
  * What apply would do to the wiring (spec §5 step 5): for each app with an API, in order,
- * whether it is up and takes Mediaplane's key, then each of its resources. An app that
- * isn't settled is checked after the start. Asks the apps; changes nothing.
+ * whether it is up and takes Mediaplane's key, then each of its resources, and what
+ * changed in them outside Mediaplane (spec §6.3). An app that isn't settled is checked
+ * after the start. Asks the apps; changes nothing but for the marks its checks leave.
  */
-export async function planWiring(
-  options: PlanWiringOptions,
-): Promise<{ changes: WiringChange[]; diagnostics: Diagnostic[] }> {
+export async function planWiring(options: PlanWiringOptions): Promise<PlannedWiring> {
   const order = wiringOrder(options.stack);
   const ready = options.onNetwork
     ? order.filter((app) => settled(app, options.current, options.changing))
@@ -432,6 +639,32 @@ export async function planWiring(
   });
   const changes: WiringChange[] = [];
   const diagnostics: Diagnostic[] = [];
+  const drift: Drift[] = [];
+  const checks: SecretCheck[] = [];
+  /** The apps that took Mediaplane's key: what a check may ask of another app. */
+  const checked = new Map<string, AppApi>();
+  const context: VerifyContext = {
+    readOnly: true,
+    peer: (app) => checked.get(app),
+  };
+  /**
+   * A value from an app, and what was said of one Mediaplane can't read, shown without any
+   * secret the run knows of by then.
+   */
+  const shown = (entry: Drift): Drift => {
+    const values = redactionValues([...options.secrets, ...found.values]);
+    const hidden = (text: string | null | Scalar | undefined) =>
+      typeof text === 'string' ? redact(text, values) : text;
+    const actual = hidden(entry.actual);
+    const unreadable = hidden(entry.unreadable);
+    if (actual === entry.actual && unreadable === entry.unreadable) return entry;
+    return {
+      ...entry,
+      ...(actual === undefined ? {} : { actual }),
+      ...(typeof unreadable === 'string' ? { unreadable } : {}),
+      redacted: true,
+    };
+  };
   /**
    * Resources apply would make or change, that couldn't be looked at, or whose secrets
    * went unchecked: not known to be in place.
@@ -478,6 +711,7 @@ export async function planWiring(
       }
       continue;
     }
+    checked.set(app.def.id, client.api);
     const wanted = wantedResources(ctx);
     if (wanted.length === 0) add({ resource: app.def.id, action: 'unchanged' });
     for (const [index, spec] of wanted.entries()) {
@@ -503,6 +737,7 @@ export async function planWiring(
       try {
         result = await examine(spec, client.api, ctx, options.known[address], {
           verify: !waiting,
+          context,
         });
       } catch (cause) {
         if (!(cause instanceof AppApiError)) throw cause;
@@ -538,10 +773,12 @@ export async function planWiring(
         action: result.action,
         ...(result.changes.length === 0 ? {} : { changes: result.changes }),
       });
+      drift.push(...result.drift.map(shown));
+      checks.push(...result.checks);
       // Its secrets went unchecked, so it isn't known to be in place either: what
       // requires it waits too.
       if (waiting) pending.add(address);
     }
   }
-  return { changes, diagnostics };
+  return { changes, diagnostics, drift, checks };
 }

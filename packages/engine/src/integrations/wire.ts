@@ -9,7 +9,13 @@ import type { SecretStore } from '../secrets/store';
 import { stackKeys } from '../secrets/values';
 import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
 import { readResources, writeResources, type KnownResources } from './resources';
-import type { DesiredResource, Fields, ResourceSpec, WiringContext } from './types';
+import type {
+  DesiredResource,
+  Fields,
+  ResourceSpec,
+  VerifyContext,
+  WiringContext,
+} from './types';
 import {
   checkApp,
   examine,
@@ -133,6 +139,9 @@ export async function wire(options: WireOptions): Promise<string[]> {
   /** Skipped because an app's first-run setup waits, or because they need what is. */
   const waited: string[] = [];
   const done: string[] = [];
+  /** The apps that took Mediaplane's key: what a check may ask of another app. */
+  const checked = new Map<string, ReachedApp['api']>();
+  const context: VerifyContext = { readOnly: false, peer: (id) => checked.get(id) };
   const values = redactionValues(secrets);
   // Every failure's message is redacted once, here, whoever wrote it: the client, a
   // resource's own error, mkdir or Docker; with the secrets the step has found by then.
@@ -187,6 +196,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
       for (const target of targets) fail(target, cause.message, `wire.${cause.kind}`);
       continue;
     }
+    checked.set(app.def.id, client.api);
     for (const spec of wantedResources(ctx)) {
       const address = resourceAddress(app, spec);
       const blocker = (spec.requires ?? []).find(
@@ -219,6 +229,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
         const planned = options.planned?.find((change) => change.resource === address);
         result = await examine(spec, client.api, ctx, known[address], {
           refused: planned?.action === 'update' ? (planned.changes ?? []) : [],
+          context,
         });
         if (result === undefined) continue;
         if (result.action === 'unchanged') {
@@ -244,7 +255,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
         if (result.action === 'create') {
           ({ id } = await spec.create(client.api, result.desired));
         } else if (result.action === 'update' && result.observed !== undefined) {
-          await spec.update(client.api, result.desired, result.observed);
+          await spec.update(client.api, result.desired, result.observed, result.changes);
         }
       } catch (cause) {
         if (!(cause instanceof AppApiError)) throw stop([address], cause);

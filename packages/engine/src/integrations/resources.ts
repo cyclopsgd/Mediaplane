@@ -22,6 +22,20 @@ const knownSchema = z.strictObject({
   /** The names of the secrets it holds: never their values, nor a hash of them. */
   secrets: z.array(z.string()),
   appliedAt: z.iso.datetime(),
+  /**
+   * What `mediaplane drift` found of each secret when it last checked it, by name: its
+   * verdict and when. Plan and drift don't check again a secret found refused, until
+   * apply sets it, and its record then has none (spec §6.3). Never a value.
+   */
+  checks: z
+    .record(
+      z.string(),
+      z.strictObject({
+        verdict: z.enum(['passed', 'refused']),
+        at: z.iso.datetime(),
+      }),
+    )
+    .optional(),
 });
 
 const fileSchema = z.strictObject({

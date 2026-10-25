@@ -66,6 +66,15 @@ const RECORDED: KnownResources = {
   },
 };
 
+/** WIRED_CATALOG, with Sonarr's resources replaced by `resources`. */
+function sonarrWith(resources: ResourceSpec[]) {
+  return stackOf(
+    WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr' ? { ...def, integration: { after: [], resources } } : def,
+    ),
+  );
+}
+
 describe('planWiring', () => {
   it('would create a resource the app has none of, and changes nothing itself', async () => {
     const sonarr = await fakeSonarr({ key: KEY });
@@ -73,6 +82,15 @@ describe('planWiring', () => {
     expect(planned).toEqual({
       changes: [{ resource: 'sonarr.login', action: 'create' }],
       diagnostics: [],
+      drift: [],
+      checks: [
+        {
+          resource: 'sonarr.login',
+          secret: 'password',
+          verdict: 'unchecked',
+          reason: 'the app has none to check: apply makes it with them',
+        },
+      ],
     });
     expect(sonarr.app.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
       'GET /ping',
@@ -162,15 +180,6 @@ describe('planWiring', () => {
       { name: 'login', fields: { user: 'admin' }, secrets: { password: PASSWORD } },
     ]);
   });
-
-  /** WIRED_CATALOG, with Sonarr's resources replaced by `resources`. */
-  function sonarrWith(resources: ResourceSpec[]) {
-    return stackOf(
-      WIRED_CATALOG.map((def) =>
-        def.id === 'sonarr' ? { ...def, integration: { after: [], resources } } : def,
-      ),
-    );
-  }
 
   it('leaves the secrets unchecked while a resource they require is yet to be made', async () => {
     // "sonarr.first", which holds no secret, is missing, so apply would create it;
@@ -1000,5 +1009,281 @@ describe('settled', () => {
     expect(settled(qbittorrent, stopped, new Set())).toBe(false);
     const noHealthCheck = RUNNING.map((c) => ({ ...c, health: '' }));
     expect(settled(qbittorrent, noHealthCheck, new Set())).toBe(true);
+  });
+});
+
+describe('planWiring: drift (spec §6.3)', () => {
+  const AT = '2026-10-20T08:00:00.000Z';
+
+  it('says what was applied and what the app holds of a field changed in it', async () => {
+    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+    const planned = await planWiring(options(sonarr, { known: RECORDED }));
+    expect(planned.changes).toEqual([
+      { resource: 'sonarr.login', action: 'update', changes: ['user'] },
+    ]);
+    expect(planned.drift).toEqual([
+      {
+        resource: 'sonarr.login',
+        kind: 'field',
+        field: 'user',
+        expected: 'admin',
+        actual: 'someone',
+      },
+    ]);
+    // The update sets the password with the user, so it isn't checked.
+    expect(planned.checks).toEqual([
+      {
+        resource: 'sonarr.login',
+        secret: 'password',
+        verdict: 'unchecked',
+        reason: 'a managed field differs: apply sets the secrets with it',
+      },
+    ]);
+  });
+
+  it('finds no drift without a record, or where the app holds what the stack now wants', async () => {
+    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+    // Never applied: an update, not a change made outside Mediaplane.
+    expect((await planWiring(options(sonarr))).drift).toEqual([]);
+    // Applied as "admin", and the stack now wants the user the app holds: adopted.
+    sonarr.state.user = 'admin';
+    const old = {
+      'sonarr.login': { ...RECORDED['sonarr.login'], fields: { user: 'old' } },
+    };
+    const planned = await planWiring(options(sonarr, { known: old as KnownResources }));
+    expect(planned.changes).toEqual([{ resource: 'sonarr.login', action: 'adopt' }]);
+    expect(planned.drift).toEqual([]);
+    expect(planned.checks).toEqual([
+      { resource: 'sonarr.login', secret: 'password', verdict: 'passed' },
+    ]);
+  });
+
+  it('says what apply sets, and what was applied, when stack.yaml and the app both changed it', async () => {
+    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+    const old = {
+      'sonarr.login': { ...RECORDED['sonarr.login'], fields: { user: 'old' } },
+    };
+    const planned = await planWiring(options(sonarr, { known: old as KnownResources }));
+    expect(planned.drift).toEqual([
+      {
+        resource: 'sonarr.login',
+        kind: 'field',
+        field: 'user',
+        expected: 'admin',
+        applied: 'old',
+        actual: 'someone',
+      },
+    ]);
+  });
+
+  it('says a resource it applied was deleted outside Mediaplane', async () => {
+    const sonarr = await fakeSonarr({ key: KEY });
+    const planned = await planWiring(options(sonarr, { known: RECORDED }));
+    expect(planned.changes).toEqual([{ resource: 'sonarr.login', action: 'create' }]);
+    expect(planned.drift).toEqual([{ resource: 'sonarr.login', kind: 'missing' }]);
+    expect(planned.checks).toEqual([
+      {
+        resource: 'sonarr.login',
+        secret: 'password',
+        verdict: 'unchecked',
+        reason: 'the app has none to check: apply makes it with them',
+      },
+    ]);
+  });
+
+  it("says a secret the app's own check refuses, by name only", async () => {
+    const sonarr = await fakeSonarr({
+      key: KEY,
+      user: 'admin',
+      password: 'fake-changed',
+    });
+    const planned = await planWiring(options(sonarr, { known: RECORDED }));
+    expect(planned.drift).toEqual([
+      { resource: 'sonarr.login', kind: 'secret', secret: 'password' },
+    ]);
+    expect(planned.checks).toEqual([
+      { resource: 'sonarr.login', secret: 'password', verdict: 'refused' },
+    ]);
+    expect(JSON.stringify(planned)).not.toContain(PASSWORD);
+  });
+
+  it('takes a secret drift found refused as refused, with no check, until apply sets it', async () => {
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const found = {
+      'sonarr.login': {
+        ...RECORDED['sonarr.login'],
+        checks: { password: { verdict: 'refused', at: AT } },
+      },
+    } as KnownResources;
+    const planned = await planWiring(options(sonarr, { known: found }));
+    expect(planned.changes).toEqual([
+      { resource: 'sonarr.login', action: 'update', changes: ['password'] },
+    ]);
+    expect(planned.drift).toEqual([
+      { resource: 'sonarr.login', kind: 'secret', secret: 'password', since: AT },
+    ]);
+    expect(planned.checks).toEqual([
+      { resource: 'sonarr.login', secret: 'password', verdict: 'refused', at: AT },
+    ]);
+    // No sign-in: each one that fails counts towards qBittorrent's ban.
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
+    // A check drift found passing is checked again.
+    const passed = {
+      'sonarr.login': {
+        ...RECORDED['sonarr.login'],
+        checks: { password: { verdict: 'passed', at: AT } },
+      },
+    } as KnownResources;
+    expect((await planWiring(options(sonarr, { known: passed }))).checks).toEqual([
+      { resource: 'sonarr.login', secret: 'password', verdict: 'passed' },
+    ]);
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(true);
+  });
+
+  it('leaves the other secrets unchecked beside one found refused, and one with no check', async () => {
+    const two: ResourceSpec = { ...FAKE_LOGIN, secrets: ['password', 'token'] };
+    const found = {
+      'sonarr.login': {
+        ...RECORDED['sonarr.login'],
+        secrets: ['password', 'token'],
+        checks: { password: { verdict: 'refused', at: AT } },
+      },
+    } as KnownResources;
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const planned = await planWiring(
+      options(sonarr, { stack: sonarrWith([two]), known: found }),
+    );
+    expect(planned.checks).toEqual([
+      { resource: 'sonarr.login', secret: 'password', verdict: 'refused', at: AT },
+      {
+        resource: 'sonarr.login',
+        secret: 'token',
+        verdict: 'unchecked',
+        reason: 'apply sets it with the refused one',
+      },
+    ]);
+    const unverified: ResourceSpec = {
+      name: FAKE_LOGIN.name,
+      fields: FAKE_LOGIN.fields,
+      secrets: FAKE_LOGIN.secrets,
+      desired: (ctx) => FAKE_LOGIN.desired(ctx),
+      observe: (api, known) => FAKE_LOGIN.observe(api, known),
+      create: (api, desired) => FAKE_LOGIN.create(api, desired),
+      update: (api, desired, observed) => FAKE_LOGIN.update(api, desired, observed),
+    };
+    const blind = await planWiring(
+      options(sonarr, { stack: sonarrWith([unverified]), known: RECORDED }),
+    );
+    expect(blind.checks).toEqual([
+      {
+        resource: 'sonarr.login',
+        secret: 'password',
+        verdict: 'unchecked',
+        reason: 'it has no check',
+      },
+    ]);
+  });
+
+  it("reports a field the app holds in a shape it can't read, never as empty", async () => {
+    const odd: ResourceSpec = {
+      ...FAKE_LOGIN,
+      observe: () =>
+        Promise.resolve({
+          id: null,
+          name: 'login',
+          fields: {},
+          unreadable: { user: 'a number, not text' },
+        }),
+    };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const planned = await planWiring(
+      options(sonarr, { stack: sonarrWith([odd]), known: RECORDED }),
+    );
+    expect(planned.changes).toEqual([
+      { resource: 'sonarr.login', action: 'update', changes: ['user'] },
+    ]);
+    expect(planned.drift).toEqual([
+      {
+        resource: 'sonarr.login',
+        kind: 'field',
+        field: 'user',
+        expected: 'admin',
+        actual: null,
+        unreadable: 'a number, not text',
+      },
+    ]);
+  });
+
+  it("keeps a secret out of what it says of a value it can't read", async () => {
+    const odd: ResourceSpec = {
+      ...FAKE_LOGIN,
+      observe: () =>
+        Promise.resolve({
+          id: null,
+          name: 'login',
+          fields: {},
+          unreadable: { user: `a folder with a comma in its name, /x,${PASSWORD}` },
+        }),
+    };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const planned = await planWiring(
+      options(sonarr, { stack: sonarrWith([odd]), known: RECORDED }),
+    );
+    expect(planned.drift).toEqual([
+      {
+        resource: 'sonarr.login',
+        kind: 'field',
+        field: 'user',
+        expected: 'admin',
+        actual: null,
+        unreadable: 'a folder with a comma in its name, /x,***',
+        redacted: true,
+      },
+    ]);
+  });
+
+  it('keeps a secret out of a value the app holds, and says it did', async () => {
+    const sonarr = await fakeSonarr({
+      key: KEY,
+      user: `x${PASSWORD}`,
+      password: PASSWORD,
+    });
+    const planned = await planWiring(options(sonarr, { known: RECORDED }));
+    expect(planned.drift).toEqual([
+      {
+        resource: 'sonarr.login',
+        kind: 'field',
+        field: 'user',
+        expected: 'admin',
+        actual: 'x***',
+        redacted: true,
+      },
+    ]);
+  });
+
+  it('gives a check what it may do and ask in plan, and says why it left one undone', async () => {
+    const seen: unknown[] = [];
+    const careful: ResourceSpec = {
+      ...FAKE_LOGIN,
+      verify: (_api, _desired, _observed, ctx) => {
+        seen.push(ctx?.readOnly, ctx?.peer('sonarr')?.name, ctx?.peer('radarr'));
+        return Promise.resolve({ unchecked: 'it would make a category' });
+      },
+    };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const planned = await planWiring(
+      options(sonarr, { stack: sonarrWith([careful]), known: RECORDED }),
+    );
+    // The fixture's Sonarr is named by its id.
+    expect(seen).toEqual([true, 'sonarr', undefined]);
+    expect(planned.changes).toEqual([{ resource: 'sonarr.login', action: 'unchanged' }]);
+    expect(planned.checks).toEqual([
+      {
+        resource: 'sonarr.login',
+        secret: 'password',
+        verdict: 'unchecked',
+        reason: 'it would make a category',
+      },
+    ]);
   });
 });

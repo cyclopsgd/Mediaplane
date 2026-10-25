@@ -1,6 +1,13 @@
 import type { ActionResult, ChangeRecord, PlanResult } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
-import { printApply, printHistory, printPlan, printRecord, printStep } from './output';
+import {
+  driftLine,
+  printApply,
+  printHistory,
+  printPlan,
+  printRecord,
+  printStep,
+} from './output';
 import type { Io } from './run';
 
 function capture() {
@@ -32,6 +39,8 @@ const PLAN: PlanResult = {
   secrets: { generate: [] },
   unhealthy: [],
   wiring: [],
+  drift: [],
+  checks: [],
   bootstrap: [],
   diagnostics: [],
 };
@@ -71,6 +80,86 @@ describe('printPlan: the wiring', () => {
     const term = capture();
     printPlan(WIRED, { json: true }, term.io);
     expect((JSON.parse(term.stdout()) as PlanResult).wiring).toEqual(WIRED.wiring);
+  });
+});
+
+describe('printPlan: drift', () => {
+  const DRIFTED: PlanResult = {
+    ...PLAN,
+    files: [],
+    wiring: [
+      { resource: 'sonarr.download_client', action: 'update', changes: ['category'] },
+    ],
+    drift: [
+      {
+        resource: 'sonarr.download_client',
+        kind: 'field',
+        field: 'category',
+        expected: 'tv',
+        actual: 'television',
+      },
+      {
+        resource: 'sonarr.download_client',
+        kind: 'field',
+        field: 'enable',
+        expected: true,
+        actual: null,
+        unreadable: 'text, not a boolean',
+      },
+      { resource: 'qbittorrent.category_movies', kind: 'missing' },
+      { resource: 'radarr.download_client', kind: 'secret', secret: 'apiKey' },
+      {
+        resource: 'qbittorrent.admin',
+        kind: 'secret',
+        secret: 'password',
+        since: '2026-10-20T08:00:00.000Z',
+      },
+    ],
+    checks: [
+      { resource: 'radarr.download_client', secret: 'apiKey', verdict: 'refused' },
+    ],
+  };
+
+  it('says what apply sets, and what was applied, when stack.yaml and the app both changed', () => {
+    expect(
+      driftLine({
+        resource: 'qbittorrent.preferences',
+        kind: 'field',
+        field: 'savePath',
+        expected: '/data/torrents',
+        applied: '/data/old',
+        actual: '/data/other',
+      }),
+    ).toBe(
+      '  ~ qbittorrent.preferences.savePath: expected "/data/torrents", actual "/data/other" (Mediaplane applied "/data/old"; stack.yaml has changed it since)',
+    );
+  });
+
+  it('says what changed outside Mediaplane: what was applied, and what the app holds', () => {
+    const term = capture();
+    printPlan(DRIFTED, { json: false }, term.io);
+    expect(term.stdout()).toBe(
+      [
+        'Drift, changed outside Mediaplane since it was applied:',
+        '  ~ sonarr.download_client.category: expected "tv", actual "television"',
+        "  ~ sonarr.download_client.enable: expected true, actual one Mediaplane can't read (text, not a boolean)",
+        '  - qbittorrent.category_movies: deleted outside Mediaplane',
+        "  ! radarr.download_client.apiKey: refused by the app's own check",
+        "  ! qbittorrent.admin.password: refused by the app's own check (found by drift at 2026-10-20T08:00:00.000Z; not checked again until apply sets it)",
+        '  apply puts each back.',
+        'Wiring:',
+        '  ~ update      sonarr.download_client (category)',
+        'Plan: 1 resource to wire.',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('gives the drift and the checks in JSON', () => {
+    const term = capture();
+    printPlan(DRIFTED, { json: true }, term.io);
+    const shown = JSON.parse(term.stdout()) as PlanResult;
+    expect([shown.drift, shown.checks]).toEqual([DRIFTED.drift, DRIFTED.checks]);
   });
 });
 
