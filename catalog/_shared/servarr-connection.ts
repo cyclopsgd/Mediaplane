@@ -1,4 +1,5 @@
 import {
+  SENDS_A_KEY,
   serviceAddress,
   type DesiredResource,
   type ResourceSpec,
@@ -7,6 +8,7 @@ import {
 import {
   numberOf,
   secretOf,
+  sendsToOf,
   servarrProvider,
   settingOf,
   textOf,
@@ -92,6 +94,8 @@ function heldHost(held: Provider): string {
  *   secret, which the arr shows masked. With TLS or a URL base held, `host` is observed as
  *   the URL the arr calls, so it differs, and the update puts the stack's address back:
  *   the arr's test of what it holds sends the key it holds only to the stack's address.
+ *   The host and port are fixed (SENDS_A_KEY), and every create, update and test is sent
+ *   to the stack's address (`sendsTo`), whatever an override or the arr holds.
  * - It is made from the arr's own template, with `triggers` on: what makes the arr tell
  *   the media server, as files come, are upgraded, renamed or deleted. They stay yours
  *   after. A template without one of them is refused, as the arr would drop it unsaid.
@@ -108,10 +112,8 @@ function servarrMediaServer(
   triggers: readonly string[],
 ): ResourceSpec {
   const settingsOf = (desired: DesiredResource): Record<string, unknown> => ({
-    host: desired.fields.host,
-    port: desired.fields.port,
-    useSsl: false,
-    urlBase: '',
+    // Where the arr sends the media server's key: the stack's own address for it.
+    ...sendsToOf(desired),
     updateLibrary: desired.fields.updateLibrary,
     // The media server's key goes to the arr, in this request body only.
     [server.keyField]: secretOf(desired, server.keyField),
@@ -119,6 +121,7 @@ function servarrMediaServer(
   return {
     name: `connection_${server.app}`,
     fields: ['host', 'port', 'updateLibrary'],
+    locked: { host: SENDS_A_KEY, port: SENDS_A_KEY },
     secrets: [server.keyField],
     requires: server.requires,
     desired: ({ stack, keys }) => {
@@ -134,6 +137,7 @@ function servarrMediaServer(
         name: server.name,
         fields: { host: at.host, port: at.port, updateLibrary: true },
         secrets: key === undefined ? {} : { [server.keyField]: key },
+        sendsTo: { host: at.host, port: at.port, useSsl: false, urlBase: '' },
       };
     },
     ...servarrProvider({

@@ -1,6 +1,7 @@
 import {
   AppApiError,
   createAppApi,
+  SENDS_A_KEY,
   type ResolvedStack,
   type WiringContext,
 } from '@mediaplane/engine';
@@ -87,6 +88,7 @@ function template() {
       { name: 'host', value: 'localhost' },
       { name: 'port', value: 8080 },
       { name: 'useSsl', value: false },
+      { name: 'urlBase' },
       { name: 'apiKey' },
       { name: 'tvCategory', value: 'tv-sonarr' },
     ],
@@ -135,6 +137,13 @@ describe('servarrDownloadClient', () => {
         enable: true,
       },
       secrets: { apiKey: QBT_KEY },
+      sendsTo: { host: 'gluetun', port: 8080, useSsl: false, urlBase: '' },
+    });
+    // Where the arr sends qBittorrent's key: no override changes it.
+    expect(client.locked).toMatchObject({
+      host: SENDS_A_KEY,
+      port: SENDS_A_KEY,
+      useSsl: SENDS_A_KEY,
     });
     expect(wanted(contextOf(stack('{ port: 8090 }'))).fields.port).toBe(8090);
     expect(wanted(contextOf(stack('{ vpn: false }'))).fields.host).toBe('qbittorrent');
@@ -203,21 +212,57 @@ describe('servarrDownloadClient', () => {
     const { api, state } = await sonarr();
     const desired = wanted();
     await client.create(api, desired);
-    // Aimed elsewhere by hand: the app tests a new client as it saves it.
-    const [held] = state.downloadClients;
-    if (held === undefined) throw new Error('no client made');
-    held.fields = held.fields.map((f) =>
-      f.name === 'host' ? { ...f, value: 'nohost' } : f,
-    );
     const observed = await client.observe(api, undefined);
     if (observed === undefined) throw new Error('no client observed');
+    state.testFailure = 'Unable to connect to qBittorrent';
     const failure = await client
       .verify?.(api, desired, observed)
       .catch((thrown: unknown) => thrown);
     expect(failure).toBeInstanceOf(AppApiError);
     expect((failure as AppApiError).message).toBe(
-      'Sonarr at http://sonarr:8989 (127.0.0.1) tested qBittorrent (Mediaplane), and it failed: Host: Unable to connect to qBittorrent (Name does not resolve (nohost:8080)) (POST /api/v3/downloadclient/test)',
+      'Sonarr at http://sonarr:8989 (127.0.0.1) tested qBittorrent (Mediaplane), and it failed: Host: Unable to connect to qBittorrent (POST /api/v3/downloadclient/test)',
     );
+  });
+
+  it("sends qBittorrent's key only to the stack's address, whatever an override or the arr holds", async () => {
+    const { api, app, state } = await sonarr();
+    // An override that got past the lock, or a resource that took one: it moves nothing.
+    const elsewhere = {
+      ...wanted(),
+      fields: { ...wanted().fields, host: 'elsewhere', port: 1, useSsl: true },
+    };
+    await client.create(api, elsewhere);
+    const at = () =>
+      state.downloadClients[0]?.fields
+        .filter((f) => ['host', 'port', 'useSsl', 'urlBase'].includes(f.name))
+        .map((f) => `${f.name}=${String(f.value)}`);
+    expect(at()).toEqual(['host=gluetun', 'port=8080', 'useSsl=false', 'urlBase=']);
+    // Changed in the arr by hand: its test is still aimed at the stack's address.
+    const [held] = state.downloadClients;
+    if (held === undefined) throw new Error('no client made');
+    held.fields = held.fields.map((f) =>
+      f.name === 'host'
+        ? { ...f, value: 'elsewhere' }
+        : f.name === 'urlBase'
+          ? { ...f, value: '@elsewhere' }
+          : f,
+    );
+    const observed = await client.observe(api, undefined);
+    if (observed === undefined) throw new Error('no client observed');
+    expect(await client.verify?.(api, elsewhere, observed)).toBe(true);
+    const test = app.requests.find((r) => r.path === '/api/v3/downloadclient/test');
+    const sent = JSON.parse(test?.body ?? '{}') as {
+      fields: { name: string; value?: unknown }[];
+    };
+    expect(
+      sent.fields
+        .filter((f) => ['host', 'port', 'useSsl', 'urlBase'].includes(f.name))
+        .map((f) => `${f.name}=${String(f.value)}`),
+    ).toEqual(['host=gluetun', 'port=8080', 'useSsl=false', 'urlBase=']);
+    expect(test?.body).not.toContain('elsewhere');
+    // And an update puts the stack's address back.
+    await client.update(api, elsewhere, observed);
+    expect(at()).toEqual(['host=gluetun', 'port=8080', 'useSsl=false', 'urlBase=']);
   });
 
   it('refuses a template or a client without a setting it needs, naming it, and sends nothing', async () => {

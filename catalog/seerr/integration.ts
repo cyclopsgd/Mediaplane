@@ -1,14 +1,19 @@
 import {
   AppApiError,
   defineIntegration,
+  isUnmanaged,
+  listItems,
+  SENDS_A_KEY,
   stackAddress,
   type AppApi,
   type DesiredResource,
+  type ObservedResource,
+  type ResolvedStack,
   type ResourceSpec,
   type WiringContext,
 } from '@mediaplane/engine';
 import { z } from 'zod';
-import { secretOf } from '../_shared/secret';
+import { secretOf, sendsToOf } from '../_shared/secret';
 import { LIBRARIES } from '../jellyfin/integration';
 import { LIBRARIES as PLEX_LIBRARIES } from '../plex/integration';
 import { ROOT_FOLDER as MOVIES } from '../radarr/integration';
@@ -23,6 +28,30 @@ const WANTED = LIBRARIES.map((library) => library.name);
 
 /** The Plex libraries Seerr has enabled: those Mediaplane makes, by name, in order. */
 const WANTED_PLEX = PLEX_LIBRARIES.map((library) => library.name);
+
+/**
+ * The libraries Seerr has enabled, of those Mediaplane makes in `app` and still manages,
+ * by name: one you stop it managing (`unmanaged`), maybe renamed, is yours in Seerr too.
+ */
+function managedLibraries(
+  stack: ResolvedStack,
+  app: 'jellyfin' | 'plex',
+  libraries: readonly { resource: string; name: string }[],
+): string {
+  return libraries
+    .filter((library) => !isUnmanaged(stack, `${app}.${library.resource}`))
+    .map((library) => library.name)
+    .join(',');
+}
+
+/**
+ * The libraries a desired link has Seerr enable: its `libraries`, those Mediaplane makes
+ * unless an override (Keep mine) names fewer. Those it doesn't name are yours to enable
+ * or not, in Seerr, and Mediaplane neither looks at nor changes them.
+ */
+function librariesIn(desired: DesiredResource | undefined, all: readonly string[]) {
+  return desired === undefined ? all : listItems(desired.fields.libraries);
+}
 
 /**
  * The stack's own address for app `id`, and its key as a secret: the only place the
@@ -56,10 +85,10 @@ const jellyfinSettings = heldJellyfin.extend({
   serverId: z.string().optional(),
 });
 
-/** Which of Mediaplane's libraries (`wanted`) Seerr has enabled, as one list. */
+/** Which of the libraries `wanted` Seerr has enabled, as one list. */
 function enabledOf(
   libraries: readonly z.infer<typeof library>[],
-  wanted: readonly string[] = WANTED,
+  wanted: readonly string[],
 ): string {
   return wanted
     .filter((name) => libraries.some((held) => held.name === name && held.enabled))
@@ -82,39 +111,46 @@ async function heldKeyWorks(api: AppApi): Promise<boolean> {
 }
 
 /**
- * Point Seerr at Jellyfin, with no URL base and no TLS, with Mediaplane's key for
- * Jellyfin. Seerr saves it only once it has reached Jellyfin there with that key. `ip` is
- * the setting; a `hostname` would be kept as a stray setting, and is the sign-in's field,
- * which Seerr refuses once set.
+ * Point Seerr at Jellyfin, at the stack's own address for it (`sendsTo`), with no URL base
+ * and no TLS, with Mediaplane's key for Jellyfin. Seerr saves it only once it has reached
+ * Jellyfin there with that key. `ip` is the setting; a `hostname` would be kept as a stray
+ * setting, and is the sign-in's field, which Seerr refuses once set.
  */
 async function saveJellyfin(api: AppApi, desired: DesiredResource): Promise<void> {
   await api.submit('POST', `${SETTINGS}/jellyfin`, {
-    ip: desired.fields.hostname,
-    port: desired.fields.port,
-    useSsl: false,
-    urlBase: '',
+    ...sendsToOf(desired),
     apiKey: secretOf(desired, 'apiKey'),
   });
 }
 
 /**
- * Enable Mediaplane's libraries in Seerr, of Jellyfin or of Plex: Seerr learns the media
+ * Whether Seerr holds the stack's own address for the media server (`sendsTo`), where
+ * the key it holds goes when Seerr asks it: as observed, TLS and a URL base folded into
+ * `hostname`, which then differs.
+ */
+function atStack(desired: DesiredResource, observed: ObservedResource): boolean {
+  const to = sendsToOf(desired);
+  return observed.fields.hostname === to.ip && observed.fields.port === to.port;
+}
+
+/**
+ * Enable the libraries `wanted` in Seerr, of Jellyfin or of Plex: Seerr learns the media
  * server's libraries by syncing them, which keeps those it has enabled, and enables them
  * one at a time. One it finds no library of the name is refused: the library may have
  * been renamed in the media server.
  */
 async function enableLibraries(
   api: AppApi,
-  server: { path: 'jellyfin' | 'plex'; name: string; wanted: readonly string[] } = {
+  wanted: readonly string[],
+  server: { path: 'jellyfin' | 'plex'; name: string } = {
     path: 'jellyfin',
     name: 'Jellyfin',
-    wanted: WANTED,
   },
 ): Promise<void> {
   const at = `${SETTINGS}/${server.path}/library`;
   await api.submit('POST', `${at}/sync`);
   const synced = await api.get(at, z.array(library));
-  for (const name of server.wanted) {
+  for (const name of wanted) {
     const held = synced.find((l) => l.name === name);
     if (held === undefined) {
       throw new AppApiError(
@@ -137,11 +173,16 @@ async function enableLibraries(
  *   (Seerr's list of Jellyfin's users), never compared. Mediaplane gives Seerr its own
  *   Jellyfin key only when Seerr's is refused, or Jellyfin moves.
  * - `libraries` lists which of Mediaplane's are enabled; a library you enable is yours.
+ * - Seerr sends the key it holds to the address it holds: its host and port are fixed
+ *   (SENDS_A_KEY), Mediaplane saves only the stack's own (`sendsTo`), and asks Seerr's
+ *   list of Jellyfin's users only while Seerr holds that address.
  * - It requires Jellyfin's admin and libraries, and Seerr comes after Jellyfin.
  */
 const mediaServer: ResourceSpec = {
   name: 'media_server',
   fields: ['hostname', 'port', 'libraries'],
+  lists: ['libraries'],
+  locked: { hostname: SENDS_A_KEY, port: SENDS_A_KEY },
   secrets: ['apiKey'],
   requires: ['jellyfin.admin', 'jellyfin.library_movies', 'jellyfin.library_shows'],
   desired: (ctx) => {
@@ -149,11 +190,16 @@ const mediaServer: ResourceSpec = {
     if (at === undefined) return undefined;
     return {
       name: 'Jellyfin',
-      fields: { hostname: at.host, port: at.port, libraries: WANTED.join(',') },
+      fields: {
+        hostname: at.host,
+        port: at.port,
+        libraries: managedLibraries(ctx.stack, 'jellyfin', LIBRARIES),
+      },
       secrets: at.secrets,
+      sendsTo: { ip: at.host, port: at.port, useSsl: false, urlBase: '' },
     };
   },
-  async observe(api) {
+  async observe(api, _known, desired) {
     const held = await api.get(`${SETTINGS}/jellyfin`, jellyfinSettings);
     api.addSecret(held.apiKey);
     return held.ip === '' || (held.serverId ?? '') === ''
@@ -165,29 +211,33 @@ const mediaServer: ResourceSpec = {
             // With TLS or a URL base, the URL Seerr calls: another host than the stack's.
             hostname: heldHost(held),
             port: held.port,
-            libraries: enabledOf(held.libraries),
+            libraries: enabledOf(held.libraries, librariesIn(desired, WANTED)),
           },
         };
   },
-  verify: (api) => heldKeyWorks(api),
+  verify: (api, desired, observed) =>
+    atStack(desired, observed)
+      ? heldKeyWorks(api)
+      : Promise.resolve({
+          unchecked:
+            "Seerr holds another address for Jellyfin than the stack's, where it would send the key it holds: apply gives it the stack's",
+        }),
   async create(api, desired) {
     await saveJellyfin(api, desired);
-    await enableLibraries(api);
+    await enableLibraries(api, librariesIn(desired, WANTED));
     return { id: null };
   },
   async update(api, desired, observed) {
-    const moved =
-      observed.fields.hostname !== desired.fields.hostname ||
-      observed.fields.port !== desired.fields.port;
+    const moved = !atStack(desired, observed);
     if (moved || !(await heldKeyWorks(api))) await saveJellyfin(api, desired);
     // Another Jellyfin has other library ids, though the names match: sync them again.
     if (moved || observed.fields.libraries !== desired.fields.libraries) {
-      await enableLibraries(api);
+      await enableLibraries(api, librariesIn(desired, WANTED));
     }
   },
 };
 
-const PLEX = { path: 'plex', name: 'Plex', wanted: WANTED_PLEX } as const;
+const PLEX = { path: 'plex', name: 'Plex' } as const;
 
 /** `machineId` is Plex's own identifier, which Seerr sets only once it has saved a link. */
 const plexSettings = heldPlex.extend({
@@ -196,16 +246,13 @@ const plexSettings = heldPlex.extend({
 });
 
 /**
- * Point Seerr at the stack's Plex, without TLS: Seerr saves it only once it has reached
- * Plex there with its admin's token (your plex.tv account's, from its first sign-in), and
- * asked it who it is. No key goes in these settings: Seerr holds none of Mediaplane's.
+ * Point Seerr at the stack's Plex, at its own address (`sendsTo`), without TLS: Seerr
+ * saves it only once it has reached Plex there with its admin's token (your plex.tv
+ * account's, from its first sign-in), and asked it who it is. No key goes in these
+ * settings, but Seerr sends that token there.
  */
 async function savePlex(api: AppApi, desired: DesiredResource): Promise<void> {
-  await api.submit('POST', `${SETTINGS}/plex`, {
-    ip: desired.fields.hostname,
-    port: desired.fields.port,
-    useSsl: false,
-  });
+  await api.submit('POST', `${SETTINGS}/plex`, sendsToOf(desired));
 }
 
 /**
@@ -216,11 +263,15 @@ async function savePlex(api: AppApi, desired: DesiredResource): Promise<void> {
  * of Mediaplane's, so none is checked here. With TLS, `hostname` is observed as the URL
  * Seerr calls, so it differs, and the update puts the stack's address back.
  * - `libraries` lists which of Mediaplane's are enabled; a library you enable is yours.
+ * - Seerr sends its admin's Plex token to the address it holds: its host and port are
+ *   fixed (SENDS_A_KEY), and Mediaplane saves only the stack's own (`sendsTo`).
  * - It requires Plex's name and libraries, and Seerr comes after Plex.
  */
 const mediaServerPlex: ResourceSpec = {
   name: 'media_server_plex',
   fields: ['hostname', 'port', 'libraries'],
+  lists: ['libraries'],
+  locked: { hostname: SENDS_A_KEY, port: SENDS_A_KEY },
   secrets: [],
   requires: ['plex.server', 'plex.library_movies', 'plex.library_tv'],
   desired: ({ stack }) => {
@@ -228,11 +279,16 @@ const mediaServerPlex: ResourceSpec = {
     if (at === undefined) return undefined;
     return {
       name: 'Plex',
-      fields: { hostname: at.host, port: at.port, libraries: WANTED_PLEX.join(',') },
+      fields: {
+        hostname: at.host,
+        port: at.port,
+        libraries: managedLibraries(stack, 'plex', PLEX_LIBRARIES),
+      },
       secrets: {},
+      sendsTo: { ip: at.host, port: at.port, useSsl: false },
     };
   },
-  async observe(api) {
+  async observe(api, _known, desired) {
     const held = await api.get(`${SETTINGS}/plex`, plexSettings);
     return held.ip === '' || (held.machineId ?? '') === ''
       ? undefined
@@ -242,23 +298,21 @@ const mediaServerPlex: ResourceSpec = {
           fields: {
             hostname: heldPlexHost(held),
             port: held.port,
-            libraries: enabledOf(held.libraries, WANTED_PLEX),
+            libraries: enabledOf(held.libraries, librariesIn(desired, WANTED_PLEX)),
           },
         };
   },
   async create(api, desired) {
     await savePlex(api, desired);
-    await enableLibraries(api, PLEX);
+    await enableLibraries(api, librariesIn(desired, WANTED_PLEX), PLEX);
     return { id: null };
   },
   async update(api, desired, observed) {
-    const moved =
-      observed.fields.hostname !== desired.fields.hostname ||
-      observed.fields.port !== desired.fields.port;
+    const moved = !atStack(desired, observed);
     if (moved) await savePlex(api, desired);
     // Another Plex has other library ids, though the names match: sync them again.
     if (moved || observed.fields.libraries !== desired.fields.libraries) {
-      await enableLibraries(api, PLEX);
+      await enableLibraries(api, librariesIn(desired, WANTED_PLEX), PLEX);
     }
   },
 };
@@ -336,7 +390,9 @@ const offered = z.looseObject({
  *   probed, whatever the cause). A failing test logs a line in Seerr's log, and the arr
  *   one in its own, as from Seerr's web UI.
  * - With TLS or a URL base, `hostname` is observed as the URL Seerr calls, so the server
- *   reads as changed, and the update puts it back at the stack's address.
+ *   reads as changed, and the update puts it back at the stack's address. The host and
+ *   port are fixed (SENDS_A_KEY), and every test, create and update is sent with the
+ *   stack's own address (`sendsTo`), whatever an override or Seerr holds.
  * - Seerr keeps a server whole, its id read-only: an update sends it back as Seerr gave
  *   it, without the id, so its other settings stay yours.
  * - It requires the arr's root folder, which it names, and Seerr comes after the arr.
@@ -355,15 +411,15 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
     }
   };
   /**
-   * The stack's own address for the arr, without TLS and with no URL base, since Seerr
-   * adds the base after the port (`@<host>` would be a host).
+   * The stack's own address for the arr (`sendsTo`), without TLS and with no URL base,
+   * since Seerr adds the base after the port (`@<host>` would be a host).
    */
-  const stackAt = (desired: DesiredResource) => ({
-    hostname: desired.fields.hostname,
-    port: desired.fields.port,
-    useSsl: false,
-    baseUrl: '',
-  });
+  const stackAt = (desired: DesiredResource) => sendsToOf(desired);
+  /** That address, as Seerr would call it, in messages. */
+  const urlOf = (desired: DesiredResource) => {
+    const to = sendsToOf(desired);
+    return `http://${String(to.hostname)}:${String(to.port)}`;
+  };
   /** Where the stack's key goes: the stack's own address for the arr, and only there. */
   const reach = (desired: DesiredResource) => ({
     ...stackAt(desired),
@@ -377,10 +433,8 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
   /** The arr's profiles, as Seerr reaches it with the stack's key. */
   const profiles = async (api: AppApi, desired: DesiredResource) => {
     const found = await test(api, reach(desired));
-    if (found === undefined) {
-      const at = `http://${String(desired.fields.hostname)}:${String(desired.fields.port)}`;
-      throw unreachable(api, at, "with the stack's key");
-    }
+    if (found === undefined)
+      throw unreachable(api, urlOf(desired), "with the stack's key");
     return found.profiles;
   };
   /** The profile `desired` names, as the arr has it. */
@@ -416,6 +470,7 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
   return {
     name: `server_${arr}`,
     fields: ['hostname', 'port', 'activeProfile', 'activeDirectory', 'isDefault'],
+    locked: { hostname: SENDS_A_KEY, port: SENDS_A_KEY },
     secrets: ['apiKey'],
     requires: [`${arr}.root_folder`],
     desired: (ctx) => {
@@ -430,6 +485,7 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
           isDefault: true,
         },
         secrets: at.secrets,
+        sendsTo: { hostname: at.host, port: at.port, useSsl: false, baseUrl: '' },
       };
     },
     async resolve(api, desired, ctx) {
@@ -480,11 +536,7 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
       // is Seerr's admin can change (a server held elsewhere reads as changed anyway).
       if ((await test(api, { ...held, ...stackAt(desired) })) !== undefined) return true;
       if ((await test(api, { ...held, ...reach(desired) })) !== undefined) return false;
-      throw unreachable(
-        api,
-        `http://${String(desired.fields.hostname)}:${String(desired.fields.port)}`,
-        "with the key it holds, or the stack's",
-      );
+      throw unreachable(api, urlOf(desired), "with the key it holds, or the stack's");
     },
     async create(api, desired) {
       const profile = await profileOf(api, desired);
@@ -498,7 +550,7 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
           activeDirectory: desired.fields.activeDirectory,
           tags: [],
           is4k: false,
-          isDefault: true,
+          isDefault: desired.fields.isDefault === true,
           syncEnabled: false,
           preventSearch: false,
           tagRequests: false,
@@ -517,7 +569,7 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
         activeProfileId: profile.id,
         activeProfileName: profile.name,
         activeDirectory: desired.fields.activeDirectory,
-        isDefault: true,
+        isDefault: desired.fields.isDefault === true,
       });
     },
   };
@@ -531,6 +583,9 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
 const setup: ResourceSpec = {
   name: 'setup',
   fields: ['initialized'],
+  locked: {
+    initialized: "Seerr can't be taken back to its setup wizard",
+  },
   secrets: [],
   requires: [
     'seerr.media_server',

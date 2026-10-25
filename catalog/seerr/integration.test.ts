@@ -1,6 +1,7 @@
 import {
   AppApiError,
   createAppApi,
+  SENDS_A_KEY,
   type DesiredResource,
   type ResourceSpec,
   type WiringContext,
@@ -173,7 +174,10 @@ describe("Seerr's media server, with Plex", () => {
       name: 'Plex',
       fields: { hostname: 'plex', port: 32400, libraries: 'Movies,TV Shows' },
       secrets: {},
+      sendsTo: { ip: 'plex', port: 32400, useSsl: false },
     });
+    // Where Seerr sends its admin's Plex token: no override changes it.
+    expect(spec.locked).toEqual({ hostname: SENDS_A_KEY, port: SENDS_A_KEY });
     expect(spec.desired(contextOf())).toBeUndefined();
     expect(resource('media_server').desired(contextOf(PLEX_STACK))).toBeUndefined();
   });
@@ -192,6 +196,15 @@ describe("Seerr's media server, with Plex", () => {
       'PUT /api/v1/settings/plex/library/1',
       'PUT /api/v1/settings/plex/library/2',
     ]);
+    expect(state.seerr.plex).toMatchObject({ ip: 'plex', port: 32400, useSsl: false });
+    // An override that got past the lock, or a resource that took one: it moves nothing.
+    const elsewhere = {
+      ...desired,
+      fields: { ...desired.fields, hostname: 'elsewhere', port: 1 },
+    };
+    const held = await spec.observe(api, undefined, desired);
+    if (held === undefined) throw new Error('Seerr holds a Plex');
+    await spec.update(api, elsewhere, held);
     expect(state.seerr.plex).toMatchObject({ ip: 'plex', port: 32400, useSsl: false });
     expect(await spec.observe(api, undefined, desired)).toEqual({
       id: null,
@@ -274,7 +287,10 @@ describe("Seerr's media server", () => {
       name: 'Jellyfin',
       fields: { hostname: 'jellyfin', port: 8096, libraries: 'Movies,Shows' },
       secrets: { apiKey: JELLYFIN_KEY },
+      sendsTo: { ip: 'jellyfin', port: 8096, useSsl: false, urlBase: '' },
     });
+    // Where Seerr sends the key it holds for Jellyfin: no override changes it.
+    expect(spec.locked).toEqual({ hostname: SENDS_A_KEY, port: SENDS_A_KEY });
     // Its first sign-in set Jellyfin, with a key of Seerr's own, and no library yet.
     const seerrKey = jellyfin.apiKeys.find((k) => k.AppName === 'Seerr')?.AccessToken;
     const observed = await spec.observe(api, undefined, desired);
@@ -300,6 +316,30 @@ describe("Seerr's media server", () => {
     expect(state.seerr.jellyfin.apiKey).toBe(seerrKey);
     expect(await spec.verify?.(api, desired, observed)).toBe(true);
     expect(state.seerr.errors).toEqual([]);
+  });
+
+  it('enables only the libraries an override names, and leaves the others to you', async () => {
+    const { api, state } = await seerr();
+    const kept = {
+      ...wanted(spec),
+      fields: { ...wanted(spec).fields, libraries: 'Movies' },
+    };
+    const observed = await spec.observe(api, undefined, kept);
+    if (observed === undefined) throw new Error('observed');
+    await spec.update(api, kept, observed);
+    const enabled = () =>
+      state.seerr.jellyfin.libraries.filter((l) => l.enabled).map((l) => l.name);
+    expect(enabled()).toEqual(['Movies']);
+    // Shows turned on by you: not Mediaplane's to look at, or to turn off.
+    const shows = state.seerr.jellyfin.libraries.find((l) => l.name === 'Shows');
+    if (shows === undefined) throw new Error('Shows was synced');
+    shows.enabled = true;
+    expect((await spec.observe(api, undefined, kept))?.fields.libraries).toBe('Movies');
+  });
+
+  it("doesn't have Seerr enable a library Mediaplane no longer manages in Jellyfin", () => {
+    const ctx = contextOf(`${STACK}overrides:\n  jellyfin.library_shows: unmanaged\n`);
+    expect(spec.desired(ctx)?.fields.libraries).toBe('Movies');
   });
 
   it('reads a link held without the Jellyfin server id Seerr sets when it saves one as not linked, and links it again', async () => {
@@ -359,6 +399,38 @@ describe("Seerr's media server", () => {
       ip: 'jellyfin',
       port: 8096,
     });
+  });
+
+  it("sends Mediaplane's Jellyfin key only to the stack's Jellyfin, whatever an override says, and asks Seerr's users only there", async () => {
+    const { api, apis, state } = await seerr();
+    // An override that got past the lock, or a resource that took one: it moves nothing.
+    const elsewhere = {
+      ...wanted(spec),
+      fields: { ...wanted(spec).fields, hostname: 'elsewhere', port: 4444 },
+    };
+    const before = apis.app.requests.length;
+    await spec.create(api, elsewhere);
+    const carrying = apis.app.requests
+      .slice(before)
+      .filter((r) => r.body.includes(JELLYFIN_KEY));
+    expect(carrying).toHaveLength(1);
+    expect(JSON.parse(carrying[0]?.body ?? '{}')).toMatchObject({
+      ip: 'jellyfin',
+      port: 8096,
+    });
+    expect(state.seerr.jellyfin).toMatchObject({ ip: 'jellyfin', port: 8096 });
+    // Held elsewhere: Seerr would send the key it holds there, so it isn't asked.
+    state.seerr.jellyfin.ip = 'elsewhere';
+    const observed = await spec.observe(api, undefined, elsewhere);
+    if (observed === undefined) throw new Error('observed');
+    const asked = apis.app.requests.length;
+    expect(await spec.verify?.(api, elsewhere, observed)).toEqual({
+      unchecked:
+        "Seerr holds another address for Jellyfin than the stack's, where it would send the key it holds: apply gives it the stack's",
+    });
+    expect(
+      apis.app.requests.slice(asked).some((r) => r.path.endsWith('/jellyfin/users')),
+    ).toBe(false);
   });
 
   it.each([
@@ -453,7 +525,10 @@ describe.each([
       name: `${name} (Mediaplane)`,
       fields: { hostname: arr, port, activeDirectory: folder, isDefault: true },
       secrets: { apiKey: key },
+      sendsTo: { hostname: arr, port, useSsl: false, baseUrl: '' },
     });
+    // Where Seerr sends the arr's key: no override changes it.
+    expect(spec.locked).toEqual({ hostname: SENDS_A_KEY, port: SENDS_A_KEY });
     const ctx = contextOf();
     const resolved = await spec.resolve?.(api, desired, ctx);
     expect(resolved?.fields.activeProfile).toBe('HD-1080p');
@@ -590,6 +665,33 @@ describe.each([
     for (const body of carrying) expect(body).toMatchObject({ hostname: arr, port });
   });
 
+  it("never sends the stack's key to a host an override names, in a test, a create or an update", async () => {
+    const { api, apis, state } = await seerr();
+    const resolved =
+      (await spec.resolve?.(api, wanted(spec), contextOf())) ?? wanted(spec);
+    // An override that got past the lock, or a resource that took one: it moves nothing.
+    const elsewhere = {
+      ...resolved,
+      fields: { ...resolved.fields, hostname: 'elsewhere', port: 4444 },
+    };
+    const before = apis.app.requests.length;
+    expect(
+      (await spec.resolve?.(api, elsewhere, contextOf()))?.fields.activeProfile,
+    ).toBe('HD-1080p');
+    await spec.create(api, elsewhere);
+    const observed = await spec.observe(api, undefined, elsewhere);
+    if (observed === undefined) throw new Error('observed');
+    expect(await spec.verify?.(api, elsewhere, observed)).toBe(true);
+    await spec.update(api, elsewhere, observed);
+    const carrying = apis.app.requests
+      .slice(before)
+      .filter((r) => r.body.includes(key))
+      .map((r) => JSON.parse(r.body) as Record<string, unknown>);
+    expect(carrying.length).toBeGreaterThanOrEqual(3);
+    for (const body of carrying) expect(body).toMatchObject({ hostname: arr, port });
+    expect(state.seerr[arr][0]).toMatchObject({ hostname: arr, port });
+  });
+
   it("sends the stack's key with no URL base, whatever base Seerr holds for the server", async () => {
     const { api, apis, state } = await seerr();
     const before = apis.app.requests.length;
@@ -659,6 +761,19 @@ describe.each([
       expect((await spec.observe(api, undefined, desired))?.fields.hostname).toBe(arr);
     },
   );
+
+  it('keeps it out of default when an override says so', async () => {
+    const { api, state } = await seerr();
+    const desired =
+      (await spec.resolve?.(api, wanted(spec), contextOf())) ?? wanted(spec);
+    const kept = { ...desired, fields: { ...desired.fields, isDefault: false } };
+    await spec.create(api, kept);
+    expect(state.seerr[arr][0]?.isDefault).toBe(false);
+    const observed = await spec.observe(api, undefined, kept);
+    if (observed === undefined) throw new Error('observed');
+    await spec.update(api, kept, observed);
+    expect(state.seerr[arr][0]?.isDefault).toBe(false);
+  });
 
   it('puts back what was changed by hand: its profile, folder and default', async () => {
     const { api, state, sonarr, radarr } = await seerr();

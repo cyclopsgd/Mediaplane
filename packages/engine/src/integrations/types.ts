@@ -22,6 +22,15 @@ export interface DesiredResource {
    * stack's user, in a throwaway container of the app's own service.
    */
   folders?: readonly string[];
+  /**
+   * Where the resource has its app send a key (or, for Prowlarr's indexer proxy, your
+   * indexers' requests): the settings of the stack's own service address for the other
+   * app (spec §11, Slice 6: keys go only to the stack's own addresses). Create, update
+   * and each check send these, never a managed field, which an override could set, nor
+   * what the app holds, which anyone who can change the app can set. Overrides never
+   * change it.
+   */
+  sendsTo?: Fields;
 }
 
 /** What the app holds now (spec §6.3: O): its id, its name and its managed fields. */
@@ -76,6 +85,17 @@ export interface ResourceSpec {
   name: string;
   /** The managed fields: compared, kept, and listed in the app's README. */
   fields: readonly string[];
+  /**
+   * Managed fields held as one comma-separated list, such as a library's folders: compared
+   * as sets, whatever their order, so an override in another order still matches.
+   */
+  lists?: readonly string[];
+  /**
+   * Managed fields an override can't change, each with why: what the resource is known
+   * by, or what its app can't change. Override keys (spec §4.2) name only the others.
+   * "{resource}" in a reason stands for the resource's address.
+   */
+  locked?: Readonly<Record<string, string>>;
   /** The secrets it holds, by name: applied and checked with verify, never compared. */
   secrets: readonly string[];
   /** Resources ("<app>.<name>") that must be in place first: one that failed skips this. */

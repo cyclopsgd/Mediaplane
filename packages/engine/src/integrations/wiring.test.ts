@@ -13,6 +13,7 @@ import {
   fakeSonarr,
   WIRED_CATALOG,
   WIRING_RUNNING as RUNNING,
+  WIRING_STACK,
   wiringStack as stackOf,
 } from '../testing/wiring';
 import { foundSecrets } from '../util/redact';
@@ -66,12 +67,18 @@ const RECORDED: KnownResources = {
   },
 };
 
-/** WIRED_CATALOG, with Sonarr's resources replaced by `resources`. */
-function sonarrWith(resources: ResourceSpec[]) {
+/**
+ * WIRED_CATALOG's stack, with Sonarr's resources replaced by `resources`, and the
+ * stack's overrides (spec §4.2) given, one line each.
+ */
+function sonarrWith(resources: ResourceSpec[], ...overrides: string[]) {
   return stackOf(
     WIRED_CATALOG.map((def) =>
       def.id === 'sonarr' ? { ...def, integration: { after: [], resources } } : def,
     ),
+    overrides.length === 0
+      ? undefined
+      : `${WIRING_STACK}overrides:\n${overrides.map((line) => `  ${line}`).join('\n')}\n`,
   );
 }
 
@@ -208,7 +215,8 @@ describe('planWiring', () => {
       ...RECORDED,
       'sonarr.first': {
         id: null,
-        name: 'first',
+        // As the wire step records it: the name desired() gives.
+        name: 'login',
         fields: { user: 'admin' },
         secrets: [],
         appliedAt: '2026-10-10T12:00:00.000Z',
@@ -1076,6 +1084,26 @@ describe('planWiring: drift (spec §6.3)', () => {
     ]);
   });
 
+  it('finds no drift against a record of another name than the stack now wants: that is its own change', async () => {
+    // qBittorrent's category, once Sonarr's is kept as another: the stack wants another.
+    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+    const before = {
+      'sonarr.login': { ...RECORDED['sonarr.login'], name: 'before' },
+    } as KnownResources;
+    const planned = await planWiring(options(sonarr, { known: before }));
+    expect(planned.changes).toEqual([
+      { resource: 'sonarr.login', action: 'update', changes: ['user'] },
+    ]);
+    expect(planned.drift).toEqual([]);
+    sonarr.state.user = 'admin';
+    // Not recorded under the name it now has: adopted.
+    expect((await planWiring(options(sonarr, { known: before }))).changes).toEqual([
+      { resource: 'sonarr.login', action: 'adopt' },
+    ]);
+    const missing = await fakeSonarr({ key: KEY });
+    expect((await planWiring(options(missing, { known: before }))).drift).toEqual([]);
+  });
+
   it('says a resource it applied was deleted outside Mediaplane', async () => {
     const sonarr = await fakeSonarr({ key: KEY });
     const planned = await planWiring(options(sonarr, { known: RECORDED }));
@@ -1285,5 +1313,68 @@ describe('planWiring: drift (spec §6.3)', () => {
         reason: 'it would make a category',
       },
     ]);
+  });
+});
+
+describe('planWiring: overrides (spec §4.2, §6.3)', () => {
+  it("wants the override's value, so that what the app holds now matches", async () => {
+    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+    const planned = await planWiring(
+      options(sonarr, {
+        stack: sonarrWith([FAKE_LOGIN], 'sonarr.login.user: someone'),
+        known: RECORDED,
+      }),
+    );
+    // Applied as "admin": what the app holds is what the stack now wants, so no drift.
+    expect(planned.changes).toEqual([{ resource: 'sonarr.login', action: 'adopt' }]);
+    expect(planned.drift).toEqual([]);
+  });
+
+  it('lists nothing for a resource it no longer manages, and asks nothing of it', async () => {
+    const sonarr = await fakeSonarr({ key: KEY });
+    const planned = await planWiring(
+      options(sonarr, { stack: sonarrWith([FAKE_LOGIN], 'sonarr.login: unmanaged') }),
+    );
+    expect(planned.changes).toEqual([{ resource: 'sonarr', action: 'unchanged' }]);
+    expect(sonarr.app.requests.map((r) => r.path)).toEqual([
+      '/ping',
+      '/api/v3/system/status',
+    ]);
+  });
+
+  it('keeps the override over what only the app can say', async () => {
+    const resolved: ResourceSpec = {
+      ...FAKE_LOGIN,
+      resolve: (_api, desired) =>
+        Promise.resolve({ ...desired, fields: { ...desired.fields, user: 'chosen' } }),
+    };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'kept', password: PASSWORD });
+    const planned = await planWiring(
+      options(sonarr, {
+        stack: sonarrWith([resolved], 'sonarr.login.user: kept'),
+        known: {
+          'sonarr.login': { ...RECORDED['sonarr.login'], fields: { user: 'kept' } },
+        } as KnownResources,
+      }),
+    );
+    expect(planned.changes).toEqual([{ resource: 'sonarr.login', action: 'unchanged' }]);
+  });
+
+  it('compares a list as a set, whatever its order', async () => {
+    const listed: ResourceSpec = {
+      ...FAKE_LOGIN,
+      lists: ['user'],
+      observe: () =>
+        Promise.resolve({ id: null, name: 'login', fields: { user: 'b,a' } }),
+    };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const known = {
+      'sonarr.login': { ...RECORDED['sonarr.login'], fields: { user: 'a,b' } },
+    } as KnownResources;
+    const planned = await planWiring(
+      options(sonarr, { stack: sonarrWith([listed], 'sonarr.login.user: a,b'), known }),
+    );
+    expect(planned.changes).toEqual([{ resource: 'sonarr.login', action: 'unchanged' }]);
+    expect(planned.drift).toEqual([]);
   });
 });

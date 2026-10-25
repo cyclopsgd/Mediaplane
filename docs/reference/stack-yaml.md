@@ -39,7 +39,7 @@ Each field shows its type, then `required` or its default, if it has one.
 - `vpn.private_key` (secret reference; required): Your WireGuard private key, as a secret reference.
 - `vpn.addresses` (string): The WireGuard address, for providers that need one, such as Mullvad: the Address line of your provider's WireGuard file, such as 10.64.0.2/32. Several go comma-separated, without spaces. Other Gluetun settings go in apps.gluetun.env.
 - `apps` (object; default `{}`): The apps to run, by id. Listing an app runs it, unless it sets enabled: false. The media server that media_server names runs without being listed, and no other media server can be enabled. Apps also bring along the apps they need, such as Gluetun for qBittorrent.
-- `overrides` (map of name → string, number or boolean; default `{}`): Keep mine values, by \<app>.\<resource>.\<field>. Not used yet: drift detection arrives in Slice 8.
+- `overrides` (map of name → string, number or boolean; default `{}`): Your own values for what Mediaplane manages in the apps, by \<app>.\<resource>.\<field>, such as sonarr.download_client.category: television: apply sets them instead of its own. Each app's README lists the fields; one marked fixed, and a secret, can't be overridden. \<app>.\<resource>: unmanaged stops Mediaplane managing that resource.
 - `managed_by` (`mediaplane` or `external`; default `mediaplane`): external: Mediaplane never writes this file, for when automation such as Ansible owns it. Today only init writes it, and init never overwrites. Matters from Slice 8.
 
 ## Settings every app takes

@@ -1,7 +1,9 @@
 import {
   AppApiError,
   defineIntegration,
+  listItems,
   type AppApi,
+  type DesiredResource,
   type ResourceSpec,
 } from '@mediaplane/engine';
 import { z } from 'zod';
@@ -114,6 +116,11 @@ function locationsOf(held: z.infer<typeof section>): string {
   return [...new Set(trimmed)].sort().join(',');
 }
 
+/** The folders a desired library holds: `location`, one comma-separated list. */
+function wantedLocations(desired: DesiredResource): string[] {
+  return listItems(desired.fields.location);
+}
+
 /**
  * One of Plex's libraries (spec §6.2), known by Plex's key for it (`resources.json`),
  * else by its name. Plex takes a second library of one name, so one is made only when
@@ -127,6 +134,11 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
   return {
     name: spec.resource,
     fields: ['name', 'type', 'location'],
+    lists: ['location'],
+    locked: {
+      name: `Seerr enables the library by its name, and Mediaplane finds it by its name when state/resources.json is lost. Rename it back to ${spec.name} in Plex, or stop Mediaplane managing it with {resource}: unmanaged`,
+      type: "Plex can't change what a library holds",
+    },
     secrets: [],
     desired: () => ({
       name: spec.name,
@@ -147,15 +159,15 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
             fields: { name: found.title, type: found.type, location: locationsOf(found) },
           };
     },
-    async create(api) {
-      const query = new URLSearchParams({
-        name: spec.name,
-        type: spec.type,
-        agent: spec.agent,
-        scanner: spec.scanner,
-        language: LANGUAGE,
-        location: spec.path,
-      });
+    async create(api, desired) {
+      const query = new URLSearchParams([
+        ['name', spec.name],
+        ['type', spec.type],
+        ['agent', spec.agent],
+        ['scanner', spec.scanner],
+        ['language', LANGUAGE],
+        ...wantedLocations(desired).map((path): [string, string] => ['location', path]),
+      ]);
       const answer = await api.post(`${SECTIONS}?${query.toString()}`, {}, made);
       // The one that is the library just asked for, whatever else Plex lists in its answer.
       const created = answer.MediaContainer.Directory.find(
@@ -169,7 +181,7 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
       }
       return { id: created.key };
     },
-    async update(api, _desired, observed) {
+    async update(api, desired, observed) {
       const holds = String(observed.fields.type);
       if (holds !== spec.type) {
         throw new AppApiError(
@@ -184,11 +196,12 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
           { kind: 'rejected' },
         );
       }
-      const query = new URLSearchParams({
-        agent: held.agent,
-        name: spec.name,
-        location: spec.path,
-      });
+      // Plex takes the folders as one `location` each, and keeps those it is sent.
+      const query = new URLSearchParams([
+        ['agent', held.agent],
+        ['name', spec.name],
+        ...wantedLocations(desired).map((path): [string, string] => ['location', path]),
+      ]);
       await api.put(
         `${SECTIONS}/${encodeURIComponent(held.key)}?${query.toString()}`,
         {},

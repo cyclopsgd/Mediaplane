@@ -266,6 +266,37 @@ apps:
       expect(state.categories).toEqual({ tv: '/data/torrents/tv' });
     });
 
+    it("wants the category Sonarr's download client is kept with, so that apply makes it, never the arr's test", async () => {
+      const kept = stack('overrides:\n  sonarr.download_client.category: television\n');
+      const desired = tv.desired(contextOf(kept));
+      expect(desired).toEqual({
+        name: 'television',
+        fields: { savePath: '/data/torrents/television' },
+        secrets: {},
+      });
+      if (desired === undefined) throw new Error('the tv category is wanted');
+      // Found by that name, and made under it; the category tv stays as it is, yours.
+      const { api, state } = await qbittorrent({
+        categories: { tv: '/data/torrents/tv' },
+      });
+      expect(await tv.observe(api, undefined, desired)).toBeUndefined();
+      expect(await tv.create(api, desired)).toEqual({ id: 'television' });
+      expect(state.categories).toEqual({
+        tv: '/data/torrents/tv',
+        television: '/data/torrents/television',
+      });
+      expect(await tv.observe(api, undefined, desired)).toEqual({
+        id: 'television',
+        name: 'television',
+        fields: { savePath: '/data/torrents/television' },
+      });
+      // Once the client is no longer Mediaplane's, the category is tv again.
+      const unmanaged = stack(
+        'overrides:\n  sonarr.download_client: unmanaged\n  sonarr.download_client.category: television\n',
+      );
+      expect(tv.desired(contextOf(unmanaged))?.name).toBe('tv');
+    });
+
     it("says qBittorrent's own words when it refuses", async () => {
       const { api } = await qbittorrent({ categories: { tv: '/data/torrents/tv' } });
       const desired = tv.desired(contextOf());

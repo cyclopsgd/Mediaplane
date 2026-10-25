@@ -1,6 +1,7 @@
 import {
   createAppApi,
   planWiring,
+  SENDS_A_KEY,
   wire,
   WiringFailed,
   type ActionResult,
@@ -153,7 +154,10 @@ describe("an arr's connection to Jellyfin", () => {
       name: JELLYFIN_CONNECTION_NAME,
       fields: { host: 'jellyfin', port: 8096, updateLibrary: true },
       secrets: { apiKey: JELLYFIN_KEY },
+      sendsTo: { host: 'jellyfin', port: 8096, useSsl: false, urlBase: '' },
     });
+    // Where the arr sends Jellyfin's key: no override changes it.
+    expect(connection.locked).toEqual({ host: SENDS_A_KEY, port: SENDS_A_KEY });
   });
 
   it('is wanted before Jellyfin has made its key, and not at all with Plex', () => {
@@ -346,6 +350,36 @@ describe("an arr's connection to Jellyfin, at another address", () => {
     expect(state.connections[0]?.fields).toContainEqual({ name: 'urlBase', value: '' });
     expect(state.connections[0]?.fields).toContainEqual({ name: 'useSsl', value: false });
   });
+
+  it("sends Jellyfin's key only to the stack's address, whatever an override or the arr holds", async () => {
+    const { api, apis, state } = await sonarr();
+    // An override that got past the lock, or a resource that took one: it moves nothing.
+    const elsewhere = {
+      ...wanted(),
+      fields: { ...wanted().fields, host: 'elsewhere', port: 1 },
+    };
+    await connection.create(api, elsewhere);
+    const at = () =>
+      state.connections[0]?.fields
+        .filter((f) => ['host', 'port', 'useSsl', 'urlBase'].includes(f.name))
+        .map((f) => `${f.name}=${String(f.value)}`);
+    expect(at()).toEqual(['host=jellyfin', 'port=8096', 'useSsl=false', 'urlBase=']);
+    // Changed in the arr by hand: its test is still aimed at the stack's address.
+    const [made] = state.connections;
+    if (made === undefined) throw new Error('no connection made');
+    made.fields = made.fields.map((f) =>
+      f.name === 'urlBase' ? { ...f, value: '@198.51.100.7' } : f,
+    );
+    const held = await connection.observe(api, undefined);
+    if (held === undefined) throw new Error('the connection is there');
+    expect(await connection.verify?.(api, elsewhere, held)).toBe(true);
+    const test = apis.app.requests.find((r) => r.path === '/api/v3/notification/test');
+    expect(test?.body).toContain('"urlBase","value":""');
+    expect(test?.body).not.toContain('198.51.100.7');
+    expect(test?.body).not.toContain('elsewhere');
+    await connection.update(api, elsewhere, held);
+    expect(at()).toEqual(['host=jellyfin', 'port=8096', 'useSsl=false', 'urlBase=']);
+  });
 });
 
 describe("an arr's connection to Plex", () => {
@@ -390,6 +424,7 @@ describe("an arr's connection to Plex", () => {
       name: PLEX_CONNECTION_NAME,
       fields: { host: 'plex', port: 32400, updateLibrary: true },
       secrets: { authToken: TOKEN },
+      sendsTo: { host: 'plex', port: 32400, useSsl: false, urlBase: '' },
     });
     expect(plexConnection.desired(contextOf(stack('jellyfin')))).toBeUndefined();
     expect(connection.desired(contextOf(stack('plex')))).toBeUndefined();

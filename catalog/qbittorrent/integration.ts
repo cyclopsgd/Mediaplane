@@ -1,7 +1,9 @@
 import {
   defineIntegration,
+  isUnmanaged,
   type AppApi,
   type DesiredResource,
+  type ResolvedStack,
   type ResourceSpec,
 } from '@mediaplane/engine';
 import { z } from 'zod';
@@ -12,7 +14,8 @@ export const DEFAULT_SAVE_PATH = '/data/torrents';
 
 /**
  * The category each arr files its torrents under (spec §6.2), made while that arr is in
- * the stack. Its save path is DEFAULT_SAVE_PATH/<name>.
+ * the stack: `name`, unless the arr's download client is kept with another (categoryOf).
+ * Its save path is DEFAULT_SAVE_PATH/<category>.
  */
 export const CATEGORIES = [
   { arr: 'sonarr', name: 'tv' },
@@ -121,6 +124,7 @@ async function saveAdmin(api: AppApi, desired: DesiredResource): Promise<void> {
 const settings: ResourceSpec = {
   name: 'preferences',
   fields: ['savePath', 'autoTmm', 'authSubnetWhitelistEnabled', 'authSubnetWhitelist'],
+  lists: ['authSubnetWhitelist'],
   secrets: [],
   desired: ({ stack, app }) => {
     const whitelist = stack.config.security.login_on_lan
@@ -169,29 +173,55 @@ async function saveSettings(api: AppApi, desired: DesiredResource): Promise<void
 }
 
 /**
- * The category `name` (spec §6.2), with its save path under DEFAULT_SAVE_PATH, while
- * `arr` is in the stack. qBittorrent knows a category by its name: it gives it no id.
+ * The category `arr`'s download client files under: `name`, or the one it is kept with
+ * (`<arr>.download_client.category`, Keep mine), so that qBittorrent has the category the
+ * client names, made by apply. Otherwise the arr's own test of the client would make it,
+ * with no save path, which plan and drift never let it do.
+ */
+function categoryOf(stack: ResolvedStack, arr: string, name: string): string {
+  const kept = stack.config.overrides[`${arr}.download_client.category`];
+  return typeof kept === 'string' &&
+    kept !== '' &&
+    !isUnmanaged(stack, `${arr}.download_client`)
+    ? kept
+    : name;
+}
+
+/**
+ * The category `name` (spec §6.2), or the one `arr`'s download client is kept with
+ * (categoryOf), with its save path under DEFAULT_SAVE_PATH, while `arr` is in the stack.
+ * qBittorrent knows a category by its name: it gives it no id. One Mediaplane made before
+ * under another name stays as it is, yours.
  */
 function category(arr: string, name: string): ResourceSpec {
   const save = (api: AppApi, path: string, desired: DesiredResource) =>
-    api.form(path, { category: name, savePath: String(desired.fields.savePath) });
+    api.form(path, {
+      category: desired.name,
+      savePath: String(desired.fields.savePath),
+    });
   return {
     name: `category_${name}`,
     fields: ['savePath'],
     secrets: [],
-    desired: ({ stack }) =>
-      stack.apps.some((app) => app.def.id === arr)
-        ? { name, fields: { savePath: `${DEFAULT_SAVE_PATH}/${name}` }, secrets: {} }
-        : undefined,
-    async observe(api) {
-      const held = (await api.get(CATEGORIES_PATH, categories))[name];
+    desired: ({ stack }) => {
+      if (!stack.apps.some((app) => app.def.id === arr)) return undefined;
+      const wanted = categoryOf(stack, arr, name);
+      return {
+        name: wanted,
+        fields: { savePath: `${DEFAULT_SAVE_PATH}/${wanted}` },
+        secrets: {},
+      };
+    },
+    async observe(api, _known, desired) {
+      const named = desired?.name ?? name;
+      const held = (await api.get(CATEGORIES_PATH, categories))[named];
       return held === undefined
         ? undefined
-        : { id: name, name, fields: { savePath: asKept(held.savePath) } };
+        : { id: named, name: named, fields: { savePath: asKept(held.savePath) } };
     },
     async create(api, desired) {
       await save(api, '/api/v2/torrents/createCategory', desired);
-      return { id: name };
+      return { id: desired.name };
     },
     async update(api, desired) {
       await save(api, '/api/v2/torrents/editCategory', desired);

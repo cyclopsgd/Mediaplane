@@ -16,7 +16,7 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
 - **Health check:** `curl -fsS http://localhost:32400/identity`, every 30s (timeout 10s, 5 retries, 120s to start)
 - **Secrets:** `token`: yours, from `plex.token` in `stack.yaml`
 - **API:** on its `web` port, which Mediaplane reaches over the stack's wiring network, with `token` in Plex's `X-Plex-Token` header
-- **Managed in the app:** `plex.server`: fields `plex.server.name`. `plex.library_movies`: fields `plex.library_movies.name`, `plex.library_movies.type`, `plex.library_movies.location`. `plex.library_tv`: fields `plex.library_tv.name`, `plex.library_tv.type`, `plex.library_tv.location`
+- **Managed in the app:** `plex.server`: fields `plex.server.name`. `plex.library_movies`: fields `plex.library_movies.name` (fixed), `plex.library_movies.type` (fixed), `plex.library_movies.location`. `plex.library_tv`: fields `plex.library_tv.name` (fixed), `plex.library_tv.type` (fixed), `plex.library_tv.location`
 - **Needs:** nothing
 - **Provides:** `media-server`
 - **Also turns on:** nothing

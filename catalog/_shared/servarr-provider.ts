@@ -8,6 +8,7 @@ import {
   type ResourceSpec,
 } from '@mediaplane/engine';
 import { z } from 'zod';
+import { sendsToOf } from './secret';
 
 /** One setting of a Servarr provider; the rest of it goes back as it came. */
 const setting = z.looseObject({ name: z.string(), value: z.unknown().optional() });
@@ -59,7 +60,7 @@ export function numberOf(value: unknown): number {
   return typeof value === 'number' ? value : 0;
 }
 
-export { secretOf } from './secret';
+export { secretOf, sendsToOf } from './secret';
 
 /**
  * The provider Mediaplane made, among the app's of `kind`: by the id resources.json
@@ -171,10 +172,34 @@ export async function updateProvider(
 }
 
 /**
+ * `body` with `settings` set, and those it lacks added: where a test sends a key.
+ */
+function aimedAt<T extends { fields: z.infer<typeof setting>[] }>(
+  body: T,
+  settings: Readonly<Record<string, unknown>>,
+): T {
+  const added = Object.entries(settings)
+    .filter(([name]) => !body.fields.some((f) => f.name === name))
+    .map(([name, value]) => ({ name, value }));
+  return {
+    ...body,
+    fields: [
+      ...body.fields.map((f) =>
+        Object.hasOwn(settings, f.name) ? { ...f, value: settings[f.name] } : f,
+      ),
+      ...added,
+    ],
+  };
+}
+
+/**
  * The app's own test of the provider it holds as `id`, sent as the app gave it (its
- * secrets masked) and with that id, or the app tests it as a new one and refuses its
- * name. True when it passes; false when it fails on one of `credentials`, a secret the
- * update sets; otherwise the app's own words, thrown.
+ * secrets masked, which the app fills in with those it holds) and with that id, or the
+ * app tests it as a new one and refuses its name; but aimed at `sendsTo`, the stack's own
+ * address for the other app: the key the app holds may be the stack's, and goes nowhere
+ * else, never to an address the app holds, which anyone who can change the app can set.
+ * True when it passes; false when it fails on one of `credentials`, a secret the update
+ * sets; otherwise the app's own words, thrown.
  */
 export async function testProvider(
   api: AppApi,
@@ -182,9 +207,10 @@ export async function testProvider(
   id: ObservedResource['id'],
   name: string,
   credentials: readonly string[],
+  sendsTo: Readonly<Record<string, unknown>>,
 ): Promise<boolean> {
   const held = await api.get(`${kind.path}/${String(id)}`, provider);
-  const result = await api.test(`${kind.path}/test`, held);
+  const result = await api.test(`${kind.path}/test`, aimedAt(held, sendsTo));
   if (result.passed) return true;
   if (result.failures.some((f) => credentials.includes(f.property))) return false;
   const said = result.failures
@@ -205,7 +231,10 @@ export interface ProviderOptions {
   credentials: readonly string[];
   /** Its managed fields, from what the app holds. */
   fieldsOf: (held: Provider) => Fields;
-  /** The settings to set, secrets in clear (this request body only). */
+  /**
+   * The settings to set, secrets in clear (this request body only): where the app sends
+   * a key among them from `desired.sendsTo` (sendsToOf), never from a managed field.
+   */
   settingsOf: (desired: DesiredResource) => Record<string, unknown>;
   /** The provider's own properties to set: its name, enable, tags…, at create and update. */
   topOf: (desired: DesiredResource) => Record<string, unknown>;
@@ -235,7 +264,7 @@ export function servarrProvider(
         : { id: held.id, name: held.name, fields: fieldsOf(held) };
     },
     verify: (api, desired, observed) =>
-      testProvider(api, kind, observed.id, desired.name, credentials),
+      testProvider(api, kind, observed.id, desired.name, credentials, sendsToOf(desired)),
     create: (api, desired) =>
       createProvider(
         api,

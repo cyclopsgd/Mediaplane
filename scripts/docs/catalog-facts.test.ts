@@ -78,6 +78,12 @@ describe('renderFacts', () => {
     );
   });
 
+  it("marks a managed field an override can't change as fixed", () => {
+    expect(renderFacts(app('sonarr'))).toContain(
+      '`sonarr.root_folder`: fields `sonarr.root_folder.path` (fixed)',
+    );
+  });
+
   it('shows what an app turns on with its default settings', () => {
     expect(renderFacts(app('prowlarr'))).toContain('`byparr`');
     expect(renderFacts(app('qbittorrent'))).toContain('`gluetun`');

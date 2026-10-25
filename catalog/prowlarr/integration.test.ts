@@ -2,6 +2,7 @@ import {
   AppApiError,
   createAppApi,
   planWiring,
+  SENDS_A_KEY,
   type ResolvedStack,
   type ResourceSpec,
   type WiringContext,
@@ -126,7 +127,10 @@ describe('a link to Sonarr or Radarr', () => {
         syncCategories: '5000,5010,5020,5030,5040,5045,5050,5090',
       },
       secrets: { apiKey: SONARR_KEY },
+      sendsTo: { prowlarrUrl: 'http://prowlarr:9696', baseUrl: 'http://sonarr:8989' },
     });
+    // Where Prowlarr sends the arr's key, and the arr Prowlarr's: no override changes it.
+    expect(toSonarr.locked).toEqual({ prowlarrUrl: SENDS_A_KEY, baseUrl: SENDS_A_KEY });
     expect(wanted(resource('application_radarr'))).toMatchObject({
       name: 'Radarr (Mediaplane)',
       fields: {
@@ -209,24 +213,58 @@ apps:
   });
 
   it("says Prowlarr's own words when its test fails for another reason", async () => {
-    const { api, state } = await prowlarr();
+    const { api, apps } = await prowlarr();
     const desired = wanted(toSonarr);
     await toSonarr.create(api, desired);
-    // Aimed elsewhere by hand: Prowlarr tests a new link as it saves it.
-    const [held] = state.applications;
-    if (held === undefined) throw new Error('no link made');
-    held.fields = held.fields.map((f) =>
-      f.name === 'baseUrl' ? { ...f, value: 'http://nowhere:8989' } : f,
-    );
     const observed = await toSonarr.observe(api, undefined);
     if (observed === undefined) throw new Error('no link observed');
+    apps.set('sonarr', { ...freshAppState(), key: SONARR_KEY, up: false });
     const failure = await toSonarr
       .verify?.(api, desired, observed)
       .catch((thrown: unknown) => thrown);
     expect(failure).toBeInstanceOf(AppApiError);
     expect((failure as AppApiError).message).toBe(
-      'Prowlarr at http://prowlarr:9696 (127.0.0.1) tested Sonarr (Mediaplane), and it failed: BaseUrl: Unable to complete application test, cannot connect to Sonarr. Resource temporarily unavailable (nowhere:8989) (POST /api/v1/applications/test)',
+      'Prowlarr at http://prowlarr:9696 (127.0.0.1) tested Sonarr (Mediaplane), and it failed: BaseUrl: Unable to complete application test, cannot connect to Sonarr. Resource temporarily unavailable (sonarr:8989) (POST /api/v1/applications/test)',
     );
+  });
+
+  it("sends the arr's key, and Prowlarr's, only to the stack's addresses, whatever an override or Prowlarr holds", async () => {
+    const { api, app, state } = await prowlarr();
+    // An override that got past the lock, or a resource that took one: it moves nothing.
+    const elsewhere = {
+      ...wanted(toSonarr),
+      fields: {
+        ...wanted(toSonarr).fields,
+        baseUrl: 'http://elsewhere:8989',
+        prowlarrUrl: 'http://elsewhere:9696',
+      },
+    };
+    await toSonarr.create(api, elsewhere);
+    const urls = () =>
+      state.applications[0]?.fields
+        .filter((f) => ['baseUrl', 'prowlarrUrl'].includes(f.name))
+        .map((f) => `${f.name}=${String(f.value)}`);
+    expect(urls()).toEqual([
+      'prowlarrUrl=http://prowlarr:9696',
+      'baseUrl=http://sonarr:8989',
+    ]);
+    // Changed in Prowlarr by hand: its test is still aimed at the stack's addresses.
+    const [held] = state.applications;
+    if (held === undefined) throw new Error('no link made');
+    held.fields = held.fields.map((f) =>
+      f.name === 'baseUrl' ? { ...f, value: 'http://elsewhere:8989' } : f,
+    );
+    const observed = await toSonarr.observe(api, undefined);
+    if (observed === undefined) throw new Error('no link observed');
+    expect(await toSonarr.verify?.(api, elsewhere, observed)).toBe(true);
+    const test = app.requests.find((r) => r.path === '/api/v1/applications/test');
+    expect(test?.body).toContain('"baseUrl","value":"http://sonarr:8989"');
+    expect(test?.body).not.toContain('elsewhere');
+    await toSonarr.update(api, elsewhere, observed);
+    expect(urls()).toEqual([
+      'prowlarrUrl=http://prowlarr:9696',
+      'baseUrl=http://sonarr:8989',
+    ]);
   });
 
   it('is tested by plan only once the arr is up and takes its key, and plan never tests the proxy or writes to Prowlarr', async () => {
@@ -375,7 +413,10 @@ describe('the indexer proxy', () => {
       name: PROXY_NAME,
       fields: { host: 'http://byparr:8191/', requestTimeout: 60, tags: 'cloudflare' },
       secrets: {},
+      sendsTo: { host: 'http://byparr:8191/' },
     });
+    // Prowlarr sends your indexers' requests through it: no override changes it.
+    expect(Object.keys(proxy.locked ?? {})).toEqual(['host']);
     expect(wanted(proxy, contextOf(stack('  flaresolverr: {}\n'))).fields.host).toBe(
       'http://flaresolverr:8191/',
     );
@@ -421,5 +462,36 @@ describe('the indexer proxy', () => {
     await proxy.update(api, wanted(proxy), observed);
     expect(state.proxies[0]?.tags).toEqual([2]);
     expect((await proxy.observe(api, undefined))?.fields).toEqual(wanted(proxy).fields);
+  });
+
+  it('gives the proxy the tags an override names, finding or making each by its label', async () => {
+    const { api, state } = await prowlarr();
+    state.tags.push({ id: 1, label: 'other' });
+    const kept = {
+      ...wanted(proxy),
+      fields: { ...wanted(proxy).fields, tags: 'cloudflare,other' },
+    };
+    await proxy.create(api, kept);
+    expect(state.tags).toEqual([
+      { id: 1, label: 'other' },
+      { id: 2, label: 'cloudflare' },
+    ]);
+    expect(state.proxies[0]?.tags).toEqual([2, 1]);
+    expect((await proxy.observe(api, undefined))?.fields.tags).toBe('cloudflare,other');
+  });
+
+  it("sends your indexers' requests only to the stack's solver, whatever an override says", async () => {
+    const { api, state } = await prowlarr();
+    const elsewhere = {
+      ...wanted(proxy),
+      fields: { ...wanted(proxy).fields, host: 'http://elsewhere:8191/' },
+    };
+    await proxy.create(api, elsewhere);
+    const host = () => state.proxies[0]?.fields.find((f) => f.name === 'host')?.value;
+    expect(host()).toBe('http://byparr:8191/');
+    const observed = await proxy.observe(api, undefined);
+    if (observed === undefined) throw new Error('no proxy observed');
+    await proxy.update(api, elsewhere, observed);
+    expect(host()).toBe('http://byparr:8191/');
   });
 });

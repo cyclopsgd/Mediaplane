@@ -1,4 +1,5 @@
 import {
+  SENDS_A_KEY,
   serviceAddress,
   type DesiredResource,
   type Fields,
@@ -8,6 +9,7 @@ import { z } from 'zod';
 import {
   numberOf,
   secretOf,
+  sendsToOf,
   servarrProvider,
   settingOf,
   textOf,
@@ -56,16 +58,15 @@ function fieldsOf(held: Provider, link: DownloadLink): Fields {
 
 /**
  * The desired settings, with qBittorrent's key in clear: the one place one app's key goes
- * to another, in a request body.
+ * to another, in a request body, with where the arr sends it, the stack's own address for
+ * qBittorrent (`sendsTo`).
  */
 function settingsOf(
   desired: DesiredResource,
   link: DownloadLink,
 ): Record<string, unknown> {
   return {
-    host: desired.fields.host,
-    port: desired.fields.port,
-    useSsl: desired.fields.useSsl,
+    ...sendsToOf(desired),
     [link.setting]: desired.fields.category,
     apiKey: secretOf(desired, 'apiKey'),
   };
@@ -81,7 +82,10 @@ function topOf(desired: DesiredResource): Record<string, unknown> {
  * DOWNLOAD_CLIENT_NAME, filing its downloads under `link.category`. It needs that category
  * in place first: Sonarr's own test makes a missing one, with no save path.
  * - Its host is how the arr reaches qBittorrent: through Gluetun when qBittorrent shares
- *   Gluetun's network, at qBittorrent's own port, which its Host check needs.
+ *   Gluetun's network, at qBittorrent's own port, which its Host check needs, without TLS
+ *   or a URL base. The arr sends qBittorrent's key there, so the host, port and TLS are
+ *   fixed (SENDS_A_KEY), and every create, update and test is sent there (`sendsTo`),
+ *   whatever an override or the arr holds.
  * - Its key is checked with the app's own test of the client it holds, as it holds it
  *   (the key masked): a refused sign-in means the key differs, and an update sets it.
  *   Any other failure, such as qBittorrent out of the arr's reach, the app explains.
@@ -94,6 +98,7 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
   return {
     name: 'download_client',
     fields: ['host', 'port', 'useSsl', 'category', 'enable'],
+    locked: { host: SENDS_A_KEY, port: SENDS_A_KEY, useSsl: SENDS_A_KEY },
     secrets: ['apiKey'],
     requires: [`qbittorrent.category_${link.category}`],
     desired: ({ stack, keys }) => {
@@ -113,6 +118,7 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
           enable: true,
         },
         secrets: { apiKey: key },
+        sendsTo: { host: at.host, port: at.port, useSsl: false, urlBase: '' },
       };
     },
     ...servarrProvider({
@@ -138,6 +144,9 @@ export function servarrRootFolder(path: string): ResourceSpec {
   return {
     name: 'root_folder',
     fields: ['path'],
+    locked: {
+      path: "the arr knows a root folder by its path, and can't move one: another path would add a second root folder beside this one, which holds your library. To move your library, move it in the arr, then stop Mediaplane managing this one with {resource}: unmanaged",
+    },
     secrets: [],
     desired: () => ({ name: path, fields: { path }, secrets: {}, folders: [path] }),
     async observe(api) {

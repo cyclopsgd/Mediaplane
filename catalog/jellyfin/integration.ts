@@ -1,7 +1,9 @@
 import {
   AppApiError,
   defineIntegration,
+  listItems,
   type AppApi,
+  type DesiredResource,
   type ResourceSpec,
 } from '@mediaplane/engine';
 import { z } from 'zod';
@@ -105,10 +107,19 @@ const available = z.looseObject({
   ),
 });
 
+/** A folder without a trailing "/", as Jellyfin may give it. */
+function trimmed(path: string): string {
+  return path.length > 1 ? path.replace(/\/+$/, '') : path;
+}
+
 /** A library's folders as one sorted list, each once and without a trailing "/". */
 function pathsOf(locations: readonly string[]): string {
-  const trimmed = locations.map((p) => (p.length > 1 ? p.replace(/\/+$/, '') : p));
-  return [...new Set(trimmed)].sort().join(',');
+  return [...new Set(locations.map(trimmed))].sort().join(',');
+}
+
+/** The folders a desired library holds: `paths`, one comma-separated list. */
+function wantedPaths(desired: DesiredResource): string[] {
+  return listItems(desired.fields.paths).map(trimmed);
 }
 
 /**
@@ -146,12 +157,19 @@ async function newLibraryOptions(api: AppApi, type: string) {
  * its folder, which a rename changes. Its managed fields are its name, what it holds and
  * its folders. It needs its folder to exist: the wire step makes it first. A second
  * library of one name isn't refused but named "<name>2", so one is made only when none
- * has the name. Jellyfin can't change what a library holds.
+ * has the name. Jellyfin can't change what a library holds. Its folders are its
+ * `paths`, the one Mediaplane gives it unless an override names more, as Keep mine does
+ * for a folder you added in Jellyfin.
  */
 function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
   return {
     name: spec.resource,
     fields: ['name', 'collectionType', 'paths'],
+    lists: ['paths'],
+    locked: {
+      name: `Mediaplane knows the library by its name, and Seerr enables it by its name. Rename it back to ${spec.name} in Jellyfin, or stop Mediaplane managing it with {resource}: unmanaged`,
+      collectionType: "Jellyfin can't change what a library holds",
+    },
     secrets: [],
     desired: () => ({
       name: spec.name,
@@ -175,19 +193,19 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
             },
           };
     },
-    async create(api) {
-      const query = new URLSearchParams({
-        name: spec.name,
-        collectionType: spec.collectionType,
-        paths: spec.path,
-        refreshLibrary: 'true',
-      });
+    async create(api, desired) {
+      const query = new URLSearchParams([
+        ['name', spec.name],
+        ['collectionType', spec.collectionType],
+        ...wantedPaths(desired).map((path): [string, string] => ['paths', path]),
+        ['refreshLibrary', 'true'],
+      ]);
       await api.submit('POST', `${VIRTUAL_FOLDERS}?${query.toString()}`, {
         LibraryOptions: await newLibraryOptions(api, spec.collectionType),
       });
       return { id: spec.name };
     },
-    async update(api, _desired, observed) {
+    async update(api, desired, observed) {
       const holds = String(observed.fields.collectionType);
       if (holds !== spec.collectionType) {
         throw new AppApiError(
@@ -195,17 +213,21 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
           { kind: 'rejected' },
         );
       }
-      const held = String(observed.fields.paths)
-        .split(',')
-        .filter((p) => p !== '');
-      // The wanted folder first, so the library never holds none.
-      if (!held.includes(spec.path)) {
+      // Its folders as Jellyfin lists them, each whole: one with a comma in its name
+      // can't be told apart in `paths`.
+      const found = (await api.get(VIRTUAL_FOLDERS, z.array(library))).find(
+        (l) => l.Name === spec.name,
+      );
+      const held = (found?.Locations ?? []).map(trimmed);
+      const wanted = wantedPaths(desired);
+      // The wanted folders first, so the library never holds none.
+      for (const path of wanted.filter((p) => !held.includes(p))) {
         await api.submit('POST', `${VIRTUAL_FOLDERS}/Paths?refreshLibrary=true`, {
           Name: spec.name,
-          Path: spec.path,
+          Path: path,
         });
       }
-      for (const path of held.filter((p) => p !== spec.path)) {
+      for (const path of held.filter((p) => !wanted.includes(p))) {
         const query = new URLSearchParams({
           name: spec.name,
           path,

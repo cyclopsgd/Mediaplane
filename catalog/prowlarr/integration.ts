@@ -1,5 +1,7 @@
 import {
+  listItems,
   provides,
+  SENDS_A_KEY,
   serviceAddress,
   type AppApi,
   type DesiredResource,
@@ -12,6 +14,7 @@ import {
   findProvider,
   numberOf,
   secretOf,
+  sendsToOf,
   servarrProvider,
   settingOf,
   textOf,
@@ -68,6 +71,9 @@ function categoriesOf(value: unknown): string {
  * "<arr> (Mediaplane)", with full sync: an indexer you add in Prowlarr reaches the arr.
  * - baseUrl is how Prowlarr reaches the arr, and prowlarrUrl how the arr reaches
  *   Prowlarr back, each by its service on the stack's network, at its container port.
+ *   Each says where a key goes, so both are fixed (SENDS_A_KEY), and every create, update
+ *   and test is sent with the stack's own (`sendsTo`), whatever an override or Prowlarr
+ *   holds.
  * - Its secret is the arr's key, checked with Prowlarr's own test of the link it holds,
  *   which calls the arr with it, and has the arr call Prowlarr back: a refused key means
  *   an update, which sets it; any other failure Prowlarr explains.
@@ -87,8 +93,8 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
   };
   const name = `${link.implementation} (Mediaplane)`;
   const settingsOf = (desired: DesiredResource) => ({
-    prowlarrUrl: desired.fields.prowlarrUrl,
-    baseUrl: desired.fields.baseUrl,
+    // Where Prowlarr sends the arr's key, and where the arr sends Prowlarr's.
+    ...sendsToOf(desired),
     apiKey: secretOf(desired, 'apiKey'),
     syncCategories: String(desired.fields.syncCategories).split(',').map(Number),
   });
@@ -99,6 +105,8 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
   return {
     name: `application_${link.arr}`,
     fields: ['prowlarrUrl', 'baseUrl', 'syncLevel', 'syncCategories'],
+    lists: ['syncCategories'],
+    locked: { prowlarrUrl: SENDS_A_KEY, baseUrl: SENDS_A_KEY },
     secrets: ['apiKey'],
     requires: [`${link.arr}.admin`],
     desired: ({ stack, app, keys }) => {
@@ -109,15 +117,19 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
       const own = serviceAddress(app, 'web');
       const key = keys[link.arr]?.apiKey;
       if (arr === undefined || own === undefined || key === undefined) return undefined;
+      const urls = {
+        prowlarrUrl: `http://${own.host}:${String(own.port)}`,
+        baseUrl: `http://${arr.host}:${String(arr.port)}`,
+      };
       return {
         name,
         fields: {
-          prowlarrUrl: `http://${own.host}:${String(own.port)}`,
-          baseUrl: `http://${arr.host}:${String(arr.port)}`,
+          ...urls,
           syncLevel: 'fullSync',
           syncCategories: categoriesOf(link.categories),
         },
         secrets: { apiKey: key },
+        sendsTo: urls,
       };
     },
     ...servarrProvider({
@@ -136,19 +148,24 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
   };
 }
 
-/** The id of the tag `cloudflare`: Prowlarr gives back the one it has, or makes it. */
-async function proxyTag(api: AppApi): Promise<number> {
-  return (await api.post(TAGS, { label: PROXY_TAG }, tag)).id;
+/** The id of the tag `label`: Prowlarr gives back the one it has, or makes it. */
+async function tagId(api: AppApi, label: string): Promise<number> {
+  return (await api.post(TAGS, { label }, tag)).id;
 }
 
-/** The proxy's settings, and its own properties: its name, and its tag's id. */
+/**
+ * The proxy's settings, and its own properties: its name, and its tags' ids, `cloudflare`
+ * unless an override names others (`prowlarr.indexer_proxy.tags`).
+ */
 async function proxyBody(api: AppApi, desired: DesiredResource) {
+  const tags: number[] = [];
+  for (const label of listItems(desired.fields.tags)) tags.push(await tagId(api, label));
   return {
     settings: {
-      host: desired.fields.host,
+      ...sendsToOf(desired),
       requestTimeout: desired.fields.requestTimeout,
     },
-    top: { name: desired.name, tags: [await proxyTag(api)] },
+    top: { name: desired.name, tags },
   };
 }
 
@@ -163,6 +180,10 @@ async function proxyBody(api: AppApi, desired: DesiredResource) {
 const indexerProxy: ResourceSpec = {
   name: 'indexer_proxy',
   fields: ['host', 'requestTimeout', 'tags'],
+  lists: ['tags'],
+  locked: {
+    host: "Prowlarr sends your indexers' requests through it, and the keys in them: it is the stack's own solver (spec §11, Slice 6)",
+  },
   secrets: [],
   desired: ({ stack }) => {
     const solver = serviceAddress(
@@ -178,6 +199,7 @@ const indexerProxy: ResourceSpec = {
         tags: PROXY_TAG,
       },
       secrets: {},
+      sendsTo: { host: `http://${solver.host}:${String(solver.port)}/` },
     };
   },
   async observe(api, known) {

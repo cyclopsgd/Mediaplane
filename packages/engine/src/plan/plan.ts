@@ -17,6 +17,7 @@ import { renderEnvFile } from '../render/env';
 import { prestartFilesFor } from '../render/prestart';
 import { composeToYaml } from '../render/yaml';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
+import { checkOverrides } from '../integrations/overrides';
 import { readResources, type KnownResources } from '../integrations/resources';
 import {
   joinFailure,
@@ -244,6 +245,11 @@ export async function planStack(
     const admin = await adminLogin(stack.config, home, preview, options.env);
     // The secrets you give, such as Plex's token, which is Plex's key.
     const given = await userSecrets(stack, options.env);
+    const keys = stackKeys(stack, preview, given);
+    // Keep mine's values (spec §6.3): an override that names nothing Mediaplane manages,
+    // or can't be applied, fails the plan before any app is asked.
+    diagnostics.push(...checkOverrides(stack, options.catalog, { admin, keys }));
+    if (hasErrors(diagnostics)) return failed(diagnostics);
     // An app to set up is asked once it is: without its key, it can't be asked now.
     const changing = new Set([
       ...containers.filter((c) => c.action !== 'unchanged').map((c) => c.service),
@@ -267,7 +273,7 @@ export async function planStack(
         changing,
         onNetwork,
         runtime: options.runtime,
-        keys: stackKeys(stack, preview, given),
+        keys,
         admin,
         secrets: knownSecrets(values, preview, admin, given),
         known,

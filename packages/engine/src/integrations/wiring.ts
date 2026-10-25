@@ -16,6 +16,7 @@ import type { ContainerState, RuntimeError, Runtime } from '../runtime/types';
 import type { SecretStore } from '../secrets/store';
 import { foundSecrets, redact, redactionValues, type FoundSecrets } from '../util/redact';
 import { compare } from '../util/sort';
+import { desiredOf, withOverrides } from './overrides';
 import type { KnownResource, KnownResources } from './resources';
 import type {
   DesiredResource,
@@ -141,11 +142,39 @@ export function resourceAddress(app: ResolvedApp, spec: ResourceSpec): string {
   return `${app.def.id}.${spec.name}`;
 }
 
-/** The app's resources that the stack wants: each one whose `desired` gives one. */
+/**
+ * The app's resources that the stack wants: each one whose `desired` gives one, and that
+ * isn't `unmanaged` (desiredOf).
+ */
 export function wantedResources(ctx: WiringContext): ResourceSpec[] {
   return (ctx.app.def.integration?.resources ?? []).filter(
-    (spec) => spec.desired(ctx) !== undefined,
+    (spec) => desiredOf(spec, ctx) !== undefined,
   );
+}
+
+/**
+ * The items of a list field's value (`lists`): one comma-separated list, as the stack and
+ * its overrides give it, without the empty ones. A value that isn't text holds none.
+ */
+export function listItems(value: Scalar | undefined): string[] {
+  return typeof value === 'string' ? value.split(',').filter((item) => item !== '') : [];
+}
+
+/**
+ * Whether two values of `spec`'s managed `field` are the same: a list field (`lists`) as
+ * a set of its items (listItems), whatever their order; any other exactly.
+ */
+export function sameValue(
+  spec: ResourceSpec,
+  field: string,
+  a: Scalar | undefined,
+  b: Scalar | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!(spec.lists ?? []).includes(field)) return false;
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const items = (list: string) => [...new Set(listItems(list))].sort(compare).join(',');
+  return items(a) === items(b);
 }
 
 /**
@@ -346,14 +375,24 @@ export async function examine(
   known: KnownResource | undefined,
   options: ExamineOptions = {},
 ): Promise<Examined | undefined> {
-  const wanted = spec.desired(ctx);
+  const wanted = desiredOf(spec, ctx);
   if (wanted === undefined) return undefined;
   const address = resourceAddress(ctx.app, spec);
+  // What only the app can say, then the overrides again: Keep mine's value wins.
   const desired =
     options.verify !== false && spec.resolve !== undefined
-      ? await spec.resolve(api, wanted, ctx)
+      ? withOverrides(
+          spec,
+          address,
+          await spec.resolve(api, wanted, ctx),
+          ctx.stack.config.overrides,
+        )
       : wanted;
   const observed = await spec.observe(api, known, desired);
+  // A record of another name is of what the stack wanted before, such as qBittorrent's
+  // category, once Sonarr's is kept as another: what differs from it is the stack's own
+  // change, which apply makes, not one made in the app.
+  const record = known?.name === desired.name ? known : undefined;
   const unchecked = (reason: string): SecretCheck[] =>
     spec.secrets.map((secret) => ({
       resource: address,
@@ -367,7 +406,7 @@ export async function examine(
       observed,
       action: 'create',
       changes: [],
-      drift: known === undefined ? [] : [{ resource: address, kind: 'missing' }],
+      drift: record === undefined ? [] : [{ resource: address, kind: 'missing' }],
       checks: unchecked('the app has none to check: apply makes it with them'),
     };
   }
@@ -378,10 +417,12 @@ export async function examine(
     ? spec.fields.filter((field) => desired.fields[field] !== undefined)
     : spec.fields;
   const changes = compared.filter(
-    (field) => observed.fields[field] !== desired.fields[field],
+    (field) => !sameValue(spec, field, observed.fields[field], desired.fields[field]),
   );
   const drift =
-    known === undefined ? [] : fieldDrift(address, compared, known, desired, observed);
+    record === undefined
+      ? []
+      : fieldDrift(spec, address, compared, record, desired, observed);
   // A field that differs makes it an update, which sets the secrets too: checking them
   // would change nothing, and could mislead. A sign-in with a user name the app doesn't
   // have yet fails as if the password were wrong.
@@ -393,7 +434,7 @@ export async function examine(
         : await checkSecrets(spec, api, address, desired, observed, known, options);
   const refused = checks.filter((check) => check.verdict === 'refused');
   changes.push(...refused.map((check) => check.secret));
-  if (known !== undefined) {
+  if (record !== undefined) {
     drift.push(
       ...refused.map((check): Drift => ({
         resource: address,
@@ -407,8 +448,10 @@ export async function examine(
     return { desired, observed, action: 'update', changes, drift, checks };
   }
   const recorded =
-    known !== undefined &&
-    compared.every((field) => known.fields[field] === desired.fields[field]);
+    record !== undefined &&
+    compared.every((field) =>
+      sameValue(spec, field, record.fields[field], desired.fields[field]),
+    );
   return {
     desired,
     observed,
@@ -425,6 +468,7 @@ export async function examine(
  * the app holds in a shape Mediaplane can't read has drifted too, with no value.
  */
 function fieldDrift(
+  spec: ResourceSpec,
   address: string,
   compared: readonly string[],
   known: KnownResource,
@@ -437,7 +481,8 @@ function fieldDrift(
     // What apply would set; and what it applied, when stack.yaml has changed it since.
     const wanted = desired.fields[field];
     const expected = wanted ?? applied;
-    const was = wanted === undefined || wanted === applied ? {} : { applied };
+    const was =
+      wanted === undefined || sameValue(spec, field, wanted, applied) ? {} : { applied };
     const unreadable =
       observed.unreadable?.[field] ??
       (observed.fields[field] === undefined ? 'the app gave none' : undefined);
@@ -455,7 +500,12 @@ function fieldDrift(
       ];
     }
     const actual = observed.fields[field];
-    if (actual === applied || actual === wanted) return [];
+    if (
+      sameValue(spec, field, actual, applied) ||
+      sameValue(spec, field, actual, wanted)
+    ) {
+      return [];
+    }
     return [{ resource: address, kind: 'field', field, expected, ...was, actual }];
   });
 }
@@ -717,7 +767,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
     for (const [index, spec] of wanted.entries()) {
       const address = resourceAddress(app, spec);
       // What the wire step would refuse, before anything is sent: plan says so first.
-      const desired = spec.desired(ctx);
+      const desired = desiredOf(spec, ctx);
       const held =
         desired === undefined
           ? undefined

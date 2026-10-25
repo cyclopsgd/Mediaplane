@@ -34,6 +34,7 @@ export * from './http/client';
 export * from './integrations/address';
 export * from './integrations/types';
 export * from './integrations/resources';
+export * from './integrations/overrides';
 export * from './integrations/wiring';
 export * from './integrations/wire';
 export * from './runtime/types';

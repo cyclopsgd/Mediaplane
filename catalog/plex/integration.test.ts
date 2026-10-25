@@ -265,6 +265,27 @@ describe("Plex's libraries", () => {
     });
   });
 
+  it('holds the folders an override names, made in one go and put back', async () => {
+    const { api, plex } = await plexOf();
+    const movies = resource('library_movies');
+    const kept = {
+      ...wanted('library_movies'),
+      fields: {
+        ...wanted('library_movies').fields,
+        location: '/data/more,/data/media/movies',
+      },
+    };
+    await movies.create(api, kept);
+    expect(plex.sections[0]?.locations).toEqual(['/data/more', '/data/media/movies']);
+    const [made] = plex.sections;
+    if (made === undefined) throw new Error('no library made');
+    made.locations = ['/data/media/movies'];
+    const held = await movies.observe(api, undefined);
+    if (held === undefined) throw new Error('the library is there');
+    await movies.update(api, kept, held);
+    expect(plex.sections[0]?.locations).toEqual(['/data/more', '/data/media/movies']);
+  });
+
   it("refuses to change what a library holds, which Plex can't, saying what to do", async () => {
     const { api, plex } = await plexOf();
     const tv = resource('library_tv');

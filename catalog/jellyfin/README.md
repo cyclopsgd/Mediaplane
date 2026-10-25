@@ -16,7 +16,7 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
 - **Health check:** `curl -fsS http://localhost:8096/health | grep -qx Healthy`, every 30s (timeout 10s, 5 retries, 120s to start)
 - **Secrets:** `apiKey`: created by the app during its first-run setup
 - **API:** on its `web` port, which Mediaplane reaches over the stack's wiring network, with `apiKey` in Jellyfin's `Authorization: MediaBrowser` header
-- **Managed in the app:** `jellyfin.admin`: fields `jellyfin.admin.username`; the secret `password`, checked and never shown. `jellyfin.library_movies`: fields `jellyfin.library_movies.name`, `jellyfin.library_movies.collectionType`, `jellyfin.library_movies.paths`. `jellyfin.library_shows`: fields `jellyfin.library_shows.name`, `jellyfin.library_shows.collectionType`, `jellyfin.library_shows.paths`
+- **Managed in the app:** `jellyfin.admin`: fields `jellyfin.admin.username`; the secret `password`, checked and never shown. `jellyfin.library_movies`: fields `jellyfin.library_movies.name` (fixed), `jellyfin.library_movies.collectionType` (fixed), `jellyfin.library_movies.paths`. `jellyfin.library_shows`: fields `jellyfin.library_shows.name` (fixed), `jellyfin.library_shows.collectionType` (fixed), `jellyfin.library_shows.paths`
 - **Needs:** nothing
 - **Provides:** `media-server`
 - **Also turns on:** nothing

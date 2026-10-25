@@ -1,5 +1,5 @@
 import { readdir, readFile } from 'node:fs/promises';
-import { stackJsonSchema } from '@mediaplane/engine';
+import { overrideTarget, SENDS_A_KEY, stackJsonSchema } from '@mediaplane/engine';
 import {
   undocumented,
   wiringStack,
@@ -26,7 +26,48 @@ function comesAfter(id: string, seen = new Set<string>()): string[] {
   return [...seen];
 }
 
+/**
+ * Every managed field that says where an app sends a key: the stack's keys go only to its
+ * own addresses (spec §11, Slice 6), so none of them can be kept or overridden.
+ */
+const SENDS_KEYS = [
+  ...['sonarr', 'radarr'].flatMap((arr) => [
+    `${arr}.download_client.host`,
+    `${arr}.download_client.port`,
+    `${arr}.download_client.useSsl`,
+    `${arr}.connection_jellyfin.host`,
+    `${arr}.connection_jellyfin.port`,
+    `${arr}.connection_plex.host`,
+    `${arr}.connection_plex.port`,
+    `prowlarr.application_${arr}.baseUrl`,
+    `prowlarr.application_${arr}.prowlarrUrl`,
+    `seerr.server_${arr}.hostname`,
+    `seerr.server_${arr}.port`,
+  ]),
+  'seerr.media_server.hostname',
+  'seerr.media_server.port',
+  'seerr.media_server_plex.hostname',
+  'seerr.media_server_plex.port',
+];
+
 describe('catalog', () => {
+  it("refuses an override of every field that says where a key goes, as Keep mine's", () => {
+    for (const key of SENDS_KEYS) {
+      const named = overrideTarget(catalog, key);
+      expect(named.ok, key).toBe(false);
+      if (named.ok) continue;
+      expect(named.diagnostic).toMatchObject({
+        code: 'overrides.locked',
+        message: `${key} can't be kept: ${SENDS_A_KEY}`,
+      });
+    }
+    // Prowlarr's indexer proxy, which your indexers' requests go through, is fixed too.
+    expect(overrideTarget(catalog, 'prowlarr.indexer_proxy.host')).toMatchObject({
+      ok: false,
+      diagnostic: { code: 'overrides.locked' },
+    });
+  });
+
   it('registers every app folder exactly once, sorted by id', () => {
     expect(catalog.map((app) => app.id)).toEqual(appFolders);
   });
@@ -188,6 +229,13 @@ apps:
         // resources.json keeps the fields, and only the secrets' names: none is both.
         expect(resource.fields.filter((f) => resource.secrets.includes(f))).toEqual([]);
         for (const needed of resource.requires ?? []) expect(addresses).toContain(needed);
+        // What an override can't change, and what is held as a list, are managed fields.
+        for (const field of [
+          ...Object.keys(resource.locked ?? {}),
+          ...(resource.lists ?? []),
+        ]) {
+          expect(resource.fields, `${app.id}.${resource.name}.${field}`).toContain(field);
+        }
       }
       const names = integration.resources.map((r) => r.name);
       expect(new Set(names).size).toBe(names.length);

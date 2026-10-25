@@ -277,7 +277,7 @@ const stackShape = {
     )
     .default({})
     .describe(
-      'Keep mine values, by <app>.<resource>.<field>. Not used yet: drift detection arrives in Slice 8.',
+      "Your own values for what Mediaplane manages in the apps, by <app>.<resource>.<field>, such as sonarr.download_client.category: television: apply sets them instead of its own. Each app's README lists the fields; one marked fixed, and a secret, can't be overridden. <app>.<resource>: unmanaged stops Mediaplane managing that resource.",
     ),
   managed_by: z
     .enum(['mediaplane', 'external'])

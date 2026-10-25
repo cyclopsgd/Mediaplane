@@ -996,6 +996,24 @@ describe('plan: the wiring', () => {
     });
   });
 
+  it('fails, before it asks any app, on an override that names nothing it manages', async () => {
+    const sonarr = await fakeSonarr();
+    const home = await makeHome({
+      stack: `${STACK}overrides:\n  sonarr.login.usr: fake-value\n`,
+    });
+    const result = await planFor(home, { catalog: WIRED_CATALOG, wiring: sonarr.seams });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: 'error',
+        code: 'overrides.unmanaged-field',
+        path: 'overrides.sonarr.login.usr',
+        hint: 'did you mean "user"?',
+      }),
+    );
+    expect(sonarr.app.requests).toEqual([]);
+  });
+
   it('checks the wiring after the start on a first plan, asking no app', async () => {
     const sonarr = await fakeSonarr();
     const result = await planFor(await makeHome(), {

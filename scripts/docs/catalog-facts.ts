@@ -80,14 +80,18 @@ function api(def: AppDefinition): string {
   return `on its ${code(port)} port, which Mediaplane reaches over the stack's wiring network, with ${code(key.secret)} ${carried}`;
 }
 
-/** What Mediaplane manages in the app, as override keys name it (spec §4.2, §6.3). */
+/**
+ * What Mediaplane manages in the app, as override keys name it (spec §4.2, §6.3): a field
+ * an override can't change is marked "fixed".
+ */
 function managed(def: AppDefinition): string {
   const resources = def.integration?.resources ?? [];
   if (resources.length === 0) return 'nothing yet';
   return resources
     .map((resource) => {
-      const fields = resource.fields.map((field) =>
-        code(`${def.id}.${resource.name}.${field}`),
+      const fields = resource.fields.map(
+        (field) =>
+          `${code(`${def.id}.${resource.name}.${field}`)}${Object.hasOwn(resource.locked ?? {}, field) ? ' (fixed)' : ''}`,
       );
       const secrets = resource.secrets.map(code);
       return `${code(`${def.id}.${resource.name}`)}: ${[

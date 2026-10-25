@@ -8,6 +8,7 @@ import { adminLogin } from '../secrets/admin';
 import type { SecretStore } from '../secrets/store';
 import { stackKeys } from '../secrets/values';
 import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
+import { desiredOf } from './overrides';
 import { readResources, writeResources, type KnownResources } from './resources';
 import type {
   DesiredResource,
@@ -214,7 +215,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
         continue;
       }
       // Wanted, and desired() is pure: only a guard.
-      const desired = spec.desired(ctx);
+      const desired = desiredOf(spec, ctx);
       if (desired === undefined) continue;
       // Before anything is sent: resources.json keeps the managed fields, and holds no
       // secret, so a field that holds one leaves the resource as it is.

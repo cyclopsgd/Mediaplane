@@ -523,7 +523,7 @@ describe("Jellyfin's libraries", () => {
     );
   });
 
-  it('puts back its folder, and takes out one added by hand, each once', async () => {
+  it('puts back its folder, and takes out one added by hand, as often as Jellyfin holds it', async () => {
     const { api, state } = await jellyfin(setUp(), true);
     state.folders.push('/data/media/tv', '/data/media/other');
     state.libraries.push({
@@ -535,16 +535,42 @@ describe("Jellyfin's libraries", () => {
     const held = await shows.observe(api, undefined);
     expect(held?.fields.paths).toBe('/data/media/other');
     if (held === undefined) throw new Error('Shows is there');
+    // Jellyfin keeps a path given twice twice, and takes one out at a time: the update
+    // reads them as Jellyfin lists them.
     await shows.update(api, wanted(shows), held);
-    expect(state.libraries[0]?.Locations).toEqual([
-      '/data/media/other',
-      '/data/media/tv',
-    ]);
-    // Jellyfin keeps a path given twice twice, and takes one out at a time.
-    const again = await shows.observe(api, undefined);
-    if (again === undefined) throw new Error('Shows is there');
-    await shows.update(api, wanted(shows), again);
     expect(state.libraries[0]?.Locations).toEqual(['/data/media/tv']);
+  });
+
+  it('removes a folder with a comma in its name, which `paths` cannot tell apart', async () => {
+    const { api, state } = await jellyfin(setUp(), true);
+    state.folders.push('/data/media/tv', '/data/media/a,b');
+    state.libraries.push({
+      Name: 'Shows',
+      CollectionType: 'tvshows',
+      Locations: ['/data/media/tv', '/data/media/a,b'],
+      LibraryOptions: {},
+    });
+    const held = await shows.observe(api, undefined);
+    if (held === undefined) throw new Error('Shows is there');
+    await shows.update(api, wanted(shows), held);
+    expect(state.libraries[0]?.Locations).toEqual(['/data/media/tv']);
+  });
+
+  it('holds the folders an override names, made in one go or added to', async () => {
+    const { api, state } = await jellyfin(setUp(), true);
+    state.folders.push('/data/media/tv', '/data/media/more');
+    const kept = {
+      ...wanted(shows),
+      fields: { ...wanted(shows).fields, paths: '/data/media/more,/data/media/tv' },
+    };
+    await shows.create(api, kept);
+    expect(state.libraries[0]?.Locations).toEqual(['/data/media/more', '/data/media/tv']);
+    // Taken out by hand: the update adds it again.
+    state.libraries[0]?.Locations.splice(0, 1);
+    const held = await shows.observe(api, undefined);
+    if (held === undefined) throw new Error('Shows is there');
+    await shows.update(api, kept, held);
+    expect(state.libraries[0]?.Locations).toEqual(['/data/media/tv', '/data/media/more']);
   });
 
   it("says Jellyfin can't change what a library of that name holds", async () => {
