@@ -3,6 +3,7 @@ import {
   defineIntegration,
   fieldReader,
   listItems,
+  SHARED_LOGIN,
   type AppApi,
   type DesiredResource,
   type ResourceSpec,
@@ -29,6 +30,7 @@ export const CHECK_ADMIN_EVERY = 24 * 60 * 60 * 1000;
 const admin: ResourceSpec = {
   name: 'admin',
   fields: ['username'],
+  locked: { username: SHARED_LOGIN },
   secrets: ['password'],
   checkEvery: CHECK_ADMIN_EVERY,
   desired: ({ admin: login }) => ({
@@ -179,6 +181,12 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
       name: `Mediaplane knows the library by its name, and Seerr enables it by its name. Rename it back to ${spec.name} in Jellyfin, or stop Mediaplane managing it with {resource}: unmanaged`,
       collectionType: "Jellyfin can't change what a library holds",
     },
+    refuses: {
+      paths: (value) =>
+        listItems(value).length === 0
+          ? 'a library holds at least one folder: name each one, separated by ","'
+          : undefined,
+    },
     secrets: [],
     desired: () => ({
       name: spec.name,
@@ -211,9 +219,11 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
       const holder = (await api.get(VIRTUAL_FOLDERS, z.array(library))).find((l) =>
         l.Locations.some((path) => wanted.includes(trimmed(path))),
       );
-      if (holder !== undefined) {
+      const folder = holder?.Locations.map(trimmed).find((path) => wanted.includes(path));
+      if (holder !== undefined && folder !== undefined) {
+        // Renamed by hand, or another library on a folder an override names.
         throw new AppApiError(
-          `${api.name} at ${api.where} has no library named ${spec.name}, but its library ${holder.Name} holds its folder: if it is ${spec.name} renamed, rename it back in Jellyfin; to keep it as it is, stop Mediaplane managing ${spec.name} with jellyfin.${spec.resource}: unmanaged under overrides: (GET ${VIRTUAL_FOLDERS})`,
+          `${api.name} at ${api.where} has no library named ${spec.name}, but its library ${holder.Name} holds ${folder}, one of its folders: if it is ${spec.name} renamed, rename it back in Jellyfin; if it is another library, take ${folder} out of it, or out of jellyfin.${spec.resource}.paths under overrides:; to keep it as it is, stop Mediaplane managing ${spec.name} with jellyfin.${spec.resource}: unmanaged under overrides: (GET ${VIRTUAL_FOLDERS})`,
           { kind: 'rejected' },
         );
       }

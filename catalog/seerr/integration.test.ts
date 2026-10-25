@@ -335,6 +335,13 @@ describe("Seerr's media server", () => {
     if (shows === undefined) throw new Error('Shows was synced');
     shows.enabled = true;
     expect((await spec.observe(api, undefined, kept))?.fields.libraries).toBe('Movies');
+    // One it enables, held as neither enabled nor not: unreadable, never off.
+    const movies = state.seerr.jellyfin.libraries.find((l) => l.name === 'Movies');
+    if (movies === undefined) throw new Error('Movies was synced');
+    Object.assign(movies, { enabled: 'yes' });
+    const odd = await spec.observe(api, undefined, kept);
+    expect(odd?.fields.libraries).toBeUndefined();
+    expect(odd?.unreadable?.libraries).toBe('Movies is held as neither enabled nor not');
   });
 
   it("doesn't have Seerr enable a library Mediaplane no longer manages in Jellyfin", () => {
@@ -884,5 +891,13 @@ describe("Seerr's setup", () => {
     expect((await spec.observe(api, undefined, desired))?.fields.initialized).toBe(true);
     expect(await spec.create(api, desired)).toEqual({ id: null });
     expect(calls().filter((c) => c.endsWith('/initialize'))).toHaveLength(2);
+    // Said in another shape: unreadable, never taken as not initialized.
+    Object.assign(state.seerr, { initialized: 'yes' });
+    expect(await spec.observe(api, undefined, desired)).toEqual({
+      id: null,
+      name: 'setup',
+      fields: {},
+      unreadable: { initialized: 'text, not true or false' },
+    });
   });
 });

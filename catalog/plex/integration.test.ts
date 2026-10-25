@@ -281,7 +281,7 @@ describe("Plex's libraries", () => {
     expect(await thrown(tv.create(api, wanted('library_tv')))).toMatchObject({
       kind: 'rejected',
       message:
-        'Plex at http://plex:32400 (127.0.0.1) has no library named TV Shows, but its library Series holds its folder: if it is TV Shows renamed, rename it back in Plex; to keep it as it is, stop Mediaplane managing TV Shows with plex.library_tv: unmanaged under overrides: (GET /library/sections)',
+        'Plex at http://plex:32400 (127.0.0.1) has no library named TV Shows, but its library Series holds /data/media/tv, one of its folders: if it is TV Shows renamed, rename it back in Plex; if it is another library, take /data/media/tv out of it, or out of plex.library_tv.location under overrides:; to keep it as it is, stop Mediaplane managing TV Shows with plex.library_tv: unmanaged under overrides: (GET /library/sections)',
     });
     expect(plex.sections.map((s) => s.title)).toEqual(['Series']);
     // Known by its key, renamed is found, and its name put back.
@@ -300,7 +300,7 @@ describe("Plex's libraries", () => {
     expect((await movies.observe(api, known))?.fields.name).toBe('Films');
   });
 
-  it("reads a folder with a comma in its name, and a name it can't, as such", async () => {
+  it("reads a folder with a comma in its name, what a library holds and Plex's name, when it can't, as such", async () => {
     const { api, plex } = await plexOf();
     const movies = resource('library_movies');
     await movies.create(api, wanted('library_movies'));
@@ -309,6 +309,30 @@ describe("Plex's libraries", () => {
     made.locations = ['/data/media/movies', '/data/a,b'];
     expect((await movies.observe(api, undefined))?.unreadable).toEqual({
       location: 'a folder with a comma in its name, /data/a,b',
+    });
+    // What it holds, of another type: unreadable, and the update says so.
+    Object.assign(made, { type: 7 });
+    const odd = await movies.observe(api, undefined);
+    expect(odd?.fields.type).toBeUndefined();
+    expect(odd?.unreadable?.type).toBe('a number, not text');
+    if (odd === undefined) throw new Error('the library is there');
+    expect(await thrown(movies.update(api, wanted('library_movies'), odd))).toMatchObject(
+      {
+        message: expect.stringContaining(
+          "that holds a kind Mediaplane can't read, not movie",
+        ) as string,
+      },
+    );
+    // Plex's name for itself, of another type: unreadable, never empty.
+    plex.prefsAnswer = {
+      status: 200,
+      body: { MediaContainer: { Setting: [{ id: 'FriendlyName', value: 7 }] } },
+    };
+    expect(await resource('server').observe(api, undefined)).toEqual({
+      id: null,
+      name: 'server',
+      fields: {},
+      unreadable: { name: 'a number, not text' },
     });
   });
 

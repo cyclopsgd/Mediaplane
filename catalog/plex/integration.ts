@@ -142,6 +142,12 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
       name: `Seerr enables the library by its name, and Mediaplane finds it by its name when state/resources.json is lost. Rename it back to ${spec.name} in Plex, or stop Mediaplane managing it with {resource}: unmanaged`,
       type: "Plex can't change what a library holds",
     },
+    refuses: {
+      location: (value) =>
+        listItems(value).length === 0
+          ? 'a library holds at least one folder: name each one, separated by ","'
+          : undefined,
+    },
     secrets: [],
     desired: () => ({
       name: spec.name,
@@ -175,9 +181,14 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
       const holder = (await sectionsOf(api)).find((s) =>
         foldersOf(s).some((path) => wanted.includes(path)),
       );
-      if (holder !== undefined) {
+      const folder =
+        holder === undefined
+          ? undefined
+          : foldersOf(holder).find((path) => wanted.includes(path));
+      if (holder !== undefined && folder !== undefined) {
+        // Renamed by hand, or another library on a folder an override names.
         throw new AppApiError(
-          `${api.name} at ${api.where} has no library named ${spec.name}, but its library ${holder.title} holds its folder: if it is ${spec.name} renamed, rename it back in Plex; to keep it as it is, stop Mediaplane managing ${spec.name} with plex.${spec.resource}: unmanaged under overrides: (GET ${SECTIONS})`,
+          `${api.name} at ${api.where} has no library named ${spec.name}, but its library ${holder.title} holds ${folder}, one of its folders: if it is ${spec.name} renamed, rename it back in Plex; if it is another library, take ${folder} out of it, or out of plex.${spec.resource}.location under overrides:; to keep it as it is, stop Mediaplane managing ${spec.name} with plex.${spec.resource}: unmanaged under overrides: (GET ${SECTIONS})`,
           { kind: 'rejected' },
         );
       }

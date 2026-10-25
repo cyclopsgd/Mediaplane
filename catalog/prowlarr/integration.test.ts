@@ -252,13 +252,18 @@ apps:
     const [held] = state.applications;
     if (held === undefined) throw new Error('no link made');
     held.fields = held.fields.map((f) =>
-      f.name === 'baseUrl' ? { ...f, value: 'http://elsewhere:8989' } : f,
+      f.name === 'baseUrl'
+        ? { ...f, value: 'http://elsewhere:8989' }
+        : f.name === 'prowlarrUrl'
+          ? { ...f, value: 'http://elsewhere:9696' }
+          : f,
     );
     const observed = await toSonarr.observe(api, undefined);
     if (observed === undefined) throw new Error('no link observed');
     expect(await toSonarr.verify?.(api, elsewhere, observed)).toBe(true);
     const test = app.requests.find((r) => r.path === '/api/v1/applications/test');
     expect(test?.body).toContain('"baseUrl","value":"http://sonarr:8989"');
+    expect(test?.body).toContain('"prowlarrUrl","value":"http://prowlarr:9696"');
     expect(test?.body).not.toContain('elsewhere');
     await toSonarr.update(api, elsewhere, observed);
     expect(urls()).toEqual([

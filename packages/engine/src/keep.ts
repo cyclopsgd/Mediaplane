@@ -2,7 +2,12 @@ import { readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { overrideLine, stackFileProblem, withOverride } from './config/overrides-file';
 import { error, warning, type Diagnostic } from './diagnostics';
-import { isUnmanaged, overrideTarget, UNMANAGED } from './integrations/overrides';
+import {
+  isUnmanaged,
+  overrideRefused,
+  overrideTarget,
+  UNMANAGED,
+} from './integrations/overrides';
 import { readResources, writeResources } from './integrations/resources';
 import type { Scalar } from './integrations/types';
 import { DRIFT_RUNBOOK } from './integrations/wiring';
@@ -131,6 +136,15 @@ export async function keep(options: KeepOptions): Promise<KeepResult> {
       ]);
     }
     const value: Scalar = field === undefined ? UNMANAGED : (found.actual ?? '');
+    // A value the field's own rule refuses, as plan would refuse it as an override.
+    const broken = field === undefined ? undefined : overrideRefused(spec, field, value);
+    if (broken !== undefined) {
+      return refused([
+        error('keep.value', `${key} can't be kept as ${def.name} holds it: ${broken}`, {
+          hint: `set it in ${def.name} to one that can, or run apply to put it back`,
+        }),
+      ]);
+    }
     const line = overrideLine(key, value);
     const byHand = `add this line under overrides: in stack.yaml yourself: ${line}`;
     if (context.stack.config.managed_by === 'external') {

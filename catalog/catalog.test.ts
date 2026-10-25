@@ -1,5 +1,11 @@
 import { readdir, readFile } from 'node:fs/promises';
-import { overrideTarget, SENDS_A_KEY, stackJsonSchema } from '@mediaplane/engine';
+import {
+  checkOverrides,
+  overrideTarget,
+  SENDS_A_KEY,
+  SHARED_LOGIN,
+  stackJsonSchema,
+} from '@mediaplane/engine';
 import {
   undocumented,
   wiringStack,
@@ -66,6 +72,178 @@ describe('catalog', () => {
       ok: false,
       diagnostic: { code: 'overrides.locked' },
     });
+  });
+
+  it('locks each field that names where a resource sends a key, whatever resource gives one', () => {
+    // Every resource that gives where it sends a key (`sendsTo`), in a stack of every
+    // wired app, with either media server: each field named so, or holding one of its
+    // addresses, can't be overridden.
+    const keys = Object.fromEntries(
+      ['sonarr', 'radarr', 'prowlarr', 'qbittorrent', 'jellyfin', 'seerr'].map((id) => [
+        id,
+        { apiKey: `fake-${id}-key` },
+      ]),
+    );
+    const admin = { username: 'admin', password: 'fake-admin-password' };
+    const looked: string[] = [];
+    for (const server of [
+      'media_server: jellyfin',
+      'media_server: plex\nplex: { token: { env: PLEX_TOKEN } }',
+    ]) {
+      const stack = wiringStack(
+        catalog,
+        `version: 1
+paths: { data: /srv/data }
+network: { bind: localhost }
+${server}
+apps:
+  sonarr: {}
+  radarr: {}
+  prowlarr: {}
+  byparr: {}
+  qbittorrent: { vpn: false }
+  seerr: {}
+`,
+      );
+      for (const app of stack.apps) {
+        for (const spec of app.def.integration?.resources ?? []) {
+          const desired = spec.desired({
+            stack,
+            app,
+            admin,
+            keys: { ...keys, plex: { token: 'fake-plex-token' } },
+          });
+          const to = desired?.sendsTo;
+          if (desired === undefined || to === undefined) continue;
+          const where = Object.values(to).filter(
+            (v) => typeof v === 'string' && v !== '',
+          );
+          const naming = spec.fields.filter((field) => {
+            const value = desired.fields[field];
+            return (
+              Object.hasOwn(to, field) || (value !== undefined && where.includes(value))
+            );
+          });
+          const address = `${app.def.id}.${spec.name}`;
+          looked.push(address);
+          expect(naming.length, address).toBeGreaterThan(0);
+          expect(
+            naming.filter((field) => spec.locked?.[field] === undefined),
+            address,
+          ).toEqual([]);
+        }
+      }
+    }
+    expect([...new Set(looked)].sort()).toEqual([
+      'prowlarr.application_radarr',
+      'prowlarr.application_sonarr',
+      'prowlarr.indexer_proxy',
+      'radarr.connection_jellyfin',
+      'radarr.connection_plex',
+      'radarr.download_client',
+      'seerr.media_server',
+      'seerr.media_server_plex',
+      'seerr.server_radarr',
+      'seerr.server_sonarr',
+      'sonarr.connection_jellyfin',
+      'sonarr.connection_plex',
+      'sonarr.download_client',
+    ]);
+  });
+
+  it("refuses an override of an app's admin user name, and of who may skip qBittorrent's login", () => {
+    for (const app of ['sonarr', 'radarr', 'prowlarr', 'jellyfin', 'qbittorrent']) {
+      expect(overrideTarget(catalog, `${app}.admin.username`), app).toMatchObject({
+        ok: false,
+        diagnostic: {
+          code: 'overrides.locked',
+          message: `${app}.admin.username can't be kept: ${SHARED_LOGIN}`,
+        },
+      });
+    }
+    for (const field of ['authSubnetWhitelistEnabled', 'authSubnetWhitelist']) {
+      expect(overrideTarget(catalog, `qbittorrent.preferences.${field}`)).toMatchObject({
+        ok: false,
+        diagnostic: {
+          code: 'overrides.locked',
+          message: `qbittorrent.preferences.${field} can't be kept: it says who may skip qBittorrent's login, a security setting: set security.login_on_lan in stack.yaml instead`,
+        },
+      });
+    }
+    // Its other preferences are yours to keep.
+    expect(overrideTarget(catalog, 'qbittorrent.preferences.savePath').ok).toBe(true);
+  });
+
+  it("refuses an override whose value its field can't take, saying why", () => {
+    const stack = (overrides: string) =>
+      wiringStack(
+        catalog,
+        `version: 1
+paths: { data: /srv/data }
+network: { bind: localhost }
+media_server: jellyfin
+apps:
+  sonarr: {}
+  prowlarr: {}
+  qbittorrent: { vpn: false }
+  seerr: {}
+overrides:
+${overrides}`,
+      );
+    const wiring = {
+      admin: { username: 'admin', password: 'fake-admin-password' },
+      keys: {
+        sonarr: { apiKey: 'fake-sonarr-key' },
+        prowlarr: { apiKey: 'fake-prowlarr-key' },
+        qbittorrent: { apiKey: 'fake-qbittorrent-key' },
+        jellyfin: { apiKey: 'fake-jellyfin-key' },
+      },
+    };
+    const refused = (line: string) =>
+      checkOverrides(stack(`  ${line}\n`), catalog, wiring).map(
+        (d) => `${d.code}: ${d.message}`,
+      );
+    // A category qBittorrent saves under /data/torrents/<category>: a subcategory too.
+    for (const fine of ['television', 'tv/anime', '"tv shows"']) {
+      expect(refused(`sonarr.download_client.category: ${fine}`), fine).toEqual([]);
+    }
+    for (const [bad, why] of [
+      ['""', 'it is empty'],
+      [
+        '..',
+        'it has a "." or ".." folder, which would take the downloads out of /data/torrents',
+      ],
+      [
+        'tv/../../etc',
+        'it has a "." or ".." folder, which would take the downloads out of /data/torrents',
+      ],
+      [
+        './tv',
+        'it has a "." or ".." folder, which would take the downloads out of /data/torrents',
+      ],
+      ['/srv', 'it has a "/" at either end, or two together'],
+      ['tv//anime', 'it has a "/" at either end, or two together'],
+      ['tv/', 'it has a "/" at either end, or two together'],
+      ['"tv\\\\anime"', 'it holds a "\\"'],
+      ['"tv\\tanime"', 'it holds a control character'],
+    ] as const) {
+      expect(refused(`sonarr.download_client.category: ${bad}`), bad).toEqual([
+        `overrides.value: sonarr.download_client.category can't be used: qBittorrent saves the category's downloads in /data/torrents/<category>, so it must be a folder name, or several joined by "/", such as tv/anime, and ${why}`,
+      ]);
+    }
+    expect(refused('jellyfin.library_shows.paths: " , "')).toEqual([
+      `overrides.value: jellyfin.library_shows.paths can't be used: a library holds at least one folder: name each one, separated by ","`,
+    ]);
+    expect(refused('prowlarr.application_sonarr.syncCategories: "5000, tv"')).toEqual([
+      `overrides.value: prowlarr.application_sonarr.syncCategories can't be used: each category Prowlarr syncs is a number, such as 5000, separated by ","`,
+    ]);
+    expect(refused('prowlarr.application_sonarr.syncCategories: "5000, 5010"')).toEqual(
+      [],
+    );
+    expect(refused('seerr.server_sonarr.activeProfile: 4')).toEqual([
+      "overrides.value: seerr.server_sonarr.activeProfile can't be used: it is the name of one of Sonarr's quality profiles, which is text",
+    ]);
+    expect(refused('seerr.server_sonarr.activeProfile: HD-1080p')).toEqual([]);
   });
 
   it('registers every app folder exactly once, sorted by id', () => {

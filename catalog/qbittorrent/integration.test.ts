@@ -5,6 +5,7 @@ import {
   type WiringContext,
 } from '@mediaplane/engine';
 import {
+  fakeHttpApp,
   fakeStackApis,
   freshAppState,
   wiringStack,
@@ -115,6 +116,17 @@ describe("qBittorrent's integration", () => {
           observed,
         ),
       ).toBe(false);
+    });
+
+    it("reads a user name of another type as one it can't, never as empty", async () => {
+      const { api, state } = await qbittorrent();
+      Object.assign(state, { user: 7 });
+      expect(await admin.observe(api, undefined)).toEqual({
+        id: null,
+        name: 'admin',
+        fields: {},
+        unreadable: { username: 'a number, not text' },
+      });
     });
 
     it('sets the user name and the password through the preferences, with the key', async () => {
@@ -314,6 +326,29 @@ apps:
         'overrides:\n  sonarr.download_client: unmanaged\n  sonarr.download_client.category: television\n',
       );
       expect(tv.desired(contextOf(unmanaged))?.name).toBe('tv');
+    });
+
+    it("reads a save path of another type as one it can't, never as empty", async () => {
+      const app = await fakeHttpApp((request) =>
+        request.path === '/api/v2/torrents/categories'
+          ? { status: 200, body: { tv: { name: 'tv', savePath: 7 } } }
+          : { status: 404 },
+      );
+      const api = createAppApi({
+        name: 'qBittorrent',
+        service: 'gluetun',
+        port: 8080,
+        endpoint: { host: '127.0.0.1', port: app.port },
+        key: { scheme: 'bearer', value: KEY },
+        secrets: [KEY, PASSWORD],
+        retry: { deadlineMs: 0 },
+      });
+      expect(await tv.observe(api, undefined)).toEqual({
+        id: 'tv',
+        name: 'tv',
+        fields: {},
+        unreadable: { savePath: 'a number, not text' },
+      });
     });
 
     it('looks one the stack no longer wants up by its record: a kept category, its arr gone', async () => {

@@ -71,7 +71,7 @@ describe('renderFacts', () => {
   it('lists what Mediaplane manages in an app, by override key', () => {
     const wired = { ...app('prowlarr'), integration: servarrIntegration('v1') };
     expect(renderFacts(wired)).toContain(
-      '- **Managed in the app:** `prowlarr.admin`: fields `prowlarr.admin.username`; the secret `password`, checked and never shown\n',
+      '- **Managed in the app:** `prowlarr.admin`: fields `prowlarr.admin.username` (fixed); the secret `password`, checked and never shown\n',
     );
     expect(renderFacts(app('byparr'))).toContain(
       '- **Managed in the app:** nothing yet\n',

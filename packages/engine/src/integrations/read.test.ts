@@ -54,4 +54,15 @@ describe('fieldReader', () => {
       },
     });
   });
+
+  it('never gives a value for a field it said it could not read, whatever it is handed', () => {
+    const read = fieldReader();
+    read.refuse('host', 'its urlBase is not text');
+    expect(read.observed(1, 'odd', { host: 'gluetun', port: 8080 })).toEqual({
+      id: 1,
+      name: 'odd',
+      fields: { port: 8080 },
+      unreadable: { host: 'its urlBase is not text' },
+    });
+  });
 });

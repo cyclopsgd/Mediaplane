@@ -82,9 +82,10 @@ const library = z.looseObject({ id: z.string(), name: z.string(), enabled: z.unk
  * Seerr sets at its first sign-in through Jellyfin and on each link to Jellyfin it saves
  * (read from Seerr's code): without one, the link reads as not saved, as Plex's does
  * without `machineId` (probed: a failed save to Plex still leaves the address in Seerr's
- * settings).
+ * settings). Loose, unlike jellyfin.ts's `jellyfinSettings`, which Seerr's first sign-in
+ * reads strictly: what an app holds is never parsed strictly here, but read field by field.
  */
-const jellyfinSettings = z.looseObject({
+const heldJellyfinSettings = z.looseObject({
   ip: z.unknown(),
   port: z.unknown(),
   useSsl: z.unknown(),
@@ -251,7 +252,7 @@ const mediaServer: ResourceSpec = {
     };
   },
   async observe(api, _known, desired) {
-    const held = await api.get(`${SETTINGS}/jellyfin`, jellyfinSettings);
+    const held = await api.get(`${SETTINGS}/jellyfin`, heldJellyfinSettings);
     api.addSecret(held.apiKey);
     if (held.ip === '' || (held.serverId ?? '') === '') return undefined;
     const read = fieldReader();
@@ -298,9 +299,10 @@ const PLEX = { path: 'plex', name: 'Plex' } as const;
 
 /**
  * Seerr's Plex settings, the managed ones read with a FieldReader. `machineId` is Plex's
- * own identifier, which Seerr sets only once it has saved a link.
+ * own identifier, which Seerr sets only once it has saved a link. Loose, unlike plex.ts's
+ * `plexSettings`, which Seerr's first sign-in reads strictly.
  */
-const plexSettings = z.looseObject({
+const heldPlexSettings = z.looseObject({
   ip: z.unknown(),
   port: z.unknown(),
   useSsl: z.unknown(),
@@ -352,7 +354,7 @@ const mediaServerPlex: ResourceSpec = {
     };
   },
   async observe(api, _known, desired) {
-    const held = await api.get(`${SETTINGS}/plex`, plexSettings);
+    const held = await api.get(`${SETTINGS}/plex`, heldPlexSettings);
     if (held.ip === '' || (held.machineId ?? '') === '') return undefined;
     const read = fieldReader();
     const at = addressOf(
@@ -534,6 +536,13 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
     name: `server_${arr}`,
     fields: ['hostname', 'port', 'activeProfile', 'activeDirectory', 'isDefault'],
     locked: { hostname: SENDS_A_KEY, port: SENDS_A_KEY },
+    // Only Seerr can say the profile (resolve): the stack has no value to type it by.
+    refuses: {
+      activeProfile: (value) =>
+        typeof value === 'string' && value !== ''
+          ? undefined
+          : `it is the name of one of ${spec.name}'s quality profiles, which is text`,
+    },
     secrets: ['apiKey'],
     requires: [`${arr}.root_folder`],
     desired: (ctx) => {

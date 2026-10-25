@@ -13,6 +13,25 @@ export const UNMANAGED = 'unmanaged';
  */
 export const SENDS_A_KEY = 'it sets where a key is sent (spec §11, Slice 6)';
 
+/**
+ * Why an app's admin user name can't be kept (`locked`): it is the shared admin login
+ * (spec §6.1), one for every app, which `mediaplane credentials` shows.
+ */
+export const SHARED_LOGIN =
+  'it is the shared admin login, the same in every app, which mediaplane credentials shows: change admin.username in stack.yaml instead';
+
+/**
+ * Why `value` can't be what an override, or Keep mine, gives `spec`'s managed `field`, by
+ * the field's own rule (`refuses`), or undefined when it can.
+ */
+export function overrideRefused(
+  spec: ResourceSpec,
+  field: string,
+  value: Scalar,
+): string | undefined {
+  return spec.refuses?.[field]?.(value);
+}
+
 /** The stack's overrides (spec §4.2), by key. */
 type Overrides = Readonly<Record<string, Scalar>>;
 
@@ -152,7 +171,8 @@ function kindOf(value: Scalar): string {
 /**
  * What is wrong with the stack's overrides (spec §4.2): a key that names nothing
  * Mediaplane manages, a secret or a locked field (errors), a value of another type than
- * the field's, `<app>.<resource>` with anything but `unmanaged`, and an override that
+ * the field's or that breaks its rule (`refuses`), `<app>.<resource>` with anything but
+ * `unmanaged`, and an override that
  * does nothing (a warning): of something this stack doesn't have, or of a field of a
  * resource made `unmanaged`. `unmanaged` of a resource the stack doesn't want is quiet:
  * it keeps one left in the app yours.
@@ -206,7 +226,8 @@ export function checkOverrides(
         ),
       ];
     }
-    const own = field === undefined ? undefined : wanted.fields[field];
+    if (field === undefined) return [];
+    const own = wanted.fields[field];
     if (own !== undefined && typeof own !== typeof value) {
       return [
         error(
@@ -216,6 +237,9 @@ export function checkOverrides(
         ),
       ];
     }
-    return [];
+    const refused = overrideRefused(spec, field, value);
+    return refused === undefined
+      ? []
+      : [error('overrides.value', `${key} can't be used: ${refused}`, { path })];
   });
 }

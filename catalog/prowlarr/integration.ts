@@ -97,7 +97,7 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
     // Where Prowlarr sends the arr's key, and where the arr sends Prowlarr's.
     ...sendsToOf(desired),
     apiKey: secretOf(desired, 'apiKey'),
-    syncCategories: String(desired.fields.syncCategories).split(',').map(Number),
+    syncCategories: listItems(desired.fields.syncCategories).map(Number),
   });
   const topOf = (desired: DesiredResource) => ({
     name: desired.name,
@@ -108,6 +108,12 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
     fields: ['prowlarrUrl', 'baseUrl', 'syncLevel', 'syncCategories'],
     lists: ['syncCategories'],
     locked: { prowlarrUrl: SENDS_A_KEY, baseUrl: SENDS_A_KEY },
+    refuses: {
+      syncCategories: (value) =>
+        listItems(value).every((item) => /^\d+$/.test(item))
+          ? undefined
+          : 'each category Prowlarr syncs is a number, such as 5000, separated by ","',
+    },
     secrets: ['apiKey'],
     requires: [`${link.arr}.admin`],
     desired: ({ stack, app, keys }) => {

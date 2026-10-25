@@ -24,7 +24,10 @@ export interface FieldReader {
   numbers(field: string, value: unknown): string | undefined;
   /** Note `field` as one Mediaplane can't read, and why: its value is then none. */
   refuse(field: string, why: string): Scalar | undefined;
-  /** The resource as read: `fields` without those it couldn't read. */
+  /**
+   * The resource as read: `fields` without those it couldn't read, even one a caller gave
+   * a value: what is unreadable is never a value.
+   */
   observed(
     id: ObservedResource['id'],
     name: string,
@@ -68,7 +71,7 @@ export function fieldReader(): FieldReader {
     observed(id, name, fields) {
       const read = Object.fromEntries(
         Object.entries(fields).flatMap(([field, value]): [string, Scalar][] =>
-          value === undefined ? [] : [[field, value]],
+          value === undefined || Object.hasOwn(unreadable, field) ? [] : [[field, value]],
         ),
       );
       const odd = Object.entries(unreadable).sort(([a], [b]) => compare(a, b));

@@ -96,6 +96,13 @@ export interface ResourceSpec {
    * "{resource}" in a reason stands for the resource's address.
    */
   locked?: Readonly<Record<string, string>>;
+  /**
+   * Managed fields whose value must keep a rule besides its type, as an override gives it
+   * (Keep mine's too), each with a check that says why a value breaks the rule, or
+   * undefined: a category qBittorrent saves under, a library's folders. Plan and keep
+   * refuse such a value, saying why.
+   */
+  refuses?: Readonly<Record<string, (value: Scalar) => string | undefined>>;
   /** The secrets it holds, by name: applied and checked with verify, never compared. */
   secrets: readonly string[];
   /**

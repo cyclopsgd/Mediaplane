@@ -164,10 +164,16 @@ export function wantedResources(ctx: WiringContext): ResourceSpec[] {
 
 /**
  * The items of a list field's value (`lists`): one comma-separated list, as the stack and
- * its overrides give it, without the empty ones. A value that isn't text holds none.
+ * its overrides give it, each without the spaces around it, and without the empty ones.
+ * A value that isn't text holds none.
  */
 export function listItems(value: Scalar | undefined): string[] {
-  return typeof value === 'string' ? value.split(',').filter((item) => item !== '') : [];
+  return typeof value === 'string'
+    ? value
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item !== '')
+    : [];
 }
 
 /**

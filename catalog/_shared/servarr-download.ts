@@ -60,6 +60,36 @@ export interface DownloadLink {
 
 const QBT_CATEGORIES = '/api/v2/torrents/categories';
 
+/** C0 and C1 control characters, which no folder name of a category holds. */
+// eslint-disable-next-line no-control-regex -- what it looks for
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+
+/**
+ * Why `value` can't be a category a download client files under, or undefined: qBittorrent
+ * saves a category's downloads in /data/torrents/<category> (qbittorrent.category_<name>),
+ * so it must stay a folder name there, or several joined by "/", as qBittorrent's
+ * subcategories are (tv/anime): never empty, nor one with a "." or ".." folder, a "/" at
+ * either end or twice, a "\", or a control character.
+ */
+export function categoryProblem(value: Scalar): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const why =
+    value === ''
+      ? 'it is empty'
+      : CONTROL.test(value)
+        ? 'it holds a control character'
+        : value.includes('\\')
+          ? 'it holds a "\\"'
+          : value.split('/').some((part) => part === '')
+            ? 'it has a "/" at either end, or two together'
+            : value.split('/').some((part) => part === '.' || part === '..')
+              ? 'it has a "." or ".." folder, which would take the downloads out of /data/torrents'
+              : undefined;
+  return why === undefined
+    ? undefined
+    : `qBittorrent saves the category's downloads in /data/torrents/<category>, so it must be a folder name, or several joined by "/", such as tv/anime, and ${why}`;
+}
+
 /**
  * Why plan and drift leave the client's key unchecked, if they do: the arr's own test
  * makes in qBittorrent each category the client names that qBittorrent lacks, with no
@@ -106,6 +136,30 @@ async function testWouldMake(
     : `qBittorrent has no category ${which(missing)}, which ${api.name}'s download client names, and ${api.name}'s own test of it would make it with no save path, so it isn't run: make it in qBittorrent, or name one in ${api.name} that qBittorrent has, then run drift again`;
 }
 
+/**
+ * Where the arr reaches qBittorrent, as one host to compare: its `host`, or, with a URL
+ * base, the whole URL the arr builds with it, which is never the stack's service (a URL
+ * base of `@<host>` is another host). So a URL base set in the arr is drift on `host`,
+ * and the update puts the stack's address back. TLS is a managed field of its own.
+ */
+function heldHost(held: Provider, read: FieldReader): string | undefined {
+  const host = read.text('host', settingOf(held, 'host'));
+  if (host === undefined) return undefined;
+  const base = optionalText(settingOf(held, 'urlBase'));
+  // Where the arr sends the key can't be told from a setting of another type.
+  if (base === undefined) {
+    read.refuse(
+      'host',
+      "its urlBase is not text, so where the arr sends the key can't be told",
+    );
+    return undefined;
+  }
+  if (base === '') return host;
+  const tls = settingOf(held, 'useSsl') === true;
+  const port = settingOf(held, 'port');
+  return `${tls ? 'https' : 'http'}://${host}:${typeof port === 'number' ? String(port) : '?'}${base}`;
+}
+
 /** The managed fields of a download client, read from the app's settings. */
 function fieldsOf(
   held: Provider,
@@ -113,7 +167,7 @@ function fieldsOf(
   read: FieldReader,
 ): Record<string, Scalar | undefined> {
   return {
-    host: read.text('host', settingOf(held, 'host')),
+    host: heldHost(held, read),
     port: read.number('port', settingOf(held, 'port')),
     useSsl: read.flag('useSsl', settingOf(held, 'useSsl')),
     category: read.text('category', settingOf(held, link.setting)),
@@ -150,7 +204,8 @@ function topOf(desired: DesiredResource): Record<string, unknown> {
  *   Gluetun's network, at qBittorrent's own port, which its Host check needs, without TLS
  *   or a URL base. The arr sends qBittorrent's key there, so the host, port and TLS are
  *   fixed (SENDS_A_KEY), and every create, update and test is sent there (`sendsTo`),
- *   whatever an override or the arr holds.
+ *   whatever an override or the arr holds. A URL base held is read as part of the host
+ *   (heldHost), so it is drift, and an update puts the stack's address back.
  * - Its key is checked with the app's own test of the client it holds, as it holds it
  *   (the key masked): a refused sign-in means the key differs, and an update sets it.
  *   Any other failure, such as qBittorrent out of the arr's reach, the app explains.
@@ -164,6 +219,7 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
     name: 'download_client',
     fields: ['host', 'port', 'useSsl', 'category', 'enable'],
     locked: { host: SENDS_A_KEY, port: SENDS_A_KEY, useSsl: SENDS_A_KEY },
+    refuses: { category: categoryProblem },
     secrets: ['apiKey'],
     requires: [`qbittorrent.category_${link.category}`],
     desired: ({ stack, keys }) => {

@@ -1,6 +1,7 @@
 import {
   defineIntegration,
   fieldReader,
+  SHARED_LOGIN,
   type ApiSpec,
   type AppApi,
   type AppContext,
@@ -83,6 +84,7 @@ export function servarrAdmin(version: 'v1' | 'v3'): ResourceSpec {
   return {
     name: 'admin',
     fields: ['username'],
+    locked: { username: SHARED_LOGIN },
     secrets: ['password'],
     desired: ({ admin }) => ({
       name: 'admin',

@@ -417,6 +417,14 @@ describe("Jellyfin's admin", () => {
     expect(await admin.observe(api, known, desired)).toMatchObject({
       fields: { username: 'renamed' },
     });
+    // Named in another shape: unreadable, never empty.
+    Object.assign(state, { user: 7 });
+    expect(await admin.observe(api, known, desired)).toEqual({
+      id: FAKE_JELLYFIN_USER_ID,
+      name: 'admin',
+      fields: {},
+      unreadable: { username: 'a number, not text' },
+    });
   });
 
   it('checks its password by signing in, then out', async () => {
@@ -553,7 +561,7 @@ describe("Jellyfin's libraries", () => {
     });
     expect(await shows.observe(api, undefined)).toBeUndefined();
     expect((await failure(shows.create(api, wanted(shows)))).message).toBe(
-      'Jellyfin at http://jellyfin:8096 (127.0.0.1) has no library named Shows, but its library Series holds its folder: if it is Shows renamed, rename it back in Jellyfin; to keep it as it is, stop Mediaplane managing Shows with jellyfin.library_shows: unmanaged under overrides: (GET /Library/VirtualFolders)',
+      'Jellyfin at http://jellyfin:8096 (127.0.0.1) has no library named Shows, but its library Series holds /data/media/tv, one of its folders: if it is Shows renamed, rename it back in Jellyfin; if it is another library, take /data/media/tv out of it, or out of jellyfin.library_shows.paths under overrides:; to keep it as it is, stop Mediaplane managing Shows with jellyfin.library_shows: unmanaged under overrides: (GET /Library/VirtualFolders)',
     );
     expect(state.libraries.map((l) => l.Name)).toEqual(['Series']);
   });

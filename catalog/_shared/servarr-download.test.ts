@@ -436,6 +436,35 @@ describe('servarrDownloadClient', () => {
     expect(at()).toEqual(['host=gluetun', 'port=8080', 'useSsl=false', 'urlBase=']);
   });
 
+  it("reads a URL base as another host, so drift says so and the update puts the stack's back", async () => {
+    // The arr sends qBittorrent's key to the URL it builds with its URL base: `@<host>`
+    // in it is another host.
+    const { api, state } = await sonarr();
+    const desired = wanted();
+    await client.create(api, desired);
+    const [held] = state.downloadClients;
+    if (held === undefined) throw new Error('no client made');
+    held.fields = held.fields.map((f) =>
+      f.name === 'urlBase' ? { ...f, value: '@198.51.100.7' } : f,
+    );
+    const observed = await client.observe(api, undefined);
+    expect(observed?.fields.host).toBe('http://gluetun:8080@198.51.100.7');
+    if (observed === undefined) throw new Error('no client observed');
+    await client.update(api, desired, observed);
+    expect(state.downloadClients[0]?.fields).toContainEqual({
+      name: 'urlBase',
+      value: '',
+    });
+    expect((await client.observe(api, undefined))?.fields.host).toBe('gluetun');
+    // One of another type: where the key goes can't be told.
+    held.fields = held.fields.map((f) => (f.name === 'urlBase' ? { ...f, value: 7 } : f));
+    const odd = await client.observe(api, undefined);
+    expect(odd?.fields.host).toBeUndefined();
+    expect(odd?.unreadable?.host).toBe(
+      "its urlBase is not text, so where the arr sends the key can't be told",
+    );
+  });
+
   it('refuses a template or a client without a setting it needs, naming it, and sends nothing', async () => {
     const { fields, ...rest } = template();
     const without = { ...rest, fields: fields.filter((f) => !NEEDED.includes(f.name)) };

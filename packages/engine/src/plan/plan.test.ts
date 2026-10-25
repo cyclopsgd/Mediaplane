@@ -1014,6 +1014,22 @@ describe('plan: the wiring', () => {
     expect(sonarr.app.requests).toEqual([]);
   });
 
+  it('fails on an override that names nothing it manages in a stack it wires nothing in', async () => {
+    // The fixture catalog gives no app an API: there is no wiring, and still a check.
+    const home = await makeHome({
+      stack: `${STACK}overrides:\n  sonarr.login.user: fake-value\n`,
+    });
+    const result = await planFor(home);
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: 'error',
+        code: 'overrides.unknown',
+        path: 'overrides.sonarr.login.user',
+      }),
+    );
+  });
+
   it('checks the wiring after the start on a first plan, asking no app', async () => {
     const sonarr = await fakeSonarr();
     const result = await planFor(await makeHome(), {

@@ -1,5 +1,6 @@
 import {
   createAppApi,
+  SHARED_LOGIN,
   type DesiredResource,
   type ObservedResource,
 } from '@mediaplane/engine';
@@ -130,6 +131,18 @@ describe('servarrAdmin', () => {
     expect(
       await admin.verify?.(api, { ...DESIRED, secrets: { password: 'Fail' } }, OBSERVED),
     ).toBe(false);
+  });
+
+  it("reads a user name of another type as one it can't, never as empty, and keeps none", async () => {
+    const { api } = await sonarr({ ...HOST, username: 7 });
+    expect(await admin.observe(api, undefined)).toEqual({
+      id: null,
+      name: 'admin',
+      fields: {},
+      unreadable: { username: 'a number, not text' },
+    });
+    // The shared login is stack.yaml's: no app's own can be kept.
+    expect(admin.locked).toEqual({ username: SHARED_LOGIN });
   });
 
   it('changes a user name that differs', async () => {

@@ -16,7 +16,7 @@ unmodified, and by default puts it behind Gluetun's VPN.
 - **Health check:** `curl -fsS "http://localhost:${WEBUI_PORT}/" > /dev/null`, every 30s (timeout 10s, 5 retries, 60s to start)
 - **Secrets:** `apiKey`: `qbt_` and 28 random letters and digits, generated once and kept in `state/secrets.json`
 - **API:** on its `web` port, which Mediaplane reaches over the stack's wiring network, with `apiKey` as a Bearer token
-- **Managed in the app:** `qbittorrent.admin`: fields `qbittorrent.admin.username`; the secret `password`, checked and never shown. `qbittorrent.preferences`: fields `qbittorrent.preferences.savePath`, `qbittorrent.preferences.autoTmm`, `qbittorrent.preferences.authSubnetWhitelistEnabled`, `qbittorrent.preferences.authSubnetWhitelist`. `qbittorrent.category_tv`: fields `qbittorrent.category_tv.savePath`. `qbittorrent.category_movies`: fields `qbittorrent.category_movies.savePath`
+- **Managed in the app:** `qbittorrent.admin`: fields `qbittorrent.admin.username` (fixed); the secret `password`, checked and never shown. `qbittorrent.preferences`: fields `qbittorrent.preferences.savePath`, `qbittorrent.preferences.autoTmm`, `qbittorrent.preferences.authSubnetWhitelistEnabled` (fixed), `qbittorrent.preferences.authSubnetWhitelist` (fixed). `qbittorrent.category_tv`: fields `qbittorrent.category_tv.savePath`. `qbittorrent.category_movies`: fields `qbittorrent.category_movies.savePath`
 - **Needs:** nothing
 - **Provides:** `download-client:torrent`
 - **Also turns on:** `gluetun`, with the default settings

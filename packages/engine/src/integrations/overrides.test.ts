@@ -202,6 +202,40 @@ describe('checkOverrides', () => {
     ]);
   });
 
+  it("refuses a value its field's own rule refuses, saying why, without the value", () => {
+    const ruled: Catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr'
+        ? {
+            ...def,
+            integration: {
+              after: [],
+              resources: [
+                {
+                  ...LOGIN,
+                  refuses: {
+                    groups: (value) =>
+                      value === 'fake-wrong' ? 'no group is named so' : undefined,
+                  },
+                },
+              ],
+            },
+          }
+        : def,
+    );
+    const stack = wiringStack(
+      ruled,
+      `${WIRING_STACK}overrides:\n  sonarr.login.groups: fake-wrong\n  sonarr.login.user: fake-wrong\n`,
+    );
+    expect(checkOverrides(stack, ruled, { admin: ADMIN, keys: {} })).toEqual([
+      {
+        severity: 'error',
+        code: 'overrides.value',
+        message: "sonarr.login.groups can't be used: no group is named so",
+        path: 'overrides.sonarr.login.groups',
+      },
+    ]);
+  });
+
   it("warns of an override for an app the stack doesn't have, and passes on what overrideTarget refuses", () => {
     const radarr = stackWith('sonarr.login.user: someone');
     const withoutSonarr = {

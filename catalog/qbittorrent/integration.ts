@@ -2,6 +2,7 @@ import {
   defineIntegration,
   fieldReader,
   isUnmanaged,
+  SHARED_LOGIN,
   type AppApi,
   type DesiredResource,
   type ResolvedStack,
@@ -9,6 +10,7 @@ import {
 } from '@mediaplane/engine';
 import { z } from 'zod';
 import { secretOf } from '../_shared/secret';
+import { categoryProblem } from '../_shared/servarr-download';
 
 /** Where qBittorrent saves a torrent without a category (spec §6.2). */
 export const DEFAULT_SAVE_PATH = '/data/torrents';
@@ -77,6 +79,7 @@ async function setPreferences(
 const admin: ResourceSpec = {
   name: 'admin',
   fields: ['username'],
+  locked: { username: SHARED_LOGIN },
   secrets: ['password'],
   desired: ({ admin: login }) => ({
     name: 'admin',
@@ -121,6 +124,13 @@ async function saveAdmin(api: AppApi, desired: DesiredResource): Promise<void> {
 }
 
 /**
+ * Why who may skip qBittorrent's login can't be kept (`locked`): it is stack.yaml's
+ * security setting, which every app's login follows.
+ */
+const LOGIN_ON_LAN =
+  "it says who may skip qBittorrent's login, a security setting: set security.login_on_lan in stack.yaml instead";
+
+/**
  * The settings Mediaplane manages in qBittorrent (spec §6.1, §6.2): the default save path,
  * Automatic Torrent Management (so a torrent follows its category's save path), and who
  * may skip the login: the LAN subnets, only with `security.login_on_lan: false` and the
@@ -130,6 +140,10 @@ const settings: ResourceSpec = {
   name: 'preferences',
   fields: ['savePath', 'autoTmm', 'authSubnetWhitelistEnabled', 'authSubnetWhitelist'],
   lists: ['authSubnetWhitelist'],
+  locked: {
+    authSubnetWhitelistEnabled: LOGIN_ON_LAN,
+    authSubnetWhitelist: LOGIN_ON_LAN,
+  },
   secrets: [],
   desired: ({ stack, app }) => {
     const whitelist = stack.config.security.login_on_lan
@@ -186,8 +200,9 @@ async function saveSettings(api: AppApi, desired: DesiredResource): Promise<void
  */
 function categoryOf(stack: ResolvedStack, arr: string, name: string): string {
   const kept = stack.config.overrides[`${arr}.download_client.category`];
+  // Plan refuses one that isn't a category name (categoryProblem): only a guard.
   return typeof kept === 'string' &&
-    kept !== '' &&
+    categoryProblem(kept) === undefined &&
     !isUnmanaged(stack, `${arr}.download_client`)
     ? kept
     : name;

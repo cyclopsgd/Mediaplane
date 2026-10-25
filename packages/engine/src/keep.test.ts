@@ -223,6 +223,29 @@ describe('keep', () => {
     expect(await readFile(join(dir, 'stack.yaml'), 'utf8')).toBe(STACK);
   });
 
+  it("refuses a value the field's own rule refuses, saying why, as plan would", async () => {
+    const ruled: ResourceSpec = {
+      ...FAKE_LOGIN,
+      refuses: { user: (value) => (value === 'someone' ? 'it is no one' : undefined) },
+    };
+    const catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr'
+        ? { ...def, integration: { after: [], resources: [ruled] } }
+        : def,
+    );
+    const dir = await home();
+    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+    const result = await keep(options(dir, sonarr, 'sonarr.login.user', { catalog }));
+    expect(result).toMatchObject({ ok: false, value: undefined });
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'keep.value',
+        message: "sonarr.login.user can't be kept as sonarr holds it: it is no one",
+      }),
+    ]);
+    expect(await readFile(join(dir, 'stack.yaml'), 'utf8')).toBe(STACK);
+  });
+
   it("refuses a value it can't read", async () => {
     const odd: ResourceSpec = {
       ...FAKE_LOGIN,

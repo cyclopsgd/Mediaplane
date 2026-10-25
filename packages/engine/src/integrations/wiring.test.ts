@@ -22,6 +22,7 @@ import type { Fields, ResourceSpec } from './types';
 import {
   joinFailure,
   knownSecrets,
+  listItems,
   PLAN_DEADLINE_MS,
   planWiring,
   reachApps,
@@ -1467,6 +1468,15 @@ describe('planWiring: overrides (spec §4.2, §6.3)', () => {
     );
     expect(planned.changes).toEqual([{ resource: 'sonarr.login', action: 'unchanged' }]);
     expect(planned.drift).toEqual([]);
+    // Written with spaces after its commas, it is the same list.
+    const spaced = await planWiring(
+      options(sonarr, {
+        stack: sonarrWith([listed], 'sonarr.login.user: "a, b"'),
+        known,
+      }),
+    );
+    expect(spaced.changes).toEqual([{ resource: 'sonarr.login', action: 'unchanged' }]);
+    expect(listItems(' a , ,b ')).toEqual(['a', 'b']);
   });
 });
 

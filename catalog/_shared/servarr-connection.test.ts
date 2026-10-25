@@ -517,6 +517,36 @@ describe("an arr's connection to Plex", () => {
     });
   });
 
+  it("sends your token only to the stack's address for Plex, whatever an override or the arr holds", async () => {
+    const { api, apis, state } = await sonarrWithPlex();
+    const elsewhere = {
+      ...plexWanted(),
+      fields: { ...plexWanted().fields, host: 'elsewhere', port: 1 },
+    };
+    await plexConnection.create(api, elsewhere);
+    const at = () =>
+      state.connections[0]?.fields
+        .filter((f) => ['host', 'port', 'useSsl', 'urlBase'].includes(f.name))
+        .map((f) => `${f.name}=${String(f.value)}`);
+    expect(at()).toEqual(['host=plex', 'port=32400', 'useSsl=false', 'urlBase=']);
+    // Changed in the arr by hand: read as another host, and its test still goes to Plex.
+    const [made] = state.connections;
+    if (made === undefined) throw new Error('no connection made');
+    made.fields = made.fields.map((f) =>
+      f.name === 'host' ? { ...f, value: '198.51.100.7' } : f,
+    );
+    const held = await plexConnection.observe(api, undefined);
+    if (held === undefined) throw new Error('the connection is there');
+    expect(held.fields.host).toBe('198.51.100.7');
+    expect(await plexConnection.verify?.(api, elsewhere, held)).toBe(true);
+    const test = apis.app.requests.find((r) => r.path === '/api/v3/notification/test');
+    expect(test?.body).toContain('"host","value":"plex"');
+    expect(test?.body).not.toContain('198.51.100.7');
+    expect(test?.body).not.toContain('elsewhere');
+    await plexConnection.update(api, elsewhere, held);
+    expect(at()).toEqual(['host=plex', 'port=32400', 'useSsl=false', 'urlBase=']);
+  });
+
   it('is refused by the arr while Plex has no library of what the arr files', async () => {
     const { api, plex } = await sonarrWithPlex();
     plex.plex.sections = [];
