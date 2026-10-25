@@ -21,7 +21,10 @@ resource deleted outside it. Drift writes to no app, and its checks leave fewer 
   gains `drift` and `checks` (how each secret was checked).
 - **Overrides** become part of D everywhere (`desiredOf`), checked by `plan` before it asks
   any app. A resource may declare fields held as lists, compared as sets, and fields an
-  override can't change (`locked`), with why.
+  override can't change (`locked`), with why: what it is known by, and every field that
+  says where an app sends a key. Every request that carries a key is built from the
+  stack's own address for the other app (`sendsTo`), whatever an override or an app
+  holds.
 - **The catalog** reads each managed field through a `FieldReader`, so a value of another
   shape is reported as one Mediaplane can't read, never as empty; every managed field
   reaches the app from D, so a kept value stays.
@@ -29,9 +32,10 @@ resource deleted outside it. Drift writes to no app, and its checks leave fewer 
   asked), under apply's lock. Its one write is each secret check's verdict and time, by
   name, in `state/resources.json`: what lets drift and `plan` not check again a secret
   found refused, and drift check Jellyfin's admin once a day.
-- **`mediaplane keep`** looks at one resource, checking none of its secrets, and adds one
-  line under `overrides:` with a textual insertion that is checked to parse to the same
-  stack with the override, then records the value as applied.
+- **`mediaplane keep`** looks at one resource, asking the app only to read it, and adds
+  one line under `overrides:` with a textual insertion that is checked to parse to the
+  same stack with the override, keeping the file's mode and group, then records the
+  value as applied.
 - **Tests:** unit tests on the fake apps, made no kinder than the real ones by this
   slice's probes; an end-to-end test of success criterion 4 against the real apps, and
   `drift` and `keep` from the image in the deploy test.
@@ -56,6 +60,11 @@ drift model, `drift`, `keep` (Keep mine), a comment-preserving override writer,
 decisions of 2026-10-17"; it proves success criterion 4), the S9 and S10 rows, "After
 M1", and every S8 item in "Inputs for later slices from the reviews", the owner's
 decisions of 2026-10-17 first. ADR 0003 (written by this slice) and ADR 0004.
+
+Revised after the controller's pre-flight scan of the first version of this plan, as its
+rulings of 2026-10-25 say: B1 (keys go only to the stack's own addresses, both ways), I1
+to I4, and M1 to M17, M10 moved to Slice 10. The decisions name the rulings that changed
+them.
 
 ## How to read the code in this plan
 
@@ -109,7 +118,8 @@ still holds (`docs/plans/m1-s1-pure-core.md` to `docs/plans/m1-s7-plex.md`):
 - bootstrap before publish (S5 to S7) is unchanged: `plan` never runs a setup, and drift
   never does either;
 - keys go only to the stack's own address for an app (S6), never to a host, port, URL
-  base or TLS setting read from an app;
+  base or TLS setting read from an app, nor one an override sets: such a field is fixed,
+  and every request that carries a key is built from the stack's own address;
 - never push.
 
 The spec's exact values for this slice, verbatim:
@@ -157,10 +167,13 @@ These are added or restated for this slice:
   `redacted`; `keep` refuses it. End-to-end checks compare names and non-secret values,
   never a secret's.
 - **`keep` keeps the file as it is** apart from its one line: comments, key order, quoting,
-  spacing and line ends. It refuses, with the line to add by hand, a `stack.yaml` it can't
-  write safely: a link, a file with other names, one of another user, one written as a
-  single `{ … }` block, or one managed by automation.
-- **A value Mediaplane can't read is said to be,** never read as empty.
+  spacing and line ends, and its mode and group. It refuses, with the line to add by
+  hand, a `stack.yaml` it can't write safely: a link, a file with other names, one of
+  another user or of a group its user isn't in, one written as a single `{ … }` block, or
+  one managed by automation.
+- **A value Mediaplane can't read is said to be,** never read as empty or false, and a
+  check that could change more than its marks fails closed: it is left undone, saying
+  why and what clears it.
 - **No new socket-proxy permission.** `deploy/mediaplane.compose.yaml` and
   `deploy/deploy.test.ts` don't change.
 - **Docker and Compose.** CI runs Docker 28 with Compose v2.38.2; the dev box runs Docker
@@ -189,27 +202,35 @@ below was probed while writing this plan, on real Docker (29.8, Compose 5.5.1, a
 with the pinned images (Sonarr 4.0.20, Radarr 6.4.4, Prowlarr 2.6.5, qBittorrent 5.2.4,
 Jellyfin 12.2, Seerr 3.5.0, Plex `1.43.4.10903-e5521bd8c-ls327`), on a stack `apply` made
 from this plan's code, or for Plex, an unclaimed Plex reached at its address. No plex.tv
-call was needed or made.
+call was needed or made. The plan was revised after the controller's pre-flight scan, as
+its rulings of 2026-10-25 say (B1, I1 to I4, M1 to M17; M10 moved to Slice 10): each
+decision a ruling changed names it.
 
 1. **(check) The three-way comparison** (Task 1; §6.3). D is what the stack wants: each
    resource's `desired`, with its overrides (decision 8). L is its record. O is what the
    app holds. A managed field drifted when O differs from L **and** from D: a value the
    stack now wants, as after you edit `stack.yaml` to match the app, is a pending change
    that `apply` records (`adopt`), not drift. So drift needs a record: a resource never
-   applied has no L, and its differences are only `plan`'s updates. Each drift item says
-   what kind it is: `field` (with `expected`, L, and `actual`, O), `missing` (§6.3's
-   "Managed resource missing"), `secret` (the app's own check refuses one: §6.3's "Test
-   endpoint fails"), and, from Task 4, `key` and `left` (decisions 13 and 14). It is shown
-   by `drift` and by `plan` (§6.3's "Shown by"), in `plan`'s `--json` as `drift`, with
-   `checks`, how each secret was checked: additive fields within `mediaplane.plan/v1`.
+   applied has no L, and its differences are only `plan`'s updates; nor is a record of
+   another name than the stack now wants, which is of what it wanted before (Task 2:
+   qBittorrent's category, once Sonarr's is kept as another, decision 7). A field's
+   `expected` is the value `apply` sets, D; when `stack.yaml` has changed it since, the
+   item has `applied`, L, too (ruling M17). Each drift item says what kind it is: `field`
+   (with `expected` and `actual`, O), `missing` (§6.3's "Managed resource missing"),
+   `secret` (the app's own check refuses one: §6.3's "Test endpoint fails"), and, from
+   Task 4, `key` and `left` (decisions 14 and 15). It is shown by `drift` and by `plan`
+   (§6.3's "Shown by"), in `plan`'s `--json` as `drift`, with `checks`, how each secret
+   was checked: additive fields within `mediaplane.plan/v1`.
 2. **(check) `drift` is `plan`, looking only** (Task 4; §3.2's "the planner in
    observe-only mode"). It skips preflight (the host's ports and folders aren't drift),
    asks every app that runs and is healthy, even one `apply` would recreate (it is about
    what the app holds now), and runs under apply's lock, so neither runs while the other
    does. Its exit code follows `plan`'s: 0 when nothing drifted and every resource and
-   secret was checked, 2 otherwise (something drifted, or something couldn't be checked),
-   1 on an error. Its `--json` is `mediaplane.drift/v1`. It is built so that a schedule
-   (M2) can call it as it is; this slice builds no schedule.
+   secret was checked, 2 otherwise (something drifted, or a resource or secret couldn't
+   be checked, ruling M15), 1 on an error. That holds from Task 4 on (ruling M3). Its
+   `--json` is `mediaplane.drift/v1`. It is built so that a schedule (M2) can call it as
+   it is; this slice builds no schedule. Its `--help` follows `plan --help`'s form, which
+   names a repo path; pointing both at the published docs is added to Slice 10's list.
 3. **(check) Drift's one write: what its checks found** (Tasks 1 and 4). The owner's
    decisions of 2026-10-17 need drift to remember: a secret it found refused, so as not to
    check it again, and when it last checked Jellyfin's admin. That goes in each
@@ -234,28 +255,35 @@ call was needed or made.
    Jellyfin's activity log (`SessionStarted`, `AuthenticationSucceeded`,
    `SessionEnded`), one that fails one (`AuthenticationFailed`). A resource may say at
    most how often drift checks its secrets while they pass (`checkEvery`): Jellyfin's
-   admin, 24 hours. `plan` and `apply` check it every time: an `admin.password` changed
-   in `stack.yaml` must reach Jellyfin, and only a check tells that it hasn't.
+   admin, 24 hours, tested through `examine` with the real spec: skipped within a day,
+   made after (ruling M7). `plan` and `apply` check it every time: an `admin.password`
+   changed in `stack.yaml` must reach Jellyfin, and only a check tells that it hasn't.
+   Drift's output says a verdict was taken from its last check, and when (ruling M11).
 6. **(check) `plan` and drift leave an arr's download client key unchecked while
-   qBittorrent lacks a category the client names** (Tasks 3 and 5; the owner's decision on
+   qBittorrent lacks a category the client names** (Task 3; the owner's decision on
    qBittorrent's post-import category, widened). Probed: Sonarr's own test of its
-   download client makes a category the client names that qBittorrent lacks, with no save
-   path, its post-import one (`tvImportedCategory`) included; an unset post-import category
-   is left out of the client's settings, a cleared one is `""`. So the client's `verify`,
-   in `plan` and drift (`VerifyContext.readOnly`), reads the client and asks qBittorrent's
-   categories first, through the run's own client for qBittorrent (`peer`), and answers
-   `{ unchecked }` while one is missing, or qBittorrent can't be asked. Task 5 widens it
-   from the post-import category to the client's own, because Keep mine can make that
-   one another (`television`), and `unmanaged` can let you delete it: without the
-   widening, `drift` made `television` in qBittorrent, which a probe of this plan's first
-   draft showed. That goes beyond the decision's words, in its direction. `apply`'s test
-   runs as before, and makes it.
-7. **Seerr's Jellyfin key is checked once per `apply`** (Task 3; the owner's decision).
-   `update` may be told what differs (`changes`): Seerr's media server, told its key was
-   refused, gives Seerr the stack's key without asking Seerr's list of Jellyfin's users
-   again. Probed: each failing check of a Seerr server logs one line in Seerr's log
-   (`[error][Radarr]: [Radarr] Failed to retrieve tags: … 401`), with no throttling; a
-   passing check logs nothing.
+   download client makes each category the client names that qBittorrent lacks, with no
+   save path, its own (`tvCategory`) and its post-import one (`tvImportedCategory`);
+   an unset post-import category is left out of the client's settings, a cleared one is
+   `""`. So the client's `verify`, in `plan` and drift (`VerifyContext.readOnly`), reads
+   the client and asks qBittorrent's categories first, through the run's own client for
+   qBittorrent (`peer`), and answers `{ unchecked }`, saying what clears it, while one is
+   missing, while a setting isn't text, or while qBittorrent can't be asked (it fails
+   closed, rulings M5 and M6). The decision's words name the post-import category; the
+   client's own is added because `unmanaged` lets you delete qBittorrent's (a first draft
+   of this plan made `television` in qBittorrent from `drift`, on the probe stack). The
+   fake arrs' test makes both, as the real one does (ruling I3), so the test of the
+   widening fails without it. `apply`'s test runs as before, and makes it.
+7. **(check) A download client's category kept as another is qBittorrent's to have**
+   (Task 2; ruling I1). `qbittorrent.category_tv` wants the category Sonarr's client is
+   kept with (`sonarr.download_client.category`), under `/data/torrents/<name>`, so
+   `plan` shows it as a change and `apply` makes it, never the arr's test; until then the
+   client waits for it (`requires`), and drift says so: "what it requires is yet to be
+   put in place, which apply does first". The category made before stays, yours. A
+   category you stop Mediaplane managing (`unmanaged`) and delete is yours to make again:
+   the reason, the runbook and the qBittorrent README say to make it in qBittorrent, or
+   name one the stack has. This keeps the owner's decision: `plan` never makes a
+   category.
 8. **(check) Overrides are part of D** (Task 2; §4.2, §6.3). `desiredOf` applies each
    `<address>.<field>` override to a resource's `desired`, and again after `resolve`, so
    Keep mine wins over what only the app can say (Seerr's profile). `<app>.<resource>:
@@ -263,15 +291,16 @@ call was needed or made.
    `plan` checks the overrides before it asks any app, as errors: an app, a resource or a
    field that isn't there, with the closest name (names are case-sensitive, the roadmap's
    S8 item); a secret; a fixed field (decision 9); a value of another type than the
-   field's; and `<app>.<resource>` with anything but `unmanaged`. An override of an app
-   the stack doesn't have, or of a field of a resource it doesn't want, does nothing, and
-   warns (`overrides.unused`); an `unmanaged` one of a resource it doesn't want is quiet:
-   it keeps a resource left in an app yours (decision 14). A field held as one
+   field's; and `<app>.<resource>` with anything but `unmanaged`. An override that does
+   nothing warns (`overrides.unused`): of an app the stack doesn't have, of a field of a
+   resource it doesn't want, or of a field of a resource made `unmanaged` (ruling M12);
+   an `unmanaged` one of a resource it doesn't want is quiet from Task 2 on (ruling M3):
+   it keeps a resource left in an app yours (decision 15). A field held as one
    comma-separated list (`lists`: folders, categories, tags, libraries, the whitelist) is
-   compared as a set, so an override in another order still matches.
-9. **(check) What a resource is known by can't be kept** (Task 2; the roadmap's S8 items on
-   identity). A resource may declare fixed fields (`locked`), each with why, which
-   overrides and Keep mine refuse with that reason:
+   compared as a set, with one helper for its items (`listItems`, ruling M8).
+9. **(check) What a resource is known by, and where a key goes, can't be kept** (Task 2;
+   the roadmap's S8 items on identity; ruling B1). A resource may declare fixed fields
+   (`locked`), each with why, which overrides and Keep mine refuse with that reason:
    - a root folder's `path`: the arr knows a root folder by its path and can't move one,
      so another path would add a second root folder beside the one that holds your
      library. To move a library: move it in the arr, then make the root folder
@@ -279,8 +308,15 @@ call was needed or made.
    - a Jellyfin or Plex library's `name` (Mediaplane finds it by its name when its record
      is lost, and Seerr enables it by its name) and what it holds (`collectionType`,
      `type`: the apps can't change it);
-   - a root folder's `accessible` (decision 10), and Seerr's `initialized` (Seerr can't go
-     back to its setup wizard).
+   - a root folder's `accessible` (decision 11), and Seerr's `initialized` (Seerr can't go
+     back to its setup wizard);
+   - every field that says where an app sends a key, with the reason "it sets where a key
+     is sent (spec §11, Slice 6)": the host, port and TLS of the arrs' download clients,
+     the host and port of their connections to Jellyfin and Plex, Prowlarr's links'
+     `baseUrl` and `prowlarrUrl`, and the host and port of Seerr's media server (Jellyfin
+     or Plex) and of its Sonarr and Radarr servers; and Prowlarr's indexer proxy's host,
+     which your indexers' requests, and the keys in them, go through. Drift still
+     reports a change to one, and `apply` puts it back.
 
    Renaming is handled by what each app keys a library by. Probed: a Jellyfin library
    renamed loses its `ItemId` until Jellyfin refreshes, and gets the same one back with its
@@ -289,46 +325,72 @@ call was needed or made.
    `name`, which `apply` puts back. Neither makes a library again on a folder another
    library of its holds (Task 3): `create` refuses, saying to rename it back, or make it
    `unmanaged`, which Seerr then stops enabling too.
-10. **A root folder's folder, deleted by hand** (Task 3; the roadmap's S8 item). Probed:
+10. **(check) Keys go only to the stack's own addresses, both ways** (Task 2; ruling B1;
+    §11, Slice 6). Besides the fixed fields, every request that carries a key is built
+    from the stack's own service address for the other app, never from a managed field
+    (which an override could set) nor from what the app holds: a resource's `desired`
+    gives it as `sendsTo`, which overrides never touch, and create, update and every
+    check send it. That covers the tests Mediaplane has an app run with a key the app
+    holds: an arr's test of its download client (now aimed with `urlBase: ''` too) and of
+    its connections, Prowlarr's of a link, and Seerr's of a server; Seerr's list of
+    Jellyfin's users, which Seerr asks with the key it holds at the address it holds, is
+    asked only while Seerr holds the stack's (`{ unchecked }` otherwise). Each catalog
+    resource has a test that an override, or a value the app holds, of the destination
+    doesn't move where the key goes. The arrs fill a masked secret of a provider sent
+    back by its id with the one they hold, as Mediaplane's tests already relied on.
+11. **A root folder's folder, deleted by hand** (Task 3; the roadmap's S8 item). Probed:
     Sonarr reads `accessible` from the disk each time it is asked (false at once after
     `rmdir`, true at once after `mkdir`). So `accessible` becomes a managed field, wanted
     `true`: drift reports it, and `apply`'s update makes the folder again, as the wire step
     makes it for a new root folder. Upgrading means each root folder's record lacks the
     field: the first `plan` after upgrading shows each root folder as `adopt`, which
     changes nothing in the arr, and the next `apply` records it.
-11. **A value Mediaplane can't read is said to be** (Task 3; the roadmap's S8 items on
-    shapes, and on `enable`). Every observe reads its managed fields through a
-    `FieldReader`, which leaves a field of another type, or missing, out of `fields` and
-    names it in `unreadable` with what it found (`text, not a number`). It then differs, so
-    `apply` sets it, and drift shows it as `actual: null` with why. Probed shapes: an arr
-    leaves an unset optional setting out (`urlBase`, `tvImportedCategory`), and gives a
-    cleared one as `""`, so only those optional settings read a missing value as empty. A
-    folder with a comma in its name can't be told apart in `paths` or `location`: it is
-    reported as unreadable, and Jellyfin's update now reads the folders as Jellyfin lists
-    them (the roadmap's S8 item: one such folder made the library fail every `apply`).
-12. **(check) Keep mine writes one line, checked** (Task 5; §3.3, §4.2, §6.3). §3.3 names the
-    `yaml` Document API to preserve comments and formatting. Probed: a round-trip through
-    it re-spaces comments aligned after values (`media_server: jellyfin   # …` loses its
-    spacing), moves a comment after `overrides:` onto the next line, re-indents, and drops
-    CRLF line ends and a missing last line end; it is byte-identical only on files such as
-    `init`'s starter. So `keep` uses the Document API to find where `overrides:` and its
-    last line are (`parseDocument`, the node ranges), and inserts the line there as text:
-    after the last override, in its indentation, or a new `overrides:` at the end, or the
-    value of one written before replaced, or into a `{ … }` flow. It then parses the new
-    text and requires the same stack with the override, or writes nothing. It keeps the
-    file's mode, writes atomically, and refuses a `stack.yaml` that is a link (a rename
+12. **A value Mediaplane can't read is said to be** (Task 3; the roadmap's S8 items on
+    shapes, and on `enable`; rulings M5 and M13). Every observe reads its managed fields
+    through a `FieldReader`, which leaves a field of another type, or missing, out of
+    `fields` and names it in `unreadable` with what kind of value it found, never the
+    value (`text, not a number`): qBittorrent's, Seerr's, Jellyfin's, Plex's and the
+    admins' too. What a resource is found by (its id, its name) is still parsed strictly,
+    and an answer Mediaplane can't parse at all leaves the resource unknown. A missing
+    `CollectionType` (Jellyfin's mixed content) is unreadable, not empty. An optional
+    setting the app leaves out is `""` only when it is absent or `""`; a value of another
+    type is unreadable, and where it says where a key goes (TLS, a URL base), the host is.
+    A folder with a comma in its name can't be told apart in `paths` or `location`: it is
+    reported as unreadable, naming the folder (not a secret field); and Jellyfin's update
+    now reads the folders as Jellyfin lists them (the roadmap's S8 item: one such folder
+    made the library fail every `apply`). Drift's output redacts the run's secrets from
+    `unreadable` too (ruling M4).
+13. **(check) Keep mine writes one line, checked, and asks the app little** (Task 5; §3.3,
+    §4.2, §6.3; rulings M9 and M16). §3.3 names the `yaml` Document API to preserve
+    comments and formatting. Probed: a round-trip through it re-spaces comments aligned
+    after values (`media_server: jellyfin   # …` loses its spacing), moves a comment after
+    `overrides:` onto the next line, re-indents, and drops CRLF line ends and a missing
+    last line end; it is byte-identical only on files such as `init`'s starter. So `keep`
+    uses the Document API to find where `overrides:` and its last line are
+    (`parseDocument`, the node ranges), and inserts the line there as text: after the last
+    override, in its indentation, or a new `overrides:` at the end, or the value of one
+    written before replaced, or into a `{ … }` flow. It then parses the new text and
+    requires the same stack with the override, or writes nothing. It keeps the file's mode
+    and group, writes atomically, and refuses a `stack.yaml` that is a link (a rename
     would replace the link), has other names (a rename would part it from them), belongs
-    to another user (a rename would make it Mediaplane's), or is written as one `{ … }`
-    block, each time giving the line to add by hand. With `managed_by: external`, it writes
-    nothing and gives that line, which is §4.2's "print the snippet"; the rest of
-    externally managed mode is Slice 10's. It then records the kept value as applied, so
-    drift is clear at once and `apply` has nothing to do.
-13. **(check) A shared key changed at its source is reported, not repaired, in S8** (Task 4;
-    §6.3's last row; the brief leaves the call to this plan). When an app refuses the key
-    Mediaplane holds for it (its key check fails `auth`), drift reports it on the app
-    (`key`, naming the key), and on each resource of another app whose desired secrets hold
-    that key, whether or not that app can be asked (`key`, with `source`). Repairing it is
-    left to Slice 10:
+    to another user (a rename would make it Mediaplane's), belongs to a group its user
+    isn't in (the rename couldn't keep it), or is written as one `{ … }` block, each time
+    giving the line to add by hand. An ACL or extended attribute isn't kept, which the
+    docs say. With `managed_by: external`, it writes nothing and gives that line in the
+    error's hint, which is §4.2's "print the snippet"; giving it as a field of
+    `mediaplane.keep/v1`, with the rest of externally managed mode, is Slice 10's (ruling
+    M10, parked). It looks at its one resource only: it checks that the app takes
+    Mediaplane's key, reads the resource, checks none of its secrets and runs no test of
+    the app's; what only the app can say (Seerr's profile, which Seerr's test gives) is
+    the value applied. So every request it makes goes to the app's own address. It then
+    records the kept value as applied, so drift is clear for it and `apply` has nothing
+    to do for it.
+14. **(check) A shared key changed at its source is reported, not repaired, in S8** (Task
+    4; §6.3's last row; the brief leaves the call to this plan). When an app refuses the
+    key Mediaplane holds for it (its key check fails `auth`), drift reports it on the app
+    (`key`, naming the key), and on each resource of another app whose desired secrets
+    hold that key, whether or not that app can be asked (`key`, with `source`). Repairing
+    it is left to Slice 10:
     - **Re-apply's** "restores the old key at the source (for qBittorrent: stop, rewrite
       `qBittorrent.conf`, start)" is exactly the "restore the key at the source" that the
       owner moved to S10 on 2026-10-25 for installs from before Slice 3a: the same stop,
@@ -339,78 +401,101 @@ call was needed or made.
       key recovery from appdata, and the store's write path for an app's key, which S10
       changes for lost state anyway.
 
-    Until then, the wiring failed runbook gives the steps by hand for each app, and drift
-    points to it.
-14. **What Mediaplane made that the stack no longer wants is reported, not removed** (Task 4;
-    the roadmap's S8 item on links to an app that leaves the stack). A recorded resource
-    the stack doesn't want, of an app still in the stack and reached, is looked up by its
-    record: one the app still holds is `left` drift (Prowlarr's link to Sonarr, once
-    Sonarr leaves); one the app can't say about is a warning (`drift.left-unknown`). `keep
-    <app>.<resource>` takes it as yours (`unmanaged`), forgetting its record. Removing it
-    needs a delete for every kind of resource and its own end-to-end test (§8.1(3) step
-    4): moved to S10.
-15. **(check) Prowlarr's indexer proxy is read, never tested** (Task 4; the roadmap's S8
+    Until then, the wiring failed runbook gives the steps by hand for each app, and the
+    CLI points to it for a `key` item, never saying that `apply` puts it back (decision
+    16).
+15. **What Mediaplane made that the stack no longer wants is reported, not removed** (Task
+    4; the roadmap's S8 item on links to an app that leaves the stack). A recorded
+    resource the stack doesn't want, of an app still in the stack and reached, is looked
+    up by its record: one the app still holds is `left` drift (Prowlarr's link to Sonarr,
+    once Sonarr leaves); one the app can't say about is a warning (`drift.left-unknown`)
+    and a wiring check that couldn't be made, so drift isn't clear and exits 2 (ruling
+    I4). `keep <app>.<resource>` takes it as yours (`unmanaged`), forgetting its record.
+    Removing it needs a delete for every kind of resource and its own end-to-end test
+    (§8.1(3) step 4): moved to S10.
+16. **The CLI says what puts each kind of drift right** (Tasks 4 and 5; ruling I2). After
+    the drift lines, `plan` and `drift` print one line for each kind there is: `apply`
+    puts back a field, a resource or a secret (with Keep mine's hint, from Task 5); a key
+    changed at its source is put back by hand, as the wiring failed runbook shows; what is
+    left in an app is removed there, or kept with `keep <app>.<resource>`. Neither of the
+    last two says that `apply` puts it back.
+17. **(check) Prowlarr's indexer proxy is read, never tested** (Task 4; the roadmap's S8
     item). Probed: with Byparr stopped, Prowlarr's own health check (`Check Health`, every
     six hours) reports `IndexerProxyStatusCheck: All indexer proxies are unavailable due to
     failures`, without any test from Mediaplane, and clears it once Byparr is back. Its
     result is in `GET /api/v1/health`. A resource may read its app's health (`health`):
     drift warns of it (`drift.health`), and of a health check it can't read. It is a
-    warning, not drift: `apply` can't put a solver that is down right.
-16. **Every managed field reaches the app from D** (Task 2), or a kept value would never
+    warning, not drift, and doesn't change the exit code: `apply` can't put a solver that
+    is down right.
+18. **Every managed field reaches the app from D** (Task 2), or a kept value would never
     settle: Prowlarr's proxy gets each tag `tags` names, made or found by label; Jellyfin's
     libraries are made with, and keep, each folder in `paths`; Plex's each in `location`
     (probed: Plex takes one `location` per folder, made or updated, and an update
     replaces them); Seerr's servers take `isDefault`. Seerr's `libraries` names the
     libraries Mediaplane enables: an override naming fewer leaves the others to you, and
     a library no longer managed in Jellyfin or Plex is never enabled by Mediaplane.
-17. **Secrets stay out** (all tasks; §6.3, §7.2(4)). A drift item never holds a secret: L
-    was refused for one before it was written, and O is redacted with the run's secrets,
-    with `redacted: true` when that changed it. `keep` refuses a redacted value, a secret
-    and a value it can't read. `checks` holds a secret's name, a verdict and a time.
-18. **The lock names its command** (Task 4). `state/lock` records `drift` or `keep`, so a
+19. **Secrets stay out** (all tasks; §6.3, §7.2(4)). A drift item never holds a secret: L
+    was refused for one before it was written, and O and `unreadable` are redacted with
+    the run's secrets, with `redacted: true` when that changed them. `keep` refuses a
+    redacted value, a secret and a value it can't read. `checks` holds a secret's name, a
+    verdict and a time.
+20. **The lock names its command** (Task 4). `state/lock` records `drift` or `keep`, so a
     held lock says `mediaplane drift is running`; apply's lock reads as before.
-19. **The contract grows, optionally** (Tasks 1 to 4; §3.2):
-    `ObservedResource.unreadable`; `ResourceSpec.lists`, `locked`, `checkEvery` and
-    `health`; `verify(api, desired, observed, ctx?)` may answer `{ unchecked }`;
-    `update(api, desired, observed, changes?)`. An integration that leaves them out keeps
-    its meaning, so no other resource changes.
-20. **Fakes no kinder than the real ones** (Tasks 3 and 4). The fake arrs' test of a
-    download client makes a missing post-import category, as Sonarr's does; their root
-    folders say `accessible` from the folders their `mkdir` made; the fake Prowlarr
-    answers `GET /api/v1/health`; the fake qBittorrent's ban was there already (S3c).
-21. **(check) The end-to-end test of success criterion 4** (Task 6; §8.1(3) step 3) runs on
+21. **The contract grows, optionally** (Tasks 1 to 4; §3.2):
+    `ObservedResource.unreadable`; `DesiredResource.sendsTo`; `ResourceSpec.lists`,
+    `locked`, `checkEvery` and `health`; `verify(api, desired, observed, ctx?)` may answer
+    `{ unchecked }`; `update(api, desired, observed, changes?)`. An integration that
+    leaves them out keeps its meaning, so no other resource changes.
+22. **Fakes no kinder than the real ones** (Tasks 3 and 4). The fake arrs' test of a
+    download client makes each category it names that qBittorrent lacks, its own and its
+    post-import one (ruling I3), as Sonarr's does; their root folders say `accessible`
+    from the folders their `mkdir` made; the fake Prowlarr answers `GET /api/v1/health`;
+    the fake qBittorrent's ban was there already (S3c). Drift's and keep's tests share
+    their home and runtime helpers (`testing/home.ts`, ruling M8).
+23. **(check) The end-to-end test of success criterion 4** (Task 6; §8.1(3) step 3) runs on
     the real apps, without Prowlarr and Seerr, to stay short: a category changed in
     Sonarr, a wrong key in Radarr's connection to Jellyfin, qBittorrent's save path
     changed and its `movies` category deleted, and a folder added to Jellyfin's Movies, by
-    the apps' own APIs. `drift` reports each with what was applied and what the app holds;
-    a second `drift` doesn't check the refused key again; `apply` puts each back, and
-    `drift` is clear. Then, changed again, `keep` refuses what can't be kept, and keeps
-    the category, the folder and Sonarr's deleted root folder (`unmanaged`): `stack.yaml`
-    gains exactly three lines, its comments kept; drift is clear; two `apply`s change
-    nothing. The deploy test runs `drift` and `keep` from the image, through the proxy.
-22. **No new socket-proxy permission** (all tasks; ADR 0008). `drift` and `keep` make the
+    the apps' own APIs. `drift` reports each with what `apply` sets and what the app
+    holds; a second `drift` doesn't check the refused key again; `apply` puts each back,
+    and `drift` is clear. Then, changed again, `keep` refuses what can't be kept (where
+    Sonarr sends qBittorrent's key among it), and keeps the category, the folder and
+    Sonarr's deleted root folder (`unmanaged`): `stack.yaml` gains exactly three lines,
+    its comments kept; drift finds nothing, but waits for qBittorrent's kept category;
+    `apply` makes it, and only it (ruling I1's remedy, proved); drift is clear; and the
+    next `apply` changes nothing. The deploy test runs `drift` and `keep` from the image,
+    through the proxy.
+24. **No new socket-proxy permission** (all tasks; ADR 0008). `drift` and `keep` make the
     calls `plan` makes. `deploy/mediaplane.compose.yaml` and `deploy/deploy.test.ts` don't
     change.
-23. **The docs** (Task 7): the drift reported runbook (new), ADR 0003 (new, Accepted), the
+25. **The docs** (Task 7): the drift reported runbook (new), ADR 0003 (new, Accepted), the
     architecture (a drift section), the threat model (drift's marks and write, keep's
-    write, T17), the app READMEs (what drift reports and Keep mine keeps there; the facts
-    mark fixed fields, generated in Task 2), the root README ("What works so far"), the
-    deploy guide, the wiring failed runbook, the spec (§3.2, §5.2 and §11, "Slice 8") and
-    the roadmap (S8 done, each S8 item settled). The CLI and `stack.yaml` references are
-    generated in Tasks 2, 4 and 5.
+    write, T17 with where keys go, ruling B1), the app READMEs (what drift reports and
+    Keep mine keeps there; the facts mark fixed fields, generated in Tasks 2 and 3), the
+    root README ("What works so far"), the deploy guide, the wiring failed runbook, the
+    spec (§3.2, §5.2 and §11, "Slice 8", and the earlier slices' "Slice 8" promises,
+    ruling M1) and the roadmap (S8 done, each S8 item settled, and each item moved to S9,
+    S10 or M2's `doctor` added to that list, rulings M2, M10, M14 and M15). The CLI and
+    `stack.yaml` references are generated in Tasks 2, 4 and 5.
+26. **Seerr's Jellyfin key is checked once per `apply`** (Task 3; the owner's decision).
+    `update` may be told what differs (`changes`): Seerr's media server, told its key was
+    refused, gives Seerr the stack's key without asking Seerr's list of Jellyfin's users
+    again. Probed: each failing check of a Seerr server logs one line in Seerr's log
+    (`[error][Radarr]: [Radarr] Failed to retrieve tags: … 401`), with no throttling; a
+    passing check logs nothing.
 
 ## File structure (new and changed in this slice)
 
 `packages/engine/src/`:
 
-- `integrations/types.ts`: `ObservedResource.unreadable`; `VerifyContext`, `Unchecked`;
-  `ResourceSpec.lists`, `locked`, `checkEvery`, `health`; `verify`'s `ctx`, `update`'s
-  `changes`.
+- `integrations/types.ts`: `ObservedResource.unreadable`; `DesiredResource.sendsTo`;
+  `VerifyContext`, `Unchecked`; `ResourceSpec.lists`, `locked`, `checkEvery`, `health`;
+  `verify`'s `ctx`, `update`'s `changes`.
 - `integrations/wiring.ts` (+test): the three-way comparison in `examine` (`Drift`,
-  `SecretCheck`, `sameValue`); `planWiring`'s `drift`, `checks`, `drift` mode, `only`;
-  `key` and `left` drift, the apps' health; `DRIFT_RUNBOOK`.
+  `SecretCheck`, `sameValue`, `listItems`); `planWiring`'s `drift`, `checks`, `drift`
+  mode, `only`; `key` and `left` drift, the apps' health; `DRIFT_RUNBOOK`.
 - `integrations/overrides.ts` (+test), new: `desiredOf`, `withOverrides`, `isUnmanaged`,
-  `UNMANAGED`, `overrideTarget`, `checkOverrides`.
+  `UNMANAGED`, `SENDS_A_KEY`, `overrideTarget`, `checkOverrides`.
 - `integrations/read.ts` (+test), new: `fieldReader`, `FieldReader`.
 - `integrations/resources.ts` (+test): `KnownResource.checks`.
 - `integrations/wire.ts` (+test): overrides, `VerifyContext` and `changes`.
@@ -420,19 +505,22 @@ call was needed or made.
 - `keep.ts` (+test), new: `keep`, `KeepResult`, `KeepOptions`.
 - `config/overrides-file.ts` (+test), new: `withOverride`, `overrideLine`,
   `stackFileProblem`; `config/schema.ts`: the `overrides` and `managed_by` descriptions.
+- `util/atomic.ts` (+test): `writeFileAtomic`'s `group`.
 - `state/lock.ts` (+test): the lock's `command`.
 - `runbooks.ts`: `drift-reported`.
-- `testing/wiring.ts`, `testing/prowlarr.ts`: the fakes, as decision 20 says.
+- `testing/wiring.ts`, `testing/prowlarr.ts`: the fakes, as decision 22 says;
+  `testing/home.ts`, new: drift's and keep's home and runtime.
 - `apply/apply.ts`: the empty plan's new fields.
 
 `packages/cli/src/`: `run.ts` (+test): `drift` and `keep`; `output.ts` (+test): the
-`Drift` section of `plan`, `printDrift`, `printKeep`, `mediaplane.drift/v1`,
-`mediaplane.keep/v1`.
+`Drift` section of `plan`, `driftLine`, `driftAdvice`, `printDrift`, `printKeep`,
+`mediaplane.drift/v1`, `mediaplane.keep/v1`.
 
-`catalog/`: `_shared/servarr-provider.ts`, `servarr-download.ts` (+test),
-`servarr-connection.ts` (+test); `sonarr/integration.ts`, `radarr/integration.ts`;
-`prowlarr/integration.ts` (+test); `qbittorrent/integration.ts`; `jellyfin/integration.ts`
-(+test); `plex/integration.ts` (+test); `seerr/integration.ts` (+test); `catalog.test.ts`.
+`catalog/`: `_shared/secret.ts` (`sendsToOf`), `servarr.ts`, `servarr-provider.ts`,
+`servarr-download.ts` (+test), `servarr-connection.ts` (+test); `sonarr/integration.ts`,
+`radarr/integration.ts`; `prowlarr/integration.ts` (+test); `qbittorrent/integration.ts`
+(+test); `jellyfin/integration.ts` (+test); `plex/integration.ts` (+test);
+`seerr/integration.ts` (+test); `catalog.test.ts`.
 
 Elsewhere: `scripts/docs/catalog-facts.ts` (+test): fixed fields; `test/e2e/drift.e2e.test.ts`,
 new; `test/e2e/deploy.e2e.test.ts`, `test/e2e/helpers.ts`; the docs, and the generated
@@ -441,8 +529,8 @@ references and app facts.
 **Tasks:**
 
 1. The three-way comparison in `plan`: drift, and how each secret was checked.
-2. Overrides: what the stack wants, with Keep mine's values, and the fields that can't be
-   kept.
+2. Overrides: what the stack wants, with Keep mine's values; the fields that can't be
+   kept; and keys sent only to the stack's own addresses.
 3. The catalog: what an app holds that Mediaplane can't read, a root folder's folder, a
    renamed library, and `plan`'s marks as the owner decided.
 4. `mediaplane drift`.
@@ -450,15 +538,19 @@ references and app facts.
 6. End-to-end: success criterion 4 on the real apps, and from the image.
 7. Docs.
 
+Each task's behaviour agrees with the decisions when it lands (ruling M3): nothing a task
+builds is changed back by a later one.
+
 **Out of scope here:**
 
 - **Restoring a key at its source, or giving a new one to every app that holds it**
-  (§6.3's shared-key resolutions), with key recovery: Slice 10 (decision 13).
+  (§6.3's shared-key resolutions), with key recovery: Slice 10 (decision 14).
 - **Removing what Mediaplane made when its app leaves the stack** (§8.1(3) step 4): Slice 10
-  (decision 14).
-- **Externally managed mode** beyond `keep`'s refusal with the line to add, re-adoption by
-  name after lost state, rotating the admin password, Jellyfin's key deleted by hand,
-  giving Seerr a new Plex token or another Jellyfin key: Slice 10.
+  (decision 15).
+- **Externally managed mode** beyond `keep`'s refusal with the line to add (and that line
+  as a field of `mediaplane.keep/v1`, ruling M10), re-adoption by name after lost state,
+  rotating the admin password, Jellyfin's key deleted by hand, giving Seerr a new Plex
+  token or another Jellyfin key: Slice 10.
 - **Drift on a schedule,** and alerts: M2.
 
 ---
@@ -468,20 +560,16 @@ references and app facts.
 Every later task builds on what `examine` now says of each resource: what drifted, and how
 each of its secrets was checked.
 
-Decision: drift is a field that differs from both what was applied and what is wanted
-(decision 1).
+Decision: drift is a field that differs from both what was applied and what is wanted;
+`expected` is what `apply` sets, with `applied` when `stack.yaml` changed it (decision 1).
 Decision: a secret drift found refused is refused, without another check, in `plan` too
 (decisions 3 and 4).
-Decision: no secret in a drift item (decision 17); the contract grows optionally
-(decision 19).
+Decision: no secret in a drift item, `unreadable` redacted too (decision 19); the contract
+grows optionally (decision 21).
 
 **Files:**
-- Modify: `packages/engine/src/integrations/types.ts`,
-  `packages/engine/src/integrations/resources.ts`,
-  `packages/engine/src/integrations/wiring.ts`, `packages/engine/src/integrations/wire.ts`,
-  `packages/engine/src/plan/plan.ts`, `packages/engine/src/apply/apply.ts`,
-  `packages/cli/src/output.ts`
-- Test: packages/cli/src/output.test.ts packages/engine/src/integrations/resources.test.ts packages/engine/src/integrations/wire.test.ts packages/engine/src/integrations/wiring.test.ts packages/engine/src/plan/plan.test.ts
+- Modify: `packages/cli/src/output.ts`, `packages/engine/src/apply/apply.ts`, `packages/engine/src/integrations/resources.ts`, `packages/engine/src/integrations/types.ts`, `packages/engine/src/integrations/wire.ts`, `packages/engine/src/integrations/wiring.ts`, `packages/engine/src/plan/plan.ts`
+- Test: `packages/cli/src/output.test.ts`, `packages/engine/src/integrations/resources.test.ts`, `packages/engine/src/integrations/wire.test.ts`, `packages/engine/src/integrations/wiring.test.ts`, `packages/engine/src/plan/plan.test.ts`
 
 **Interfaces:**
 - **Consumes:** S3b to S7's `examine`, `planWiring`, `wire`, `KnownResource`,
@@ -493,13 +581,15 @@ Decision: no secret in a drift item (decision 17); the contract grows optionally
     `ResourceSpec.verify?(api, desired, observed, ctx?: VerifyContext): Promise<boolean | Unchecked>`,
     `ResourceSpec.update(api, desired, observed, changes?: readonly string[]): Promise<void>`;
   - `KnownResource.checks?: Record<string, { verdict: 'passed' | 'refused'; at: string }>`;
-  - in `integrations/wiring.ts`: `interface Drift { resource: string; kind: 'field' | 'missing' | 'secret'; field?; expected?: Scalar; actual?: Scalar | null; unreadable?: string; redacted?: boolean; secret?: string; since?: string }`,
+  - in `integrations/wiring.ts`: `interface Drift { resource: string; kind: 'field' | 'missing' | 'secret'; field?; expected?: Scalar; applied?: Scalar; actual?: Scalar | null; unreadable?: string; redacted?: boolean; secret?: string; since?: string }`,
     `interface SecretCheck { resource: string; secret: string; verdict: 'passed' | 'refused' | 'unchecked'; reason?: string; at?: string }`,
     `Examined.drift: Drift[]`, `Examined.checks: SecretCheck[]`,
     `ExamineOptions.context?: VerifyContext`, `interface PlannedWiring { changes; diagnostics; drift; checks }`;
   - `PlanResult.drift: Drift[]`, `PlanResult.checks: SecretCheck[]`;
   - in `packages/cli/src/output.ts`: `driftLine(drift: Drift): string`, and `plan`'s
-    `Drift, changed outside Mediaplane since it was applied:` section.
+    `Drift, changed outside Mediaplane since it was applied:` section;
+  - in `wiring.test.ts`: one `sonarrWith(resources, ...overrides)`, for every later test
+    there (ruling M8).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -507,15 +597,27 @@ Decision: no secret in a drift item (decision 17); the contract grows optionally
 
 ```diff
 diff --git a/packages/cli/src/output.test.ts b/packages/cli/src/output.test.ts
-index 4ec2b23..fa3724f 100644
+index 4ec2b23..fa587ce 100644
 --- a/packages/cli/src/output.test.ts
 +++ b/packages/cli/src/output.test.ts
-@@ -34,2 +34,4 @@ const PLAN: PlanResult = {
+@@ -2,3 +2,10 @@ import type { ActionResult, ChangeRecord, PlanResult } from '@mediaplane/engine'
+ import { describe, expect, it } from 'vitest';
+-import { printApply, printHistory, printPlan, printRecord, printStep } from './output';
++import {
++  driftLine,
++  printApply,
++  printHistory,
++  printPlan,
++  printRecord,
++  printStep,
++} from './output';
+ import type { Io } from './run';
+@@ -34,2 +41,4 @@ const PLAN: PlanResult = {
    wiring: [],
 +  drift: [],
 +  checks: [],
    bootstrap: [],
-@@ -76,2 +78,67 @@ describe('printPlan: the wiring', () => {
+@@ -76,2 +85,82 @@ describe('printPlan: the wiring', () => {
  
 +describe('printPlan: drift', () => {
 +  const DRIFTED: PlanResult = {
@@ -553,6 +655,21 @@ index 4ec2b23..fa3724f 100644
 +      { resource: 'radarr.download_client', secret: 'apiKey', verdict: 'refused' },
 +    ],
 +  };
++
++  it('says what apply sets, and what was applied, when stack.yaml and the app both changed', () => {
++    expect(
++      driftLine({
++        resource: 'qbittorrent.preferences',
++        kind: 'field',
++        field: 'savePath',
++        expected: '/data/torrents',
++        applied: '/data/old',
++        actual: '/data/other',
++      }),
++    ).toBe(
++      '  ~ qbittorrent.preferences.savePath: expected "/data/torrents", actual "/data/other" (Mediaplane applied "/data/old"; stack.yaml has changed it since)',
++    );
++  });
 +
 +  it('says what changed outside Mediaplane: what was applied, and what the app holds', () => {
 +    const term = capture();
@@ -663,10 +780,22 @@ index 687467b..a21a110 100644
 
 ```diff
 diff --git a/packages/engine/src/integrations/wiring.test.ts b/packages/engine/src/integrations/wiring.test.ts
-index 31b2e4e..7ac1a26 100644
+index 31b2e4e..43fc8fa 100644
 --- a/packages/engine/src/integrations/wiring.test.ts
 +++ b/packages/engine/src/integrations/wiring.test.ts
-@@ -75,2 +75,11 @@ describe('planWiring', () => {
+@@ -68,2 +68,11 @@ const RECORDED: KnownResources = {
+ 
++/** WIRED_CATALOG, with Sonarr's resources replaced by `resources`. */
++function sonarrWith(resources: ResourceSpec[]) {
++  return stackOf(
++    WIRED_CATALOG.map((def) =>
++      def.id === 'sonarr' ? { ...def, integration: { after: [], resources } } : def,
++    ),
++  );
++}
++
+ describe('planWiring', () => {
+@@ -75,2 +84,11 @@ describe('planWiring', () => {
        diagnostics: [],
 +      drift: [],
 +      checks: [
@@ -678,17 +807,22 @@ index 31b2e4e..7ac1a26 100644
 +        },
 +      ],
      });
-@@ -1004 +1013,238 @@ describe('settled', () => {
+@@ -165,11 +183,2 @@ describe('planWiring', () => {
+ 
+-  /** WIRED_CATALOG, with Sonarr's resources replaced by `resources`. */
+-  function sonarrWith(resources: ResourceSpec[]) {
+-    return stackOf(
+-      WIRED_CATALOG.map((def) =>
+-        def.id === 'sonarr' ? { ...def, integration: { after: [], resources } } : def,
+-      ),
+-    );
+-  }
+-
+   it('leaves the secrets unchecked while a resource they require is yet to be made', async () => {
+@@ -1004 +1013,277 @@ describe('settled', () => {
  });
 +
 +describe('planWiring: drift (spec §6.3)', () => {
-+  /** WIRED_CATALOG, with Sonarr's resources replaced by `resources`. */
-+  const sonarrWith = (resources: ResourceSpec[]) =>
-+    stackOf(
-+      WIRED_CATALOG.map((def) =>
-+        def.id === 'sonarr' ? { ...def, integration: { after: [], resources } } : def,
-+      ),
-+    );
 +  const AT = '2026-10-20T08:00:00.000Z';
 +
 +  it('says what was applied and what the app holds of a field changed in it', async () => {
@@ -731,6 +865,24 @@ index 31b2e4e..7ac1a26 100644
 +    expect(planned.drift).toEqual([]);
 +    expect(planned.checks).toEqual([
 +      { resource: 'sonarr.login', secret: 'password', verdict: 'passed' },
++    ]);
++  });
++
++  it('says what apply sets, and what was applied, when stack.yaml and the app both changed it', async () => {
++    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
++    const old = {
++      'sonarr.login': { ...RECORDED['sonarr.login'], fields: { user: 'old' } },
++    };
++    const planned = await planWiring(options(sonarr, { known: old as KnownResources }));
++    expect(planned.drift).toEqual([
++      {
++        resource: 'sonarr.login',
++        kind: 'field',
++        field: 'user',
++        expected: 'admin',
++        applied: 'old',
++        actual: 'someone',
++      },
 +    ]);
 +  });
 +
@@ -872,6 +1024,34 @@ index 31b2e4e..7ac1a26 100644
 +    ]);
 +  });
 +
++  it("keeps a secret out of what it says of a value it can't read", async () => {
++    const odd: ResourceSpec = {
++      ...FAKE_LOGIN,
++      observe: () =>
++        Promise.resolve({
++          id: null,
++          name: 'login',
++          fields: {},
++          unreadable: { user: `a folder with a comma in its name, /x,${PASSWORD}` },
++        }),
++    };
++    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
++    const planned = await planWiring(
++      options(sonarr, { stack: sonarrWith([odd]), known: RECORDED }),
++    );
++    expect(planned.drift).toEqual([
++      {
++        resource: 'sonarr.login',
++        kind: 'field',
++        field: 'user',
++        expected: 'admin',
++        actual: null,
++        unreadable: 'a folder with a comma in its name, /x,***',
++        redacted: true,
++      },
++    ]);
++  });
++
 +  it('keeps a secret out of a value the app holds, and says it did', async () => {
 +    const sonarr = await fakeSonarr({
 +      key: KEY,
@@ -973,7 +1153,7 @@ index 14cab6b..7b05d5f 100644
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `pnpm vitest run packages/cli/src/output.test.ts packages/engine/src/integrations/resources.test.ts packages/engine/src/integrations/wire.test.ts packages/engine/src/integrations/wiring.test.ts packages/engine/src/plan/plan.test.ts`
-Expected: FAIL. 14 tests fail, 141 pass: 10 in `wiring.test.ts` (`expected undefined to deeply equal […]`: `planWiring` gives no `drift` nor `checks`), and one in each of `output.test.ts` (no `Drift` section), `plan.test.ts`, `resources.test.ts` (`checks` refused as an unknown key) and `wire.test.ts` (`update` is given no `changes`).
+Expected: FAIL. 17 tests fail, 141 pass: 12 in `wiring.test.ts` (`expected undefined to deeply equal […]`: `planWiring` gives no `drift` nor `checks`), 2 in `output.test.ts` (no `Drift` section, nor `applied`), and one in each of `plan.test.ts`, `resources.test.ts` (`checks` refused as an unknown key) and `wire.test.ts` (`update` is given no `changes`).
 
 - [ ] **Step 3: Write the comparison, the checks and `plan`'s drift**
 
@@ -981,7 +1161,7 @@ Expected: FAIL. 14 tests fail, 141 pass: 10 in `wiring.test.ts` (`expected undef
 
 ```diff
 diff --git a/packages/cli/src/output.ts b/packages/cli/src/output.ts
-index 812734b..23aac55 100644
+index 812734b..cba88c7 100644
 --- a/packages/cli/src/output.ts
 +++ b/packages/cli/src/output.ts
 @@ -9,2 +9,3 @@ import {
@@ -1006,7 +1186,7 @@ index 812734b..23aac55 100644
 +        drift.unreadable === undefined
 +          ? shownValue(drift.actual ?? null)
 +          : `one Mediaplane can't read (${drift.unreadable})`;
-+      return `  ~ ${drift.resource}.${drift.field ?? ''}: expected ${shownValue(drift.expected ?? null)}, actual ${actual}`;
++      return `  ~ ${drift.resource}.${drift.field ?? ''}: expected ${shownValue(drift.expected ?? null)}, actual ${actual}${drift.applied === undefined ? '' : ` (Mediaplane applied ${shownValue(drift.applied)}; stack.yaml has changed it since)`}`;
 +    }
 +    case 'missing':
 +      return `  - ${drift.resource}: deleted outside Mediaplane`;
@@ -1166,7 +1346,7 @@ index 0e96656..1c42db7 100644
 
 ```diff
 diff --git a/packages/engine/src/integrations/wiring.ts b/packages/engine/src/integrations/wiring.ts
-index a50b234..8b81a56 100644
+index a50b234..a9735e6 100644
 --- a/packages/engine/src/integrations/wiring.ts
 +++ b/packages/engine/src/integrations/wiring.ts
 @@ -23,2 +23,4 @@ import type {
@@ -1174,14 +1354,15 @@ index a50b234..8b81a56 100644
 +  Scalar,
 +  VerifyContext,
    WiringContext,
-@@ -54,2 +56,39 @@ export interface WiringChange {
+@@ -54,2 +56,43 @@ export interface WiringChange {
  
 +/**
 + * What changed in an app outside Mediaplane since Mediaplane last applied a resource
 + * (spec §6.3: O ≠ L), never a secret's value:
-+ * - `field`: a managed field holds another value than the one applied (`expected`), and
-+ *   than the one the stack now wants: `actual`, or null with `unreadable` when the app
-+ *   holds it in a shape Mediaplane can't read;
++ * - `field`: a managed field holds another value than the one applied, and than the one
++ *   the stack now wants (`expected`, what apply sets): `actual`, or null with `unreadable`
++ *   when the app holds it in a shape Mediaplane can't read. When stack.yaml has changed
++ *   it since, `applied` is the value Mediaplane applied;
 + * - `missing`: the app no longer holds it;
 + * - `secret`: the app's own check refuses one of its secrets (`since`: when drift found
 + *   it, for one it doesn't check again).
@@ -1191,10 +1372,13 @@ index a50b234..8b81a56 100644
 +  resource: string;
 +  kind: 'field' | 'missing' | 'secret';
 +  field?: string;
++  /** The value apply sets: what the stack wants (D). */
 +  expected?: Scalar;
++  /** What Mediaplane applied (L), when the stack now wants another value. */
++  applied?: Scalar;
 +  actual?: Scalar | null;
 +  unreadable?: string;
-+  /** true when `actual` held one of the run's secrets, shown as ***. */
++  /** true when `actual` or `unreadable` held one of the run's secrets, shown as ***. */
 +  redacted?: boolean;
 +  secret?: string;
 +  since?: string;
@@ -1214,14 +1398,14 @@ index a50b234..8b81a56 100644
 +}
 +
  /** For tests: where an app is reached, and how long its calls take and are tried. */
-@@ -259,2 +298,6 @@ export interface Examined {
+@@ -259,2 +302,6 @@ export interface Examined {
    changes: string[];
 +  /** What changed in the app since Mediaplane last applied it; none without a record. */
 +  drift: Drift[];
 +  /** How each of its secrets was checked. */
 +  checks: SecretCheck[];
  }
-@@ -276,8 +319,19 @@ export interface ExamineOptions {
+@@ -276,8 +323,19 @@ export interface ExamineOptions {
    refused?: readonly string[];
 +  /**
 +   * What the resource's verify may use (VerifyContext); apply's, which may change things,
@@ -1244,11 +1428,11 @@ index a50b234..8b81a56 100644
 + * a field that differs from both what was applied and what is wanted now. Undefined when
 + * the stack wants none. Throws AppApiError.
   */
-@@ -292,2 +346,3 @@ export async function examine(
+@@ -292,2 +350,3 @@ export async function examine(
    if (wanted === undefined) return undefined;
 +  const address = resourceAddress(ctx.app, spec);
    const desired =
-@@ -297,4 +352,18 @@ export async function examine(
+@@ -297,4 +356,18 @@ export async function examine(
    const observed = await spec.observe(api, known, desired);
 +  const unchecked = (reason: string): SecretCheck[] =>
 +    spec.secrets.map((secret) => ({
@@ -1268,12 +1452,12 @@ index a50b234..8b81a56 100644
 +      checks: unchecked('the app has none to check: apply makes it with them'),
 +    };
    }
-@@ -309,2 +378,4 @@ export async function examine(
+@@ -309,2 +382,4 @@ export async function examine(
    );
 +  const drift =
 +    known === undefined ? [] : fieldDrift(address, compared, known, desired, observed);
    // A field that differs makes it an update, which sets the secrets too: checking them
-@@ -312,11 +383,23 @@ export async function examine(
+@@ -312,11 +387,23 @@ export async function examine(
    // have yet fails as if the password were wrong.
 -  if (changes.length === 0 && spec.secrets.length > 0) {
 -    const refused = (options.refused ?? []).filter((name) => spec.secrets.includes(name));
@@ -1305,7 +1489,7 @@ index a50b234..8b81a56 100644
    }
 -  if (changes.length > 0) return { desired, observed, action: 'update', changes };
    const recorded =
-@@ -324,3 +407,102 @@ export async function examine(
+@@ -324,3 +411,114 @@ export async function examine(
      compared.every((field) => known.fields[field] === desired.fields[field]);
 -  return { desired, observed, action: recorded ? 'unchanged' : 'adopt', changes };
 +  return {
@@ -1331,19 +1515,31 @@ index a50b234..8b81a56 100644
 +  observed: ObservedResource,
 +): Drift[] {
 +  return compared.flatMap((field): Drift[] => {
-+    const expected = known.fields[field];
-+    if (expected === undefined) return [];
++    const applied = known.fields[field];
++    if (applied === undefined) return [];
++    // What apply would set; and what it applied, when stack.yaml has changed it since.
++    const wanted = desired.fields[field];
++    const expected = wanted ?? applied;
++    const was = wanted === undefined || wanted === applied ? {} : { applied };
 +    const unreadable =
 +      observed.unreadable?.[field] ??
 +      (observed.fields[field] === undefined ? 'the app gave none' : undefined);
 +    if (unreadable !== undefined) {
 +      return [
-+        { resource: address, kind: 'field', field, expected, actual: null, unreadable },
++        {
++          resource: address,
++          kind: 'field',
++          field,
++          expected,
++          ...was,
++          actual: null,
++          unreadable,
++        },
 +      ];
 +    }
 +    const actual = observed.fields[field];
-+    if (actual === expected || actual === desired.fields[field]) return [];
-+    return [{ resource: address, kind: 'field', field, expected, actual }];
++    if (actual === applied || actual === wanted) return [];
++    return [{ resource: address, kind: 'field', field, expected, ...was, actual }];
 +  });
 +}
 +
@@ -1409,7 +1605,7 @@ index a50b234..8b81a56 100644
 +  if (verdict === false) return all('refused');
 +  return all('unchecked', verdict.unchecked);
  }
-@@ -414,10 +596,19 @@ export interface PlanWiringOptions {
+@@ -414,10 +612,19 @@ export interface PlanWiringOptions {
  
 +/** What planWiring found: apply's changes, and what drift found on the way. */
 +export interface PlannedWiring {
@@ -1434,7 +1630,7 @@ index a50b234..8b81a56 100644
 -): Promise<{ changes: WiringChange[]; diagnostics: Diagnostic[] }> {
 +export async function planWiring(options: PlanWiringOptions): Promise<PlannedWiring> {
    const order = wiringOrder(options.stack);
-@@ -434,2 +625,19 @@ export async function planWiring(
+@@ -434,2 +641,28 @@ export async function planWiring(
    const diagnostics: Diagnostic[] = [];
 +  const drift: Drift[] = [];
 +  const checks: SecretCheck[] = [];
@@ -1444,30 +1640,39 @@ index a50b234..8b81a56 100644
 +    readOnly: true,
 +    peer: (app) => checked.get(app),
 +  };
-+  /** A value from an app, shown without any secret the run knows of by then. */
++  /**
++   * A value from an app, and what was said of one Mediaplane can't read, shown without any
++   * secret the run knows of by then.
++   */
 +  const shown = (entry: Drift): Drift => {
-+    if (typeof entry.actual !== 'string') return entry;
-+    const actual = redact(
-+      entry.actual,
-+      redactionValues([...options.secrets, ...found.values]),
-+    );
-+    return actual === entry.actual ? entry : { ...entry, actual, redacted: true };
++    const values = redactionValues([...options.secrets, ...found.values]);
++    const hidden = (text: string | null | Scalar | undefined) =>
++      typeof text === 'string' ? redact(text, values) : text;
++    const actual = hidden(entry.actual);
++    const unreadable = hidden(entry.unreadable);
++    if (actual === entry.actual && unreadable === entry.unreadable) return entry;
++    return {
++      ...entry,
++      ...(actual === undefined ? {} : { actual }),
++      ...(typeof unreadable === 'string' ? { unreadable } : {}),
++      redacted: true,
++    };
 +  };
    /**
-@@ -480,2 +688,3 @@ export async function planWiring(
+@@ -480,2 +713,3 @@ export async function planWiring(
      }
 +    checked.set(app.def.id, client.api);
      const wanted = wantedResources(ctx);
-@@ -505,2 +714,3 @@ export async function planWiring(
+@@ -505,2 +739,3 @@ export async function planWiring(
            verify: !waiting,
 +          context,
          });
-@@ -540,2 +750,4 @@ export async function planWiring(
+@@ -540,2 +775,4 @@ export async function planWiring(
        });
 +      drift.push(...result.drift.map(shown));
 +      checks.push(...result.checks);
        // Its secrets went unchecked, so it isn't known to be in place either: what
-@@ -545,3 +757,3 @@ export async function planWiring(
+@@ -545,3 +782,3 @@ export async function planWiring(
    }
 -  return { changes, diagnostics };
 +  return { changes, diagnostics, drift, checks };
@@ -1530,39 +1735,40 @@ git add packages
 git commit -m "feat(engine): plan compares what the apps hold with what Mediaplane applied, and says what changed outside it" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1974 tests pass in 88 files (1960 in 88 files before this slice).
+Expected: 1977 tests pass in 88 files (1960 in 88 files before this slice).
 
 ---
 
-### Task 2: Overrides: what the stack wants, with Keep mine's values, and the fields that can't be kept
+### Task 2: Overrides: what the stack wants, with Keep mine's values; the fields that can't be kept; and keys sent only to the stack's own addresses
 
 `overrides:` has been in the schema since Slice 1, unused. This task makes it part of D,
 checks it, and makes each catalog resource send the app what D says, so that a value of
-yours stays.
+yours stays; but never where a key goes, which is fixed, and sent from the stack's own
+addresses whatever an override or an app holds.
 
-Decision: overrides are part of D, checked before any app is asked (decision 8).
-Decision: fixed fields, with why (decision 9).
-Decision: every managed field reaches the app from D (decision 16).
+Decision: overrides are part of D, checked before any app is asked; a field of an
+`unmanaged` resource warns, an `unmanaged` one left is quiet (decision 8).
+Decision: fixed fields, with why, where a key goes among them (decision 9).
+Decision: keys go only to the stack's own addresses, both ways (decision 10).
+Decision: a download client's category kept as another is qBittorrent's to have, and a
+record of another name isn't drift (decisions 1 and 7).
+Decision: every managed field reaches the app from D (decision 18).
 
 **Files:**
 - Create: `packages/engine/src/integrations/overrides.ts`
-- Modify: `packages/engine/src/integrations/types.ts`,
-  `packages/engine/src/integrations/wiring.ts`, `packages/engine/src/integrations/wire.ts`,
-  `packages/engine/src/plan/plan.ts`, `packages/engine/src/config/schema.ts`,
-  `packages/engine/src/index.ts`, `catalog/_shared/servarr-download.ts`,
-  `catalog/prowlarr/integration.ts`, `catalog/qbittorrent/integration.ts`,
-  `catalog/jellyfin/integration.ts`, `catalog/plex/integration.ts`,
-  `catalog/seerr/integration.ts`, `scripts/docs/catalog-facts.ts`
-- Test: catalog/catalog.test.ts catalog/jellyfin/integration.test.ts catalog/plex/integration.test.ts catalog/prowlarr/integration.test.ts catalog/seerr/integration.test.ts packages/engine/src/integrations/overrides.test.ts packages/engine/src/integrations/wiring.test.ts packages/engine/src/plan/plan.test.ts scripts/docs/catalog-facts.test.ts
-- Generated: `docs/reference/stack-yaml.md`, `docs/reference/stack.schema.json`, and the
-  facts of `catalog/{jellyfin,plex,radarr,seerr,sonarr}/README.md`
+- Modify: `catalog/_shared/secret.ts`, `catalog/_shared/servarr-connection.ts`, `catalog/_shared/servarr-download.ts`, `catalog/_shared/servarr-provider.ts`, `catalog/jellyfin/integration.ts`, `catalog/plex/integration.ts`, `catalog/prowlarr/integration.ts`, `catalog/qbittorrent/integration.ts`, `catalog/seerr/integration.ts`, `packages/engine/src/config/schema.ts`, `packages/engine/src/index.ts`, `packages/engine/src/integrations/types.ts`, `packages/engine/src/integrations/wire.ts`, `packages/engine/src/integrations/wiring.ts`, `packages/engine/src/plan/plan.ts`, `scripts/docs/catalog-facts.ts`
+- Test: `catalog/_shared/servarr-connection.test.ts`, `catalog/_shared/servarr-download.test.ts`, `catalog/catalog.test.ts`, `catalog/jellyfin/integration.test.ts`, `catalog/plex/integration.test.ts`, `catalog/prowlarr/integration.test.ts`, `catalog/qbittorrent/integration.test.ts`, `catalog/seerr/integration.test.ts`, `packages/engine/src/integrations/overrides.test.ts`, `packages/engine/src/integrations/wiring.test.ts`, `packages/engine/src/plan/plan.test.ts`, `scripts/docs/catalog-facts.test.ts`
+- Generated: `catalog/jellyfin/README.md`, `catalog/plex/README.md`, `catalog/prowlarr/README.md`, `catalog/radarr/README.md`, `catalog/seerr/README.md`, `catalog/sonarr/README.md`, `docs/reference/stack-yaml.md`, `docs/reference/stack.schema.json`
 
 **Interfaces:**
-- **Consumes:** Task 1's `examine` and `planWiring`; `didYouMean`.
+- **Consumes:** Task 1's `examine` and `planWiring`; `didYouMean`; S3b's
+  `serviceAddress` and `stackAddress`.
 - **Produces:**
   - `ResourceSpec.lists?: readonly string[]`, `ResourceSpec.locked?: Readonly<Record<string, string>>`
     (`{resource}` in a reason stands for the address);
-  - from `@mediaplane/engine`: `UNMANAGED` (`'unmanaged'`),
+  - `DesiredResource.sendsTo?: Fields`: where the resource has its app send a key;
+  - from `@mediaplane/engine`: `UNMANAGED` (`'unmanaged'`), `SENDS_A_KEY` (`'it sets
+    where a key is sent (spec §11, Slice 6)'`),
     `isUnmanaged(stack: ResolvedStack, address: string): boolean`,
     `withOverrides(spec, address, desired, overrides): DesiredResource`,
     `desiredOf(spec: ResourceSpec, ctx: WiringContext): DesiredResource | undefined`,
@@ -1571,18 +1777,216 @@ Decision: every managed field reaches the app from D (decision 16).
     `checkOverrides(stack, catalog, wiring: { admin; keys }): Diagnostic[]` (codes
     `overrides.invalid`, `.unknown`, `.secret`, `.unmanaged-field`, `.locked`, `.type`,
     `.unused`);
-  - in `integrations/wiring.ts`: `sameValue(spec, field, a, b): boolean`.
+  - in `integrations/wiring.ts`: `listItems(value): string[]`,
+    `sameValue(spec, field, a, b): boolean`;
+  - in `catalog/_shared/secret.ts` (and re-exported by `servarr-provider.ts`):
+    `sendsToOf(desired): Fields`; `testProvider(api, kind, id, name, credentials, sendsTo)`.
 
 - [ ] **Step 1: Write the failing tests**
+
+**Change** `catalog/_shared/servarr-connection.test.ts`:
+
+```diff
+diff --git a/catalog/_shared/servarr-connection.test.ts b/catalog/_shared/servarr-connection.test.ts
+index 4a0f0f4..a138517 100644
+--- a/catalog/_shared/servarr-connection.test.ts
++++ b/catalog/_shared/servarr-connection.test.ts
+@@ -3,2 +3,3 @@ import {
+   planWiring,
++  SENDS_A_KEY,
+   wire,
+@@ -155,3 +156,6 @@ describe("an arr's connection to Jellyfin", () => {
+       secrets: { apiKey: JELLYFIN_KEY },
++      sendsTo: { host: 'jellyfin', port: 8096, useSsl: false, urlBase: '' },
+     });
++    // Where the arr sends Jellyfin's key: no override changes it.
++    expect(connection.locked).toEqual({ host: SENDS_A_KEY, port: SENDS_A_KEY });
+   });
+@@ -348,2 +352,32 @@ describe("an arr's connection to Jellyfin, at another address", () => {
+   });
++
++  it("sends Jellyfin's key only to the stack's address, whatever an override or the arr holds", async () => {
++    const { api, apis, state } = await sonarr();
++    // An override that got past the lock, or a resource that took one: it moves nothing.
++    const elsewhere = {
++      ...wanted(),
++      fields: { ...wanted().fields, host: 'elsewhere', port: 1 },
++    };
++    await connection.create(api, elsewhere);
++    const at = () =>
++      state.connections[0]?.fields
++        .filter((f) => ['host', 'port', 'useSsl', 'urlBase'].includes(f.name))
++        .map((f) => `${f.name}=${String(f.value)}`);
++    expect(at()).toEqual(['host=jellyfin', 'port=8096', 'useSsl=false', 'urlBase=']);
++    // Changed in the arr by hand: its test is still aimed at the stack's address.
++    const [made] = state.connections;
++    if (made === undefined) throw new Error('no connection made');
++    made.fields = made.fields.map((f) =>
++      f.name === 'urlBase' ? { ...f, value: '@198.51.100.7' } : f,
++    );
++    const held = await connection.observe(api, undefined);
++    if (held === undefined) throw new Error('the connection is there');
++    expect(await connection.verify?.(api, elsewhere, held)).toBe(true);
++    const test = apis.app.requests.find((r) => r.path === '/api/v3/notification/test');
++    expect(test?.body).toContain('"urlBase","value":""');
++    expect(test?.body).not.toContain('198.51.100.7');
++    expect(test?.body).not.toContain('elsewhere');
++    await connection.update(api, elsewhere, held);
++    expect(at()).toEqual(['host=jellyfin', 'port=8096', 'useSsl=false', 'urlBase=']);
++  });
+ });
+@@ -392,2 +426,3 @@ describe("an arr's connection to Plex", () => {
+       secrets: { authToken: TOKEN },
++      sendsTo: { host: 'plex', port: 32400, useSsl: false, urlBase: '' },
+     });
+```
+
+**Change** `catalog/_shared/servarr-download.test.ts`:
+
+```diff
+diff --git a/catalog/_shared/servarr-download.test.ts b/catalog/_shared/servarr-download.test.ts
+index e8dba07..ec5615a 100644
+--- a/catalog/_shared/servarr-download.test.ts
++++ b/catalog/_shared/servarr-download.test.ts
+@@ -3,2 +3,3 @@ import {
+   createAppApi,
++  SENDS_A_KEY,
+   type ResolvedStack,
+@@ -89,2 +90,3 @@ function template() {
+       { name: 'useSsl', value: false },
++      { name: 'urlBase' },
+       { name: 'apiKey' },
+@@ -137,2 +139,9 @@ describe('servarrDownloadClient', () => {
+       secrets: { apiKey: QBT_KEY },
++      sendsTo: { host: 'gluetun', port: 8080, useSsl: false, urlBase: '' },
++    });
++    // Where the arr sends qBittorrent's key: no override changes it.
++    expect(client.locked).toMatchObject({
++      host: SENDS_A_KEY,
++      port: SENDS_A_KEY,
++      useSsl: SENDS_A_KEY,
+     });
+@@ -205,10 +214,5 @@ describe('servarrDownloadClient', () => {
+     await client.create(api, desired);
+-    // Aimed elsewhere by hand: the app tests a new client as it saves it.
+-    const [held] = state.downloadClients;
+-    if (held === undefined) throw new Error('no client made');
+-    held.fields = held.fields.map((f) =>
+-      f.name === 'host' ? { ...f, value: 'nohost' } : f,
+-    );
+     const observed = await client.observe(api, undefined);
+     if (observed === undefined) throw new Error('no client observed');
++    state.testFailure = 'Unable to connect to qBittorrent';
+     const failure = await client
+@@ -218,3 +222,3 @@ describe('servarrDownloadClient', () => {
+     expect((failure as AppApiError).message).toBe(
+-      'Sonarr at http://sonarr:8989 (127.0.0.1) tested qBittorrent (Mediaplane), and it failed: Host: Unable to connect to qBittorrent (Name does not resolve (nohost:8080)) (POST /api/v3/downloadclient/test)',
++      'Sonarr at http://sonarr:8989 (127.0.0.1) tested qBittorrent (Mediaplane), and it failed: Host: Unable to connect to qBittorrent (POST /api/v3/downloadclient/test)',
+     );
+@@ -222,2 +226,43 @@ describe('servarrDownloadClient', () => {
+ 
++  it("sends qBittorrent's key only to the stack's address, whatever an override or the arr holds", async () => {
++    const { api, app, state } = await sonarr();
++    // An override that got past the lock, or a resource that took one: it moves nothing.
++    const elsewhere = {
++      ...wanted(),
++      fields: { ...wanted().fields, host: 'elsewhere', port: 1, useSsl: true },
++    };
++    await client.create(api, elsewhere);
++    const at = () =>
++      state.downloadClients[0]?.fields
++        .filter((f) => ['host', 'port', 'useSsl', 'urlBase'].includes(f.name))
++        .map((f) => `${f.name}=${String(f.value)}`);
++    expect(at()).toEqual(['host=gluetun', 'port=8080', 'useSsl=false', 'urlBase=']);
++    // Changed in the arr by hand: its test is still aimed at the stack's address.
++    const [held] = state.downloadClients;
++    if (held === undefined) throw new Error('no client made');
++    held.fields = held.fields.map((f) =>
++      f.name === 'host'
++        ? { ...f, value: 'elsewhere' }
++        : f.name === 'urlBase'
++          ? { ...f, value: '@elsewhere' }
++          : f,
++    );
++    const observed = await client.observe(api, undefined);
++    if (observed === undefined) throw new Error('no client observed');
++    expect(await client.verify?.(api, elsewhere, observed)).toBe(true);
++    const test = app.requests.find((r) => r.path === '/api/v3/downloadclient/test');
++    const sent = JSON.parse(test?.body ?? '{}') as {
++      fields: { name: string; value?: unknown }[];
++    };
++    expect(
++      sent.fields
++        .filter((f) => ['host', 'port', 'useSsl', 'urlBase'].includes(f.name))
++        .map((f) => `${f.name}=${String(f.value)}`),
++    ).toEqual(['host=gluetun', 'port=8080', 'useSsl=false', 'urlBase=']);
++    expect(test?.body).not.toContain('elsewhere');
++    // And an update puts the stack's address back.
++    await client.update(api, elsewhere, observed);
++    expect(at()).toEqual(['host=gluetun', 'port=8080', 'useSsl=false', 'urlBase=']);
++  });
++
+   it('refuses a template or a client without a setting it needs, naming it, and sends nothing', async () => {
+```
 
 **Change** `catalog/catalog.test.ts`:
 
 ```diff
 diff --git a/catalog/catalog.test.ts b/catalog/catalog.test.ts
-index feb6566..45f92eb 100644
+index feb6566..069ab99 100644
 --- a/catalog/catalog.test.ts
 +++ b/catalog/catalog.test.ts
-@@ -190,2 +190,9 @@ apps:
+@@ -1,3 +1,3 @@
+ import { readdir, readFile } from 'node:fs/promises';
+-import { stackJsonSchema } from '@mediaplane/engine';
++import { overrideTarget, SENDS_A_KEY, stackJsonSchema } from '@mediaplane/engine';
+ import {
+@@ -28,3 +28,44 @@ function comesAfter(id: string, seen = new Set<string>()): string[] {
+ 
++/**
++ * Every managed field that says where an app sends a key: the stack's keys go only to its
++ * own addresses (spec §11, Slice 6), so none of them can be kept or overridden.
++ */
++const SENDS_KEYS = [
++  ...['sonarr', 'radarr'].flatMap((arr) => [
++    `${arr}.download_client.host`,
++    `${arr}.download_client.port`,
++    `${arr}.download_client.useSsl`,
++    `${arr}.connection_jellyfin.host`,
++    `${arr}.connection_jellyfin.port`,
++    `${arr}.connection_plex.host`,
++    `${arr}.connection_plex.port`,
++    `prowlarr.application_${arr}.baseUrl`,
++    `prowlarr.application_${arr}.prowlarrUrl`,
++    `seerr.server_${arr}.hostname`,
++    `seerr.server_${arr}.port`,
++  ]),
++  'seerr.media_server.hostname',
++  'seerr.media_server.port',
++  'seerr.media_server_plex.hostname',
++  'seerr.media_server_plex.port',
++];
++
+ describe('catalog', () => {
++  it("refuses an override of every field that says where a key goes, as Keep mine's", () => {
++    for (const key of SENDS_KEYS) {
++      const named = overrideTarget(catalog, key);
++      expect(named.ok, key).toBe(false);
++      if (named.ok) continue;
++      expect(named.diagnostic).toMatchObject({
++        code: 'overrides.locked',
++        message: `${key} can't be kept: ${SENDS_A_KEY}`,
++      });
++    }
++    // Prowlarr's indexer proxy, which your indexers' requests go through, is fixed too.
++    expect(overrideTarget(catalog, 'prowlarr.indexer_proxy.host')).toMatchObject({
++      ok: false,
++      diagnostic: { code: 'overrides.locked' },
++    });
++  });
++
+   it('registers every app folder exactly once, sorted by id', () => {
+@@ -190,2 +231,9 @@ apps:
          for (const needed of resource.requires ?? []) expect(addresses).toContain(needed);
 +        // What an override can't change, and what is held as a list, are managed fields.
 +        for (const field of [
@@ -1694,10 +2098,91 @@ index d1e93f2..c0bca9a 100644
 
 ```diff
 diff --git a/catalog/prowlarr/integration.test.ts b/catalog/prowlarr/integration.test.ts
-index 9a7cb9a..266217d 100644
+index 9a7cb9a..768cfdf 100644
 --- a/catalog/prowlarr/integration.test.ts
 +++ b/catalog/prowlarr/integration.test.ts
-@@ -424,2 +424,18 @@ describe('the indexer proxy', () => {
+@@ -4,2 +4,3 @@ import {
+   planWiring,
++  SENDS_A_KEY,
+   type ResolvedStack,
+@@ -128,3 +129,6 @@ describe('a link to Sonarr or Radarr', () => {
+       secrets: { apiKey: SONARR_KEY },
++      sendsTo: { prowlarrUrl: 'http://prowlarr:9696', baseUrl: 'http://sonarr:8989' },
+     });
++    // Where Prowlarr sends the arr's key, and the arr Prowlarr's: no override changes it.
++    expect(toSonarr.locked).toEqual({ prowlarrUrl: SENDS_A_KEY, baseUrl: SENDS_A_KEY });
+     expect(wanted(resource('application_radarr'))).toMatchObject({
+@@ -211,13 +215,8 @@ apps:
+   it("says Prowlarr's own words when its test fails for another reason", async () => {
+-    const { api, state } = await prowlarr();
++    const { api, apps } = await prowlarr();
+     const desired = wanted(toSonarr);
+     await toSonarr.create(api, desired);
+-    // Aimed elsewhere by hand: Prowlarr tests a new link as it saves it.
+-    const [held] = state.applications;
+-    if (held === undefined) throw new Error('no link made');
+-    held.fields = held.fields.map((f) =>
+-      f.name === 'baseUrl' ? { ...f, value: 'http://nowhere:8989' } : f,
+-    );
+     const observed = await toSonarr.observe(api, undefined);
+     if (observed === undefined) throw new Error('no link observed');
++    apps.set('sonarr', { ...freshAppState(), key: SONARR_KEY, up: false });
+     const failure = await toSonarr
+@@ -227,3 +226,3 @@ apps:
+     expect((failure as AppApiError).message).toBe(
+-      'Prowlarr at http://prowlarr:9696 (127.0.0.1) tested Sonarr (Mediaplane), and it failed: BaseUrl: Unable to complete application test, cannot connect to Sonarr. Resource temporarily unavailable (nowhere:8989) (POST /api/v1/applications/test)',
++      'Prowlarr at http://prowlarr:9696 (127.0.0.1) tested Sonarr (Mediaplane), and it failed: BaseUrl: Unable to complete application test, cannot connect to Sonarr. Resource temporarily unavailable (sonarr:8989) (POST /api/v1/applications/test)',
+     );
+@@ -231,2 +230,41 @@ apps:
+ 
++  it("sends the arr's key, and Prowlarr's, only to the stack's addresses, whatever an override or Prowlarr holds", async () => {
++    const { api, app, state } = await prowlarr();
++    // An override that got past the lock, or a resource that took one: it moves nothing.
++    const elsewhere = {
++      ...wanted(toSonarr),
++      fields: {
++        ...wanted(toSonarr).fields,
++        baseUrl: 'http://elsewhere:8989',
++        prowlarrUrl: 'http://elsewhere:9696',
++      },
++    };
++    await toSonarr.create(api, elsewhere);
++    const urls = () =>
++      state.applications[0]?.fields
++        .filter((f) => ['baseUrl', 'prowlarrUrl'].includes(f.name))
++        .map((f) => `${f.name}=${String(f.value)}`);
++    expect(urls()).toEqual([
++      'prowlarrUrl=http://prowlarr:9696',
++      'baseUrl=http://sonarr:8989',
++    ]);
++    // Changed in Prowlarr by hand: its test is still aimed at the stack's addresses.
++    const [held] = state.applications;
++    if (held === undefined) throw new Error('no link made');
++    held.fields = held.fields.map((f) =>
++      f.name === 'baseUrl' ? { ...f, value: 'http://elsewhere:8989' } : f,
++    );
++    const observed = await toSonarr.observe(api, undefined);
++    if (observed === undefined) throw new Error('no link observed');
++    expect(await toSonarr.verify?.(api, elsewhere, observed)).toBe(true);
++    const test = app.requests.find((r) => r.path === '/api/v1/applications/test');
++    expect(test?.body).toContain('"baseUrl","value":"http://sonarr:8989"');
++    expect(test?.body).not.toContain('elsewhere');
++    await toSonarr.update(api, elsewhere, observed);
++    expect(urls()).toEqual([
++      'prowlarrUrl=http://prowlarr:9696',
++      'baseUrl=http://sonarr:8989',
++    ]);
++  });
++
+   it('is tested by plan only once the arr is up and takes its key, and plan never tests the proxy or writes to Prowlarr', async () => {
+@@ -377,3 +415,6 @@ describe('the indexer proxy', () => {
+       secrets: {},
++      sendsTo: { host: 'http://byparr:8191/' },
+     });
++    // Prowlarr sends your indexers' requests through it: no override changes it.
++    expect(Object.keys(proxy.locked ?? {})).toEqual(['host']);
+     expect(wanted(proxy, contextOf(stack('  flaresolverr: {}\n'))).fields.host).toBe(
+@@ -424,2 +465,33 @@ describe('the indexer proxy', () => {
    });
 +
 +  it('gives the proxy the tags an override names, finding or making each by its label', async () => {
@@ -1715,17 +2200,105 @@ index 9a7cb9a..266217d 100644
 +    expect(state.proxies[0]?.tags).toEqual([2, 1]);
 +    expect((await proxy.observe(api, undefined))?.fields.tags).toBe('cloudflare,other');
 +  });
++
++  it("sends your indexers' requests only to the stack's solver, whatever an override says", async () => {
++    const { api, state } = await prowlarr();
++    const elsewhere = {
++      ...wanted(proxy),
++      fields: { ...wanted(proxy).fields, host: 'http://elsewhere:8191/' },
++    };
++    await proxy.create(api, elsewhere);
++    const host = () => state.proxies[0]?.fields.find((f) => f.name === 'host')?.value;
++    expect(host()).toBe('http://byparr:8191/');
++    const observed = await proxy.observe(api, undefined);
++    if (observed === undefined) throw new Error('no proxy observed');
++    await proxy.update(api, elsewhere, observed);
++    expect(host()).toBe('http://byparr:8191/');
++  });
  });
+```
+
+**Change** `catalog/qbittorrent/integration.test.ts`:
+
+```diff
+diff --git a/catalog/qbittorrent/integration.test.ts b/catalog/qbittorrent/integration.test.ts
+index 177320c..a226503 100644
+--- a/catalog/qbittorrent/integration.test.ts
++++ b/catalog/qbittorrent/integration.test.ts
+@@ -268,2 +268,33 @@ apps:
+ 
++    it("wants the category Sonarr's download client is kept with, so that apply makes it, never the arr's test", async () => {
++      const kept = stack('overrides:\n  sonarr.download_client.category: television\n');
++      const desired = tv.desired(contextOf(kept));
++      expect(desired).toEqual({
++        name: 'television',
++        fields: { savePath: '/data/torrents/television' },
++        secrets: {},
++      });
++      if (desired === undefined) throw new Error('the tv category is wanted');
++      // Found by that name, and made under it; the category tv stays as it is, yours.
++      const { api, state } = await qbittorrent({
++        categories: { tv: '/data/torrents/tv' },
++      });
++      expect(await tv.observe(api, undefined, desired)).toBeUndefined();
++      expect(await tv.create(api, desired)).toEqual({ id: 'television' });
++      expect(state.categories).toEqual({
++        tv: '/data/torrents/tv',
++        television: '/data/torrents/television',
++      });
++      expect(await tv.observe(api, undefined, desired)).toEqual({
++        id: 'television',
++        name: 'television',
++        fields: { savePath: '/data/torrents/television' },
++      });
++      // Once the client is no longer Mediaplane's, the category is tv again.
++      const unmanaged = stack(
++        'overrides:\n  sonarr.download_client: unmanaged\n  sonarr.download_client.category: television\n',
++      );
++      expect(tv.desired(contextOf(unmanaged))?.name).toBe('tv');
++    });
++
+     it("says qBittorrent's own words when it refuses", async () => {
 ```
 
 **Change** `catalog/seerr/integration.test.ts`:
 
 ```diff
 diff --git a/catalog/seerr/integration.test.ts b/catalog/seerr/integration.test.ts
-index d593449..494999a 100644
+index d593449..fba0f74 100644
 --- a/catalog/seerr/integration.test.ts
 +++ b/catalog/seerr/integration.test.ts
-@@ -304,2 +304,26 @@ describe("Seerr's media server", () => {
+@@ -3,2 +3,3 @@ import {
+   createAppApi,
++  SENDS_A_KEY,
+   type DesiredResource,
+@@ -175,3 +176,6 @@ describe("Seerr's media server, with Plex", () => {
+       secrets: {},
++      sendsTo: { ip: 'plex', port: 32400, useSsl: false },
+     });
++    // Where Seerr sends its admin's Plex token: no override changes it.
++    expect(spec.locked).toEqual({ hostname: SENDS_A_KEY, port: SENDS_A_KEY });
+     expect(spec.desired(contextOf())).toBeUndefined();
+@@ -195,2 +199,11 @@ describe("Seerr's media server, with Plex", () => {
+     expect(state.seerr.plex).toMatchObject({ ip: 'plex', port: 32400, useSsl: false });
++    // An override that got past the lock, or a resource that took one: it moves nothing.
++    const elsewhere = {
++      ...desired,
++      fields: { ...desired.fields, hostname: 'elsewhere', port: 1 },
++    };
++    const held = await spec.observe(api, undefined, desired);
++    if (held === undefined) throw new Error('Seerr holds a Plex');
++    await spec.update(api, elsewhere, held);
++    expect(state.seerr.plex).toMatchObject({ ip: 'plex', port: 32400, useSsl: false });
+     expect(await spec.observe(api, undefined, desired)).toEqual({
+@@ -276,3 +289,6 @@ describe("Seerr's media server", () => {
+       secrets: { apiKey: JELLYFIN_KEY },
++      sendsTo: { ip: 'jellyfin', port: 8096, useSsl: false, urlBase: '' },
+     });
++    // Where Seerr sends the key it holds for Jellyfin: no override changes it.
++    expect(spec.locked).toEqual({ hostname: SENDS_A_KEY, port: SENDS_A_KEY });
+     // Its first sign-in set Jellyfin, with a key of Seerr's own, and no library yet.
+@@ -304,2 +320,26 @@ describe("Seerr's media server", () => {
  
 +  it('enables only the libraries an override names, and leaves the others to you', async () => {
 +    const { api, state } = await seerr();
@@ -1752,7 +2325,79 @@ index d593449..494999a 100644
 +  });
 +
    it('reads a link held without the Jellyfin server id Seerr sets when it saves one as not linked, and links it again', async () => {
-@@ -662,2 +686,15 @@ describe.each([
+@@ -363,2 +403,34 @@ describe("Seerr's media server", () => {
+ 
++  it("sends Mediaplane's Jellyfin key only to the stack's Jellyfin, whatever an override says, and asks Seerr's users only there", async () => {
++    const { api, apis, state } = await seerr();
++    // An override that got past the lock, or a resource that took one: it moves nothing.
++    const elsewhere = {
++      ...wanted(spec),
++      fields: { ...wanted(spec).fields, hostname: 'elsewhere', port: 4444 },
++    };
++    const before = apis.app.requests.length;
++    await spec.create(api, elsewhere);
++    const carrying = apis.app.requests
++      .slice(before)
++      .filter((r) => r.body.includes(JELLYFIN_KEY));
++    expect(carrying).toHaveLength(1);
++    expect(JSON.parse(carrying[0]?.body ?? '{}')).toMatchObject({
++      ip: 'jellyfin',
++      port: 8096,
++    });
++    expect(state.seerr.jellyfin).toMatchObject({ ip: 'jellyfin', port: 8096 });
++    // Held elsewhere: Seerr would send the key it holds there, so it isn't asked.
++    state.seerr.jellyfin.ip = 'elsewhere';
++    const observed = await spec.observe(api, undefined, elsewhere);
++    if (observed === undefined) throw new Error('observed');
++    const asked = apis.app.requests.length;
++    expect(await spec.verify?.(api, elsewhere, observed)).toEqual({
++      unchecked:
++        "Seerr holds another address for Jellyfin than the stack's, where it would send the key it holds: apply gives it the stack's",
++    });
++    expect(
++      apis.app.requests.slice(asked).some((r) => r.path.endsWith('/jellyfin/users')),
++    ).toBe(false);
++  });
++
+   it.each([
+@@ -455,3 +527,6 @@ describe.each([
+       secrets: { apiKey: key },
++      sendsTo: { hostname: arr, port, useSsl: false, baseUrl: '' },
+     });
++    // Where Seerr sends the arr's key: no override changes it.
++    expect(spec.locked).toEqual({ hostname: SENDS_A_KEY, port: SENDS_A_KEY });
+     const ctx = contextOf();
+@@ -592,2 +667,29 @@ describe.each([
+ 
++  it("never sends the stack's key to a host an override names, in a test, a create or an update", async () => {
++    const { api, apis, state } = await seerr();
++    const resolved =
++      (await spec.resolve?.(api, wanted(spec), contextOf())) ?? wanted(spec);
++    // An override that got past the lock, or a resource that took one: it moves nothing.
++    const elsewhere = {
++      ...resolved,
++      fields: { ...resolved.fields, hostname: 'elsewhere', port: 4444 },
++    };
++    const before = apis.app.requests.length;
++    expect(
++      (await spec.resolve?.(api, elsewhere, contextOf()))?.fields.activeProfile,
++    ).toBe('HD-1080p');
++    await spec.create(api, elsewhere);
++    const observed = await spec.observe(api, undefined, elsewhere);
++    if (observed === undefined) throw new Error('observed');
++    expect(await spec.verify?.(api, elsewhere, observed)).toBe(true);
++    await spec.update(api, elsewhere, observed);
++    const carrying = apis.app.requests
++      .slice(before)
++      .filter((r) => r.body.includes(key))
++      .map((r) => JSON.parse(r.body) as Record<string, unknown>);
++    expect(carrying.length).toBeGreaterThanOrEqual(3);
++    for (const body of carrying) expect(body).toMatchObject({ hostname: arr, port });
++    expect(state.seerr[arr][0]).toMatchObject({ hostname: arr, port });
++  });
++
+   it("sends the stack's key with no URL base, whatever base Seerr holds for the server", async () => {
+@@ -662,2 +764,15 @@ describe.each([
  
 +  it('keeps it out of default when an override says so', async () => {
 +    const { api, state } = await seerr();
@@ -1921,22 +2566,36 @@ describe('checkOverrides', () => {
   const check = (...lines: string[]) =>
     checkOverrides(stackWith(...lines), CATALOG, { admin: ADMIN, keys: {} });
 
-  it('takes overrides of the fields Mediaplane manages, and unmanaged resources', () => {
+  it('takes overrides of the fields Mediaplane manages, and unmanaged resources, wanted or left', () => {
     expect(
       check(
         'sonarr.login.user: someone',
         'sonarr.login.groups: a,b',
         'sonarr.connection_plex: unmanaged',
       ),
-    ).toEqual([
+    ).toEqual([]);
+    expect(check('sonarr.login: unmanaged')).toEqual([]);
+    // A field of what the stack doesn't want does nothing.
+    expect(check('sonarr.connection_plex.user: someone')).toEqual([
       expect.objectContaining({
         severity: 'warning',
         code: 'overrides.unused',
         message:
-          "sonarr.connection_plex does nothing: Mediaplane doesn't make sonarr.connection_plex in this stack",
+          "sonarr.connection_plex.user does nothing: Mediaplane doesn't make sonarr.connection_plex in this stack",
       }),
     ]);
-    expect(check('sonarr.login: unmanaged')).toEqual([]);
+  });
+
+  it('warns of an override of a field of a resource made unmanaged: it does nothing', () => {
+    expect(check('sonarr.login: unmanaged', 'sonarr.login.user: someone')).toEqual([
+      {
+        severity: 'warning',
+        code: 'overrides.unused',
+        message:
+          'sonarr.login.user does nothing: sonarr.login is unmanaged, so Mediaplane neither looks at it nor sets it',
+        path: 'overrides.sonarr.login.user',
+      },
+    ]);
   });
 
   it('refuses a value of another type than the field, and a resource set to anything but unmanaged', () => {
@@ -1986,31 +2645,67 @@ describe('checkOverrides', () => {
 
 ```diff
 diff --git a/packages/engine/src/integrations/wiring.test.ts b/packages/engine/src/integrations/wiring.test.ts
-index 7ac1a26..134c131 100644
+index 43fc8fa..6e62424 100644
 --- a/packages/engine/src/integrations/wiring.test.ts
 +++ b/packages/engine/src/integrations/wiring.test.ts
 @@ -15,2 +15,3 @@ import {
    WIRING_RUNNING as RUNNING,
 +  WIRING_STACK,
    wiringStack as stackOf,
-@@ -1250 +1251,73 @@ describe('planWiring: drift (spec §6.3)', () => {
+@@ -68,4 +69,7 @@ const RECORDED: KnownResources = {
+ 
+-/** WIRED_CATALOG, with Sonarr's resources replaced by `resources`. */
+-function sonarrWith(resources: ResourceSpec[]) {
++/**
++ * WIRED_CATALOG's stack, with Sonarr's resources replaced by `resources`, and the
++ * stack's overrides (spec §4.2) given, one line each.
++ */
++function sonarrWith(resources: ResourceSpec[], ...overrides: string[]) {
+   return stackOf(
+@@ -74,2 +78,5 @@ function sonarrWith(resources: ResourceSpec[]) {
+     ),
++    overrides.length === 0
++      ? undefined
++      : `${WIRING_STACK}overrides:\n${overrides.map((line) => `  ${line}`).join('\n')}\n`,
+   );
+@@ -210,3 +217,4 @@ describe('planWiring', () => {
+         id: null,
+-        name: 'first',
++        // As the wire step records it: the name desired() gives.
++        name: 'login',
+         fields: { user: 'admin' },
+@@ -1078,2 +1086,22 @@ describe('planWiring: drift (spec §6.3)', () => {
+ 
++  it('finds no drift against a record of another name than the stack now wants: that is its own change', async () => {
++    // qBittorrent's category, once Sonarr's is kept as another: the stack wants another.
++    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
++    const before = {
++      'sonarr.login': { ...RECORDED['sonarr.login'], name: 'before' },
++    } as KnownResources;
++    const planned = await planWiring(options(sonarr, { known: before }));
++    expect(planned.changes).toEqual([
++      { resource: 'sonarr.login', action: 'update', changes: ['user'] },
++    ]);
++    expect(planned.drift).toEqual([]);
++    sonarr.state.user = 'admin';
++    // Not recorded under the name it now has: adopted.
++    expect((await planWiring(options(sonarr, { known: before }))).changes).toEqual([
++      { resource: 'sonarr.login', action: 'adopt' },
++    ]);
++    const missing = await fakeSonarr({ key: KEY });
++    expect((await planWiring(options(missing, { known: before }))).drift).toEqual([]);
++  });
++
+   it('says a resource it applied was deleted outside Mediaplane', async () => {
+@@ -1289 +1317,64 @@ describe('planWiring: drift (spec §6.3)', () => {
  });
 +
 +describe('planWiring: overrides (spec §4.2, §6.3)', () => {
-+  /** WIRED_CATALOG's stack, with Sonarr's resources and the stack's overrides given. */
-+  const stackWith = (resources: ResourceSpec[], ...overrides: string[]) =>
-+    stackOf(
-+      WIRED_CATALOG.map((def) =>
-+        def.id === 'sonarr' ? { ...def, integration: { after: [], resources } } : def,
-+      ),
-+      `${WIRING_STACK}overrides:\n${overrides.map((line) => `  ${line}`).join('\n')}\n`,
-+    );
-+
 +  it("wants the override's value, so that what the app holds now matches", async () => {
 +    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
 +    const planned = await planWiring(
 +      options(sonarr, {
-+        stack: stackWith([FAKE_LOGIN], 'sonarr.login.user: someone'),
++        stack: sonarrWith([FAKE_LOGIN], 'sonarr.login.user: someone'),
 +        known: RECORDED,
 +      }),
 +    );
@@ -2022,7 +2717,7 @@ index 7ac1a26..134c131 100644
 +  it('lists nothing for a resource it no longer manages, and asks nothing of it', async () => {
 +    const sonarr = await fakeSonarr({ key: KEY });
 +    const planned = await planWiring(
-+      options(sonarr, { stack: stackWith([FAKE_LOGIN], 'sonarr.login: unmanaged') }),
++      options(sonarr, { stack: sonarrWith([FAKE_LOGIN], 'sonarr.login: unmanaged') }),
 +    );
 +    expect(planned.changes).toEqual([{ resource: 'sonarr', action: 'unchanged' }]);
 +    expect(sonarr.app.requests.map((r) => r.path)).toEqual([
@@ -2040,7 +2735,7 @@ index 7ac1a26..134c131 100644
 +    const sonarr = await fakeSonarr({ key: KEY, user: 'kept', password: PASSWORD });
 +    const planned = await planWiring(
 +      options(sonarr, {
-+        stack: stackWith([resolved], 'sonarr.login.user: kept'),
++        stack: sonarrWith([resolved], 'sonarr.login.user: kept'),
 +        known: {
 +          'sonarr.login': { ...RECORDED['sonarr.login'], fields: { user: 'kept' } },
 +        } as KnownResources,
@@ -2061,7 +2756,7 @@ index 7ac1a26..134c131 100644
 +      'sonarr.login': { ...RECORDED['sonarr.login'], fields: { user: 'a,b' } },
 +    } as KnownResources;
 +    const planned = await planWiring(
-+      options(sonarr, { stack: stackWith([listed], 'sonarr.login.user: a,b'), known }),
++      options(sonarr, { stack: sonarrWith([listed], 'sonarr.login.user: a,b'), known }),
 +    );
 +    expect(planned.changes).toEqual([{ resource: 'sonarr.login', action: 'unchanged' }]);
 +    expect(planned.drift).toEqual([]);
@@ -2119,19 +2814,121 @@ index e0b00c1..0bd5a0e 100644
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `pnpm vitest run catalog/catalog.test.ts catalog/jellyfin/integration.test.ts catalog/plex/integration.test.ts catalog/prowlarr/integration.test.ts catalog/seerr/integration.test.ts packages/engine/src/integrations/overrides.test.ts packages/engine/src/integrations/wiring.test.ts packages/engine/src/plan/plan.test.ts scripts/docs/catalog-facts.test.ts`
-Expected: FAIL. `overrides.test.ts` doesn't load (`Cannot find module './overrides'`), and 15 tests fail, 355 pass: 4 in `wiring.test.ts` and 1 in `plan.test.ts` (overrides are ignored), 3 in Jellyfin's tests and 1 in Plex's (a library's folders are the one Mediaplane gives it; a folder with a comma in its name fails the update), 1 in Prowlarr's (the proxy's tags are `cloudflare`), 4 in Seerr's (every library enabled, `isDefault` always true), and 1 in `catalog-facts.test.ts` (no `(fixed)`).
+Run: `pnpm vitest run catalog/_shared/servarr-connection.test.ts catalog/_shared/servarr-download.test.ts catalog/catalog.test.ts catalog/jellyfin/integration.test.ts catalog/plex/integration.test.ts catalog/prowlarr/integration.test.ts catalog/qbittorrent/integration.test.ts catalog/seerr/integration.test.ts packages/engine/src/integrations/overrides.test.ts packages/engine/src/integrations/wiring.test.ts packages/engine/src/plan/plan.test.ts scripts/docs/catalog-facts.test.ts`
+Expected: FAIL. `overrides.test.ts` doesn't load (`Cannot find module './overrides'`), and 35 tests fail, 387 pass: 12 in Seerr's (every library enabled, `isDefault` always true, no `sendsTo`, a key sent to a host an override names), 5 in Prowlarr's (the proxy's tags are `cloudflare`; no `sendsTo`, nor fixed URLs), 5 in `wiring.test.ts` (overrides ignored; a record of another name read as drift), 3 in the connection's and 2 in the download client's (no `sendsTo` nor fixed host; a key sent where an override says), 3 in Jellyfin's and 1 in Plex's (a library's folders are the one Mediaplane gives it; a folder with a comma in its name fails the update), and 1 each in `catalog.test.ts` (no field is fixed where a key goes), qBittorrent's (its category doesn't follow the one Sonarr's client is kept with), `plan.test.ts` and `catalog-facts.test.ts` (no `(fixed)`).
 
-- [ ] **Step 3: Write the overrides, the fixed fields and the catalog's use of them**
+- [ ] **Step 3: Write the overrides, the fixed fields, the destinations and the catalog's use of them**
+
+**Change** `catalog/_shared/secret.ts`:
+
+```diff
+diff --git a/catalog/_shared/secret.ts b/catalog/_shared/secret.ts
+index 4a21c30..4ab50c2 100644
+--- a/catalog/_shared/secret.ts
++++ b/catalog/_shared/secret.ts
+@@ -1,2 +1,2 @@
+-import type { DesiredResource } from '@mediaplane/engine';
++import type { DesiredResource, Fields } from '@mediaplane/engine';
+ 
+@@ -12 +12,12 @@ export function secretOf(desired: DesiredResource, name: string): string {
+ }
++
++/**
++ * Where `desired` has its app send a key: its `sendsTo`, the stack's own address for the
++ * other app, which desired() gives every resource that holds one.
++ */
++export function sendsToOf(desired: DesiredResource): Fields {
++  if (desired.sendsTo === undefined) {
++    throw new Error(`${desired.name} says nowhere to send its key`);
++  }
++  return desired.sendsTo;
++}
+```
+
+**Change** `catalog/_shared/servarr-connection.ts`:
+
+```diff
+diff --git a/catalog/_shared/servarr-connection.ts b/catalog/_shared/servarr-connection.ts
+index 0c8f2b2..7b91dcd 100644
+--- a/catalog/_shared/servarr-connection.ts
++++ b/catalog/_shared/servarr-connection.ts
+@@ -1,2 +1,3 @@
+ import {
++  SENDS_A_KEY,
+   serviceAddress,
+@@ -9,2 +10,3 @@ import {
+   secretOf,
++  sendsToOf,
+   servarrProvider,
+@@ -94,2 +96,4 @@ function heldHost(held: Provider): string {
+  *   the arr's test of what it holds sends the key it holds only to the stack's address.
++ *   The host and port are fixed (SENDS_A_KEY), and every create, update and test is sent
++ *   to the stack's address (`sendsTo`), whatever an override or the arr holds.
+  * - It is made from the arr's own template, with `triggers` on: what makes the arr tell
+@@ -110,6 +114,4 @@ function servarrMediaServer(
+   const settingsOf = (desired: DesiredResource): Record<string, unknown> => ({
+-    host: desired.fields.host,
+-    port: desired.fields.port,
+-    useSsl: false,
+-    urlBase: '',
++    // Where the arr sends the media server's key: the stack's own address for it.
++    ...sendsToOf(desired),
+     updateLibrary: desired.fields.updateLibrary,
+@@ -121,2 +123,3 @@ function servarrMediaServer(
+     fields: ['host', 'port', 'updateLibrary'],
++    locked: { host: SENDS_A_KEY, port: SENDS_A_KEY },
+     secrets: [server.keyField],
+@@ -136,2 +139,3 @@ function servarrMediaServer(
+         secrets: key === undefined ? {} : { [server.keyField]: key },
++        sendsTo: { host: at.host, port: at.port, useSsl: false, urlBase: '' },
+       };
+```
 
 **Change** `catalog/_shared/servarr-download.ts`:
 
 ```diff
 diff --git a/catalog/_shared/servarr-download.ts b/catalog/_shared/servarr-download.ts
-index d150d16..9d84c62 100644
+index d150d16..d03b84c 100644
 --- a/catalog/_shared/servarr-download.ts
 +++ b/catalog/_shared/servarr-download.ts
-@@ -140,2 +140,5 @@ export function servarrRootFolder(path: string): ResourceSpec {
+@@ -1,2 +1,3 @@
+ import {
++  SENDS_A_KEY,
+   serviceAddress,
+@@ -10,2 +11,3 @@ import {
+   secretOf,
++  sendsToOf,
+   servarrProvider,
+@@ -58,3 +60,4 @@ function fieldsOf(held: Provider, link: DownloadLink): Fields {
+  * The desired settings, with qBittorrent's key in clear: the one place one app's key goes
+- * to another, in a request body.
++ * to another, in a request body, with where the arr sends it, the stack's own address for
++ * qBittorrent (`sendsTo`).
+  */
+@@ -65,5 +68,3 @@ function settingsOf(
+   return {
+-    host: desired.fields.host,
+-    port: desired.fields.port,
+-    useSsl: desired.fields.useSsl,
++    ...sendsToOf(desired),
+     [link.setting]: desired.fields.category,
+@@ -83,3 +84,6 @@ function topOf(desired: DesiredResource): Record<string, unknown> {
+  * - Its host is how the arr reaches qBittorrent: through Gluetun when qBittorrent shares
+- *   Gluetun's network, at qBittorrent's own port, which its Host check needs.
++ *   Gluetun's network, at qBittorrent's own port, which its Host check needs, without TLS
++ *   or a URL base. The arr sends qBittorrent's key there, so the host, port and TLS are
++ *   fixed (SENDS_A_KEY), and every create, update and test is sent there (`sendsTo`),
++ *   whatever an override or the arr holds.
+  * - Its key is checked with the app's own test of the client it holds, as it holds it
+@@ -96,2 +100,3 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
+     fields: ['host', 'port', 'useSsl', 'category', 'enable'],
++    locked: { host: SENDS_A_KEY, port: SENDS_A_KEY, useSsl: SENDS_A_KEY },
+     secrets: ['apiKey'],
+@@ -115,2 +120,3 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
+         secrets: { apiKey: key },
++        sendsTo: { host: at.host, port: at.port, useSsl: false, urlBase: '' },
+       };
+@@ -140,2 +146,5 @@ export function servarrRootFolder(path: string): ResourceSpec {
      fields: ['path'],
 +    locked: {
 +      path: "the arr knows a root folder by its path, and can't move one: another path would add a second root folder beside this one, which holds your library. To move your library, move it in the arr, then stop Mediaplane managing this one with {resource}: unmanaged",
@@ -2139,18 +2936,94 @@ index d150d16..9d84c62 100644
      secrets: [],
 ```
 
+**Change** `catalog/_shared/servarr-provider.ts`:
+
+```diff
+diff --git a/catalog/_shared/servarr-provider.ts b/catalog/_shared/servarr-provider.ts
+index b74aae5..258c891 100644
+--- a/catalog/_shared/servarr-provider.ts
++++ b/catalog/_shared/servarr-provider.ts
+@@ -10,2 +10,3 @@ import {
+ import { z } from 'zod';
++import { sendsToOf } from './secret';
+ 
+@@ -61,3 +62,3 @@ export function numberOf(value: unknown): number {
+ 
+-export { secretOf } from './secret';
++export { secretOf, sendsToOf } from './secret';
+ 
+@@ -172,7 +173,31 @@ export async function updateProvider(
+ 
++/**
++ * `body` with `settings` set, and those it lacks added: where a test sends a key.
++ */
++function aimedAt<T extends { fields: z.infer<typeof setting>[] }>(
++  body: T,
++  settings: Readonly<Record<string, unknown>>,
++): T {
++  const added = Object.entries(settings)
++    .filter(([name]) => !body.fields.some((f) => f.name === name))
++    .map(([name, value]) => ({ name, value }));
++  return {
++    ...body,
++    fields: [
++      ...body.fields.map((f) =>
++        Object.hasOwn(settings, f.name) ? { ...f, value: settings[f.name] } : f,
++      ),
++      ...added,
++    ],
++  };
++}
++
+ /**
+  * The app's own test of the provider it holds as `id`, sent as the app gave it (its
+- * secrets masked) and with that id, or the app tests it as a new one and refuses its
+- * name. True when it passes; false when it fails on one of `credentials`, a secret the
+- * update sets; otherwise the app's own words, thrown.
++ * secrets masked, which the app fills in with those it holds) and with that id, or the
++ * app tests it as a new one and refuses its name; but aimed at `sendsTo`, the stack's own
++ * address for the other app: the key the app holds may be the stack's, and goes nowhere
++ * else, never to an address the app holds, which anyone who can change the app can set.
++ * True when it passes; false when it fails on one of `credentials`, a secret the update
++ * sets; otherwise the app's own words, thrown.
+  */
+@@ -184,5 +209,6 @@ export async function testProvider(
+   credentials: readonly string[],
++  sendsTo: Readonly<Record<string, unknown>>,
+ ): Promise<boolean> {
+   const held = await api.get(`${kind.path}/${String(id)}`, provider);
+-  const result = await api.test(`${kind.path}/test`, held);
++  const result = await api.test(`${kind.path}/test`, aimedAt(held, sendsTo));
+   if (result.passed) return true;
+@@ -207,3 +233,6 @@ export interface ProviderOptions {
+   fieldsOf: (held: Provider) => Fields;
+-  /** The settings to set, secrets in clear (this request body only). */
++  /**
++   * The settings to set, secrets in clear (this request body only): where the app sends
++   * a key among them from `desired.sendsTo` (sendsToOf), never from a managed field.
++   */
+   settingsOf: (desired: DesiredResource) => Record<string, unknown>;
+@@ -237,3 +266,3 @@ export function servarrProvider(
+     verify: (api, desired, observed) =>
+-      testProvider(api, kind, observed.id, desired.name, credentials),
++      testProvider(api, kind, observed.id, desired.name, credentials, sendsToOf(desired)),
+     create: (api, desired) =>
+```
+
 **Change** `catalog/jellyfin/integration.ts`:
 
 ```diff
 diff --git a/catalog/jellyfin/integration.ts b/catalog/jellyfin/integration.ts
-index 1ff70c3..65c6b8d 100644
+index 1ff70c3..c1ce070 100644
 --- a/catalog/jellyfin/integration.ts
 +++ b/catalog/jellyfin/integration.ts
-@@ -4,2 +4,3 @@ import {
+@@ -3,3 +3,5 @@ import {
+   defineIntegration,
++  listItems,
    type AppApi,
 +  type DesiredResource,
    type ResourceSpec,
-@@ -107,6 +108,18 @@ const available = z.looseObject({
+@@ -107,6 +109,15 @@ const available = z.looseObject({
  
 +/** A folder without a trailing "/", as Jellyfin may give it. */
 +function trimmed(path: string): string {
@@ -2166,19 +3039,16 @@ index 1ff70c3..65c6b8d 100644
 +
 +/** The folders a desired library holds: `paths`, one comma-separated list. */
 +function wantedPaths(desired: DesiredResource): string[] {
-+  return String(desired.fields.paths)
-+    .split(',')
-+    .filter((path) => path !== '')
-+    .map(trimmed);
++  return listItems(desired.fields.paths).map(trimmed);
  }
-@@ -148,3 +161,5 @@ async function newLibraryOptions(api: AppApi, type: string) {
+@@ -148,3 +159,5 @@ async function newLibraryOptions(api: AppApi, type: string) {
   * library of one name isn't refused but named "<name>2", so one is made only when none
 - * has the name. Jellyfin can't change what a library holds.
 + * has the name. Jellyfin can't change what a library holds. Its folders are its
 + * `paths`, the one Mediaplane gives it unless an override names more, as Keep mine does
 + * for a folder you added in Jellyfin.
   */
-@@ -154,2 +169,7 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
+@@ -154,2 +167,7 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
      fields: ['name', 'collectionType', 'paths'],
 +    lists: ['paths'],
 +    locked: {
@@ -2186,7 +3056,7 @@ index 1ff70c3..65c6b8d 100644
 +      collectionType: "Jellyfin can't change what a library holds",
 +    },
      secrets: [],
-@@ -177,9 +197,9 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
+@@ -177,9 +195,9 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
      },
 -    async create(api) {
 -      const query = new URLSearchParams({
@@ -2203,12 +3073,12 @@ index 1ff70c3..65c6b8d 100644
 +        ['refreshLibrary', 'true'],
 +      ]);
        await api.submit('POST', `${VIRTUAL_FOLDERS}?${query.toString()}`, {
-@@ -189,3 +209,3 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
+@@ -189,3 +207,3 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
      },
 -    async update(api, _desired, observed) {
 +    async update(api, desired, observed) {
        const holds = String(observed.fields.collectionType);
-@@ -197,13 +217,17 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
+@@ -197,13 +215,17 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
        }
 -      const held = String(observed.fields.paths)
 -        .split(',')
@@ -2239,24 +3109,24 @@ index 1ff70c3..65c6b8d 100644
 
 ```diff
 diff --git a/catalog/plex/integration.ts b/catalog/plex/integration.ts
-index 995ceaa..decf217 100644
+index 995ceaa..bfed306 100644
 --- a/catalog/plex/integration.ts
 +++ b/catalog/plex/integration.ts
-@@ -4,2 +4,3 @@ import {
+@@ -3,3 +3,5 @@ import {
+   defineIntegration,
++  listItems,
    type AppApi,
 +  type DesiredResource,
    type ResourceSpec,
-@@ -116,2 +117,9 @@ function locationsOf(held: z.infer<typeof section>): string {
+@@ -116,2 +118,7 @@ function locationsOf(held: z.infer<typeof section>): string {
  
 +/** The folders a desired library holds: `location`, one comma-separated list. */
 +function wantedLocations(desired: DesiredResource): string[] {
-+  return String(desired.fields.location)
-+    .split(',')
-+    .filter((path) => path !== '');
++  return listItems(desired.fields.location);
 +}
 +
  /**
-@@ -129,2 +137,7 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
+@@ -129,2 +136,7 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
      fields: ['name', 'type', 'location'],
 +    lists: ['location'],
 +    locked: {
@@ -2264,7 +3134,7 @@ index 995ceaa..decf217 100644
 +      type: "Plex can't change what a library holds",
 +    },
      secrets: [],
-@@ -149,11 +162,11 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
+@@ -149,11 +161,11 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
      },
 -    async create(api) {
 -      const query = new URLSearchParams({
@@ -2285,12 +3155,12 @@ index 995ceaa..decf217 100644
 +        ...wantedLocations(desired).map((path): [string, string] => ['location', path]),
 +      ]);
        const answer = await api.post(`${SECTIONS}?${query.toString()}`, {}, made);
-@@ -171,3 +184,3 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
+@@ -171,3 +183,3 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
      },
 -    async update(api, _desired, observed) {
 +    async update(api, desired, observed) {
        const holds = String(observed.fields.type);
-@@ -186,7 +199,8 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
+@@ -186,7 +198,8 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
        }
 -      const query = new URLSearchParams({
 -        agent: held.agent,
@@ -2310,14 +3180,55 @@ index 995ceaa..decf217 100644
 
 ```diff
 diff --git a/catalog/prowlarr/integration.ts b/catalog/prowlarr/integration.ts
-index 1eaac54..f0e0ffe 100644
+index 1eaac54..3eb4352 100644
 --- a/catalog/prowlarr/integration.ts
 +++ b/catalog/prowlarr/integration.ts
-@@ -101,2 +101,3 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
+@@ -1,3 +1,5 @@
+ import {
++  listItems,
+   provides,
++  SENDS_A_KEY,
+   serviceAddress,
+@@ -14,2 +16,3 @@ import {
+   secretOf,
++  sendsToOf,
+   servarrProvider,
+@@ -70,2 +73,5 @@ function categoriesOf(value: unknown): string {
+  *   Prowlarr back, each by its service on the stack's network, at its container port.
++ *   Each says where a key goes, so both are fixed (SENDS_A_KEY), and every create, update
++ *   and test is sent with the stack's own (`sendsTo`), whatever an override or Prowlarr
++ *   holds.
+  * - Its secret is the arr's key, checked with Prowlarr's own test of the link it holds,
+@@ -89,4 +95,4 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
+   const settingsOf = (desired: DesiredResource) => ({
+-    prowlarrUrl: desired.fields.prowlarrUrl,
+-    baseUrl: desired.fields.baseUrl,
++    // Where Prowlarr sends the arr's key, and where the arr sends Prowlarr's.
++    ...sendsToOf(desired),
+     apiKey: secretOf(desired, 'apiKey'),
+@@ -101,2 +107,4 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
      fields: ['prowlarrUrl', 'baseUrl', 'syncLevel', 'syncCategories'],
 +    lists: ['syncCategories'],
++    locked: { prowlarrUrl: SENDS_A_KEY, baseUrl: SENDS_A_KEY },
      secrets: ['apiKey'],
-@@ -138,9 +139,17 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
+@@ -111,2 +119,6 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
+       if (arr === undefined || own === undefined || key === undefined) return undefined;
++      const urls = {
++        prowlarrUrl: `http://${own.host}:${String(own.port)}`,
++        baseUrl: `http://${arr.host}:${String(arr.port)}`,
++      };
+       return {
+@@ -114,4 +126,3 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
+         fields: {
+-          prowlarrUrl: `http://${own.host}:${String(own.port)}`,
+-          baseUrl: `http://${arr.host}:${String(arr.port)}`,
++          ...urls,
+           syncLevel: 'fullSync',
+@@ -120,2 +131,3 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
+         secrets: { apiKey: key },
++        sendsTo: urls,
+       };
+@@ -138,15 +150,20 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
  
 -/** The id of the tag `cloudflare`: Prowlarr gives back the one it has, or makes it. */
 -async function proxyTag(api: AppApi): Promise<number> {
@@ -2333,52 +3244,142 @@ index 1eaac54..f0e0ffe 100644
 + * unless an override names others (`prowlarr.indexer_proxy.tags`).
 + */
  async function proxyBody(api: AppApi, desired: DesiredResource) {
-+  const labels = String(desired.fields.tags)
-+    .split(',')
-+    .filter((label) => label !== '');
 +  const tags: number[] = [];
-+  for (const label of labels) tags.push(await tagId(api, label));
++  for (const label of listItems(desired.fields.tags)) tags.push(await tagId(api, label));
    return {
-@@ -150,3 +159,3 @@ async function proxyBody(api: AppApi, desired: DesiredResource) {
+     settings: {
+-      host: desired.fields.host,
++      ...sendsToOf(desired),
+       requestTimeout: desired.fields.requestTimeout,
      },
 -    top: { name: desired.name, tags: [await proxyTag(api)] },
 +    top: { name: desired.name, tags },
    };
-@@ -165,2 +174,3 @@ const indexerProxy: ResourceSpec = {
+@@ -165,2 +182,6 @@ const indexerProxy: ResourceSpec = {
    fields: ['host', 'requestTimeout', 'tags'],
 +  lists: ['tags'],
++  locked: {
++    host: "Prowlarr sends your indexers' requests through it, and the keys in them: it is the stack's own solver (spec §11, Slice 6)",
++  },
    secrets: [],
+@@ -180,2 +201,3 @@ const indexerProxy: ResourceSpec = {
+       secrets: {},
++      sendsTo: { host: `http://${solver.host}:${String(solver.port)}/` },
+     };
 ```
 
 **Change** `catalog/qbittorrent/integration.ts`:
 
 ```diff
 diff --git a/catalog/qbittorrent/integration.ts b/catalog/qbittorrent/integration.ts
-index edc1b36..8978ae3 100644
+index edc1b36..8a539df 100644
 --- a/catalog/qbittorrent/integration.ts
 +++ b/catalog/qbittorrent/integration.ts
-@@ -123,2 +123,3 @@ const settings: ResourceSpec = {
+@@ -2,4 +2,6 @@ import {
+   defineIntegration,
++  isUnmanaged,
+   type AppApi,
+   type DesiredResource,
++  type ResolvedStack,
+   type ResourceSpec,
+@@ -14,3 +16,4 @@ export const DEFAULT_SAVE_PATH = '/data/torrents';
+  * The category each arr files its torrents under (spec §6.2), made while that arr is in
+- * the stack. Its save path is DEFAULT_SAVE_PATH/<name>.
++ * the stack: `name`, unless the arr's download client is kept with another (categoryOf).
++ * Its save path is DEFAULT_SAVE_PATH/<category>.
+  */
+@@ -123,2 +126,3 @@ const settings: ResourceSpec = {
    fields: ['savePath', 'autoTmm', 'authSubnetWhitelistEnabled', 'authSubnetWhitelist'],
 +  lists: ['authSubnetWhitelist'],
    secrets: [],
+@@ -171,4 +175,21 @@ async function saveSettings(api: AppApi, desired: DesiredResource): Promise<void
+ /**
+- * The category `name` (spec §6.2), with its save path under DEFAULT_SAVE_PATH, while
+- * `arr` is in the stack. qBittorrent knows a category by its name: it gives it no id.
++ * The category `arr`'s download client files under: `name`, or the one it is kept with
++ * (`<arr>.download_client.category`, Keep mine), so that qBittorrent has the category the
++ * client names, made by apply. Otherwise the arr's own test of the client would make it,
++ * with no save path, which plan and drift never let it do.
++ */
++function categoryOf(stack: ResolvedStack, arr: string, name: string): string {
++  const kept = stack.config.overrides[`${arr}.download_client.category`];
++  return typeof kept === 'string' &&
++    kept !== '' &&
++    !isUnmanaged(stack, `${arr}.download_client`)
++    ? kept
++    : name;
++}
++
++/**
++ * The category `name` (spec §6.2), or the one `arr`'s download client is kept with
++ * (categoryOf), with its save path under DEFAULT_SAVE_PATH, while `arr` is in the stack.
++ * qBittorrent knows a category by its name: it gives it no id. One Mediaplane made before
++ * under another name stays as it is, yours.
+  */
+@@ -176,3 +197,6 @@ function category(arr: string, name: string): ResourceSpec {
+   const save = (api: AppApi, path: string, desired: DesiredResource) =>
+-    api.form(path, { category: name, savePath: String(desired.fields.savePath) });
++    api.form(path, {
++      category: desired.name,
++      savePath: String(desired.fields.savePath),
++    });
+   return {
+@@ -181,11 +205,17 @@ function category(arr: string, name: string): ResourceSpec {
+     secrets: [],
+-    desired: ({ stack }) =>
+-      stack.apps.some((app) => app.def.id === arr)
+-        ? { name, fields: { savePath: `${DEFAULT_SAVE_PATH}/${name}` }, secrets: {} }
+-        : undefined,
+-    async observe(api) {
+-      const held = (await api.get(CATEGORIES_PATH, categories))[name];
++    desired: ({ stack }) => {
++      if (!stack.apps.some((app) => app.def.id === arr)) return undefined;
++      const wanted = categoryOf(stack, arr, name);
++      return {
++        name: wanted,
++        fields: { savePath: `${DEFAULT_SAVE_PATH}/${wanted}` },
++        secrets: {},
++      };
++    },
++    async observe(api, _known, desired) {
++      const named = desired?.name ?? name;
++      const held = (await api.get(CATEGORIES_PATH, categories))[named];
+       return held === undefined
+         ? undefined
+-        : { id: name, name, fields: { savePath: asKept(held.savePath) } };
++        : { id: named, name: named, fields: { savePath: asKept(held.savePath) } };
+     },
+@@ -193,3 +223,3 @@ function category(arr: string, name: string): ResourceSpec {
+       await save(api, '/api/v2/torrents/createCategory', desired);
+-      return { id: name };
++      return { id: desired.name };
+     },
 ```
 
 **Change** `catalog/seerr/integration.ts`:
 
 ```diff
 diff --git a/catalog/seerr/integration.ts b/catalog/seerr/integration.ts
-index faec96b..07d0bfd 100644
+index faec96b..ecc2edf 100644
 --- a/catalog/seerr/integration.ts
 +++ b/catalog/seerr/integration.ts
-@@ -3,2 +3,3 @@ import {
+@@ -3,2 +3,5 @@ import {
    defineIntegration,
 +  isUnmanaged,
++  listItems,
++  SENDS_A_KEY,
    stackAddress,
-@@ -6,2 +7,3 @@ import {
+@@ -6,2 +9,4 @@ import {
    type DesiredResource,
++  type ObservedResource,
 +  type ResolvedStack,
    type ResourceSpec,
-@@ -26,2 +28,30 @@ const WANTED_PLEX = PLEX_LIBRARIES.map((library) => library.name);
+@@ -10,3 +15,3 @@ import {
+ import { z } from 'zod';
+-import { secretOf } from '../_shared/secret';
++import { secretOf, sendsToOf } from '../_shared/secret';
+ import { LIBRARIES } from '../jellyfin/integration';
+@@ -26,2 +31,26 @@ const WANTED_PLEX = PLEX_LIBRARIES.map((library) => library.name);
  
 +/**
 + * The libraries Seerr has enabled, of those Mediaplane makes in `app` and still manages,
@@ -2401,15 +3402,11 @@ index faec96b..07d0bfd 100644
 + * or not, in Seerr, and Mediaplane neither looks at nor changes them.
 + */
 +function librariesIn(desired: DesiredResource | undefined, all: readonly string[]) {
-+  return desired === undefined
-+    ? all
-+    : String(desired.fields.libraries)
-+        .split(',')
-+        .filter((name) => name !== '');
++  return desired === undefined ? all : listItems(desired.fields.libraries);
 +}
 +
  /**
-@@ -58,6 +88,6 @@ const jellyfinSettings = heldJellyfin.extend({
+@@ -58,6 +87,6 @@ const jellyfinSettings = heldJellyfin.extend({
  
 -/** Which of Mediaplane's libraries (`wanted`) Seerr has enabled, as one list. */
 +/** Which of the libraries `wanted` Seerr has enabled, as one list. */
@@ -2418,12 +3415,41 @@ index faec96b..07d0bfd 100644
 -  wanted: readonly string[] = WANTED,
 +  wanted: readonly string[],
  ): string {
-@@ -100,3 +130,3 @@ async function saveJellyfin(api: AppApi, desired: DesiredResource): Promise<void
+@@ -84,6 +113,6 @@ async function heldKeyWorks(api: AppApi): Promise<boolean> {
+ /**
+- * Point Seerr at Jellyfin, with no URL base and no TLS, with Mediaplane's key for
+- * Jellyfin. Seerr saves it only once it has reached Jellyfin there with that key. `ip` is
+- * the setting; a `hostname` would be kept as a stray setting, and is the sign-in's field,
+- * which Seerr refuses once set.
++ * Point Seerr at Jellyfin, at the stack's own address for it (`sendsTo`), with no URL base
++ * and no TLS, with Mediaplane's key for Jellyfin. Seerr saves it only once it has reached
++ * Jellyfin there with that key. `ip` is the setting; a `hostname` would be kept as a stray
++ * setting, and is the sign-in's field, which Seerr refuses once set.
+  */
+@@ -91,6 +120,3 @@ async function saveJellyfin(api: AppApi, desired: DesiredResource): Promise<void
+   await api.submit('POST', `${SETTINGS}/jellyfin`, {
+-    ip: desired.fields.hostname,
+-    port: desired.fields.port,
+-    useSsl: false,
+-    urlBase: '',
++    ...sendsToOf(desired),
+     apiKey: secretOf(desired, 'apiKey'),
+@@ -100,3 +126,13 @@ async function saveJellyfin(api: AppApi, desired: DesiredResource): Promise<void
  /**
 - * Enable Mediaplane's libraries in Seerr, of Jellyfin or of Plex: Seerr learns the media
++ * Whether Seerr holds the stack's own address for the media server (`sendsTo`), where
++ * the key it holds goes when Seerr asks it: as observed, TLS and a URL base folded into
++ * `hostname`, which then differs.
++ */
++function atStack(desired: DesiredResource, observed: ObservedResource): boolean {
++  const to = sendsToOf(desired);
++  return observed.fields.hostname === to.ip && observed.fields.port === to.port;
++}
++
++/**
 + * Enable the libraries `wanted` in Seerr, of Jellyfin or of Plex: Seerr learns the media
   * server's libraries by syncing them, which keeps those it has enabled, and enables them
-@@ -107,6 +137,6 @@ async function enableLibraries(
+@@ -107,6 +143,6 @@ async function enableLibraries(
    api: AppApi,
 -  server: { path: 'jellyfin' | 'plex'; name: string; wanted: readonly string[] } = {
 +  wanted: readonly string[],
@@ -2432,16 +3458,23 @@ index faec96b..07d0bfd 100644
      name: 'Jellyfin',
 -    wanted: WANTED,
    },
-@@ -116,3 +146,3 @@ async function enableLibraries(
+@@ -116,3 +152,3 @@ async function enableLibraries(
    const synced = await api.get(at, z.array(library));
 -  for (const name of server.wanted) {
 +  for (const name of wanted) {
      const held = synced.find((l) => l.name === name);
-@@ -144,2 +174,3 @@ const mediaServer: ResourceSpec = {
+@@ -139,2 +175,5 @@ async function enableLibraries(
+  * - `libraries` lists which of Mediaplane's are enabled; a library you enable is yours.
++ * - Seerr sends the key it holds to the address it holds: its host and port are fixed
++ *   (SENDS_A_KEY), Mediaplane saves only the stack's own (`sendsTo`), and asks Seerr's
++ *   list of Jellyfin's users only while Seerr holds that address.
+  * - It requires Jellyfin's admin and libraries, and Seerr comes after Jellyfin.
+@@ -144,2 +183,4 @@ const mediaServer: ResourceSpec = {
    fields: ['hostname', 'port', 'libraries'],
 +  lists: ['libraries'],
++  locked: { hostname: SENDS_A_KEY, port: SENDS_A_KEY },
    secrets: ['apiKey'],
-@@ -151,3 +182,7 @@ const mediaServer: ResourceSpec = {
+@@ -151,7 +192,12 @@ const mediaServer: ResourceSpec = {
        name: 'Jellyfin',
 -      fields: { hostname: at.host, port: at.port, libraries: WANTED.join(',') },
 +      fields: {
@@ -2450,36 +3483,78 @@ index faec96b..07d0bfd 100644
 +        libraries: managedLibraries(ctx.stack, 'jellyfin', LIBRARIES),
 +      },
        secrets: at.secrets,
-@@ -155,3 +190,3 @@ const mediaServer: ResourceSpec = {
++      sendsTo: { ip: at.host, port: at.port, useSsl: false, urlBase: '' },
+     };
    },
 -  async observe(api) {
 +  async observe(api, _known, desired) {
      const held = await api.get(`${SETTINGS}/jellyfin`, jellyfinSettings);
-@@ -167,3 +202,3 @@ const mediaServer: ResourceSpec = {
+@@ -167,3 +213,3 @@ const mediaServer: ResourceSpec = {
              port: held.port,
 -            libraries: enabledOf(held.libraries),
 +            libraries: enabledOf(held.libraries, librariesIn(desired, WANTED)),
            },
-@@ -174,3 +209,3 @@ const mediaServer: ResourceSpec = {
+@@ -171,6 +217,12 @@ const mediaServer: ResourceSpec = {
+   },
+-  verify: (api) => heldKeyWorks(api),
++  verify: (api, desired, observed) =>
++    atStack(desired, observed)
++      ? heldKeyWorks(api)
++      : Promise.resolve({
++          unchecked:
++            "Seerr holds another address for Jellyfin than the stack's, where it would send the key it holds: apply gives it the stack's",
++        }),
+   async create(api, desired) {
      await saveJellyfin(api, desired);
 -    await enableLibraries(api);
 +    await enableLibraries(api, librariesIn(desired, WANTED));
      return { id: null };
-@@ -184,3 +219,3 @@ const mediaServer: ResourceSpec = {
+@@ -178,5 +230,3 @@ const mediaServer: ResourceSpec = {
+   async update(api, desired, observed) {
+-    const moved =
+-      observed.fields.hostname !== desired.fields.hostname ||
+-      observed.fields.port !== desired.fields.port;
++    const moved = !atStack(desired, observed);
+     if (moved || !(await heldKeyWorks(api))) await saveJellyfin(api, desired);
+@@ -184,3 +234,3 @@ const mediaServer: ResourceSpec = {
      if (moved || observed.fields.libraries !== desired.fields.libraries) {
 -      await enableLibraries(api);
 +      await enableLibraries(api, librariesIn(desired, WANTED));
      }
-@@ -189,3 +224,3 @@ const mediaServer: ResourceSpec = {
+@@ -189,3 +239,3 @@ const mediaServer: ResourceSpec = {
  
 -const PLEX = { path: 'plex', name: 'Plex', wanted: WANTED_PLEX } as const;
 +const PLEX = { path: 'plex', name: 'Plex' } as const;
  
-@@ -223,2 +258,3 @@ const mediaServerPlex: ResourceSpec = {
+@@ -198,12 +248,9 @@ const plexSettings = heldPlex.extend({
+ /**
+- * Point Seerr at the stack's Plex, without TLS: Seerr saves it only once it has reached
+- * Plex there with its admin's token (your plex.tv account's, from its first sign-in), and
+- * asked it who it is. No key goes in these settings: Seerr holds none of Mediaplane's.
++ * Point Seerr at the stack's Plex, at its own address (`sendsTo`), without TLS: Seerr
++ * saves it only once it has reached Plex there with its admin's token (your plex.tv
++ * account's, from its first sign-in), and asked it who it is. No key goes in these
++ * settings, but Seerr sends that token there.
+  */
+ async function savePlex(api: AppApi, desired: DesiredResource): Promise<void> {
+-  await api.submit('POST', `${SETTINGS}/plex`, {
+-    ip: desired.fields.hostname,
+-    port: desired.fields.port,
+-    useSsl: false,
+-  });
++  await api.submit('POST', `${SETTINGS}/plex`, sendsToOf(desired));
+ }
+@@ -218,2 +265,4 @@ async function savePlex(api: AppApi, desired: DesiredResource): Promise<void> {
+  * - `libraries` lists which of Mediaplane's are enabled; a library you enable is yours.
++ * - Seerr sends its admin's Plex token to the address it holds: its host and port are
++ *   fixed (SENDS_A_KEY), and Mediaplane saves only the stack's own (`sendsTo`).
+  * - It requires Plex's name and libraries, and Seerr comes after Plex.
+@@ -223,2 +272,4 @@ const mediaServerPlex: ResourceSpec = {
    fields: ['hostname', 'port', 'libraries'],
 +  lists: ['libraries'],
++  locked: { hostname: SENDS_A_KEY, port: SENDS_A_KEY },
    secrets: [],
-@@ -230,3 +266,7 @@ const mediaServerPlex: ResourceSpec = {
+@@ -230,7 +281,12 @@ const mediaServerPlex: ResourceSpec = {
        name: 'Plex',
 -      fields: { hostname: at.host, port: at.port, libraries: WANTED_PLEX.join(',') },
 +      fields: {
@@ -2488,37 +3563,98 @@ index faec96b..07d0bfd 100644
 +        libraries: managedLibraries(stack, 'plex', PLEX_LIBRARIES),
 +      },
        secrets: {},
-@@ -234,3 +274,3 @@ const mediaServerPlex: ResourceSpec = {
++      sendsTo: { ip: at.host, port: at.port, useSsl: false },
+     };
    },
 -  async observe(api) {
 +  async observe(api, _known, desired) {
      const held = await api.get(`${SETTINGS}/plex`, plexSettings);
-@@ -244,3 +284,3 @@ const mediaServerPlex: ResourceSpec = {
+@@ -244,3 +300,3 @@ const mediaServerPlex: ResourceSpec = {
              port: held.port,
 -            libraries: enabledOf(held.libraries, WANTED_PLEX),
 +            libraries: enabledOf(held.libraries, librariesIn(desired, WANTED_PLEX)),
            },
-@@ -250,3 +290,3 @@ const mediaServerPlex: ResourceSpec = {
+@@ -250,3 +306,3 @@ const mediaServerPlex: ResourceSpec = {
      await savePlex(api, desired);
 -    await enableLibraries(api, PLEX);
 +    await enableLibraries(api, librariesIn(desired, WANTED_PLEX), PLEX);
      return { id: null };
-@@ -260,3 +300,3 @@ const mediaServerPlex: ResourceSpec = {
+@@ -254,5 +310,3 @@ const mediaServerPlex: ResourceSpec = {
+   async update(api, desired, observed) {
+-    const moved =
+-      observed.fields.hostname !== desired.fields.hostname ||
+-      observed.fields.port !== desired.fields.port;
++    const moved = !atStack(desired, observed);
+     if (moved) await savePlex(api, desired);
+@@ -260,3 +314,3 @@ const mediaServerPlex: ResourceSpec = {
      if (moved || observed.fields.libraries !== desired.fields.libraries) {
 -      await enableLibraries(api, PLEX);
 +      await enableLibraries(api, librariesIn(desired, WANTED_PLEX), PLEX);
      }
-@@ -500,3 +540,3 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
+@@ -338,3 +392,5 @@ const offered = z.looseObject({
+  * - With TLS or a URL base, `hostname` is observed as the URL Seerr calls, so the server
+- *   reads as changed, and the update puts it back at the stack's address.
++ *   reads as changed, and the update puts it back at the stack's address. The host and
++ *   port are fixed (SENDS_A_KEY), and every test, create and update is sent with the
++ *   stack's own address (`sendsTo`), whatever an override or Seerr holds.
+  * - Seerr keeps a server whole, its id read-only: an update sends it back as Seerr gave
+@@ -357,11 +413,11 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
+   /**
+-   * The stack's own address for the arr, without TLS and with no URL base, since Seerr
+-   * adds the base after the port (`@<host>` would be a host).
++   * The stack's own address for the arr (`sendsTo`), without TLS and with no URL base,
++   * since Seerr adds the base after the port (`@<host>` would be a host).
+    */
+-  const stackAt = (desired: DesiredResource) => ({
+-    hostname: desired.fields.hostname,
+-    port: desired.fields.port,
+-    useSsl: false,
+-    baseUrl: '',
+-  });
++  const stackAt = (desired: DesiredResource) => sendsToOf(desired);
++  /** That address, as Seerr would call it, in messages. */
++  const urlOf = (desired: DesiredResource) => {
++    const to = sendsToOf(desired);
++    return `http://${String(to.hostname)}:${String(to.port)}`;
++  };
+   /** Where the stack's key goes: the stack's own address for the arr, and only there. */
+@@ -379,6 +435,4 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
+     const found = await test(api, reach(desired));
+-    if (found === undefined) {
+-      const at = `http://${String(desired.fields.hostname)}:${String(desired.fields.port)}`;
+-      throw unreachable(api, at, "with the stack's key");
+-    }
++    if (found === undefined)
++      throw unreachable(api, urlOf(desired), "with the stack's key");
+     return found.profiles;
+@@ -418,2 +472,3 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
+     fields: ['hostname', 'port', 'activeProfile', 'activeDirectory', 'isDefault'],
++    locked: { hostname: SENDS_A_KEY, port: SENDS_A_KEY },
+     secrets: ['apiKey'],
+@@ -432,2 +487,3 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
+         secrets: at.secrets,
++        sendsTo: { hostname: at.host, port: at.port, useSsl: false, baseUrl: '' },
+       };
+@@ -482,7 +538,3 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
+       if ((await test(api, { ...held, ...reach(desired) })) !== undefined) return false;
+-      throw unreachable(
+-        api,
+-        `http://${String(desired.fields.hostname)}:${String(desired.fields.port)}`,
+-        "with the key it holds, or the stack's",
+-      );
++      throw unreachable(api, urlOf(desired), "with the key it holds, or the stack's");
+     },
+@@ -500,3 +552,3 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
            is4k: false,
 -          isDefault: true,
 +          isDefault: desired.fields.isDefault === true,
            syncEnabled: false,
-@@ -519,3 +559,3 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
+@@ -519,3 +571,3 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
          activeDirectory: desired.fields.activeDirectory,
 -        isDefault: true,
 +        isDefault: desired.fields.isDefault === true,
        });
-@@ -533,2 +573,5 @@ const setup: ResourceSpec = {
+@@ -533,2 +585,5 @@ const setup: ResourceSpec = {
    fields: ['initialized'],
 +  locked: {
 +    initialized: "Seerr can't be taken back to its setup wizard",
@@ -2564,6 +3700,12 @@ import type { DesiredResource, ResourceSpec, Scalar, WiringContext } from './typ
 
 /** `<app>.<resource>: unmanaged`: Mediaplane no longer manages the resource (spec §6.3). */
 export const UNMANAGED = 'unmanaged';
+
+/**
+ * Why a field that says where an app sends a key can't be kept (`locked`): the stack's
+ * keys go only to its own addresses (spec §11, Slice 6), whatever the app holds.
+ */
+export const SENDS_A_KEY = 'it sets where a key is sent (spec §11, Slice 6)';
 
 /** The stack's overrides (spec §4.2), by key. */
 type Overrides = Readonly<Record<string, Scalar>>;
@@ -2704,8 +3846,10 @@ function kindOf(value: Scalar): string {
 /**
  * What is wrong with the stack's overrides (spec §4.2): a key that names nothing
  * Mediaplane manages, a secret or a locked field (errors), a value of another type than
- * the field's, `<app>.<resource>` with anything but `unmanaged`, and an override of
- * something this stack doesn't have (a warning: it does nothing).
+ * the field's, `<app>.<resource>` with anything but `unmanaged`, and an override that
+ * does nothing (a warning): of something this stack doesn't have, or of a field of a
+ * resource made `unmanaged`. `unmanaged` of a resource the stack doesn't want is quiet:
+ * it keeps one left in the app yours.
  */
 export function checkOverrides(
   stack: ResolvedStack,
@@ -2735,6 +3879,18 @@ export function checkOverrides(
       ];
     }
     const wanted = spec.desired({ stack, app, ...wiring });
+    // Unmanaged, one the stack doesn't want stays so: one left in the app is yours.
+    if (wanted === undefined && value === UNMANAGED) return [];
+    const address = `${def.id}.${spec.name}`;
+    if (field !== undefined && isUnmanaged(stack, address)) {
+      return [
+        warning(
+          'overrides.unused',
+          `${key} does nothing: ${address} is ${UNMANAGED}, so Mediaplane neither looks at it nor sets it`,
+          { path },
+        ),
+      ];
+    }
     if (wanted === undefined) {
       return [
         warning(
@@ -2763,10 +3919,22 @@ export function checkOverrides(
 
 ```diff
 diff --git a/packages/engine/src/integrations/types.ts b/packages/engine/src/integrations/types.ts
-index db2f052..a18a114 100644
+index db2f052..f4b9c45 100644
 --- a/packages/engine/src/integrations/types.ts
 +++ b/packages/engine/src/integrations/types.ts
-@@ -78,2 +78,13 @@ export interface ResourceSpec {
+@@ -24,2 +24,11 @@ export interface DesiredResource {
+   folders?: readonly string[];
++  /**
++   * Where the resource has its app send a key (or, for Prowlarr's indexer proxy, your
++   * indexers' requests): the settings of the stack's own service address for the other
++   * app (spec §11, Slice 6: keys go only to the stack's own addresses). Create, update
++   * and each check send these, never a managed field, which an override could set, nor
++   * what the app holds, which anyone who can change the app can set. Overrides never
++   * change it.
++   */
++  sendsTo?: Fields;
+ }
+@@ -78,2 +87,13 @@ export interface ResourceSpec {
    fields: readonly string[];
 +  /**
 +   * Managed fields held as one comma-separated list, such as a library's folders: compared
@@ -2804,14 +3972,14 @@ index 1c42db7..41e5729 100644
 
 ```diff
 diff --git a/packages/engine/src/integrations/wiring.ts b/packages/engine/src/integrations/wiring.ts
-index 8b81a56..65685ca 100644
+index a9735e6..6a8e6b4 100644
 --- a/packages/engine/src/integrations/wiring.ts
 +++ b/packages/engine/src/integrations/wiring.ts
 @@ -18,2 +18,3 @@ import { foundSecrets, redact, redactionValues, type FoundSecrets } from '../uti
  import { compare } from '../util/sort';
 +import { desiredOf, withOverrides } from './overrides';
  import type { KnownResource, KnownResources } from './resources';
-@@ -139,6 +140,9 @@ export function resourceAddress(app: ResolvedApp, spec: ResourceSpec): string {
+@@ -143,6 +144,9 @@ export function resourceAddress(app: ResolvedApp, spec: ResourceSpec): string {
  
 -/** The app's resources that the stack wants: each one whose `desired` gives one. */
 +/**
@@ -2823,11 +3991,19 @@ index 8b81a56..65685ca 100644
 -    (spec) => spec.desired(ctx) !== undefined,
 +    (spec) => desiredOf(spec, ctx) !== undefined,
    );
-@@ -146,2 +150,20 @@ export function wantedResources(ctx: WiringContext): ResourceSpec[] {
+@@ -150,2 +154,27 @@ export function wantedResources(ctx: WiringContext): ResourceSpec[] {
  
 +/**
++ * The items of a list field's value (`lists`): one comma-separated list, as the stack and
++ * its overrides give it, without the empty ones. A value that isn't text holds none.
++ */
++export function listItems(value: Scalar | undefined): string[] {
++  return typeof value === 'string' ? value.split(',').filter((item) => item !== '') : [];
++}
++
++/**
 + * Whether two values of `spec`'s managed `field` are the same: a list field (`lists`) as
-+ * a set of its comma-separated items, whatever their order; any other exactly.
++ * a set of its items (listItems), whatever their order; any other exactly.
 + */
 +export function sameValue(
 +  spec: ResourceSpec,
@@ -2838,13 +4014,12 @@ index 8b81a56..65685ca 100644
 +  if (a === b) return true;
 +  if (!(spec.lists ?? []).includes(field)) return false;
 +  if (typeof a !== 'string' || typeof b !== 'string') return false;
-+  const items = (list: string) =>
-+    [...new Set(list.split(',').filter((item) => item !== ''))].sort(compare).join(',');
++  const items = (list: string) => [...new Set(listItems(list))].sort(compare).join(',');
 +  return items(a) === items(b);
 +}
 +
  /**
-@@ -344,8 +366,14 @@ export async function examine(
+@@ -348,10 +377,20 @@ export async function examine(
  ): Promise<Examined | undefined> {
 -  const wanted = spec.desired(ctx);
 +  const wanted = desiredOf(spec, ctx);
@@ -2861,39 +4036,63 @@ index 8b81a56..65685ca 100644
 +          ctx.stack.config.overrides,
 +        )
        : wanted;
-@@ -376,6 +404,8 @@ export async function examine(
+   const observed = await spec.observe(api, known, desired);
++  // A record of another name is of what the stack wanted before, such as qBittorrent's
++  // category, once Sonarr's is kept as another: what differs from it is the stack's own
++  // change, which apply makes, not one made in the app.
++  const record = known?.name === desired.name ? known : undefined;
+   const unchecked = (reason: string): SecretCheck[] =>
+@@ -369,3 +408,3 @@ export async function examine(
+       changes: [],
+-      drift: known === undefined ? [] : [{ resource: address, kind: 'missing' }],
++      drift: record === undefined ? [] : [{ resource: address, kind: 'missing' }],
+       checks: unchecked('the app has none to check: apply makes it with them'),
+@@ -380,6 +419,8 @@ export async function examine(
    const changes = compared.filter(
 -    (field) => observed.fields[field] !== desired.fields[field],
 +    (field) => !sameValue(spec, field, observed.fields[field], desired.fields[field]),
    );
    const drift =
 -    known === undefined ? [] : fieldDrift(address, compared, known, desired, observed);
-+    known === undefined
++    record === undefined
 +      ? []
-+      : fieldDrift(spec, address, compared, known, desired, observed);
++      : fieldDrift(spec, address, compared, record, desired, observed);
    // A field that differs makes it an update, which sets the secrets too: checking them
-@@ -406,3 +436,5 @@ export async function examine(
-     known !== undefined &&
+@@ -395,3 +436,3 @@ export async function examine(
+   changes.push(...refused.map((check) => check.secret));
+-  if (known !== undefined) {
++  if (record !== undefined) {
+     drift.push(
+@@ -409,4 +450,6 @@ export async function examine(
+   const recorded =
+-    known !== undefined &&
 -    compared.every((field) => known.fields[field] === desired.fields[field]);
++    record !== undefined &&
 +    compared.every((field) =>
-+      sameValue(spec, field, known.fields[field], desired.fields[field]),
++      sameValue(spec, field, record.fields[field], desired.fields[field]),
 +    );
    return {
-@@ -423,2 +455,3 @@ export async function examine(
+@@ -427,2 +470,3 @@ export async function examine(
  function fieldDrift(
 +  spec: ResourceSpec,
    address: string,
-@@ -441,3 +474,8 @@ function fieldDrift(
+@@ -439,3 +483,4 @@ function fieldDrift(
+     const expected = wanted ?? applied;
+-    const was = wanted === undefined || wanted === applied ? {} : { applied };
++    const was =
++      wanted === undefined || sameValue(spec, field, wanted, applied) ? {} : { applied };
+     const unreadable =
+@@ -457,3 +502,8 @@ function fieldDrift(
      const actual = observed.fields[field];
--    if (actual === expected || actual === desired.fields[field]) return [];
+-    if (actual === applied || actual === wanted) return [];
 +    if (
-+      sameValue(spec, field, actual, expected) ||
-+      sameValue(spec, field, actual, desired.fields[field])
++      sameValue(spec, field, actual, applied) ||
++      sameValue(spec, field, actual, wanted)
 +    ) {
 +      return [];
 +    }
-     return [{ resource: address, kind: 'field', field, expected, actual }];
-@@ -694,3 +732,3 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
+     return [{ resource: address, kind: 'field', field, expected, ...was, actual }];
+@@ -719,3 +769,3 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
        // What the wire step would refuse, before anything is sent: plan says so first.
 -      const desired = spec.desired(ctx);
 +      const desired = desiredOf(spec, ctx);
@@ -2954,13 +4153,14 @@ index ffe4627..a604a88 100644
 - [ ] **Step 4: Run them to see them pass, and regenerate the references and facts**
 
 ```bash
-pnpm vitest run catalog/catalog.test.ts catalog/jellyfin/integration.test.ts catalog/plex/integration.test.ts catalog/prowlarr/integration.test.ts catalog/seerr/integration.test.ts packages/engine/src/integrations/overrides.test.ts packages/engine/src/integrations/wiring.test.ts packages/engine/src/plan/plan.test.ts scripts/docs/catalog-facts.test.ts
+pnpm vitest run catalog/_shared/servarr-connection.test.ts catalog/_shared/servarr-download.test.ts catalog/catalog.test.ts catalog/jellyfin/integration.test.ts catalog/plex/integration.test.ts catalog/prowlarr/integration.test.ts catalog/qbittorrent/integration.test.ts catalog/seerr/integration.test.ts packages/engine/src/integrations/overrides.test.ts packages/engine/src/integrations/wiring.test.ts packages/engine/src/plan/plan.test.ts scripts/docs/catalog-facts.test.ts
 pnpm docs:generate
 ```
 
 Expected: PASS. `docs:generate` rewrites `docs/reference/stack-yaml.md` and
 `docs/reference/stack.schema.json` (the `overrides` description), and the facts of the
-Jellyfin, Plex, Radarr, Seerr and Sonarr READMEs (`(fixed)` after each fixed field).
+Jellyfin, Plex, Prowlarr, Radarr, Seerr and Sonarr READMEs (`(fixed)` after each fixed
+field).
 
 - [ ] **Step 5: The full check, and commit**
 
@@ -2970,43 +4170,39 @@ git add packages catalog scripts docs/reference
 git commit -m "feat: overrides set what apply sets in the apps, and unmanaged stops Mediaplane managing a resource" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 1997 tests pass in 89 files.
+Expected: 2011 tests pass in 89 files.
 
 ---
 
 ### Task 3: The catalog: what an app holds that Mediaplane can't read, a root folder's folder, a renamed library, and `plan`'s marks as the owner decided
 
-Decision: a value Mediaplane can't read is said to be (decision 11).
-Decision: a root folder's `accessible` (decision 10); a renamed library is never made again
+Decision: a value Mediaplane can't read is said to be, in every observe (decision 12).
+Decision: a root folder's `accessible` (decision 11); a renamed library is never made again
 on its folder (decision 9).
-Decision: the arr's test isn't run by `plan` while its post-import category is missing
-(decision 6); Seerr's key once (decision 7).
-Decision: fakes no kinder (decision 20).
+Decision: the arr's test isn't run by `plan` while qBittorrent lacks a category the client
+names, or can't be asked (decision 6); Seerr's key once (decision 26).
+Decision: fakes no kinder (decision 22).
 
 **Files:**
 - Create: `packages/engine/src/integrations/read.ts`
-- Modify: `packages/engine/src/index.ts`, `packages/engine/src/testing/wiring.ts`,
-  `catalog/_shared/servarr-provider.ts`, `catalog/_shared/servarr-download.ts`,
-  `catalog/_shared/servarr-connection.ts`, `catalog/sonarr/integration.ts`,
-  `catalog/radarr/integration.ts`, `catalog/prowlarr/integration.ts`,
-  `catalog/jellyfin/integration.ts`, `catalog/plex/integration.ts`,
-  `catalog/seerr/integration.ts`
-- Test: catalog/_shared/servarr-connection.test.ts catalog/_shared/servarr-download.test.ts catalog/jellyfin/integration.test.ts catalog/plex/integration.test.ts catalog/prowlarr/integration.test.ts catalog/seerr/integration.test.ts packages/cli/src/run.test.ts packages/engine/src/integrations/read.test.ts
-- Generated: the facts of `catalog/{radarr,sonarr}/README.md`
+- Modify: `catalog/_shared/servarr-connection.ts`, `catalog/_shared/servarr-download.ts`, `catalog/_shared/servarr-provider.ts`, `catalog/_shared/servarr.ts`, `catalog/jellyfin/integration.ts`, `catalog/plex/integration.ts`, `catalog/prowlarr/integration.ts`, `catalog/qbittorrent/integration.ts`, `catalog/radarr/integration.ts`, `catalog/seerr/integration.ts`, `catalog/sonarr/integration.ts`, `packages/engine/src/index.ts`, `packages/engine/src/testing/wiring.ts`
+- Test: `catalog/_shared/servarr-connection.test.ts`, `catalog/_shared/servarr-download.test.ts`, `catalog/jellyfin/integration.test.ts`, `catalog/plex/integration.test.ts`, `catalog/prowlarr/integration.test.ts`, `catalog/qbittorrent/integration.test.ts`, `catalog/seerr/integration.test.ts`, `packages/cli/src/run.test.ts`, `packages/engine/src/integrations/read.test.ts`
+- Generated: `catalog/radarr/README.md`, `catalog/sonarr/README.md`
 
 **Interfaces:**
 - **Consumes:** Task 1's `VerifyContext`, `Unchecked`, `ObservedResource.unreadable` and
-  `update`'s `changes`; Task 2's `locked`.
+  `update`'s `changes`; Task 2's `locked`, `sendsToOf`, `testProvider`'s `sendsTo`.
 - **Produces:**
-  - from `@mediaplane/engine`: `interface FieldReader { text(field, value, absent?): string | undefined; number(field, value): number | undefined; flag(field, value): boolean | undefined; numbers(field, value): string | undefined; refuse(field, why): Scalar | undefined; observed(id, name, fields): ObservedResource }`,
+  - from `@mediaplane/engine`: `interface FieldReader { text(field, value): string | undefined; number(field, value): number | undefined; flag(field, value): boolean | undefined; numbers(field, value): string | undefined; refuse(field, why): Scalar | undefined; observed(id, name, fields): ObservedResource }`,
     `fieldReader(): FieldReader`;
-  - in `catalog/_shared/servarr-provider.ts`: `optionalText(value): string` (in place of
-    `textOf` and `numberOf`), `providerOf(api, kind, id): Promise<Provider>`;
+  - in `catalog/_shared/servarr-provider.ts`: `optionalText(value): string | undefined`
+    (in place of `textOf` and `numberOf`; undefined for a value of another type),
+    `providerOf(api, kind, id): Promise<Provider>`;
     `ProviderOptions.fieldsOf(held, read: FieldReader)`;
   - `DownloadLink.imported: 'tvImportedCategory' | 'movieImportedCategory'`;
   - the root folder's managed fields: `path`, `accessible`;
   - `FakeAppState`'s root folders say `accessible` from `folders`, and the fake arrs'
-    test of a client makes its post-import category.
+    test of a client makes each category it names that qBittorrent lacks.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3014,10 +4210,10 @@ Decision: fakes no kinder (decision 20).
 
 ```diff
 diff --git a/catalog/_shared/servarr-connection.test.ts b/catalog/_shared/servarr-connection.test.ts
-index 4a0f0f4..f7a6657 100644
+index a138517..824f5e1 100644
 --- a/catalog/_shared/servarr-connection.test.ts
 +++ b/catalog/_shared/servarr-connection.test.ts
-@@ -348,2 +348,23 @@ describe("an arr's connection to Jellyfin, at another address", () => {
+@@ -382,2 +382,42 @@ describe("an arr's connection to Jellyfin, at another address", () => {
    });
 +
 +  it("reads a host or a setting it can't as one it can't, never as empty", async () => {
@@ -3039,6 +4235,25 @@ index 4a0f0f4..f7a6657 100644
 +        updateLibrary: 'nothing, not true or false',
 +      },
 +    });
++    // A TLS or URL base setting of another type: where the key goes can't be told.
++    for (const [name, value, why] of [
++      ['useSsl', 'yes', 'useSsl is not true or false'],
++      ['urlBase', 7, 'urlBase is not text'],
++    ] as const) {
++      made.fields = made.fields.map((f) =>
++        f.name === 'host'
++          ? { ...f, value: 'jellyfin' }
++          : f.name === 'useSsl'
++            ? { ...f, value: false }
++            : f.name === 'urlBase'
++              ? { ...f, value: '' }
++              : f,
++      );
++      made.fields = made.fields.map((f) => (f.name === name ? { ...f, value } : f));
++      expect((await connection.observe(api, undefined))?.unreadable?.host).toBe(
++        `its ${why}, so where the arr sends the key can't be told`,
++      );
++    }
 +  });
  });
 ```
@@ -3047,10 +4262,10 @@ index 4a0f0f4..f7a6657 100644
 
 ```diff
 diff --git a/catalog/_shared/servarr-download.test.ts b/catalog/_shared/servarr-download.test.ts
-index e8dba07..e13643d 100644
+index ec5615a..f69af84 100644
 --- a/catalog/_shared/servarr-download.test.ts
 +++ b/catalog/_shared/servarr-download.test.ts
-@@ -50,3 +50,7 @@ function contextOf(resolved: ResolvedStack = stack()): WiringContext {
+@@ -51,3 +51,7 @@ function contextOf(resolved: ResolvedStack = stack()): WiringContext {
  
 -const client = servarrDownloadClient({ category: 'tv', setting: 'tvCategory' });
 +const client = servarrDownloadClient({
@@ -3059,7 +4274,7 @@ index e8dba07..e13643d 100644
 +  imported: 'tvImportedCategory',
 +});
  
-@@ -67,3 +71,13 @@ async function sonarr() {
+@@ -68,3 +72,13 @@ async function sonarr() {
    });
 -  return { api, app: apis.app, state };
 +  // qBittorrent, as plan reaches it: what a check may ask of another app.
@@ -3074,7 +4289,7 @@ index e8dba07..e13643d 100644
 +  });
 +  return { api, app: apis.app, state, qbittorrent, apis };
  }
-@@ -201,2 +215,78 @@ describe('servarrDownloadClient', () => {
+@@ -210,2 +224,159 @@ describe('servarrDownloadClient', () => {
  
 +  it("leaves the key unchecked in plan when the arr's test would make a missing post-import category", async () => {
 +    const { api, app, state, qbittorrent, apis } = await sonarr();
@@ -3099,7 +4314,7 @@ index e8dba07..e13643d 100644
 +    };
 +    expect(await client.verify?.(api, desired, observed, plan)).toEqual({
 +      unchecked:
-+        "Sonarr's own test of its download client would make qBittorrent's post-import category tv-imported (tvImportedCategory) when it is missing, which Mediaplane doesn't manage, and qBittorrent has no such category: apply's test makes it",
++        "qBittorrent has no category tv-imported (tvImportedCategory), which Sonarr's download client names, and Sonarr's own test of it would make it with no save path, so it isn't run: make it in qBittorrent, or name one in Sonarr that qBittorrent has, then run drift again",
 +    });
 +    expect(tests()).toBe(before);
 +    expect(Object.keys(qbt.categories)).toEqual(['tv']);
@@ -3111,7 +4326,7 @@ index e8dba07..e13643d 100644
 +      }),
 +    ).toEqual({
 +      unchecked:
-+        "Sonarr's own test of its download client would make qBittorrent's post-import category tv-imported (tvImportedCategory) when it is missing, which Mediaplane doesn't manage, and qBittorrent couldn't be asked whether it has it",
++        "Sonarr's own test of its download client would make any of tv (tvCategory) and tv-imported (tvImportedCategory) that qBittorrent lacks, with no save path, so it isn't run while qBittorrent can't be asked which it has: run drift again once it answers",
 +    });
 +    // Apply's check runs the test, which makes the category, as the arr's own does.
 +    expect(await client.verify?.(api, desired, observed)).toBe(true);
@@ -3119,6 +4334,87 @@ index e8dba07..e13643d 100644
 +    // Once qBittorrent has it, plan runs the test.
 +    expect(await client.verify?.(api, desired, observed, plan)).toBe(true);
 +    expect(tests()).toBe(before + 2);
++  });
++
++  it('leaves the key unchecked in plan while qBittorrent lacks the category the client files under', async () => {
++    // No longer Mediaplane's in qBittorrent (unmanaged), and deleted there.
++    const { api, app, state, qbittorrent, apis } = await sonarr();
++    const desired = wanted();
++    await client.create(api, desired);
++    const qbt = apis.apps.get('qbittorrent');
++    if (qbt === undefined) throw new Error('no qBittorrent faked');
++    qbt.categories = {};
++    const observed = await client.observe(api, undefined);
++    if (observed === undefined) throw new Error('no client observed');
++    const tests = () =>
++      app.requests.filter((r) => r.path === '/api/v3/downloadclient/test').length;
++    const before = tests();
++    const plan = { readOnly: true, peer: () => qbittorrent };
++    expect(await client.verify?.(api, desired, observed, plan)).toEqual({
++      unchecked:
++        "qBittorrent has no category tv (tvCategory), which Sonarr's download client names, and Sonarr's own test of it would make it with no save path, so it isn't run: make it in qBittorrent, or name one in Sonarr that qBittorrent has, then run drift again",
++    });
++    expect(tests()).toBe(before);
++    expect(qbt.categories).toEqual({});
++    // Apply's check runs the test, which makes it, with no save path, as the arr's does.
++    expect(state.downloadClients).toHaveLength(1);
++    expect(await client.verify?.(api, desired, observed)).toBe(true);
++    expect(qbt.categories).toEqual({ tv: '' });
++  });
++
++  it("leaves the key unchecked in plan while qBittorrent can't say which categories it has", async () => {
++    const { api, app } = await sonarr();
++    const desired = wanted();
++    await client.create(api, desired);
++    const observed = await client.observe(api, undefined);
++    if (observed === undefined) throw new Error('no client observed');
++    const broken = await fakeHttpApp(() => ({ status: 500 }));
++    const failing = createAppApi({
++      name: 'qBittorrent',
++      service: 'qbittorrent',
++      port: 8080,
++      endpoint: { host: '127.0.0.1', port: broken.port },
++      key: { scheme: 'bearer', value: QBT_KEY },
++      secrets: [QBT_KEY],
++      retry: { deadlineMs: 0 },
++    });
++    const tests = () =>
++      app.requests.filter((r) => r.path === '/api/v3/downloadclient/test').length;
++    const before = tests();
++    const verdict = await client.verify?.(api, desired, observed, {
++      readOnly: true,
++      peer: () => failing,
++    });
++    expect(verdict).toEqual({
++      unchecked: expect.stringMatching(
++        /^Sonarr's own test of its download client would make any of tv \(tvCategory\) that qBittorrent lacks, with no save path, so it isn't run while qBittorrent can't be asked which it has \(qBittorrent at .*\/api\/v2\/torrents\/categories\)\): run drift again once it answers$/,
++      ) as string,
++    });
++    expect(tests()).toBe(before);
++  });
++
++  it("leaves the key unchecked in plan while the client's post-import category isn't text", async () => {
++    const { api, app, state, qbittorrent } = await sonarr();
++    const desired = wanted();
++    await client.create(api, desired);
++    const [held] = state.downloadClients;
++    if (held === undefined) throw new Error('no client made');
++    held.fields = held.fields.map((f) =>
++      f.name === 'tvImportedCategory' ? { ...f, value: 7 } : f,
++    );
++    const observed = await client.observe(api, undefined);
++    if (observed === undefined) throw new Error('no client observed');
++    const before = app.requests.length;
++    expect(
++      await client.verify?.(api, desired, observed, {
++        readOnly: true,
++        peer: () => qbittorrent,
++      }),
++    ).toEqual({
++      unchecked:
++        "Sonarr's download client holds a tvImportedCategory that isn't text, so its own test of it, which could make a category in qBittorrent, isn't run: set tvImportedCategory in Sonarr, then run drift again",
++    });
++    expect(app.requests.slice(before).some((r) => r.path.endsWith('/test'))).toBe(false);
 +  });
 +
 +  it("reads a client setting it can't, of another type or missing, as one it can't, never as empty", async () => {
@@ -3153,12 +4449,12 @@ index e8dba07..e13643d 100644
 +  });
 +
    it("says the app's own words when its test fails for another reason", async () => {
-@@ -327,3 +417,3 @@ describe('servarrRootFolder', () => {
+@@ -372,3 +543,3 @@ describe('servarrRootFolder', () => {
        name: '/data/media/tv',
 -      fields: { path: '/data/media/tv' },
 +      fields: { path: '/data/media/tv', accessible: true },
        secrets: {},
-@@ -341,2 +431,25 @@ describe('servarrRootFolder', () => {
+@@ -386,2 +557,25 @@ describe('servarrRootFolder', () => {
      state.rootFolders = [{ id: 1, path: '/data/media/tv/' }];
 +    expect(await folder.observe(api, undefined)).toEqual({
 +      id: 1,
@@ -3184,7 +4480,7 @@ index e8dba07..e13643d 100644
 +      },
 +    });
      expect(await folder.observe(api, undefined)).toEqual({
-@@ -345,2 +458,3 @@ describe('servarrRootFolder', () => {
+@@ -390,2 +584,3 @@ describe('servarrRootFolder', () => {
        fields: { path: '/data/media/tv' },
 +      unreadable: { accessible: 'nothing, not true or false' },
      });
@@ -3194,7 +4490,7 @@ index e8dba07..e13643d 100644
 
 ```diff
 diff --git a/catalog/jellyfin/integration.test.ts b/catalog/jellyfin/integration.test.ts
-index e75cbe2..2217beb 100644
+index e75cbe2..53290fc 100644
 --- a/catalog/jellyfin/integration.test.ts
 +++ b/catalog/jellyfin/integration.test.ts
 @@ -543,2 +543,18 @@ describe("Jellyfin's libraries", () => {
@@ -3223,6 +4519,16 @@ index e75cbe2..2217beb 100644
 +      paths: 'a folder with a comma in its name, /data/media/a,b',
 +    });
      await shows.update(api, wanted(shows), held);
+@@ -584,5 +604,7 @@ describe("Jellyfin's libraries", () => {
+     if (held === undefined) throw new Error('Shows is there');
+-    expect(held.fields.collectionType).toBe('');
++    // Jellyfin gives none for mixed content: read as one Mediaplane can't, never empty.
++    expect(held.fields.collectionType).toBeUndefined();
++    expect(held.unreadable).toEqual({ collectionType: 'nothing, not text' });
+     expect((await failure(shows.update(api, wanted(shows), held))).message).toBe(
+-      "Jellyfin at http://jellyfin:8096 (127.0.0.1) has a library named Shows that holds mixed content, not tvshows, and Jellyfin can't change what a library holds: rename or remove it in Jellyfin, and the next apply makes Shows (GET /Library/VirtualFolders)",
++      "Jellyfin at http://jellyfin:8096 (127.0.0.1) has a library named Shows that holds mixed content, or a kind Mediaplane can't read, not tvshows, and Jellyfin can't change what a library holds: rename or remove it in Jellyfin, and the next apply makes Shows (GET /Library/VirtualFolders)",
+     );
 ```
 
 **Change** `catalog/plex/integration.test.ts`:
@@ -3288,10 +4594,10 @@ index c0bca9a..fb25625 100644
 
 ```diff
 diff --git a/catalog/prowlarr/integration.test.ts b/catalog/prowlarr/integration.test.ts
-index 266217d..e8a7877 100644
+index 768cfdf..51a4a8d 100644
 --- a/catalog/prowlarr/integration.test.ts
 +++ b/catalog/prowlarr/integration.test.ts
-@@ -344,2 +344,15 @@ apps:
+@@ -382,2 +382,15 @@ apps:
  
 +  it("reads categories it can't as such, never as none", async () => {
 +    const { api, state } = await prowlarr();
@@ -3307,7 +4613,7 @@ index 266217d..e8a7877 100644
 +  });
 +
    it('refuses a Prowlarr that offers no link to the arr, and sends nothing', async () => {
-@@ -425,2 +438,14 @@ describe('the indexer proxy', () => {
+@@ -466,2 +479,14 @@ describe('the indexer proxy', () => {
  
 +  it("reads tags it can't as such, never as none", async () => {
 +    const { api, state } = await prowlarr();
@@ -3324,14 +4630,45 @@ index 266217d..e8a7877 100644
    it('gives the proxy the tags an override names, finding or making each by its label', async () => {
 ```
 
+**Change** `catalog/qbittorrent/integration.test.ts`:
+
+```diff
+diff --git a/catalog/qbittorrent/integration.test.ts b/catalog/qbittorrent/integration.test.ts
+index a226503..3effeaa 100644
+--- a/catalog/qbittorrent/integration.test.ts
++++ b/catalog/qbittorrent/integration.test.ts
+@@ -230,2 +230,21 @@ apps:
+     });
++
++    it("reads a setting held in another shape as one it can't, never as false or empty", async () => {
++      const { api, state } = await qbittorrent();
++      state.preferences = {
++        ...state.preferences,
++        auto_tmm_enabled: 'yes',
++        save_path: '',
++      };
++      expect(await settings.observe(api, undefined)).toEqual({
++        id: null,
++        name: 'preferences',
++        fields: {
++          savePath: '',
++          authSubnetWhitelistEnabled: false,
++          authSubnetWhitelist: '',
++        },
++        unreadable: { autoTmm: 'text, not true or false' },
++      });
++    });
+   });
+```
+
 **Change** `catalog/seerr/integration.test.ts`:
 
 ```diff
 diff --git a/catalog/seerr/integration.test.ts b/catalog/seerr/integration.test.ts
-index 494999a..9d7dd2b 100644
+index fba0f74..b455203 100644
 --- a/catalog/seerr/integration.test.ts
 +++ b/catalog/seerr/integration.test.ts
-@@ -368,2 +368,16 @@ describe("Seerr's media server", () => {
+@@ -384,2 +384,16 @@ describe("Seerr's media server", () => {
  
 +  it('gives Seerr the key at once when the check found it refused: one failed check per apply', async () => {
 +    const { api, state, jellyfin, calls } = await seerr();
@@ -3348,6 +4685,24 @@ index 494999a..9d7dd2b 100644
 +  });
 +
    it("sends Mediaplane's Jellyfin key only to the stack's Jellyfin, whatever Seerr holds", async () => {
+@@ -777,2 +791,17 @@ describe.each([
+ 
++  it("reads a setting Seerr holds in another shape as one it can't, never as false or empty", async () => {
++    const { api, state } = await seerr();
++    const desired =
++      (await spec.resolve?.(api, wanted(spec), contextOf())) ?? wanted(spec);
++    await spec.create(api, desired);
++    const held = state.seerr[arr][0];
++    if (held === undefined) throw new Error('held');
++    Object.assign(held, { isDefault: 'yes', useSsl: 'no' });
++    expect((await spec.observe(api, undefined, desired))?.unreadable).toEqual({
++      hostname:
++        "its TLS, URL base or port is held in a shape Mediaplane can't read, so where Seerr sends the key it holds can't be told",
++      isDefault: 'text, not true or false',
++    });
++  });
++
+   it('puts back what was changed by hand: its profile, folder and default', async () => {
 ```
 
 **Change** `packages/cli/src/run.test.ts`:
@@ -3420,7 +4775,6 @@ describe('fieldReader', () => {
     expect(
       read.observed(1, 'client', {
         host: read.text('host', 'gluetun'),
-        base: read.text('base', undefined, ''),
         port: read.number('port', 8080),
         on: read.flag('on', false),
         categories: read.numbers('categories', [5010, 5000]),
@@ -3430,7 +4784,6 @@ describe('fieldReader', () => {
       name: 'client',
       fields: {
         host: 'gluetun',
-        base: '',
         port: 8080,
         on: false,
         categories: '5000,5010',
@@ -3474,8 +4827,8 @@ describe('fieldReader', () => {
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `pnpm vitest run catalog/_shared/servarr-connection.test.ts catalog/_shared/servarr-download.test.ts catalog/jellyfin/integration.test.ts catalog/plex/integration.test.ts catalog/prowlarr/integration.test.ts catalog/seerr/integration.test.ts packages/cli/src/run.test.ts packages/engine/src/integrations/read.test.ts`
-Expected: FAIL. `read.test.ts` doesn't load (`Cannot find module './read'`), and 14 tests fail, 183 pass: in `servarr-download.test.ts`, 2 of the download client (no `unreadable`; the arr's test runs and makes the post-import category) and 3 of the root folder (no `accessible`); 1 in `servarr-connection.test.ts` and 2 in Prowlarr's (no `unreadable`); 2 in Jellyfin's and 2 in Plex's (a second library is made on the renamed one's folder; a comma isn't reported); 1 in Seerr's (Seerr's list of Jellyfin's users is asked again); and 1 in `run.test.ts` (`plan` runs Sonarr's test while its post-import category is missing).
+Run: `pnpm vitest run catalog/_shared/servarr-connection.test.ts catalog/_shared/servarr-download.test.ts catalog/jellyfin/integration.test.ts catalog/plex/integration.test.ts catalog/prowlarr/integration.test.ts catalog/qbittorrent/integration.test.ts catalog/seerr/integration.test.ts packages/cli/src/run.test.ts packages/engine/src/integrations/read.test.ts`
+Expected: FAIL. `read.test.ts` doesn't load (`Cannot find module './read'`), and 21 tests fail, 200 pass: 8 in `servarr-download.test.ts` (the arr's test runs while qBittorrent lacks the post-import category, or the client's own, or can't say which it has, or while the setting isn't text; no `unreadable`; no `accessible`), 3 in Jellyfin's and 2 in Plex's (a second library is made on the renamed one's folder; a comma, a missing `CollectionType` or a name of another type isn't reported), 3 in Seerr's (Seerr's list of Jellyfin's users is asked again; a setting of another type fails the whole resource), 2 in Prowlarr's, and 1 each in `servarr-connection.test.ts`, qBittorrent's and `run.test.ts` (`plan` runs Sonarr's test while its post-import category is missing).
 
 - [ ] **Step 3: Write the reader, `accessible`, the library guards and the marks**
 
@@ -3483,39 +4836,48 @@ Expected: FAIL. `read.test.ts` doesn't load (`Cannot find module './read'`), and
 
 ```diff
 diff --git a/catalog/_shared/servarr-connection.ts b/catalog/_shared/servarr-connection.ts
-index 0c8f2b2..006e6d4 100644
+index 7b91dcd..a80c143 100644
 --- a/catalog/_shared/servarr-connection.ts
 +++ b/catalog/_shared/servarr-connection.ts
-@@ -3,2 +3,3 @@ import {
+@@ -4,2 +4,3 @@ import {
    type DesiredResource,
 +  type FieldReader,
    type ResourceSpec,
-@@ -7,3 +8,3 @@ import {
+@@ -8,3 +9,3 @@ import {
  import {
 -  numberOf,
 +  optionalText,
    secretOf,
-@@ -11,3 +12,2 @@ import {
+@@ -13,3 +14,2 @@ import {
    settingOf,
 -  textOf,
    type Provider,
-@@ -77,9 +77,9 @@ const PLEX: MediaServer = {
+@@ -79,9 +79,18 @@ const PLEX: MediaServer = {
   */
 -function heldHost(held: Provider): string {
 -  const host = textOf(settingOf(held, 'host'));
+-  const tls = settingOf(held, 'useSsl') === true;
+-  const base = textOf(settingOf(held, 'urlBase'));
 +function heldHost(held: Provider, read: FieldReader): string | undefined {
 +  const host = read.text('host', settingOf(held, 'host'));
-   const tls = settingOf(held, 'useSsl') === true;
--  const base = textOf(settingOf(held, 'urlBase'));
--  if (!tls && base === '') return host;
++  if (host === undefined) return undefined;
++  const tls = settingOf(held, 'useSsl');
++  const base = optionalText(settingOf(held, 'urlBase'));
++  // Where the arr sends the key can't be told from a setting of another type.
++  if (typeof tls !== 'boolean' || base === undefined) {
++    read.refuse(
++      'host',
++      `its ${typeof tls !== 'boolean' ? 'useSsl is not true or false' : 'urlBase is not text'}, so where the arr sends the key can't be told`,
++    );
++    return undefined;
++  }
+   if (!tls && base === '') return host;
 -  const port = String(numberOf(settingOf(held, 'port')));
 -  return `${tls ? 'https' : 'http'}://${host}:${port}${base}`;
-+  const base = optionalText(settingOf(held, 'urlBase'));
-+  if (host === undefined || (!tls && base === '')) return host;
 +  const port = settingOf(held, 'port');
 +  return `${tls ? 'https' : 'http'}://${host}:${typeof port === 'number' ? String(port) : '?'}${base}`;
  }
-@@ -142,6 +142,6 @@ function servarrMediaServer(
+@@ -146,6 +155,6 @@ function servarrMediaServer(
        credentials: server.credentials,
 -      fieldsOf: (held) => ({
 -        host: heldHost(held),
@@ -3532,12 +4894,14 @@ index 0c8f2b2..006e6d4 100644
 
 ```diff
 diff --git a/catalog/_shared/servarr-download.ts b/catalog/_shared/servarr-download.ts
-index 9d84c62..2509bd0 100644
+index d03b84c..35ef767 100644
 --- a/catalog/_shared/servarr-download.ts
 +++ b/catalog/_shared/servarr-download.ts
-@@ -1,6 +1,11 @@
+@@ -1,7 +1,13 @@
  import {
++  AppApiError,
 +  fieldReader,
+   SENDS_A_KEY,
    serviceAddress,
 +  type AppApi,
    type DesiredResource,
@@ -3548,18 +4912,18 @@ index 9d84c62..2509bd0 100644
 +  type Scalar,
 +  type VerifyContext,
  } from '@mediaplane/engine';
-@@ -8,3 +13,4 @@ import { z } from 'zod';
+@@ -9,3 +15,4 @@ import { z } from 'zod';
  import {
 -  numberOf,
 +  optionalText,
 +  providerOf,
    secretOf,
-@@ -12,3 +18,3 @@ import {
+@@ -14,3 +21,3 @@ import {
    settingOf,
 -  textOf,
 +  testProvider,
    type Provider,
-@@ -43,12 +49,54 @@ export interface DownloadLink {
+@@ -45,12 +52,70 @@ export interface DownloadLink {
    setting: 'tvCategory' | 'movieCategory';
 +  /**
 +   * The arr's setting of the category it moves a download to once imported, which
@@ -3575,9 +4939,14 @@ index 9d84c62..2509bd0 100644
 +
 +/**
 + * Why plan and drift leave the client's key unchecked, if they do: the arr's own test
-+ * makes the post-import category the client names when qBittorrent lacks it (probed), and
-+ * they change nothing (spec §5.2; the owner's decision of 2026-10-17). Without one, or
-+ * with qBittorrent holding it, undefined: the test is run.
++ * makes in qBittorrent each category the client names that qBittorrent lacks, with no
++ * save path (probed), and they change nothing (spec §5.2). That is its post-import one,
++ * which Mediaplane doesn't manage (the owner's decision of 2026-10-17, which this widens
++ * in its direction), or its own, once qBittorrent's is no longer Mediaplane's
++ * (`unmanaged`) and deleted. (One kept as another, Keep mine, is qBittorrent's category to
++ * make, by apply: the client waits for it.) A setting it can't read, or a qBittorrent it
++ * can't ask, leaves the key unchecked too. With qBittorrent holding each, undefined: the
++ * test is run.
 + */
 +async function testWouldMake(
 +  api: AppApi,
@@ -3586,21 +4955,32 @@ index 9d84c62..2509bd0 100644
 +  ctx: VerifyContext,
 +): Promise<string | undefined> {
 +  const held = await providerOf(api, CLIENTS, observed.id);
-+  // Unset, the arr leaves it out; cleared, it holds "" (probed).
-+  const imported = optionalText(settingOf(held, link.imported));
-+  if (imported === '') return undefined;
-+  const qbittorrent = ctx.peer('qbittorrent');
-+  const would = `${api.name}'s own test of its download client would make qBittorrent's post-import category ${imported} (${link.imported}) when it is missing, which Mediaplane doesn't manage`;
-+  if (qbittorrent === undefined) {
-+    return `${would}, and qBittorrent couldn't be asked whether it has it`;
++  const named: { setting: string; category: string }[] = [];
++  for (const setting of [link.setting, link.imported]) {
++    // Unset, the arr leaves a setting out; cleared, it holds "" (probed).
++    const category = optionalText(settingOf(held, setting));
++    if (category === undefined) {
++      return `${api.name}'s download client holds a ${setting} that isn't text, so its own test of it, which could make a category in qBittorrent, isn't run: set ${setting} in ${api.name}, then run drift again`;
++    }
++    if (category !== '') named.push({ setting, category });
 +  }
-+  const categories = await qbittorrent.get(
-+    QBT_CATEGORIES,
-+    z.record(z.string(), z.unknown()),
-+  );
-+  return Object.hasOwn(categories, imported)
++  if (named.length === 0) return undefined;
++  const which = (list: typeof named) =>
++    list.map(({ setting, category }) => `${category} (${setting})`).join(' and ');
++  const cannot = `${api.name}'s own test of its download client would make any of ${which(named)} that qBittorrent lacks, with no save path, so it isn't run while qBittorrent can't be asked which it has`;
++  const qbittorrent = ctx.peer('qbittorrent');
++  if (qbittorrent === undefined) return `${cannot}: run drift again once it answers`;
++  let categories: Record<string, unknown>;
++  try {
++    categories = await qbittorrent.get(QBT_CATEGORIES, z.record(z.string(), z.unknown()));
++  } catch (cause) {
++    if (!(cause instanceof AppApiError)) throw cause;
++    return `${cannot} (${cause.message}): run drift again once it answers`;
++  }
++  const missing = named.filter(({ category }) => !Object.hasOwn(categories, category));
++  return missing.length === 0
 +    ? undefined
-+    : `${would}, and qBittorrent has no such category: apply's test makes it`;
++    : `qBittorrent has no category ${which(missing)}, which ${api.name}'s download client names, and ${api.name}'s own test of it would make it with no save path, so it isn't run: make it in qBittorrent, or name one in ${api.name} that qBittorrent has, then run drift again`;
 +}
 +
 +/** The managed fields of a download client, read from the app's settings. */
@@ -3621,22 +5001,29 @@ index 9d84c62..2509bd0 100644
 +    category: read.text('category', settingOf(held, link.setting)),
 +    enable: read.flag('enable', held.enable),
    };
-@@ -121,3 +169,3 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
+@@ -127,3 +192,3 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
        credentials: CREDENTIALS,
 -      fieldsOf: (held) => fieldsOf(held, link),
 +      fieldsOf: (held, read) => fieldsOf(held, link, read),
        settingsOf: (desired) => settingsOf(desired, link),
-@@ -125,2 +173,9 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
+@@ -131,2 +196,16 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
      }),
 +    async verify(api, desired, observed, ctx) {
 +      if (ctx?.readOnly === true) {
 +        const unchecked = await testWouldMake(api, link, observed, ctx);
 +        if (unchecked !== undefined) return { unchecked };
 +      }
-+      return testProvider(api, CLIENTS, observed.id, desired.name, CREDENTIALS);
++      return testProvider(
++        api,
++        CLIENTS,
++        observed.id,
++        desired.name,
++        CREDENTIALS,
++        sendsToOf(desired),
++      );
 +    },
    };
-@@ -128,3 +183,7 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
+@@ -134,3 +213,7 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
  
 -const rootFolder = z.looseObject({ id: z.number(), path: z.string() });
 +const rootFolder = z.looseObject({
@@ -3645,7 +5032,7 @@ index 9d84c62..2509bd0 100644
 +  accessible: z.unknown().optional(),
 +});
  
-@@ -133,4 +192,6 @@ const rootFolder = z.looseObject({ id: z.number(), path: z.string() });
+@@ -139,4 +222,6 @@ const rootFolder = z.looseObject({ id: z.number(), path: z.string() });
   * folder, which the downloads share, so that an import is a hard link. The app needs the
 - * folder to exist: the wire step makes it first. A root folder is known by its path, and
 - * the app can't change one (a PUT answers 405), so a found one is always as wanted.
@@ -3654,7 +5041,7 @@ index 9d84c62..2509bd0 100644
 + * probed). A root folder is known by its path, and the app can't change one (a PUT
 + * answers 405), so there is nothing else to update.
   */
-@@ -139,8 +200,15 @@ export function servarrRootFolder(path: string): ResourceSpec {
+@@ -145,8 +230,15 @@ export function servarrRootFolder(path: string): ResourceSpec {
      name: 'root_folder',
 -    fields: ['path'],
 +    fields: ['path', 'accessible'],
@@ -3672,7 +5059,7 @@ index 9d84c62..2509bd0 100644
 +      folders: [path],
 +    }),
      async observe(api) {
-@@ -149,5 +217,8 @@ export function servarrRootFolder(path: string): ResourceSpec {
+@@ -155,5 +247,8 @@ export function servarrRootFolder(path: string): ResourceSpec {
        );
 -      return held === undefined
 -        ? undefined
@@ -3684,7 +5071,7 @@ index 9d84c62..2509bd0 100644
 +        accessible: read.flag('accessible', held.accessible),
 +      });
      },
-@@ -157,3 +228,3 @@ export function servarrRootFolder(path: string): ResourceSpec {
+@@ -163,3 +258,3 @@ export function servarrRootFolder(path: string): ResourceSpec {
      },
 -    // Found by its path, it never differs from the one wanted: there is nothing to update.
 +    // The wire step made its folder again first, which is all an update can do.
@@ -3695,7 +5082,7 @@ index 9d84c62..2509bd0 100644
 
 ```diff
 diff --git a/catalog/_shared/servarr-provider.ts b/catalog/_shared/servarr-provider.ts
-index b74aae5..7bc95a9 100644
+index 258c891..2862be0 100644
 --- a/catalog/_shared/servarr-provider.ts
 +++ b/catalog/_shared/servarr-provider.ts
 @@ -2,5 +2,6 @@ import {
@@ -3710,26 +5097,26 @@ index b74aae5..7bc95a9 100644
    type ResourceSpec,
 +  type Scalar,
  } from '@mediaplane/engine';
-@@ -51,4 +53,8 @@ export function settingOf(held: Provider, name: string): unknown {
+@@ -52,10 +54,10 @@ export function settingOf(held: Provider, name: string): unknown {
  
 -/** A setting's text, or "" when it holds none. */
 -export function textOf(value: unknown): string {
-+/**
-+ * A setting the app leaves out while it is unset, such as a URL base: its text, or ""
-+ * when it holds none. A managed field is read with a FieldReader instead, so that one the
-+ * app holds in another shape is said to be, never read as empty.
-+ */
-+export function optionalText(value: unknown): string {
-   return typeof value === 'string' ? value : '';
-@@ -56,7 +62,2 @@ export function textOf(value: unknown): string {
- 
+-  return typeof value === 'string' ? value : '';
+-}
+-
 -/** A setting's number, or 0 when it holds none. */
 -export function numberOf(value: unknown): number {
 -  return typeof value === 'number' ? value : 0;
--}
--
- export { secretOf } from './secret';
-@@ -82,2 +83,11 @@ export async function findProvider(
++/**
++ * A setting the app leaves out while it is unset, such as a URL base: its text, "" when
++ * it holds none (left out, or cleared), or undefined when it holds a value of another
++ * type, which is never read as empty. A managed field is read with a FieldReader instead.
++ */
++export function optionalText(value: unknown): string | undefined {
++  if (value === undefined || value === null) return '';
++  return typeof value === 'string' ? value : undefined;
+ }
+@@ -83,2 +85,11 @@ export async function findProvider(
  
 +/** The provider the app holds as `id`, as it gives it: its secrets masked. */
 +export function providerOf(
@@ -3741,14 +5128,14 @@ index b74aae5..7bc95a9 100644
 +}
 +
  /**
-@@ -205,4 +215,4 @@ export interface ProviderOptions {
+@@ -231,4 +242,4 @@ export interface ProviderOptions {
    credentials: readonly string[];
 -  /** Its managed fields, from what the app holds. */
 -  fieldsOf: (held: Provider) => Fields;
 +  /** Its managed fields, read from what the app holds: one it can't read is noted. */
 +  fieldsOf: (held: Provider, read: FieldReader) => Record<string, Scalar | undefined>;
-   /** The settings to set, secrets in clear (this request body only). */
-@@ -232,5 +242,5 @@ export function servarrProvider(
+   /**
+@@ -261,5 +272,5 @@ export function servarrProvider(
        const held = await findProvider(api, kind, known, name);
 -      return held === undefined
 -        ? undefined
@@ -3759,18 +5146,68 @@ index b74aae5..7bc95a9 100644
      },
 ```
 
+**Change** `catalog/_shared/servarr.ts`:
+
+```diff
+diff --git a/catalog/_shared/servarr.ts b/catalog/_shared/servarr.ts
+index 5ecd55d..9978e3a 100644
+--- a/catalog/_shared/servarr.ts
++++ b/catalog/_shared/servarr.ts
+@@ -2,2 +2,3 @@ import {
+   defineIntegration,
++  fieldReader,
+   type ApiSpec,
+@@ -59,3 +60,3 @@ export function servarrApi(version: 'v1' | 'v3'): ApiSpec {
+ /** What Mediaplane reads of the app's host settings; the rest goes back as it came. */
+-const hostSettings = z.looseObject({ id: z.number(), username: z.string() });
++const hostSettings = z.looseObject({ id: z.number(), username: z.unknown() });
+ 
+@@ -93,5 +94,5 @@ export function servarrAdmin(version: 'v1' | 'v3'): ResourceSpec {
+       // No user yet: the app asks for a login that nobody can give.
+-      return username === ''
+-        ? undefined
+-        : { id: null, name: 'admin', fields: { username } };
++      if (username === '') return undefined;
++      const read = fieldReader();
++      return read.observed(null, 'admin', { username: read.text('username', username) });
+     },
+```
+
 **Change** `catalog/jellyfin/integration.ts`:
 
 ```diff
 diff --git a/catalog/jellyfin/integration.ts b/catalog/jellyfin/integration.ts
-index 65c6b8d..9e6fd66 100644
+index c1ce070..33af065 100644
 --- a/catalog/jellyfin/integration.ts
 +++ b/catalog/jellyfin/integration.ts
 @@ -3,2 +3,3 @@ import {
    defineIntegration,
 +  fieldReader,
-   type AppApi,
-@@ -185,15 +186,29 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
+   listItems,
+@@ -12,3 +13,3 @@ import { signIn } from './bootstrap';
+ 
+-const user = z.looseObject({ Id: z.string(), Name: z.string() });
++const user = z.looseObject({ Id: z.string(), Name: z.unknown() });
+ 
+@@ -36,5 +37,7 @@ const admin: ResourceSpec = {
+       users.find((u) => u.Name === desired?.fields.username);
+-    return held === undefined
+-      ? undefined
+-      : { id: held.Id, name: 'admin', fields: { username: held.Name } };
++    if (held === undefined) return undefined;
++    const read = fieldReader();
++    return read.observed(held.Id, 'admin', {
++      username: read.text('username', held.Name),
++    });
+   },
+@@ -92,4 +95,4 @@ const library = z.looseObject({
+   Name: z.string(),
+-  /** Absent for mixed content. */
+-  CollectionType: z.string().optional(),
++  /** Absent for mixed content: read as one Mediaplane can't, never as empty. */
++  CollectionType: z.unknown().optional(),
+   Locations: z.array(z.string()),
+@@ -183,15 +186,29 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
        );
 -      return held === undefined
 -        ? undefined
@@ -3790,7 +5227,7 @@ index 65c6b8d..9e6fd66 100644
 +      const odd = held.Locations.find((path) => path.includes(','));
 +      return read.observed(spec.name, spec.name, {
 +        name: held.Name,
-+        collectionType: held.CollectionType ?? '',
++        collectionType: read.text('collectionType', held.CollectionType),
 +        paths:
 +          odd === undefined
 +            ? pathsOf(held.Locations)
@@ -3811,20 +5248,29 @@ index 65c6b8d..9e6fd66 100644
 +        );
 +      }
        const query = new URLSearchParams([
+@@ -208,6 +225,6 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
+     async update(api, desired, observed) {
+-      const holds = String(observed.fields.collectionType);
++      const holds = observed.fields.collectionType;
+       if (holds !== spec.collectionType) {
+         throw new AppApiError(
+-          `${api.name} at ${api.where} has a library named ${spec.name} that holds ${holds === '' ? 'mixed content' : holds}, not ${spec.collectionType}, and Jellyfin can't change what a library holds: rename or remove it in Jellyfin, and the next apply makes ${spec.name} (GET ${VIRTUAL_FOLDERS})`,
++          `${api.name} at ${api.where} has a library named ${spec.name} that holds ${holds === undefined ? "mixed content, or a kind Mediaplane can't read" : String(holds)}, not ${spec.collectionType}, and Jellyfin can't change what a library holds: rename or remove it in Jellyfin, and the next apply makes ${spec.name} (GET ${VIRTUAL_FOLDERS})`,
+           { kind: 'rejected' },
 ```
 
 **Change** `catalog/plex/integration.ts`:
 
 ```diff
 diff --git a/catalog/plex/integration.ts b/catalog/plex/integration.ts
-index decf217..308b429 100644
+index bfed306..5520216 100644
 --- a/catalog/plex/integration.ts
 +++ b/catalog/plex/integration.ts
 @@ -3,2 +3,3 @@ import {
    defineIntegration,
 +  fieldReader,
-   type AppApi,
-@@ -40,8 +41,6 @@ const server: ResourceSpec = {
+   listItems,
+@@ -41,8 +42,6 @@ const server: ResourceSpec = {
      const { Setting } = (await api.get('/:/prefs', prefs)).MediaContainer;
 -    const name = Setting.find((s) => s.id === 'FriendlyName')?.value;
 -    return {
@@ -3837,7 +5283,12 @@ index decf217..308b429 100644
 +      name: read.text('name', Setting.find((s) => s.id === 'FriendlyName')?.value),
 +    });
    },
-@@ -109,8 +108,12 @@ async function sectionsOf(api: AppApi): Promise<z.infer<typeof section>[]> {
+@@ -92,3 +91,3 @@ const section = z.looseObject({
+   title: z.string(),
+-  type: z.string(),
++  type: z.unknown(),
+   agent: z.string(),
+@@ -110,8 +109,12 @@ async function sectionsOf(api: AppApi): Promise<z.infer<typeof section>[]> {
  
 -/** A library's folders as one sorted list, each once and without a trailing "/". */
 -function locationsOf(held: z.infer<typeof section>): string {
@@ -3854,7 +5305,7 @@ index decf217..308b429 100644
 +function locationsOf(held: z.infer<typeof section>): string {
 +  return [...new Set(foldersOf(held))].sort().join(',');
  }
-@@ -154,11 +157,29 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
+@@ -153,11 +156,29 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
          held.find((s) => s.title === spec.name);
 -      return found === undefined
 -        ? undefined
@@ -3870,7 +5321,7 @@ index decf217..308b429 100644
 +      const odd = foldersOf(found).find((path) => path.includes(','));
 +      return read.observed(found.key, found.title, {
 +        name: found.title,
-+        type: found.type,
++        type: read.text('type', found.type),
 +        location:
 +          odd === undefined
 +            ? locationsOf(found)
@@ -3891,28 +5342,37 @@ index decf217..308b429 100644
 +        );
 +      }
        const query = new URLSearchParams([
+@@ -184,6 +205,6 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
+     async update(api, desired, observed) {
+-      const holds = String(observed.fields.type);
++      const holds = observed.fields.type;
+       if (holds !== spec.type) {
+         throw new AppApiError(
+-          `${api.name} at ${api.where} has a library named ${String(observed.fields.name)} that holds ${holds}, not ${spec.type}, and Plex can't change what a library holds: rename or remove it in Plex, and the next apply makes ${spec.name} (GET ${SECTIONS})`,
++          `${api.name} at ${api.where} has a library named ${String(observed.fields.name)} that holds ${holds === undefined ? "a kind Mediaplane can't read" : String(holds)}, not ${spec.type}, and Plex can't change what a library holds: rename or remove it in Plex, and the next apply makes ${spec.name} (GET ${SECTIONS})`,
+           { kind: 'rejected' },
 ```
 
 **Change** `catalog/prowlarr/integration.ts`:
 
 ```diff
 diff --git a/catalog/prowlarr/integration.ts b/catalog/prowlarr/integration.ts
-index f0e0ffe..a9f50c7 100644
+index 3eb4352..11a2bb8 100644
 --- a/catalog/prowlarr/integration.ts
 +++ b/catalog/prowlarr/integration.ts
 @@ -1,2 +1,3 @@
  import {
 +  fieldReader,
-   provides,
-@@ -12,3 +13,2 @@ import {
+   listItems,
+@@ -14,3 +15,2 @@ import {
    findProvider,
 -  numberOf,
    secretOf,
-@@ -16,3 +16,2 @@ import {
+@@ -19,3 +19,2 @@ import {
    settingOf,
 -  textOf,
    updateProvider,
-@@ -127,7 +126,7 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
+@@ -138,7 +137,7 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
        credentials: ['ApiKey'],
 -      fieldsOf: (held) => ({
 -        prowlarrUrl: textOf(settingOf(held, 'prowlarrUrl')),
@@ -3925,7 +5385,7 @@ index f0e0ffe..a9f50c7 100644
 +        syncLevel: read.text('syncLevel', held.syncLevel),
 +        syncCategories: read.numbers('syncCategories', settingOf(held, 'syncCategories')),
        }),
-@@ -199,14 +198,13 @@ const indexerProxy: ResourceSpec = {
+@@ -211,14 +210,13 @@ const indexerProxy: ResourceSpec = {
      const ids = tagIds.safeParse(held.tags);
 -    return {
 -      id: held.id,
@@ -3953,6 +5413,91 @@ index f0e0ffe..a9f50c7 100644
    },
 ```
 
+**Change** `catalog/qbittorrent/integration.ts`:
+
+```diff
+diff --git a/catalog/qbittorrent/integration.ts b/catalog/qbittorrent/integration.ts
+index 8a539df..2ee331e 100644
+--- a/catalog/qbittorrent/integration.ts
++++ b/catalog/qbittorrent/integration.ts
+@@ -2,2 +2,3 @@ import {
+   defineIntegration,
++  fieldReader,
+   isUnmanaged,
+@@ -29,11 +30,11 @@ const CATEGORIES_PATH = '/api/v2/torrents/categories';
+ /**
+- * What Mediaplane reads of qBittorrent's preferences. They hold its API key too: z.object
+- * drops every other field, so nothing else is kept.
++ * What Mediaplane reads of qBittorrent's preferences, each read with a FieldReader. They
++ * hold its API key too: z.object drops every other field, so nothing else is kept.
+  */
+ const preferences = z.object({
+-  web_ui_username: z.string(),
+-  save_path: z.string(),
+-  auto_tmm_enabled: z.boolean(),
+-  bypass_auth_subnet_whitelist_enabled: z.boolean(),
+-  bypass_auth_subnet_whitelist: z.string(),
++  web_ui_username: z.unknown(),
++  save_path: z.unknown(),
++  auto_tmm_enabled: z.unknown(),
++  bypass_auth_subnet_whitelist_enabled: z.unknown(),
++  bypass_auth_subnet_whitelist: z.unknown(),
+ });
+@@ -41,6 +42,7 @@ const preferences = z.object({
+ /** qBittorrent's categories, by name. */
+-const categories = z.record(z.string(), z.object({ savePath: z.string() }));
++const categories = z.record(z.string(), z.looseObject({ savePath: z.unknown() }));
+ 
+ /** A path as qBittorrent gives it back: without a trailing "/". */
+-function asKept(path: string): string {
++function asKept(path: string | undefined): string | undefined {
++  if (path === undefined) return undefined;
+   return path.length > 1 ? path.replace(/\/+$/, '') : path;
+@@ -85,3 +87,6 @@ const admin: ResourceSpec = {
+     const held = await api.get(PREFERENCES, preferences);
+-    return { id: null, name: 'admin', fields: { username: held.web_ui_username } };
++    const read = fieldReader();
++    return read.observed(null, 'admin', {
++      username: read.text('username', held.web_ui_username),
++    });
+   },
+@@ -145,12 +150,13 @@ const settings: ResourceSpec = {
+     const held = await api.get(PREFERENCES, preferences);
+-    return {
+-      id: null,
+-      name: 'preferences',
+-      fields: {
+-        savePath: asKept(held.save_path),
+-        autoTmm: held.auto_tmm_enabled,
+-        authSubnetWhitelistEnabled: held.bypass_auth_subnet_whitelist_enabled,
+-        authSubnetWhitelist: subnetList(held.bypass_auth_subnet_whitelist),
+-      },
+-    };
++    const read = fieldReader();
++    const whitelist = read.text('authSubnetWhitelist', held.bypass_auth_subnet_whitelist);
++    return read.observed(null, 'preferences', {
++      savePath: asKept(read.text('savePath', held.save_path)),
++      autoTmm: read.flag('autoTmm', held.auto_tmm_enabled),
++      authSubnetWhitelistEnabled: read.flag(
++        'authSubnetWhitelistEnabled',
++        held.bypass_auth_subnet_whitelist_enabled,
++      ),
++      authSubnetWhitelist: whitelist === undefined ? undefined : subnetList(whitelist),
++    });
+   },
+@@ -217,5 +223,7 @@ function category(arr: string, name: string): ResourceSpec {
+       const held = (await api.get(CATEGORIES_PATH, categories))[named];
+-      return held === undefined
+-        ? undefined
+-        : { id: named, name: named, fields: { savePath: asKept(held.savePath) } };
++      if (held === undefined) return undefined;
++      const read = fieldReader();
++      return read.observed(named, named, {
++        savePath: asKept(read.text('savePath', held.savePath)),
++      });
+     },
+```
+
 **Change** `catalog/radarr/integration.ts`:
 
 ```diff
@@ -3975,16 +5520,144 @@ index 13ffe50..1a8315a 100644
 
 ```diff
 diff --git a/catalog/seerr/integration.ts b/catalog/seerr/integration.ts
-index 07d0bfd..df84f2b 100644
+index ecc2edf..987e213 100644
 --- a/catalog/seerr/integration.ts
 +++ b/catalog/seerr/integration.ts
-@@ -212,3 +212,3 @@ const mediaServer: ResourceSpec = {
+@@ -3,2 +3,3 @@ import {
+   defineIntegration,
++  fieldReader,
+   isUnmanaged,
+@@ -9,2 +10,3 @@ import {
+   type DesiredResource,
++  type FieldReader,
+   type ObservedResource,
+@@ -20,4 +22,4 @@ import { ROOT_FOLDER as MOVIES } from '../radarr/integration';
+ import { ROOT_FOLDER as TV } from '../sonarr/integration';
+-import { heldHost, jellyfinSettings as heldJellyfin } from './jellyfin';
+-import { heldPlexHost, plexSettings as heldPlex } from './plex';
++import { heldHost } from './jellyfin';
++import { heldPlexHost } from './plex';
+ 
+@@ -75,10 +77,17 @@ function stackApp(
+ 
+-const library = z.looseObject({ id: z.string(), name: z.string(), enabled: z.boolean() });
++const library = z.looseObject({ id: z.string(), name: z.string(), enabled: z.unknown() });
+ /**
+- * `serverId` is the server's own identifier, which Seerr sets at its first sign-in
+- * through Jellyfin and on each link to Jellyfin it saves (read from Seerr's code): without
+- * one, the link reads as not saved, as Plex's does without `machineId` (probed: a failed
+- * save to Plex still leaves the address in Seerr's settings).
++ * Seerr's Jellyfin settings (`GET /api/v1/settings/jellyfin`), its key in clear, and the
++ * managed ones read with a FieldReader. `serverId` is the server's own identifier, which
++ * Seerr sets at its first sign-in through Jellyfin and on each link to Jellyfin it saves
++ * (read from Seerr's code): without one, the link reads as not saved, as Plex's does
++ * without `machineId` (probed: a failed save to Plex still leaves the address in Seerr's
++ * settings).
+  */
+-const jellyfinSettings = heldJellyfin.extend({
++const jellyfinSettings = z.looseObject({
++  ip: z.unknown(),
++  port: z.unknown(),
++  useSsl: z.unknown(),
++  urlBase: z.unknown(),
++  apiKey: z.string(),
+   libraries: z.array(library),
+@@ -87,9 +96,22 @@ const jellyfinSettings = heldJellyfin.extend({
+ 
+-/** Which of the libraries `wanted` Seerr has enabled, as one list. */
++/**
++ * Which of the libraries `wanted` Seerr has enabled, as one list; none, said to be, when
++ * one of them is held as neither enabled nor not.
++ */
+ function enabledOf(
++  read: FieldReader,
+   libraries: readonly z.infer<typeof library>[],
+   wanted: readonly string[],
+-): string {
++): string | undefined {
++  const odd = libraries.find(
++    (held) => wanted.includes(held.name) && typeof held.enabled !== 'boolean',
++  );
++  if (odd !== undefined) {
++    read.refuse('libraries', `${odd.name} is held as neither enabled nor not`);
++    return undefined;
++  }
+   return wanted
+-    .filter((name) => libraries.some((held) => held.name === name && held.enabled))
++    .filter((name) =>
++      libraries.some((held) => held.name === name && held.enabled === true),
++    )
+     .join(',');
+@@ -97,2 +119,31 @@ function enabledOf(
+ 
++/**
++ * Where Seerr reaches a media server or an arr, read: its host as `fold` makes it of the
++ * settings (the URL Seerr calls, with TLS or a URL base), and its port. A setting of
++ * another type says the host can't be read: where Seerr sends the key it holds can't be
++ * told then.
++ */
++function addressOf(
++  read: FieldReader,
++  held: { host: unknown; port: unknown; useSsl: unknown; base: unknown },
++  fold: (at: { host: string; port: number; useSsl: boolean; base: string }) => string,
++): { hostname: string | undefined; port: number | undefined } {
++  const port = read.number('port', held.port);
++  const host = read.text('hostname', held.host);
++  if (host === undefined) return { hostname: undefined, port };
++  const base = held.base ?? '';
++  if (
++    typeof held.useSsl !== 'boolean' ||
++    typeof base !== 'string' ||
++    port === undefined
++  ) {
++    read.refuse(
++      'hostname',
++      "its TLS, URL base or port is held in a shape Mediaplane can't read, so where Seerr sends the key it holds can't be told",
++    );
++    return { hostname: undefined, port };
++  }
++  return { hostname: fold({ host, port, useSsl: held.useSsl, base }), port };
++}
++
+ /**
+@@ -160,3 +211,3 @@ async function enableLibraries(
+     }
+-    if (!held.enabled) {
++    if (held.enabled !== true) {
+       await api.put(`${at}/${encodeURIComponent(held.id)}`, { enabled: true });
+@@ -204,14 +255,15 @@ const mediaServer: ResourceSpec = {
+     api.addSecret(held.apiKey);
+-    return held.ip === '' || (held.serverId ?? '') === ''
+-      ? undefined
+-      : {
+-          id: null,
+-          name: 'Jellyfin',
+-          fields: {
+-            // With TLS or a URL base, the URL Seerr calls: another host than the stack's.
+-            hostname: heldHost(held),
+-            port: held.port,
+-            libraries: enabledOf(held.libraries, librariesIn(desired, WANTED)),
+-          },
+-        };
++    if (held.ip === '' || (held.serverId ?? '') === '') return undefined;
++    const read = fieldReader();
++    // With TLS or a URL base, the URL Seerr calls: another host than the stack's.
++    const at = addressOf(
++      read,
++      { host: held.ip, port: held.port, useSsl: held.useSsl, base: held.urlBase },
++      ({ host, port, useSsl, base }) =>
++        heldHost({ ip: host, port, useSsl, urlBase: base }),
++    );
++    return read.observed(null, 'Jellyfin', {
++      ...at,
++      libraries: enabledOf(read, held.libraries, librariesIn(desired, WANTED)),
++    });
+   },
+@@ -229,5 +281,10 @@ const mediaServer: ResourceSpec = {
    },
 -  async update(api, desired, observed) {
 +  async update(api, desired, observed, changes = []) {
-     const moved =
-@@ -216,3 +216,8 @@ const mediaServer: ResourceSpec = {
-       observed.fields.port !== desired.fields.port;
+     const moved = !atStack(desired, observed);
 -    if (moved || !(await heldKeyWorks(api))) await saveJellyfin(api, desired);
 +    // A key the check found refused is given at once: each check that fails logs a line
 +    // in Seerr's log, so one is enough (the owner's decision of 2026-10-17). One left
@@ -3993,6 +5666,122 @@ index 07d0bfd..df84f2b 100644
 +      await saveJellyfin(api, desired);
 +    }
      // Another Jellyfin has other library ids, though the names match: sync them again.
+@@ -241,4 +298,10 @@ const PLEX = { path: 'plex', name: 'Plex' } as const;
+ 
+-/** `machineId` is Plex's own identifier, which Seerr sets only once it has saved a link. */
+-const plexSettings = heldPlex.extend({
++/**
++ * Seerr's Plex settings, the managed ones read with a FieldReader. `machineId` is Plex's
++ * own identifier, which Seerr sets only once it has saved a link.
++ */
++const plexSettings = z.looseObject({
++  ip: z.unknown(),
++  port: z.unknown(),
++  useSsl: z.unknown(),
+   libraries: z.array(library),
+@@ -292,13 +355,13 @@ const mediaServerPlex: ResourceSpec = {
+     const held = await api.get(`${SETTINGS}/plex`, plexSettings);
+-    return held.ip === '' || (held.machineId ?? '') === ''
+-      ? undefined
+-      : {
+-          id: null,
+-          name: 'Plex',
+-          fields: {
+-            hostname: heldPlexHost(held),
+-            port: held.port,
+-            libraries: enabledOf(held.libraries, librariesIn(desired, WANTED_PLEX)),
+-          },
+-        };
++    if (held.ip === '' || (held.machineId ?? '') === '') return undefined;
++    const read = fieldReader();
++    const at = addressOf(
++      read,
++      { host: held.ip, port: held.port, useSsl: held.useSsl, base: '' },
++      ({ host, port, useSsl }) => heldPlexHost({ ip: host, port, useSsl }),
++    );
++    return read.observed(null, 'Plex', {
++      ...at,
++      libraries: enabledOf(read, held.libraries, librariesIn(desired, WANTED_PLEX)),
++    });
+   },
+@@ -348,2 +411,3 @@ const ARRS = {
+ 
++/** A server as Seerr holds it, its key in clear, the managed fields read with a FieldReader. */
+ const server = z.looseObject({
+@@ -351,10 +415,10 @@ const server = z.looseObject({
+   name: z.string(),
+-  hostname: z.string(),
+-  port: z.number(),
++  hostname: z.unknown(),
++  port: z.unknown(),
+   apiKey: z.string(),
+-  useSsl: z.boolean(),
+-  baseUrl: z.string().optional(),
+-  activeProfileName: z.string(),
+-  activeDirectory: z.string(),
+-  isDefault: z.boolean(),
++  useSsl: z.unknown(),
++  baseUrl: z.unknown().optional(),
++  activeProfileName: z.unknown(),
++  activeDirectory: z.unknown(),
++  isDefault: z.unknown(),
+ });
+@@ -365,6 +429,5 @@ const server = z.looseObject({
+  */
+-function serverHost(held: z.infer<typeof server>): string {
+-  const base = held.baseUrl ?? '';
+-  if (!held.useSsl && base === '') return held.hostname;
+-  return `${held.useSsl ? 'https' : 'http'}://${held.hostname}:${String(held.port)}${base}`;
++function serverHost(at: { host: string; port: number; useSsl: boolean; base: string }) {
++  if (!at.useSsl && at.base === '') return at.host;
++  return `${at.useSsl ? 'https' : 'http'}://${at.host}:${String(at.port)}${at.base}`;
+ }
+@@ -516,16 +579,20 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
+         held.find((s) => s.name === name);
+-      return found === undefined
+-        ? undefined
+-        : {
+-            id: found.id,
+-            name: found.name,
+-            fields: {
+-              // With TLS or a URL base, the URL Seerr calls: not the stack's host.
+-              hostname: serverHost(found),
+-              port: found.port,
+-              activeProfile: found.activeProfileName,
+-              activeDirectory: found.activeDirectory,
+-              isDefault: found.isDefault,
+-            },
+-          };
++      if (found === undefined) return undefined;
++      const read = fieldReader();
++      return read.observed(found.id, found.name, {
++        // With TLS or a URL base, the URL Seerr calls: not the stack's host.
++        ...addressOf(
++          read,
++          {
++            host: found.hostname,
++            port: found.port,
++            useSsl: found.useSsl,
++            base: found.baseUrl,
++          },
++          serverHost,
++        ),
++        activeProfile: read.text('activeProfile', found.activeProfileName),
++        activeDirectory: read.text('activeDirectory', found.activeDirectory),
++        isDefault: read.flag('isDefault', found.isDefault),
++      });
+     },
+@@ -599,5 +666,8 @@ const setup: ResourceSpec = {
+       `${SETTINGS}/public`,
+-      z.looseObject({ initialized: z.boolean() }),
++      z.looseObject({ initialized: z.unknown() }),
+     );
+-    return { id: null, name: 'setup', fields: { initialized } };
++    const read = fieldReader();
++    return read.observed(null, 'setup', {
++      initialized: read.flag('initialized', initialized),
++    });
+   },
 ```
 
 **Change** `catalog/sonarr/integration.ts`:
@@ -4048,8 +5837,7 @@ function kindOf(value: unknown): string {
  * drift say what was found.
  */
 export interface FieldReader {
-  /** Text; `absent` for a setting the app leaves out while it is unset. */
-  text(field: string, value: unknown, absent?: string): string | undefined;
+  text(field: string, value: unknown): string | undefined;
   number(field: string, value: unknown): number | undefined;
   flag(field: string, value: unknown): boolean | undefined;
   /** A list of numbers, as one sorted, comma-separated list: "5000,5010". */
@@ -4071,9 +5859,8 @@ export function fieldReader(): FieldReader {
     unreadable[field] = why;
   };
   return {
-    text(field, value, absent) {
+    text(field, value) {
       if (typeof value === 'string') return value;
-      if (absent !== undefined && (value === undefined || value === null)) return absent;
       note(field, `${kindOf(value)}, not text`);
       return undefined;
     },
@@ -4120,7 +5907,7 @@ export function fieldReader(): FieldReader {
 
 ```diff
 diff --git a/packages/engine/src/testing/wiring.ts b/packages/engine/src/testing/wiring.ts
-index b2354c8..8b2012f 100644
+index b2354c8..ba874e8 100644
 --- a/packages/engine/src/testing/wiring.ts
 +++ b/packages/engine/src/testing/wiring.ts
 @@ -254,2 +254,4 @@ function qbittorrentTemplate(service: string): Omit<FakeDownloadClient, 'id'> &
@@ -4128,7 +5915,18 @@ index b2354c8..8b2012f 100644
 +      // Unset, the arrs leave it out (probed).
 +      { name: service === 'radarr' ? 'movieImportedCategory' : 'tvImportedCategory' },
      ],
-@@ -288,5 +290,12 @@ function testClient(
+@@ -258,2 +260,10 @@ function qbittorrentTemplate(service: string): Omit<FakeDownloadClient, 'id'> &
+ 
++/** The settings of an arr's download client that name a qBittorrent category. */
++const CLIENT_CATEGORIES = [
++  'tvCategory',
++  'movieCategory',
++  'tvImportedCategory',
++  'movieImportedCategory',
++];
++
+ /**
+@@ -288,5 +298,15 @@ function testClient(
      (qbittorrent.key === '' || key === qbittorrent.key);
 -  return right
 -    ? undefined
@@ -4136,15 +5934,18 @@ index b2354c8..8b2012f 100644
 +  if (!right) {
 +    return refusal('ApiKey', 'Authentication Failure', 'Please verify your credentials.');
 +  }
-+  // A test that reaches qBittorrent makes the post-import category the client names
-+  // when qBittorrent lacks it, with no save path (probed on Sonarr 4 and Radarr 6).
-+  const imported = value('tvImportedCategory') ?? value('movieImportedCategory');
-+  if (typeof imported === 'string' && imported !== '') {
-+    qbittorrent.categories[imported] ??= '';
++  // A test that reaches qBittorrent makes each category the client names that
++  // qBittorrent lacks, its own and its post-import one, with no save path (probed on
++  // Sonarr 4 and Radarr 6).
++  for (const setting of CLIENT_CATEGORIES) {
++    const category = value(setting);
++    if (typeof category === 'string' && category !== '') {
++      qbittorrent.categories[category] ??= '';
++    }
 +  }
 +  return undefined;
  }
-@@ -319,3 +328,8 @@ function fakeServarrDownloads(
+@@ -319,3 +339,8 @@ function fakeServarrDownloads(
        status: 200,
 -      body: state.rootFolders.map((f) => ({ ...f, accessible: true, freeSpace: 1 })),
 +      // The arrs read `accessible` from the disk each time they are asked (probed).
@@ -4159,7 +5960,7 @@ index b2354c8..8b2012f 100644
 - [ ] **Step 4: Run them to see them pass, and regenerate the facts**
 
 ```bash
-pnpm vitest run catalog/_shared/servarr-connection.test.ts catalog/_shared/servarr-download.test.ts catalog/jellyfin/integration.test.ts catalog/plex/integration.test.ts catalog/prowlarr/integration.test.ts catalog/seerr/integration.test.ts packages/cli/src/run.test.ts packages/engine/src/integrations/read.test.ts
+pnpm vitest run catalog/_shared/servarr-connection.test.ts catalog/_shared/servarr-download.test.ts catalog/jellyfin/integration.test.ts catalog/plex/integration.test.ts catalog/prowlarr/integration.test.ts catalog/qbittorrent/integration.test.ts catalog/seerr/integration.test.ts packages/cli/src/run.test.ts packages/engine/src/integrations/read.test.ts
 pnpm docs:generate
 ```
 
@@ -4174,28 +5975,27 @@ git add packages catalog
 git commit -m "feat(catalog): say what an app holds that Mediaplane can't read, make a root folder's folder again, and leave plan's marks to the owner's decisions" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 2011 tests pass in 90 files.
+Expected: 2031 tests pass in 90 files.
 
 ---
 
 ### Task 4: `mediaplane drift`
 
-Decision: `drift` is `plan`, looking only, under the lock (decision 2).
-Decision: its one write, `checks` (decision 3); Jellyfin's admin once a day (decision 5).
+Decision: `drift` is `plan`, looking only, under the lock; clear only when every resource
+and secret was checked (decision 2).
+Decision: its one write, `checks` (decision 3); Jellyfin's admin once a day, and a verdict
+taken from then said to be (decision 5).
 Decision: a shared key changed at its source is reported on the source and each consumer
-(decision 13); what is left in an app is reported (decision 14).
-Decision: Prowlarr's proxy is read through Prowlarr's health check (decision 15).
-Decision: the lock names its command (decision 18).
+(decision 14); what is left in an app is reported, and one its app can't say about isn't
+checked (decision 15).
+Decision: the CLI says what puts each kind right (decision 16).
+Decision: Prowlarr's proxy is read through Prowlarr's health check (decision 17).
+Decision: the lock names its command (decision 20).
 
 **Files:**
-- Create: `packages/engine/src/drift.ts`
-- Modify: `packages/engine/src/integrations/types.ts`,
-  `packages/engine/src/integrations/wiring.ts`, `packages/engine/src/plan/plan.ts`,
-  `packages/engine/src/state/lock.ts`, `packages/engine/src/runbooks.ts`,
-  `packages/engine/src/index.ts`, `packages/engine/src/testing/wiring.ts`,
-  `packages/engine/src/testing/prowlarr.ts`, `catalog/jellyfin/integration.ts`,
-  `catalog/prowlarr/integration.ts`, `packages/cli/src/run.ts`, `packages/cli/src/output.ts`
-- Test: catalog/jellyfin/integration.test.ts catalog/prowlarr/integration.test.ts packages/cli/src/output.test.ts packages/cli/src/run.test.ts packages/engine/src/drift.test.ts packages/engine/src/integrations/wiring.test.ts packages/engine/src/state/lock.test.ts
+- Create: `packages/engine/src/drift.ts`, `packages/engine/src/testing/home.ts`
+- Modify: `catalog/jellyfin/integration.ts`, `catalog/prowlarr/integration.ts`, `packages/cli/src/output.ts`, `packages/cli/src/run.ts`, `packages/engine/src/index.ts`, `packages/engine/src/integrations/types.ts`, `packages/engine/src/integrations/wiring.ts`, `packages/engine/src/plan/plan.ts`, `packages/engine/src/runbooks.ts`, `packages/engine/src/state/lock.ts`, `packages/engine/src/testing/index.ts`, `packages/engine/src/testing/prowlarr.ts`, `packages/engine/src/testing/wiring.ts`
+- Test: `catalog/jellyfin/integration.test.ts`, `catalog/prowlarr/integration.test.ts`, `packages/cli/src/output.test.ts`, `packages/cli/src/run.test.ts`, `packages/engine/src/drift.test.ts`, `packages/engine/src/integrations/wiring.test.ts`, `packages/engine/src/state/lock.test.ts`
 - Generated: `docs/reference/cli.md`
 
 **Interfaces:**
@@ -4205,17 +6005,21 @@ Decision: the lock names its command (decision 18).
   - `ResourceSpec.checkEvery?: number` (ms), `ResourceSpec.health?(api, observed): Promise<string | undefined>`;
   - `Drift.kind` gains `'key' | 'left'`, and `Drift.source?: string`;
     `PlanWiringOptions.drift?: { now: () => Date }`, `ExamineOptions.drift?`;
-    `DRIFT_RUNBOOK`; warnings `drift.health`, `drift.left-unknown`;
+    `DRIFT_RUNBOOK`; warnings `drift.health`, `drift.left-unknown` (with an `unknown`
+    wiring change);
   - `PlanOptions.drift?: { now: () => Date }`;
   - from `@mediaplane/engine`: `interface DriftOptions extends PlanOptions { now? }`,
     `interface DriftResult { ok; clear; drift: Drift[]; checks: SecretCheck[]; unchecked: { resource: string; reason: string }[]; diagnostics }`,
     `drift(options: DriftOptions): Promise<DriftResult>` (errors `drift.locked`; warning
-    `drift.checks-not-kept`);
+    `drift.checks-not-kept`); `clear` is false while a secret went unchecked;
   - `LockInfo.command?: string`, `acquireLock(home, now?, command = 'apply')`;
   - `CHECK_ADMIN_EVERY` in `catalog/jellyfin/integration.ts`;
   - the CLI: `mediaplane drift [--home] [--json]` (exit 0, 2 or 1),
-    `DRIFT_JSON_SCHEMA` (`'mediaplane.drift/v1'`), `printDrift(result, options, io)`;
-  - `FakeAppState.health`, which the fake Prowlarr answers at `GET /api/v1/health`.
+    `DRIFT_JSON_SCHEMA` (`'mediaplane.drift/v1'`), `printDrift(result, options, io)`,
+    `driftAdvice(drift): string[]`;
+  - `FakeAppState.health`, which the fake Prowlarr answers at `GET /api/v1/health`;
+  - from `@mediaplane/engine/testing`: `wiredHome(options): Promise<string>`,
+    `wiredRuntime(addresses): Runtime`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4223,13 +6027,50 @@ Decision: the lock names its command (decision 18).
 
 ```diff
 diff --git a/catalog/jellyfin/integration.test.ts b/catalog/jellyfin/integration.test.ts
-index 2217beb..8bd8d98 100644
+index 53290fc..c55020d 100644
 --- a/catalog/jellyfin/integration.test.ts
 +++ b/catalog/jellyfin/integration.test.ts
-@@ -595,2 +595,6 @@ describe("Jellyfin's libraries", () => {
+@@ -4,2 +4,3 @@ import {
+   createAppApi,
++  examine,
+   type ResourceSpec,
+@@ -595,2 +596,39 @@ describe("Jellyfin's libraries", () => {
  
-+  it("is checked by drift once a day at most, while it passes: each check is in Jellyfin's activity log", () => {
-+    expect(resource('admin').checkEvery).toBe(24 * 60 * 60 * 1000);
++  it("is checked by drift once a day at most, while it passes: each check is in Jellyfin's activity log", async () => {
++    const { api, app } = await jellyfin(setUp(), true);
++    const spec = resource('admin');
++    const observed = await spec.observe(api, undefined, wanted(spec));
++    if (observed === undefined) throw new Error('no admin');
++    const at = '2026-10-20T08:00:00.000Z';
++    const known = {
++      id: observed.id,
++      name: 'admin',
++      fields: { username: 'admin' },
++      secrets: ['password'],
++      appliedAt: at,
++      checks: { password: { verdict: 'passed' as const, at } },
++    };
++    const signIns = () =>
++      calls(app).filter((call) => call === 'POST /Users/AuthenticateByName').length;
++    const look = { readOnly: true, peer: () => undefined };
++    const driftAfter = (hours: number) =>
++      examine(spec, api, contextOf(), known, {
++        context: look,
++        drift: { now: () => new Date(Date.parse(at) + hours * 60 * 60 * 1000) },
++      });
++    // Within a day of the check that passed: taken from then, without signing in.
++    expect((await driftAfter(23))?.checks).toEqual([
++      { resource: 'jellyfin.admin', secret: 'password', verdict: 'passed', at },
++    ]);
++    expect(signIns()).toBe(0);
++    // A day on, it signs in again.
++    expect((await driftAfter(25))?.checks).toEqual([
++      { resource: 'jellyfin.admin', secret: 'password', verdict: 'passed' },
++    ]);
++    expect(signIns()).toBe(1);
++    // plan checks it every time.
++    await examine(spec, api, contextOf(), known, { context: look });
++    expect(signIns()).toBe(2);
 +  });
 +
    it("says Jellyfin can't change what a library of that name holds", async () => {
@@ -4239,10 +6080,10 @@ index 2217beb..8bd8d98 100644
 
 ```diff
 diff --git a/catalog/prowlarr/integration.test.ts b/catalog/prowlarr/integration.test.ts
-index e8a7877..d88e6a0 100644
+index 51a4a8d..216b3ba 100644
 --- a/catalog/prowlarr/integration.test.ts
 +++ b/catalog/prowlarr/integration.test.ts
-@@ -438,2 +438,28 @@ describe('the indexer proxy', () => {
+@@ -479,2 +479,28 @@ describe('the indexer proxy', () => {
  
 +  it("reads what Prowlarr's own health check found of its proxies, and tests none itself", async () => {
 +    const { api, app, state } = await prowlarr();
@@ -4277,10 +6118,10 @@ index e8a7877..d88e6a0 100644
 
 ```diff
 diff --git a/packages/cli/src/output.test.ts b/packages/cli/src/output.test.ts
-index fa3724f..90a859e 100644
+index fa587ce..83e5ffe 100644
 --- a/packages/cli/src/output.test.ts
 +++ b/packages/cli/src/output.test.ts
-@@ -1,4 +1,16 @@
+@@ -1,2 +1,7 @@
 -import type { ActionResult, ChangeRecord, PlanResult } from '@mediaplane/engine';
 +import type {
 +  ActionResult,
@@ -4289,19 +6130,18 @@ index fa3724f..90a859e 100644
 +  PlanResult,
 +} from '@mediaplane/engine';
  import { describe, expect, it } from 'vitest';
--import { printApply, printHistory, printPlan, printRecord, printStep } from './output';
-+import {
-+  printApply,
+@@ -5,2 +10,3 @@ import {
+   printApply,
 +  printDrift,
-+  printHistory,
-+  printPlan,
-+  printRecord,
-+  printStep,
-+} from './output';
- import type { Io } from './run';
-@@ -135,2 +147,35 @@ describe('printPlan: drift', () => {
+   printHistory,
+@@ -148,3 +154,3 @@ describe('printPlan: drift', () => {
+         "  ! qbittorrent.admin.password: refused by the app's own check (found by drift at 2026-10-20T08:00:00.000Z; not checked again until apply sets it)",
+-        '  apply puts each back.',
++        '  apply puts back each field, resource and secret changed in the apps.',
+         'Wiring:',
+@@ -157,2 +163,36 @@ describe('printPlan: drift', () => {
  
-+  it('says an app refuses its own key, which those that hold it hold too, and what is left', () => {
++  it('says an app refuses its own key, which those that hold it hold too, and what is left, and that apply puts back neither', () => {
 +    const term = capture();
 +    printPlan(
 +      {
@@ -4327,7 +6167,8 @@ index fa3724f..90a859e 100644
 +        '  ! qbittorrent: refuses the key Mediaplane holds for it (apiKey), as if it was changed in the app',
 +        "  ! sonarr.download_client.apiKey: holds qbittorrent's key, which qbittorrent refuses",
 +        '  ? prowlarr.application_radarr: still in the app, though the stack no longer wants it; apply leaves it',
-+        '  apply puts each back.',
++        "  apply doesn't give an app back its own key: put back the key Mediaplane holds, as https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md shows.",
++        "  apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it.",
 +        'No changes.',
 +        '',
 +      ].join('\n'),
@@ -4335,7 +6176,7 @@ index fa3724f..90a859e 100644
 +  });
 +
    it('gives the drift and the checks in JSON', () => {
-@@ -143,2 +188,68 @@ describe('printPlan: drift', () => {
+@@ -165,2 +205,102 @@ describe('printPlan: drift', () => {
  
 +describe('printDrift', () => {
 +  const FOUND: DriftResult = {
@@ -4374,7 +6215,8 @@ index fa3724f..90a859e 100644
 +        "  ? radarr.admin: its app isn't running",
 +        "Secrets, checked with each app's own check: 1 passed, 1 not checked.",
 +        '  - sonarr.download_client.apiKey: a managed field differs: apply sets the secrets with it',
-+        'Drift found. apply puts it back.',
++        'Drift found.',
++        '  apply puts back each field, resource and secret changed in the apps.',
 +        '',
 +      ].join('\n'),
 +    );
@@ -4390,7 +6232,40 @@ index fa3724f..90a859e 100644
 +    expect(clear.stdout()).toBe('No drift: the apps hold what Mediaplane applied.\n');
 +    const partly = capture();
 +    printDrift({ ...FOUND, drift: [], checks: [] }, { json: false }, partly.io);
-+    expect(partly.stdout()).toContain('No drift found where Mediaplane could look.\n');
++    expect(partly.stdout()).toContain(
++      'No drift found where Mediaplane could look, but it could not look at everything, or check every secret: see above.\n',
++    );
++  });
++
++  it('says which secrets passed when drift last checked them, and when, rather than now', () => {
++    const term = capture();
++    printDrift(
++      {
++        ...FOUND,
++        clear: true,
++        drift: [],
++        unchecked: [],
++        checks: [
++          { resource: 'sonarr.admin', secret: 'password', verdict: 'passed' },
++          {
++            resource: 'jellyfin.admin',
++            secret: 'password',
++            verdict: 'passed',
++            at: '2026-10-20T08:00:00.000Z',
++          },
++        ],
++      },
++      { json: false },
++      term.io,
++    );
++    expect(term.stdout()).toBe(
++      [
++        "Secrets, checked with each app's own check: 2 passed (1 as last checked).",
++        "  = jellyfin.admin.password: passed when drift last checked it, at 2026-10-20T08:00:00.000Z; it isn't checked again until its time is up",
++        'No drift: the apps hold what Mediaplane applied.',
++        '',
++      ].join('\n'),
++    );
 +  });
 +
 +  it('gives all of it in JSON, versioned', () => {
@@ -4410,10 +6285,10 @@ index fa3724f..90a859e 100644
 
 ```diff
 diff --git a/packages/cli/src/run.test.ts b/packages/cli/src/run.test.ts
-index 5d5a2b9..6bf46f3 100644
+index 5d5a2b9..0b67f8a 100644
 --- a/packages/cli/src/run.test.ts
 +++ b/packages/cli/src/run.test.ts
-@@ -1695,2 +1695,104 @@ apps:
+@@ -1695,2 +1695,106 @@ apps:
  
 +describe('mediaplane drift', () => {
 +  const current = () =>
@@ -4448,7 +6323,9 @@ index 5d5a2b9..6bf46f3 100644
 +    expect(term.stdout()).toContain(
 +      'Changed outside Mediaplane since it was applied:\n  ~ sonarr.download_client.category: expected "tv", actual "television"\n',
 +    );
-+    expect(term.stdout()).toContain('Drift found. apply puts it back.\n');
++    expect(term.stdout()).toContain(
++      'Drift found.\n  apply puts back each field, resource and secret changed in the apps.\n',
++    );
 +    const json = capture();
 +    expect(await run(['drift', '--home', home, '--json'], json.io, deps(runtime))).toBe(
 +      2,
@@ -4523,18 +6400,21 @@ index 5d5a2b9..6bf46f3 100644
 **Create** `packages/engine/src/drift.test.ts`:
 
 ```ts
-import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
+import { readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { drift } from './drift';
+import { AppApiError } from './http/client';
 import { readResources, writeResources } from './integrations/resources';
-import { LOCK_PATH, RESOURCES_PATH, SECRETS_PATH } from './paths';
+import type { ResourceSpec } from './integrations/types';
+import { LOCK_PATH, RESOURCES_PATH } from './paths';
 import type { HostProbe } from './preflight/probe';
 import type { Runtime } from './runtime/types';
-import { fakeProbe, fakeRuntime, running } from './testing/fakes';
+import { fakeProbe, fakeRuntime } from './testing/fakes';
 import { FIXTURE_HOST } from './testing/fixtures';
+import { wiredHome, wiredRuntime } from './testing/home';
 import { tempDir } from './testing/temp';
-import { fakeSonarr, WIRED_CATALOG } from './testing/wiring';
+import { FAKE_LOGIN, fakeSonarr, WIRED_CATALOG } from './testing/wiring';
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -4556,34 +6436,18 @@ const RECORD = {
 };
 
 /** A home of the wired fixture stack, with Sonarr's key stored and its login recorded. */
-async function home(): Promise<string> {
-  const dir = await tempDir('mediaplane-drift-');
-  await writeFile(join(dir, 'stack.yaml'), STACK);
-  await mkdir(join(dir, 'state'));
-  await writeFile(
-    join(dir, SECRETS_PATH),
-    JSON.stringify({
-      version: 1,
-      apps: { sonarr: { apiKey: KEY } },
-      shared: { adminPassword: PASSWORD },
-    }),
-  );
-  await writeResources(dir, { 'sonarr.login': RECORD });
-  return dir;
+function home(): Promise<string> {
+  return wiredHome({
+    prefix: 'mediaplane-drift-',
+    stack: STACK,
+    key: KEY,
+    password: PASSWORD,
+    known: { 'sonarr.login': RECORD },
+  });
 }
 
 /** The stack's Sonarr, running and healthy, on the wiring network. */
-function runtimeFor(addresses: Record<string, string>): Runtime {
-  return fakeRuntime({
-    hashes: { ok: true, hashes: {} },
-    containers: running({
-      jellyfin: 'a'.repeat(64),
-      qbittorrent: 'c'.repeat(64),
-      sonarr: 'b'.repeat(64),
-    }),
-    addresses,
-  });
-}
+const runtimeFor = wiredRuntime;
 
 async function driftOf(
   dir: string,
@@ -4675,6 +6539,73 @@ describe('drift', () => {
     });
   });
 
+  it("isn't clear while a secret goes unchecked, though nothing is found", async () => {
+    const dir = await home();
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const careful: ResourceSpec = {
+      ...FAKE_LOGIN,
+      verify: () => Promise.resolve({ unchecked: 'it would make a category' }),
+    };
+    const catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr'
+        ? { ...def, integration: { after: [], resources: [careful] } }
+        : def,
+    );
+    const result = await drift({
+      home: dir,
+      catalog,
+      host: FIXTURE_HOST,
+      env: {},
+      runtime: runtimeFor(sonarr.addresses),
+      probe: fakeProbe(),
+      wiring: sonarr.seams,
+      now: () => AT,
+    });
+    expect(result).toMatchObject({ ok: true, clear: false, drift: [], unchecked: [] });
+  });
+
+  it("isn't clear while it can't tell whether an app still holds what Mediaplane made there", async () => {
+    const dir = await home();
+    await writeResources(dir, {
+      'sonarr.login': RECORD,
+      'sonarr.gone': { ...RECORD, name: 'gone' },
+    });
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const gone: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'gone',
+      desired: () => undefined,
+      observe: () => Promise.reject(new AppApiError('no', { kind: 'rejected' })),
+    };
+    const catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr'
+        ? { ...def, integration: { after: [], resources: [FAKE_LOGIN, gone] } }
+        : def,
+    );
+    const result = await drift({
+      home: dir,
+      catalog,
+      host: FIXTURE_HOST,
+      env: {},
+      runtime: runtimeFor(sonarr.addresses),
+      probe: fakeProbe(),
+      wiring: sonarr.seams,
+      now: () => AT,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      clear: false,
+      drift: [],
+      unchecked: [
+        {
+          resource: 'sonarr.gone',
+          reason:
+            "Mediaplane made sonarr.gone, which the stack no longer wants, and couldn't tell whether sonarr still holds it: no",
+        },
+      ],
+    });
+  });
+
   it("asks no more of the host than it needs: the host's ports and folders aren't drift", async () => {
     const dir = await home();
     const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
@@ -4748,22 +6679,15 @@ describe('drift', () => {
 
 ```diff
 diff --git a/packages/engine/src/integrations/wiring.test.ts b/packages/engine/src/integrations/wiring.test.ts
-index 134c131..26ddde3 100644
+index 6e62424..3a9aebc 100644
 --- a/packages/engine/src/integrations/wiring.test.ts
 +++ b/packages/engine/src/integrations/wiring.test.ts
-@@ -1323 +1323,167 @@ describe('planWiring: overrides (spec §4.2, §6.3)', () => {
+@@ -1380 +1380,164 @@ describe('planWiring: overrides (spec §4.2, §6.3)', () => {
  });
 +
 +describe('planWiring: what drift adds (spec §6.3)', () => {
 +  const AT = '2026-10-20T08:00:00.000Z';
 +  const DAY = 24 * 60 * 60 * 1000;
-+  /** WIRED_CATALOG, with Sonarr's resources replaced by `resources`. */
-+  const sonarrWith = (resources: ResourceSpec[]) =>
-+    stackOf(
-+      WIRED_CATALOG.map((def) =>
-+        def.id === 'sonarr' ? { ...def, integration: { after: [], resources } } : def,
-+      ),
-+    );
 +  const passed = {
 +    'sonarr.login': {
 +      ...RECORDED['sonarr.login'],
@@ -4877,14 +6801,18 @@ index 134c131..26ddde3 100644
 +      }),
 +    );
 +    expect(planned.drift).toEqual([{ resource: 'sonarr.gone', kind: 'left' }]);
-+    expect(planned.changes.map((c) => c.resource)).toEqual(['sonarr.login']);
-+    // One the app can't say about is never said to be gone.
++    // One the app can't say about is never said to be gone: it couldn't be looked at.
++    const said =
++      "Mediaplane made sonarr.failing, which the stack no longer wants, and couldn't tell whether sonarr still holds it: no";
++    expect(planned.changes).toEqual([
++      { resource: 'sonarr.login', action: 'unchanged' },
++      { resource: 'sonarr.failing', action: 'unknown', reason: said },
++    ]);
 +    expect(planned.diagnostics).toEqual([
 +      expect.objectContaining({
 +        severity: 'warning',
 +        code: 'drift.left-unknown',
-+        message:
-+          "Mediaplane made sonarr.failing, which the stack no longer wants, and couldn't tell whether sonarr still holds it: no",
++        message: said,
 +      }),
 +    ]);
 +  });
@@ -4955,7 +6883,7 @@ index 234cf82..e483e6f 100644
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `pnpm vitest run catalog/jellyfin/integration.test.ts catalog/prowlarr/integration.test.ts packages/cli/src/output.test.ts packages/cli/src/run.test.ts packages/engine/src/drift.test.ts packages/engine/src/integrations/wiring.test.ts packages/engine/src/state/lock.test.ts`
-Expected: FAIL. `drift.test.ts` doesn't load (`Cannot find module './drift'`), and 15 tests fail, 191 pass: 4 in `wiring.test.ts` (no `checkEvery`, `key`, `left` nor `health`), 4 in `output.test.ts` (`printDrift is not a function`, and no line for `key` or `left`), 4 in `run.test.ts` (`unknown command 'drift'`), 1 in `lock.test.ts` (no `command`), 1 in Jellyfin's (no `checkEvery`) and 1 in Prowlarr's (no `health`).
+Expected: FAIL. `drift.test.ts` doesn't load (`Cannot find module './drift'`), and 17 tests fail, 196 pass: 6 in `output.test.ts` (`printDrift is not a function`; `apply puts each back` printed for a key and what is left), 4 in `run.test.ts` (`unknown command 'drift'`), 4 in `wiring.test.ts` (no `checkEvery`, `key`, `left`, nor `health`; no unknown change for a left resource its app can't say about), and 1 each in `lock.test.ts` (no `command`), Jellyfin's (its admin signed in to within a day) and Prowlarr's (no `health`).
 
 - [ ] **Step 3: Write `drift`, its checks, and what it adds to `plan`'s look**
 
@@ -4963,23 +6891,23 @@ Expected: FAIL. `drift.test.ts` doesn't load (`Cannot find module './drift'`), a
 
 ```diff
 diff --git a/catalog/jellyfin/integration.ts b/catalog/jellyfin/integration.ts
-index 9e6fd66..a0d6ecc 100644
+index 33af065..42e910f 100644
 --- a/catalog/jellyfin/integration.ts
 +++ b/catalog/jellyfin/integration.ts
-@@ -14,2 +14,5 @@ const user = z.looseObject({ Id: z.string(), Name: z.string() });
+@@ -15,2 +15,5 @@ const user = z.looseObject({ Id: z.string(), Name: z.unknown() });
  
 +/** How often drift checks the admin's password at most, while it passes: once a day. */
 +export const CHECK_ADMIN_EVERY = 24 * 60 * 60 * 1000;
 +
  /**
-@@ -20,3 +23,5 @@ const user = z.looseObject({ Id: z.string(), Name: z.string() });
+@@ -21,3 +24,5 @@ const user = z.looseObject({ Id: z.string(), Name: z.unknown() });
   * doesn't lock its admin out after failed sign-ins (probed: none after seven), but its
 - * activity log records each sign-in, as it records any.
 + * activity log records each sign-in, as it records any: three lines for each check that
 + * passes, one for each that fails (probed). So drift checks it once a day at most, while
 + * it passes (the owner's decision of 2026-10-17); plan and apply check it every time.
   */
-@@ -26,2 +31,3 @@ const admin: ResourceSpec = {
+@@ -27,2 +32,3 @@ const admin: ResourceSpec = {
    secrets: ['password'],
 +  checkEvery: CHECK_ADMIN_EVERY,
    desired: ({ admin: login }) => ({
@@ -4989,15 +6917,15 @@ index 9e6fd66..a0d6ecc 100644
 
 ```diff
 diff --git a/catalog/prowlarr/integration.ts b/catalog/prowlarr/integration.ts
-index a9f50c7..13f212d 100644
+index 11a2bb8..c01e1fa 100644
 --- a/catalog/prowlarr/integration.ts
 +++ b/catalog/prowlarr/integration.ts
-@@ -55,2 +55,4 @@ const REQUEST_TIMEOUT = 60;
+@@ -58,2 +58,4 @@ const REQUEST_TIMEOUT = 60;
  const TAGS = '/api/v1/tag';
 +const HEALTH = '/api/v1/health';
 +const health = z.array(z.looseObject({ source: z.string(), message: z.string() }));
  const tag = z.looseObject({ id: z.number(), label: z.string() });
-@@ -210,2 +212,12 @@ const indexerProxy: ResourceSpec = {
+@@ -222,2 +224,12 @@ const indexerProxy: ResourceSpec = {
    },
 +  // Prowlarr's own health check tests its proxies, every six hours (probed): drift reads
 +  // what it found, and never tests the proxy itself, which would need the internet.
@@ -5016,18 +6944,22 @@ index a9f50c7..13f212d 100644
 
 ```diff
 diff --git a/packages/cli/src/output.ts b/packages/cli/src/output.ts
-index 23aac55..5177d6f 100644
+index cba88c7..e326965 100644
 --- a/packages/cli/src/output.ts
 +++ b/packages/cli/src/output.ts
-@@ -10,2 +10,3 @@ import {
+@@ -3,2 +3,3 @@ import {
+   unhealthyServices,
++  WIRING_RUNBOOK,
+   type ActionResult,
+@@ -10,2 +11,3 @@ import {
    type Drift,
 +  type DriftResult,
    type PlanResult,
-@@ -23,2 +24,3 @@ export const STATUS_JSON_SCHEMA = 'mediaplane.status/v1';
+@@ -23,2 +25,3 @@ export const STATUS_JSON_SCHEMA = 'mediaplane.status/v1';
  export const HISTORY_JSON_SCHEMA = 'mediaplane.history/v1';
 +export const DRIFT_JSON_SCHEMA = 'mediaplane.drift/v1';
  
-@@ -70,2 +72,8 @@ export function driftLine(drift: Drift): string {
+@@ -70,2 +73,8 @@ export function driftLine(drift: Drift): string {
        return `  ! ${drift.resource}.${drift.secret ?? ''}: refused by the app's own check${drift.since === undefined ? '' : ` (found by drift at ${drift.since}; not checked again until apply sets it)`}`;
 +    case 'key':
 +      return drift.source === undefined
@@ -5036,7 +6968,39 @@ index 23aac55..5177d6f 100644
 +    case 'left':
 +      return `  ? ${drift.resource}: still in the app, though the stack no longer wants it; apply leaves it`;
    }
-@@ -177,2 +185,53 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
+@@ -73,2 +82,26 @@ export function driftLine(drift: Drift): string {
+ 
++/**
++ * What puts right the drift found, one line for each kind of it there is: apply puts back
++ * a field, a resource or a secret changed in an app; it gives no app back a key changed
++ * there, and removes nothing the stack no longer wants, so it is never said to.
++ */
++export function driftAdvice(drift: readonly Drift[]): string[] {
++  const has = (...kinds: Drift['kind'][]) => drift.some((d) => kinds.includes(d.kind));
++  return [
++    ...(has('field', 'missing', 'secret')
++      ? ['apply puts back each field, resource and secret changed in the apps']
++      : []),
++    ...(has('key')
++      ? [
++          `apply doesn't give an app back its own key: put back the key Mediaplane holds, as ${WIRING_RUNBOOK} shows`,
++        ]
++      : []),
++    ...(has('left')
++      ? [
++          "apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it",
++        ]
++      : []),
++  ];
++}
++
+ export function formatDiagnostic(diagnostic: Diagnostic): string {
+@@ -153,3 +186,3 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
+     for (const drift of result.drift) io.stdout(`${driftLine(drift)}\n`);
+-    io.stdout('  apply puts each back.\n');
++    for (const line of driftAdvice(result.drift)) io.stdout(`  ${line}.\n`);
+   }
+@@ -177,2 +210,69 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
  
 +/**
 + * What `mediaplane drift` found: each change made outside Mediaplane, what it couldn't
@@ -5069,24 +7033,40 @@ index 23aac55..5177d6f 100644
 +  const verdicts = (verdict: string) =>
 +    result.checks.filter((check) => check.verdict === verdict);
 +  const unchecked = verdicts('unchecked');
++  // A secret that passed lately isn't checked again until its time is up (checkEvery).
++  const recalled = verdicts('passed').filter((check) => check.at !== undefined);
++  const passed = verdicts('passed').length;
 +  const secrets = [
-+    [verdicts('passed').length, 'passed'] as const,
++    [
++      passed,
++      recalled.length === 0
++        ? 'passed'
++        : `passed (${String(recalled.length)} as last checked)`,
++    ] as const,
 +    [verdicts('refused').length, 'refused'] as const,
 +    [unchecked.length, 'not checked'] as const,
 +  ].flatMap(([n, what]) => (n === 0 ? [] : [`${String(n)} ${what}`]));
 +  if (secrets.length > 0) {
 +    io.stdout(`Secrets, checked with each app's own check: ${secrets.join(', ')}.\n`);
++    for (const { resource, secret, at } of recalled) {
++      io.stdout(
++        `  = ${resource}.${secret}: passed when drift last checked it, at ${at ?? ''}; it isn't checked again until its time is up\n`,
++      );
++    }
 +    for (const { resource, secret, reason } of unchecked) {
 +      io.stdout(`  - ${resource}.${secret}: ${reason ?? 'not checked'}\n`);
 +    }
 +  }
-+  io.stdout(
-+    result.clear
-+      ? 'No drift: the apps hold what Mediaplane applied.\n'
-+      : result.drift.length > 0
-+        ? 'Drift found. apply puts it back.\n'
-+        : 'No drift found where Mediaplane could look.\n',
-+  );
++  if (result.clear) {
++    io.stdout('No drift: the apps hold what Mediaplane applied.\n');
++  } else if (result.drift.length > 0) {
++    io.stdout('Drift found.\n');
++    for (const line of driftAdvice(result.drift)) io.stdout(`  ${line}.\n`);
++  } else {
++    io.stdout(
++      'No drift found where Mediaplane could look, but it could not look at everything, or check every secret: see above.\n',
++    );
++  }
 +}
 +
  function count(n: number, noun: string, verb: string): string | undefined {
@@ -5096,7 +7076,7 @@ index 23aac55..5177d6f 100644
 
 ```diff
 diff --git a/packages/cli/src/run.ts b/packages/cli/src/run.ts
-index f955d79..432cc44 100644
+index f955d79..a6cc32d 100644
 --- a/packages/cli/src/run.ts
 +++ b/packages/cli/src/run.ts
 @@ -10,2 +10,3 @@ import {
@@ -5111,7 +7091,7 @@ index f955d79..432cc44 100644
    status: ['0: the containers were listed', '1: an error, or no container for that app'],
 +  drift: [
 +    '0: nothing changed outside Mediaplane, and every resource was checked',
-+    '2: something changed outside Mediaplane, or a resource was not checked',
++    '2: drift found, or a resource or secret was not checked',
 +    '1: an error; nothing was changed',
 +  ],
    history: ['0: the records were listed or shown', '1: an error, or no such record'],
@@ -5231,7 +7211,10 @@ export async function drift(options: DriftOptions): Promise<DriftResult> {
     const unchecked = result.wiring.flatMap(notLooked);
     return {
       ok: true,
-      clear: result.drift.length === 0 && unchecked.length === 0,
+      clear:
+        result.drift.length === 0 &&
+        unchecked.length === 0 &&
+        result.checks.every((check) => check.verdict !== 'unchecked'),
       drift: result.drift,
       checks: result.checks,
       unchecked,
@@ -5308,10 +7291,10 @@ index a6807d1..38045e7 100644
 
 ```diff
 diff --git a/packages/engine/src/integrations/types.ts b/packages/engine/src/integrations/types.ts
-index a18a114..cc1b945 100644
+index f4b9c45..f0f30a6 100644
 --- a/packages/engine/src/integrations/types.ts
 +++ b/packages/engine/src/integrations/types.ts
-@@ -91,2 +91,8 @@ export interface ResourceSpec {
+@@ -100,2 +100,8 @@ export interface ResourceSpec {
    secrets: readonly string[];
 +  /**
 +   * At most how often `mediaplane drift` checks its secrets, in ms, when they last passed:
@@ -5320,7 +7303,7 @@ index a18a114..cc1b945 100644
 +   */
 +  checkEvery?: number;
    /** Resources ("<app>.<name>") that must be in place first: one that failed skips this. */
-@@ -131,2 +137,7 @@ export interface ResourceSpec {
+@@ -140,2 +146,7 @@ export interface ResourceSpec {
    ): Promise<boolean | Unchecked>;
 +  /**
 +   * What the app's own health check says is wrong with it, read and never run: drift warns
@@ -5334,7 +7317,7 @@ index a18a114..cc1b945 100644
 
 ```diff
 diff --git a/packages/engine/src/integrations/wiring.ts b/packages/engine/src/integrations/wiring.ts
-index 65685ca..28d2c3b 100644
+index 6a8e6b4..0d5d05d 100644
 --- a/packages/engine/src/integrations/wiring.ts
 +++ b/packages/engine/src/integrations/wiring.ts
 @@ -18,3 +18,3 @@ import { foundSecrets, redact, redactionValues, type FoundSecrets } from '../uti
@@ -5348,7 +7331,7 @@ index 65685ca..28d2c3b 100644
 +export const DRIFT_RUNBOOK = runbookUrl('drift-reported');
 +
  /** How long plan waits for an app that is starting, in ms: apply waits APP_DEADLINE_MS. */
-@@ -65,8 +68,13 @@ export interface WiringChange {
+@@ -66,8 +69,13 @@ export interface WiringChange {
   * - `secret`: the app's own check refuses one of its secrets (`since`: when drift found
 - *   it, for one it doesn't check again).
 + *   it, for one it doesn't check again);
@@ -5365,12 +7348,12 @@ index 65685ca..28d2c3b 100644
 -  kind: 'field' | 'missing' | 'secret';
 +  kind: 'field' | 'missing' | 'secret' | 'key' | 'left';
    field?: string;
-@@ -79,2 +87,4 @@ export interface Drift {
+@@ -83,2 +91,4 @@ export interface Drift {
    since?: string;
 +  /** key: the app whose key the resource holds. */
 +  source?: string;
  }
-@@ -347,2 +357,7 @@ export interface ExamineOptions {
+@@ -358,2 +368,7 @@ export interface ExamineOptions {
    context?: VerifyContext;
 +  /**
 +   * `mediaplane drift`'s, which checks again a secret that passed only once the resource's
@@ -5378,7 +7361,7 @@ index 65685ca..28d2c3b 100644
 +   */
 +  drift?: { now: () => Date };
  }
-@@ -539,2 +554,22 @@ async function checkSecrets(
+@@ -567,2 +582,22 @@ async function checkSecrets(
    }
 +  // Drift checks again what passed only once its time has gone by: each check of
 +  // Jellyfin's admin signs in, which its activity log keeps (the owner's decision).
@@ -5401,7 +7384,7 @@ index 65685ca..28d2c3b 100644
 +    }
 +  }
    // The catalog's tests make every resource with secrets give a verify.
-@@ -631,2 +666,7 @@ export interface PlanWiringOptions {
+@@ -659,2 +694,7 @@ export interface PlanWiringOptions {
    known: KnownResources;
 +  /**
 +   * `mediaplane drift`'s, which checks a secret that passed again only once its resource's
@@ -5409,18 +7392,18 @@ index 65685ca..28d2c3b 100644
 +   */
 +  drift?: { now: () => Date };
    seams?: WiringSeams;
-@@ -680,2 +720,4 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
+@@ -717,2 +757,4 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
    };
 +  /** The keys of the apps that refuse their own, as Mediaplane holds them: by value. */
 +  const refusedKeys = new Map<string, string>();
    /**
-@@ -700,2 +742,5 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
+@@ -737,2 +779,5 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
      const targets = wiringTargets(ctx);
 +    // A resource that holds the key of an app that refuses it: drift on the consumer
 +    // too (§6.3), whether or not its own app can be asked.
 +    drift.push(...holdingRefused(ctx, refusedKeys));
      const client = reached.get(app.def.id);
-@@ -724,2 +769,9 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
+@@ -761,2 +806,9 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
        }
 +      // The app refuses the key Mediaplane holds for it: changed at its source (§6.3).
 +      const name = app.def.api?.key.secret;
@@ -5430,11 +7413,11 @@ index 65685ca..28d2c3b 100644
 +        refusedKeys.set(key, app.def.id);
 +      }
        continue;
-@@ -753,2 +805,3 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
+@@ -790,2 +842,3 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
            context,
 +          ...(options.drift === undefined ? {} : { drift: options.drift }),
          });
-@@ -793,3 +846,26 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
+@@ -830,3 +883,27 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
        if (waiting) pending.add(address);
 +      if (options.drift !== undefined && spec.health !== undefined && result.observed) {
 +        const said = await healthOf(spec, client.api, result.observed);
@@ -5460,8 +7443,9 @@ index 65685ca..28d2c3b 100644
 +    ]);
 +    drift.push(...left.drift);
 +    diagnostics.push(...left.diagnostics);
++    for (const change of left.unknown) add(change);
    }
-@@ -797 +873,76 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
+@@ -834 +911,75 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
  }
 +
 +/**
@@ -5502,17 +7486,18 @@ index 65685ca..28d2c3b 100644
 +/**
 + * The resources Mediaplane made in `ctx`'s app, by its record, that the stack no longer
 + * wants and the app still holds (`left`): apply doesn't remove them. One you stopped it
-+ * managing (`unmanaged`) is yours. One the app can't say about is a warning, never said to
-+ * be gone.
++ * managing (`unmanaged`) is yours. One the app can't say about is a warning, and a change
++ * it couldn't check (`unknown`), never said to be gone: drift isn't clear then.
 + */
 +async function leftIn(
 +  ctx: WiringContext,
 +  api: AppApi,
 +  known: KnownResources,
 +  secrets: readonly string[],
-+): Promise<{ drift: Drift[]; diagnostics: Diagnostic[] }> {
++): Promise<{ drift: Drift[]; diagnostics: Diagnostic[]; unknown: WiringChange[] }> {
 +  const drift: Drift[] = [];
 +  const diagnostics: Diagnostic[] = [];
++  const unknown: WiringChange[] = [];
 +  for (const spec of ctx.app.def.integration?.resources ?? []) {
 +    const address = resourceAddress(ctx.app, spec);
 +    const record = known[address];
@@ -5524,19 +7509,17 @@ index 65685ca..28d2c3b 100644
 +      }
 +    } catch (cause) {
 +      if (!(cause instanceof AppApiError)) throw cause;
-+      diagnostics.push(
-+        warning(
-+          'drift.left-unknown',
-+          redact(
-+            `Mediaplane made ${address}, which the stack no longer wants, and couldn't tell whether ${ctx.app.def.name} still holds it: ${cause.message}`,
-+            redactionValues(secrets),
-+          ),
-+          { hint: `see ${DRIFT_RUNBOOK}` },
-+        ),
++      const said = redact(
++        `Mediaplane made ${address}, which the stack no longer wants, and couldn't tell whether ${ctx.app.def.name} still holds it: ${cause.message}`,
++        redactionValues(secrets),
 +      );
++      diagnostics.push(
++        warning('drift.left-unknown', said, { hint: `see ${DRIFT_RUNBOOK}` }),
++      );
++      unknown.push({ resource: address, action: 'unknown', reason: said });
 +    }
 +  }
-+  return { drift, diagnostics };
++  return { drift, diagnostics, unknown };
 +}
 ```
 
@@ -5660,6 +7643,75 @@ index ba707d5..c5fdb26 100644
      }
 ```
 
+**Create** `packages/engine/src/testing/home.ts`:
+
+```ts
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { writeResources, type KnownResources } from '../integrations/resources';
+import { SECRETS_PATH } from '../paths';
+import type { Runtime } from '../runtime/types';
+import { fakeRuntime, running } from './fakes';
+import { tempDir } from './temp';
+
+/**
+ * A Mediaplane home of a stack wired to the fakes (fakeSonarr), for drift's and keep's
+ * tests: `stack` as its stack.yaml, Sonarr's `key` and the shared admin's `password` in
+ * its secrets store, and `known` as what Mediaplane last applied, in
+ * state/resources.json.
+ */
+export async function wiredHome(options: {
+  prefix: string;
+  stack: string;
+  key: string;
+  password: string;
+  known: KnownResources;
+}): Promise<string> {
+  const dir = await tempDir(options.prefix);
+  await writeFile(join(dir, 'stack.yaml'), options.stack);
+  await mkdir(join(dir, 'state'));
+  await writeFile(
+    join(dir, SECRETS_PATH),
+    JSON.stringify({
+      version: 1,
+      apps: { sonarr: { apiKey: options.key } },
+      shared: { adminPassword: options.password },
+    }),
+  );
+  await writeResources(dir, options.known);
+  return dir;
+}
+
+/**
+ * The containers of a stack of Jellyfin, qBittorrent and Sonarr, running and healthy, at
+ * `addresses` on the wiring network: what wiredHome's stack runs.
+ */
+export function wiredRuntime(addresses: Record<string, string>): Runtime {
+  return fakeRuntime({
+    hashes: { ok: true, hashes: {} },
+    containers: running({
+      jellyfin: 'a'.repeat(64),
+      qbittorrent: 'c'.repeat(64),
+      sonarr: 'b'.repeat(64),
+    }),
+    addresses,
+  });
+}
+```
+
+**Change** `packages/engine/src/testing/index.ts`:
+
+```diff
+diff --git a/packages/engine/src/testing/index.ts b/packages/engine/src/testing/index.ts
+index 385c4de..246ad10 100644
+--- a/packages/engine/src/testing/index.ts
++++ b/packages/engine/src/testing/index.ts
+@@ -4,2 +4,3 @@ export * from './fixtures';
+ export * from './fakes';
++export * from './home';
+ export * from './http';
+```
+
 **Change** `packages/engine/src/testing/prowlarr.ts`:
 
 ```diff
@@ -5680,7 +7732,7 @@ index c55a515..1566e55 100644
 
 ```diff
 diff --git a/packages/engine/src/testing/wiring.ts b/packages/engine/src/testing/wiring.ts
-index 8b2012f..c945abf 100644
+index ba874e8..750719d 100644
 --- a/packages/engine/src/testing/wiring.ts
 +++ b/packages/engine/src/testing/wiring.ts
 @@ -156,2 +156,4 @@ export interface FakeAppState {
@@ -5711,149 +7763,93 @@ git add packages catalog docs/reference
 git commit -m "feat: mediaplane drift reports what changed in the apps outside Mediaplane, and checks each secret no more than it must" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 2033 tests pass in 91 files.
+Expected: 2056 tests pass in 91 files.
 
 ---
 
 ### Task 5: `mediaplane keep`
 
-Decision: Keep mine writes one line, checked, and refuses what it can't write safely
-(decision 12).
-Decision: keep looks at one resource, checking none of its secrets (decision 12); a
-resource deleted or left becomes `unmanaged` (decisions 8 and 14).
-Decision: the download client's key is left unchecked while its own category is missing
-too (decision 6).
+Decision: Keep mine writes one line, checked, keeping the file's mode and group, and
+refuses what it can't write safely (decision 13).
+Decision: keep looks at one resource, asking the app only to read it (decision 13); a
+resource deleted or left becomes `unmanaged` (decisions 8 and 15).
+Decision: the CLI's advice names Keep mine (decision 16).
 
 **Files:**
 - Create: `packages/engine/src/config/overrides-file.ts`, `packages/engine/src/keep.ts`
-- Modify: `packages/engine/src/integrations/wiring.ts`, `packages/engine/src/plan/plan.ts`,
-  `packages/engine/src/integrations/overrides.ts`, `packages/engine/src/drift.ts`,
-  `packages/engine/src/config/schema.ts`, `packages/engine/src/index.ts`,
-  `catalog/_shared/servarr-download.ts`, `packages/cli/src/run.ts`,
-  `packages/cli/src/output.ts`
-- Test: catalog/_shared/servarr-download.test.ts packages/cli/src/output.test.ts packages/cli/src/run.test.ts packages/engine/src/config/overrides-file.test.ts packages/engine/src/drift.test.ts packages/engine/src/integrations/overrides.test.ts packages/engine/src/keep.test.ts
-- Generated: `docs/reference/cli.md`, `docs/reference/stack-yaml.md`,
-  `docs/reference/stack.schema.json`
+- Modify: `packages/cli/src/output.ts`, `packages/cli/src/run.ts`, `packages/engine/src/config/schema.ts`, `packages/engine/src/drift.ts`, `packages/engine/src/index.ts`, `packages/engine/src/integrations/wiring.ts`, `packages/engine/src/plan/plan.ts`, `packages/engine/src/util/atomic.ts`
+- Test: `packages/cli/src/output.test.ts`, `packages/cli/src/run.test.ts`, `packages/engine/src/config/overrides-file.test.ts`, `packages/engine/src/keep.test.ts`, `packages/engine/src/util/atomic.test.ts`
+- Generated: `docs/reference/cli.md`, `docs/reference/stack-yaml.md`, `docs/reference/stack.schema.json`
 
 **Interfaces:**
 - **Consumes:** Task 2's `overrideTarget`, `isUnmanaged`, `UNMANAGED`; Task 4's `drift`
-  mode, `leftIn`, `DRIFT_RUNBOOK`, `acquireLock`'s command; `writeFileAtomic`.
+  mode, `leftIn`, `DRIFT_RUNBOOK`, `acquireLock`'s command, `driftAdvice`, `wiredHome`
+  and `wiredRuntime`; `writeFileAtomic`.
 - **Produces:**
   - from `@mediaplane/engine`: `overrideLine(key: string, value: Scalar): string`,
     `withOverride(source: string, key: string, value: Scalar): { ok: true; text: string } | { ok: false; reason: string }`,
-    `stackFileProblem(path: string, uid?: number): Promise<string | undefined>`;
+    `stackFileProblem(path: string, uid?: number, groups?: readonly number[]): Promise<string | undefined>`;
     `interface KeepOptions extends PlanOptions { path: string; now? }`,
     `interface KeepResult { ok; key: string; value: Scalar | undefined; diagnostics }`,
     `keep(options: KeepOptions): Promise<KeepResult>` (errors `keep.locked`,
     `keep.unmanaged`, `keep.no-drift`, `keep.unreadable`, `keep.secret`, `keep.external`,
     `keep.stack-file`; warning `keep.record`);
-  - `PlanOptions.only?: string`, `PlanWiringOptions.only?`, `ExamineOptions.secrets?: boolean`;
-  - `DriftResult.clear` is false while a secret went unchecked;
+  - `writeFileAtomic(path, content, mode?, group?)`;
+  - `PlanOptions.only?: string`, `PlanWiringOptions.only?`, `ExamineOptions.secrets?: boolean`
+    (false: no secret checked, and `resolve`'s fields taken from the record);
   - the CLI: `mediaplane keep <path> [--home] [--json]` (exit 0 or 1),
-    `KEEP_JSON_SCHEMA` (`'mediaplane.keep/v1'`), `printKeep(result, options, io)`, and a
-    hint for `keep` after drift.
+    `KEEP_JSON_SCHEMA` (`'mediaplane.keep/v1'`), `printKeep(result, options, io)`, and
+    Keep mine's hint in `driftAdvice`.
 
 - [ ] **Step 1: Write the failing tests**
-
-**Change** `catalog/_shared/servarr-download.test.ts`:
-
-```diff
-diff --git a/catalog/_shared/servarr-download.test.ts b/catalog/_shared/servarr-download.test.ts
-index e13643d..4cba57d 100644
---- a/catalog/_shared/servarr-download.test.ts
-+++ b/catalog/_shared/servarr-download.test.ts
-@@ -238,3 +238,3 @@ describe('servarrDownloadClient', () => {
-       unchecked:
--        "Sonarr's own test of its download client would make qBittorrent's post-import category tv-imported (tvImportedCategory) when it is missing, which Mediaplane doesn't manage, and qBittorrent has no such category: apply's test makes it",
-+        "Sonarr's own test of its download client would make qBittorrent's missing category tv-imported (tvImportedCategory), with no save path: apply's test makes it",
-     });
-@@ -250,3 +250,3 @@ describe('servarrDownloadClient', () => {
-       unchecked:
--        "Sonarr's own test of its download client would make qBittorrent's post-import category tv-imported (tvImportedCategory) when it is missing, which Mediaplane doesn't manage, and qBittorrent couldn't be asked whether it has it",
-+        "Sonarr's own test of its download client would make in qBittorrent any of the categories tv (tvCategory) and tv-imported (tvImportedCategory) it lacks, and qBittorrent couldn't be asked which it has",
-     });
-@@ -260,2 +260,25 @@ describe('servarrDownloadClient', () => {
- 
-+  it('leaves the key unchecked in plan while qBittorrent lacks the category the client files under', async () => {
-+    // Kept as another by you, or no longer managed by Mediaplane and deleted.
-+    const { api, state, qbittorrent, apis } = await sonarr();
-+    const desired = wanted();
-+    await client.create(api, desired);
-+    const qbt = apis.apps.get('qbittorrent');
-+    if (qbt === undefined) throw new Error('no qBittorrent faked');
-+    qbt.categories = { tv: '/data/torrents/tv' };
-+    const [held] = state.downloadClients;
-+    if (held === undefined) throw new Error('no client made');
-+    held.fields = held.fields.map((f) =>
-+      f.name === 'tvCategory' ? { ...f, value: 'television' } : f,
-+    );
-+    const observed = await client.observe(api, undefined);
-+    if (observed === undefined) throw new Error('no client observed');
-+    const plan = { readOnly: true, peer: () => qbittorrent };
-+    expect(await client.verify?.(api, desired, observed, plan)).toEqual({
-+      unchecked:
-+        "Sonarr's own test of its download client would make qBittorrent's missing category television (tvCategory), with no save path: apply's test makes it",
-+    });
-+    expect(Object.keys(qbt.categories)).toEqual(['tv']);
-+  });
-+
-   it("reads a client setting it can't, of another type or missing, as one it can't, never as empty", async () => {
-```
 
 **Change** `packages/cli/src/output.test.ts`:
 
 ```diff
 diff --git a/packages/cli/src/output.test.ts b/packages/cli/src/output.test.ts
-index 90a859e..b8f424b 100644
+index 83e5ffe..05e7b76 100644
 --- a/packages/cli/src/output.test.ts
 +++ b/packages/cli/src/output.test.ts
-@@ -138,3 +138,3 @@ describe('printPlan: drift', () => {
+@@ -154,3 +154,3 @@ describe('printPlan: drift', () => {
          "  ! qbittorrent.admin.password: refused by the app's own check (found by drift at 2026-10-20T08:00:00.000Z; not checked again until apply sets it)",
--        '  apply puts each back.',
-+        '  apply puts each back; mediaplane keep <app>.<resource>.<field> keeps what the app holds instead, and <app>.<resource> stops Mediaplane managing one deleted.',
+-        '  apply puts back each field, resource and secret changed in the apps.',
++        '  apply puts back each field, resource and secret changed in the apps; mediaplane keep <app>.<resource>.<field> keeps what the app holds instead, and <app>.<resource> stops Mediaplane managing one deleted.',
          'Wiring:',
-@@ -173,3 +173,3 @@ describe('printPlan: drift', () => {
-         '  ? prowlarr.application_radarr: still in the app, though the stack no longer wants it; apply leaves it',
--        '  apply puts each back.',
-+        '  apply puts each back; mediaplane keep <app>.<resource>.<field> keeps what the app holds instead, and <app>.<resource> stops Mediaplane managing one deleted.',
+@@ -190,3 +190,3 @@ describe('printPlan: drift', () => {
+         "  apply doesn't give an app back its own key: put back the key Mediaplane holds, as https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md shows.",
+-        "  apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it.",
++        "  apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it, or keep it as yours with mediaplane keep <app>.<resource>, which stops the report.",
          'No changes.',
-@@ -225,3 +225,3 @@ describe('printDrift', () => {
-         '  - sonarr.download_client.apiKey: a managed field differs: apply sets the secrets with it',
--        'Drift found. apply puts it back.',
-+        'Drift found. apply puts it back; mediaplane keep <app>.<resource>.<field> keeps what the app holds instead, and <app>.<resource> stops Mediaplane managing one deleted.',
+@@ -243,3 +243,3 @@ describe('printDrift', () => {
+         'Drift found.',
+-        '  apply puts back each field, resource and secret changed in the apps.',
++        '  apply puts back each field, resource and secret changed in the apps; mediaplane keep <app>.<resource>.<field> keeps what the app holds instead, and <app>.<resource> stops Mediaplane managing one deleted.',
          '',
-@@ -241,3 +241,5 @@ describe('printDrift', () => {
-     printDrift({ ...FOUND, drift: [], checks: [] }, { json: false }, partly.io);
--    expect(partly.stdout()).toContain('No drift found where Mediaplane could look.\n');
-+    expect(partly.stdout()).toContain(
-+      'No drift found where Mediaplane could look, but it could not look everywhere: see above.\n',
-+    );
-   });
 ```
 
 **Change** `packages/cli/src/run.test.ts`:
 
 ```diff
 diff --git a/packages/cli/src/run.test.ts b/packages/cli/src/run.test.ts
-index 6bf46f3..8b24ddf 100644
+index 0b67f8a..0c69545 100644
 --- a/packages/cli/src/run.test.ts
 +++ b/packages/cli/src/run.test.ts
 @@ -1,2 +1,2 @@
 -import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 +import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
  import { join } from 'node:path';
-@@ -1728,3 +1728,3 @@ describe('mediaplane drift', () => {
+@@ -1729,3 +1729,3 @@ describe('mediaplane drift', () => {
+     expect(term.stdout()).toContain(
+-      'Drift found.\n  apply puts back each field, resource and secret changed in the apps.\n',
++      'Drift found.\n  apply puts back each field, resource and secret changed in the apps; mediaplane keep <app>.<resource>.<field> keeps what the app holds instead, and <app>.<resource> stops Mediaplane managing one deleted.\n',
      );
--    expect(term.stdout()).toContain('Drift found. apply puts it back.\n');
-+    expect(term.stdout()).toContain('Drift found. apply puts it back; mediaplane keep');
-     const json = capture();
-@@ -1797,2 +1797,74 @@ describe('mediaplane drift', () => {
+@@ -1799,2 +1799,106 @@ describe('mediaplane drift', () => {
  
 +describe('mediaplane keep', () => {
 +  const current = () =>
 +    fakeRuntime({ hashes: { ok: true, hashes: HASHES }, containers: running(HASHES) });
 +
-+  it('writes what an app holds as an override in stack.yaml, its mode kept, and drift is then clear', async () => {
++  it("writes what an app holds as an override in stack.yaml, its mode kept; qBittorrent's category follows, and drift is then clear", async () => {
 +    const runtime = current();
 +    const home = await currentHome(runtime);
 +    const before = await readFile(join(home, 'stack.yaml'), 'utf8');
@@ -5863,10 +7859,10 @@ index 6bf46f3..8b24ddf 100644
 +    client.fields = client.fields.map((f) =>
 +      f.name === 'tvCategory' ? { ...f, value: 'television' } : f,
 +    );
-+    // qBittorrent has the category: the arr's test may run, and makes nothing.
++    // As Sonarr's own test made it, with no save path.
 +    const qbittorrent = apis.apps.get('qbittorrent');
-+    if (qbittorrent !== undefined)
-+      qbittorrent.categories.television = '/data/torrents/tv';
++    if (qbittorrent === undefined) throw new Error('no qBittorrent faked');
++    qbittorrent.categories.television = '';
 +    const term = capture();
 +    expect(
 +      await run(
@@ -5882,8 +7878,40 @@ index 6bf46f3..8b24ddf 100644
 +      `${before}overrides:\n  sonarr.download_client.category: television\n`,
 +    );
 +    expect((await stat(join(home, 'stack.yaml'))).mode & 0o777).toBe(0o640);
++    // qBittorrent's category is now the one kept: plan shows apply putting it in place,
++    // with its save path, and drift waits for it before it checks the client's key.
++    const planned = capture();
++    expect(await run(['plan', '--home', home], planned.io, deps(runtime))).toBe(2);
++    expect(planned.stdout()).toContain(
++      '  ~ update      qbittorrent.category_tv (savePath)\n',
++    );
++    const waiting = capture();
++    expect(await run(['drift', '--home', home], waiting.io, deps(runtime))).toBe(2);
++    expect(waiting.stdout()).toContain(
++      '  - sonarr.download_client.apiKey: what it requires is yet to be put in place, which apply does first\n',
++    );
++    expect(waiting.stdout()).not.toContain('Changed outside Mediaplane');
++    // Put in place, as apply does: drift is clear, with the client's key checked.
++    qbittorrent.categories.television = '/data/torrents/television';
 +    expect(await run(['drift', '--home', home], capture().io, deps(runtime))).toBe(0);
-+    expect(await run(['plan', '--home', home], capture().io, deps(runtime))).toBe(0);
++  });
++
++  it('refuses to keep where an app sends a key, saying why, and writes nothing', async () => {
++    const runtime = current();
++    const home = await currentHome(runtime);
++    const before = await readFile(join(home, 'stack.yaml'), 'utf8');
++    const term = capture();
++    expect(
++      await run(
++        ['keep', 'seerr.server_sonarr.hostname', '--home', home],
++        term.io,
++        deps(runtime),
++      ),
++    ).toBe(1);
++    expect(term.stderr()).toContain(
++      "error: seerr.server_sonarr.hostname can't be kept: it sets where a key is sent (spec §11, Slice 6)\n",
++    );
++    expect(await readFile(join(home, 'stack.yaml'), 'utf8')).toBe(before);
 +  });
 +
 +  it('exits 1, writing nothing, for what has not drifted, saying why, in JSON too', async () => {
@@ -6113,98 +8141,30 @@ describe('stackFileProblem', () => {
     expect(await stackFileProblem(join(dir, 'theirs.yaml'), 4242)).toMatch(
       /^it belongs to uid \d+, and Mediaplane runs as uid 4242/,
     );
+    // Of a group this user isn't in: the rewrite couldn't keep it.
+    expect(
+      await stackFileProblem(join(dir, 'theirs.yaml'), process.getuid?.(), [4242]),
+    ).toMatch(/^it belongs to group \d+, which Mediaplane's user isn't in/);
   });
 });
-```
-
-**Change** `packages/engine/src/drift.test.ts`:
-
-```diff
-diff --git a/packages/engine/src/drift.test.ts b/packages/engine/src/drift.test.ts
-index 86e5299..e433ee2 100644
---- a/packages/engine/src/drift.test.ts
-+++ b/packages/engine/src/drift.test.ts
-@@ -11,3 +11,4 @@ import { FIXTURE_HOST } from './testing/fixtures';
- import { tempDir } from './testing/temp';
--import { fakeSonarr, WIRED_CATALOG } from './testing/wiring';
-+import { FAKE_LOGIN, fakeSonarr, WIRED_CATALOG } from './testing/wiring';
-+import type { ResourceSpec } from './integrations/types';
- 
-@@ -152,2 +153,27 @@ describe('drift', () => {
- 
-+  it("isn't clear while a secret goes unchecked, though nothing is found", async () => {
-+    const dir = await home();
-+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
-+    const careful: ResourceSpec = {
-+      ...FAKE_LOGIN,
-+      verify: () => Promise.resolve({ unchecked: 'it would make a category' }),
-+    };
-+    const catalog = WIRED_CATALOG.map((def) =>
-+      def.id === 'sonarr'
-+        ? { ...def, integration: { after: [], resources: [careful] } }
-+        : def,
-+    );
-+    const result = await drift({
-+      home: dir,
-+      catalog,
-+      host: FIXTURE_HOST,
-+      env: {},
-+      runtime: runtimeFor(sonarr.addresses),
-+      probe: fakeProbe(),
-+      wiring: sonarr.seams,
-+      now: () => AT,
-+    });
-+    expect(result).toMatchObject({ ok: true, clear: false, drift: [], unchecked: [] });
-+  });
-+
-   it("asks no more of the host than it needs: the host's ports and folders aren't drift", async () => {
-```
-
-**Change** `packages/engine/src/integrations/overrides.test.ts`:
-
-```diff
-diff --git a/packages/engine/src/integrations/overrides.test.ts b/packages/engine/src/integrations/overrides.test.ts
-index 0db6677..9435ae0 100644
---- a/packages/engine/src/integrations/overrides.test.ts
-+++ b/packages/engine/src/integrations/overrides.test.ts
-@@ -148,3 +148,3 @@ describe('checkOverrides', () => {
- 
--  it('takes overrides of the fields Mediaplane manages, and unmanaged resources', () => {
-+  it('takes overrides of the fields Mediaplane manages, and unmanaged resources, wanted or left', () => {
-     expect(
-@@ -155,3 +155,6 @@ describe('checkOverrides', () => {
-       ),
--    ).toEqual([
-+    ).toEqual([]);
-+    expect(check('sonarr.login: unmanaged')).toEqual([]);
-+    // A field of what the stack doesn't want does nothing.
-+    expect(check('sonarr.connection_plex.user: someone')).toEqual([
-       expect.objectContaining({
-@@ -160,6 +163,5 @@ describe('checkOverrides', () => {
-         message:
--          "sonarr.connection_plex does nothing: Mediaplane doesn't make sonarr.connection_plex in this stack",
-+          "sonarr.connection_plex.user does nothing: Mediaplane doesn't make sonarr.connection_plex in this stack",
-       }),
-     ]);
--    expect(check('sonarr.login: unmanaged')).toEqual([]);
-   });
 ```
 
 **Create** `packages/engine/src/keep.test.ts`:
 
 ```ts
-import { mkdir, readdir, readFile, rename, symlink, writeFile } from 'node:fs/promises';
+import { readdir, readFile, rename, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Catalog } from './catalog/types';
 import { readResources, writeResources } from './integrations/resources';
 import type { ResourceSpec } from './integrations/types';
 import { keep } from './keep';
-import { LOCK_PATH, RESOURCES_PATH, SECRETS_PATH } from './paths';
+import { LOCK_PATH, RESOURCES_PATH } from './paths';
 import { plan } from './plan/plan';
 import type { Runtime } from './runtime/types';
-import { fakeProbe, fakeRuntime, running } from './testing/fakes';
+import { fakeProbe, fakeRuntime } from './testing/fakes';
 import { FIXTURE_HOST } from './testing/fixtures';
+import { wiredHome, wiredRuntime } from './testing/home';
 import { tempDir } from './testing/temp';
 import { FAKE_LOGIN, fakeSonarr, WIRED_CATALOG } from './testing/wiring';
 
@@ -6230,33 +8190,17 @@ const RECORD = {
   appliedAt: '2026-10-10T12:00:00.000Z',
 };
 
-async function home(stack = STACK): Promise<string> {
-  const dir = await tempDir('mediaplane-keep-');
-  await writeFile(join(dir, 'stack.yaml'), stack);
-  await mkdir(join(dir, 'state'));
-  await writeFile(
-    join(dir, SECRETS_PATH),
-    JSON.stringify({
-      version: 1,
-      apps: { sonarr: { apiKey: KEY } },
-      shared: { adminPassword: PASSWORD },
-    }),
-  );
-  await writeResources(dir, { 'sonarr.login': RECORD });
-  return dir;
-}
-
-function runtimeFor(addresses: Record<string, string>): Runtime {
-  return fakeRuntime({
-    hashes: { ok: true, hashes: {} },
-    containers: running({
-      jellyfin: 'a'.repeat(64),
-      qbittorrent: 'c'.repeat(64),
-      sonarr: 'b'.repeat(64),
-    }),
-    addresses,
+function home(stack = STACK): Promise<string> {
+  return wiredHome({
+    prefix: 'mediaplane-keep-',
+    stack,
+    key: KEY,
+    password: PASSWORD,
+    known: { 'sonarr.login': RECORD },
   });
 }
+
+const runtimeFor = wiredRuntime;
 
 type Fake = Awaited<ReturnType<typeof fakeSonarr>>;
 
@@ -6307,6 +8251,41 @@ describe('keep', () => {
     expect(after.wiring).toEqual([{ resource: 'sonarr.login', action: 'unchanged' }]);
     expect(after.drift).toEqual([]);
     await expect(readFile(join(dir, LOCK_PATH))).rejects.toThrow();
+  });
+
+  it('asks the app nothing but to read the resource: what only the app can say is what was applied', async () => {
+    const dir = await home();
+    const asked: string[] = [];
+    // A login whose profile only the app can say, through its own test (as Seerr's).
+    const profiled: ResourceSpec = {
+      ...FAKE_LOGIN,
+      fields: ['user', 'profile'],
+      resolve: (_api, desired) => {
+        asked.push('resolve');
+        return Promise.resolve({
+          ...desired,
+          fields: { ...desired.fields, profile: 'HD' },
+        });
+      },
+      observe: () =>
+        Promise.resolve({
+          id: null,
+          name: 'login',
+          fields: { user: 'someone', profile: 'Any' },
+        }),
+    };
+    await writeResources(dir, {
+      'sonarr.login': { ...RECORD, fields: { user: 'admin', profile: 'HD' } },
+    });
+    const catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr'
+        ? { ...def, integration: { after: [], resources: [profiled] } }
+        : def,
+    );
+    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+    const kept = await keep(options(dir, sonarr, 'sonarr.login.profile', { catalog }));
+    expect([kept.ok, kept.value]).toEqual([true, 'Any']);
+    expect(asked).toEqual([]);
   });
 
   it('stops managing a resource deleted outside Mediaplane, and forgets its record', async () => {
@@ -6509,73 +8488,49 @@ describe('keep', () => {
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail**
-
-Run: `pnpm vitest run catalog/_shared/servarr-download.test.ts packages/cli/src/output.test.ts packages/cli/src/run.test.ts packages/engine/src/config/overrides-file.test.ts packages/engine/src/drift.test.ts packages/engine/src/integrations/overrides.test.ts packages/engine/src/keep.test.ts`
-Expected: FAIL. `keep.test.ts` and `overrides-file.test.ts` don't load (`Cannot find module './keep'`, `'./overrides-file'`), and 11 tests fail, 119 pass: 4 in `output.test.ts` and 1 in `run.test.ts`'s drift (no `mediaplane keep` hint), 2 in `run.test.ts`'s keep (`unknown command 'keep'`), 2 in `servarr-download.test.ts` (the client's own category isn't asked about), 1 in `drift.test.ts` (clear with a secret unchecked) and 1 in `overrides.test.ts` (an unused warning for an `unmanaged` resource left).
-
-- [ ] **Step 3: Write the writer, `keep`, and its one-resource look**
-
-**Change** `catalog/_shared/servarr-download.ts`:
+**Change** `packages/engine/src/util/atomic.test.ts`:
 
 ```diff
-diff --git a/catalog/_shared/servarr-download.ts b/catalog/_shared/servarr-download.ts
-index 2509bd0..e75983b 100644
---- a/catalog/_shared/servarr-download.ts
-+++ b/catalog/_shared/servarr-download.ts
-@@ -61,5 +61,7 @@ const QBT_CATEGORIES = '/api/v2/torrents/categories';
-  * Why plan and drift leave the client's key unchecked, if they do: the arr's own test
-- * makes the post-import category the client names when qBittorrent lacks it (probed), and
-- * they change nothing (spec §5.2; the owner's decision of 2026-10-17). Without one, or
-- * with qBittorrent holding it, undefined: the test is run.
-+ * makes in qBittorrent each category the client names that qBittorrent lacks, with no
-+ * save path (probed), and they change nothing (spec §5.2). That is its post-import one,
-+ * which Mediaplane doesn't manage (the owner's decision of 2026-10-17), or its own, kept
-+ * by you as another (Keep mine), or one Mediaplane no longer manages, deleted. With
-+ * qBittorrent holding each, undefined: the test is run.
-  */
-@@ -72,9 +74,13 @@ async function testWouldMake(
-   const held = await providerOf(api, CLIENTS, observed.id);
--  // Unset, the arr leaves it out; cleared, it holds "" (probed).
--  const imported = optionalText(settingOf(held, link.imported));
--  if (imported === '') return undefined;
-+  // Unset, the arr leaves a setting out; cleared, it holds "" (probed).
-+  const named = [link.setting, link.imported].flatMap((setting) => {
-+    const category = optionalText(settingOf(held, setting));
-+    return category === '' ? [] : [{ setting, category }];
+diff --git a/packages/engine/src/util/atomic.test.ts b/packages/engine/src/util/atomic.test.ts
+index 26504ea..2aa1322 100644
+--- a/packages/engine/src/util/atomic.test.ts
++++ b/packages/engine/src/util/atomic.test.ts
+@@ -17,2 +17,14 @@ describe('writeFileAtomic', () => {
+ 
++  it('gives the new file the group it is given', async () => {
++    const dir = await tempDir('mediaplane-atomic-');
++    const path = join(dir, 'stack.yaml');
++    await writeFile(path, 'old\n');
++    // One of this user's other groups, where there is one, else its own.
++    const own = process.getgid?.() ?? 0;
++    const group = (process.getgroups?.() ?? []).find((g) => g !== own) ?? own;
++    await writeFileAtomic(path, 'new\n', 0o640, group);
++    expect((await stat(path)).gid).toBe(group);
++    expect(await modeOf(path)).toBe(0o640);
 +  });
-+  if (named.length === 0) return undefined;
-   const qbittorrent = ctx.peer('qbittorrent');
--  const would = `${api.name}'s own test of its download client would make qBittorrent's post-import category ${imported} (${link.imported}) when it is missing, which Mediaplane doesn't manage`;
-+  const which = (list: typeof named) =>
-+    list.map(({ setting, category }) => `${category} (${setting})`).join(' and ');
-   if (qbittorrent === undefined) {
--    return `${would}, and qBittorrent couldn't be asked whether it has it`;
-+    return `${api.name}'s own test of its download client would make in qBittorrent any of the categories ${which(named)} it lacks, and qBittorrent couldn't be asked which it has`;
-   }
-@@ -84,5 +90,6 @@ async function testWouldMake(
-   );
--  return Object.hasOwn(categories, imported)
-+  const missing = named.filter(({ category }) => !Object.hasOwn(categories, category));
-+  return missing.length === 0
-     ? undefined
--    : `${would}, and qBittorrent has no such category: apply's test makes it`;
-+    : `${api.name}'s own test of its download client would make qBittorrent's missing category ${which(missing)}, with no save path: apply's test makes it`;
- }
++
+   it('replaces an existing file and leaves no temporary file behind', async () => {
 ```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `pnpm vitest run packages/cli/src/output.test.ts packages/cli/src/run.test.ts packages/engine/src/config/overrides-file.test.ts packages/engine/src/keep.test.ts packages/engine/src/util/atomic.test.ts`
+Expected: FAIL. `keep.test.ts` and `overrides-file.test.ts` don't load (`Cannot find module './keep'`, `'./overrides-file'`), and 8 tests fail, 100 pass: 4 in `run.test.ts` (no `mediaplane keep` hint after drift; `unknown command 'keep'`), 3 in `output.test.ts` (no `mediaplane keep` hint) and 1 in `atomic.test.ts` (the new file doesn't get the group it is given).
+
+- [ ] **Step 3: Write the writer, `keep`, and its one-resource look**
 
 **Change** `packages/cli/src/output.ts`:
 
 ```diff
 diff --git a/packages/cli/src/output.ts b/packages/cli/src/output.ts
-index 5177d6f..37c33ad 100644
+index e326965..f411aa1 100644
 --- a/packages/cli/src/output.ts
 +++ b/packages/cli/src/output.ts
-@@ -11,2 +11,3 @@ import {
+@@ -12,2 +12,3 @@ import {
    type DriftResult,
 +  type KeepResult,
    type PlanResult,
-@@ -25,2 +26,7 @@ export const HISTORY_JSON_SCHEMA = 'mediaplane.history/v1';
+@@ -26,2 +27,7 @@ export const HISTORY_JSON_SCHEMA = 'mediaplane.history/v1';
  export const DRIFT_JSON_SCHEMA = 'mediaplane.drift/v1';
 +export const KEEP_JSON_SCHEMA = 'mediaplane.keep/v1';
 +
@@ -6583,20 +8538,20 @@ index 5177d6f..37c33ad 100644
 +const KEEP_HINT =
 +  'mediaplane keep <app>.<resource>.<field> keeps what the app holds instead, and <app>.<resource> stops Mediaplane managing one deleted';
  
-@@ -161,3 +167,3 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
-     for (const drift of result.drift) io.stdout(`${driftLine(drift)}\n`);
--    io.stdout('  apply puts each back.\n');
-+    io.stdout(`  apply puts each back; ${KEEP_HINT}.\n`);
-   }
-@@ -231,4 +237,24 @@ export function printDrift(
-       : result.drift.length > 0
--        ? 'Drift found. apply puts it back.\n'
--        : 'No drift found where Mediaplane could look.\n',
-+        ? `Drift found. apply puts it back; ${KEEP_HINT}.\n`
-+        : 'No drift found where Mediaplane could look, but it could not look everywhere: see above.\n',
-+  );
-+}
-+
+@@ -91,3 +97,5 @@ export function driftAdvice(drift: readonly Drift[]): string[] {
+     ...(has('field', 'missing', 'secret')
+-      ? ['apply puts back each field, resource and secret changed in the apps']
++      ? [
++          `apply puts back each field, resource and secret changed in the apps; ${KEEP_HINT}`,
++        ]
+       : []),
+@@ -100,3 +108,3 @@ export function driftAdvice(drift: readonly Drift[]): string[] {
+       ? [
+-          "apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it",
++          "apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it, or keep it as yours with mediaplane keep <app>.<resource>, which stops the report",
+         ]
+@@ -277,2 +285,22 @@ export function printDrift(
+ 
 +/** What `mediaplane keep` kept, or why it kept nothing. */
 +export function printKeep(result: KeepResult, options: { json: boolean }, io: Io): void {
 +  if (options.json) {
@@ -6614,14 +8569,17 @@ index 5177d6f..37c33ad 100644
 +    result.value === 'unmanaged' && result.key.split('.').length === 2
 +      ? `Wrote ${result.key}: unmanaged under overrides: in stack.yaml. Mediaplane no longer manages it, and apply doesn't make it again.\n`
 +      : `Wrote ${result.key}: ${JSON.stringify(result.value)} under overrides: in stack.yaml. apply now leaves it as the app holds it, and drift no longer reports it.\n`,
-   );
++  );
++}
++
+ function count(n: number, noun: string, verb: string): string | undefined {
 ```
 
 **Change** `packages/cli/src/run.ts`:
 
 ```diff
 diff --git a/packages/cli/src/run.ts b/packages/cli/src/run.ts
-index 432cc44..80d6300 100644
+index a6cc32d..3ff76c3 100644
 --- a/packages/cli/src/run.ts
 +++ b/packages/cli/src/run.ts
 @@ -11,2 +11,3 @@ import {
@@ -6791,15 +8749,23 @@ export function withOverride(
   return { ok: true, text };
 }
 
+/** The groups this user is in: its own, and the others. */
+function userGroups(): number[] {
+  const own = process.getgid?.();
+  return [...(own === undefined ? [] : [own]), ...(process.getgroups?.() ?? [])];
+}
+
 /**
  * Why `path`, a stack.yaml, can't be written safely, or undefined when it can: a link
  * (Mediaplane would replace the link, not the file it leads to), not a regular file,
- * a file with other names (hard links, which a rewrite would part from it), or one that
- * belongs to another user (a rewrite would take it over).
+ * a file with other names (hard links, which a rewrite would part from it), one that
+ * belongs to another user (a rewrite would take it over), or one of a group this user
+ * isn't in (the rewrite couldn't keep it). Its mode and group are kept; an ACL isn't.
  */
 export async function stackFileProblem(
   path: string,
   uid: number | undefined = process.getuid?.(),
+  groups: readonly number[] = userGroups(),
 ): Promise<string | undefined> {
   const stats = await lstat(path);
   if (stats.isSymbolicLink()) {
@@ -6811,6 +8777,9 @@ export async function stackFileProblem(
   }
   if (uid !== undefined && stats.uid !== uid) {
     return `it belongs to uid ${String(stats.uid)}, and Mediaplane runs as uid ${String(uid)}: a rewrite would make it Mediaplane's`;
+  }
+  if (groups.length > 0 && !groups.includes(stats.gid)) {
+    return `it belongs to group ${String(stats.gid)}, which Mediaplane's user isn't in: a rewrite would give it Mediaplane's group`;
   }
   return undefined;
 }
@@ -6839,7 +8808,7 @@ index b1bb9f1..7a5f6f5 100644
 
 ```diff
 diff --git a/packages/engine/src/drift.ts b/packages/engine/src/drift.ts
-index ad6fdba..2f58bf9 100644
+index 829b724..2f58bf9 100644
 --- a/packages/engine/src/drift.ts
 +++ b/packages/engine/src/drift.ts
 @@ -22,3 +22,6 @@ export interface DriftResult {
@@ -6850,14 +8819,6 @@ index ad6fdba..2f58bf9 100644
 +   * and every secret checked.
 +   */
    clear: boolean;
-@@ -84,3 +87,6 @@ export async function drift(options: DriftOptions): Promise<DriftResult> {
-       ok: true,
--      clear: result.drift.length === 0 && unchecked.length === 0,
-+      clear:
-+        result.drift.length === 0 &&
-+        unchecked.length === 0 &&
-+        result.checks.every((check) => check.verdict !== 'unchecked'),
-       drift: result.drift,
 ```
 
 **Change** `packages/engine/src/index.ts`:
@@ -6874,37 +8835,57 @@ index 38045e7..75091a4 100644
  export * from './credentials';
 ```
 
-**Change** `packages/engine/src/integrations/overrides.ts`:
-
-```diff
-diff --git a/packages/engine/src/integrations/overrides.ts b/packages/engine/src/integrations/overrides.ts
-index 41c5af2..0ce1709 100644
---- a/packages/engine/src/integrations/overrides.ts
-+++ b/packages/engine/src/integrations/overrides.ts
-@@ -179,2 +179,4 @@ export function checkOverrides(
-     const wanted = spec.desired({ stack, app, ...wiring });
-+    // Unmanaged, one the stack doesn't want stays so: one left in the app is yours.
-+    if (wanted === undefined && value === UNMANAGED) return [];
-     if (wanted === undefined) {
-```
-
 **Change** `packages/engine/src/integrations/wiring.ts`:
 
 ```diff
 diff --git a/packages/engine/src/integrations/wiring.ts b/packages/engine/src/integrations/wiring.ts
-index 28d2c3b..df016a2 100644
+index 0d5d05d..049fe02 100644
 --- a/packages/engine/src/integrations/wiring.ts
 +++ b/packages/engine/src/integrations/wiring.ts
-@@ -362,2 +362,4 @@ export interface ExamineOptions {
+@@ -373,2 +373,8 @@ export interface ExamineOptions {
    drift?: { now: () => Date };
-+  /** false: check none of its secrets (`mediaplane keep`, which needs only its fields). */
++  /**
++   * false: check none of its secrets, and ask the app nothing but to read the resource
++   * (`mediaplane keep`, which needs only its fields): what only the app can say
++   * (`resolve`, which may use the app's own test, as Seerr's does) is what was applied.
++   */
 +  secrets?: boolean;
  }
-@@ -522,2 +524,3 @@ async function checkSecrets(
+@@ -395,5 +401,13 @@ export async function examine(
+   const address = resourceAddress(ctx.app, spec);
+-  // What only the app can say, then the overrides again: Keep mine's value wins.
+-  const desired =
+-    options.verify !== false && spec.resolve !== undefined
++  // What only the app can say, then the overrides again: Keep mine's value wins. Keep
++  // takes it from what was applied instead, and so asks the app nothing more.
++  const keeping = options.secrets === false && spec.resolve !== undefined;
++  const desired = keeping
++    ? withOverrides(
++        spec,
++        address,
++        { ...wanted, fields: { ...known?.fields, ...wanted.fields } },
++        ctx.stack.config.overrides,
++      )
++    : options.verify !== false && spec.resolve !== undefined
+       ? withOverrides(
+@@ -429,3 +443,3 @@ export async function examine(
+   // Every other field is, set or not.
+-  const unresolved = spec.resolve !== undefined && options.verify === false;
++  const unresolved = spec.resolve !== undefined && options.verify === false && !keeping;
+   const compared = unresolved
+@@ -550,2 +564,3 @@ async function checkSecrets(
      }));
 +  if (options.secrets === false) return all('unchecked', 'keep checks no secret');
    const planned = (options.refused ?? []).filter((name) => spec.secrets.includes(name));
-@@ -671,2 +674,7 @@ export interface PlanWiringOptions {
+@@ -580,3 +595,6 @@ async function checkSecrets(
+   if (options.verify === false) {
+-    return all('unchecked', 'what it requires is yet to be put in place');
++    return all(
++      'unchecked',
++      'what it requires is yet to be put in place, which apply does first',
++    );
+   }
+@@ -699,2 +717,7 @@ export interface PlanWiringOptions {
    drift?: { now: () => Date };
 +  /**
 +   * `mediaplane keep`'s: look at this one resource ("<app>.<resource>") and its app only,
@@ -6912,13 +8893,13 @@ index 28d2c3b..df016a2 100644
 +   */
 +  only?: string;
    seams?: WiringSeams;
-@@ -733,3 +741,5 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
+@@ -770,3 +793,5 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
    };
 +  const { only } = options;
    for (const app of order) {
 +    if (only !== undefined && !only.startsWith(`${app.def.id}.`)) continue;
      const ctx: WiringContext = {
-@@ -741,3 +751,6 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
+@@ -778,3 +803,6 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
      // Only what the stack wants is listed: a resource it doesn't want isn't wiring.
 -    const targets = wiringTargets(ctx);
 +    const targets =
@@ -6926,18 +8907,18 @@ index 28d2c3b..df016a2 100644
 +        ? wiringTargets(ctx)
 +        : wiringTargets(ctx).filter((target) => target === only);
      // A resource that holds the key of an app that refuses it: drift on the consumer
-@@ -779,3 +792,5 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
+@@ -816,3 +844,5 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
      checked.set(app.def.id, client.api);
 -    const wanted = wantedResources(ctx);
 +    const wanted = wantedResources(ctx).filter(
 +      (spec) => only === undefined || resourceAddress(app, spec) === only,
 +    );
      if (wanted.length === 0) add({ resource: app.def.id, action: 'unchanged' });
-@@ -806,2 +821,3 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
+@@ -843,2 +873,3 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
            ...(options.drift === undefined ? {} : { drift: options.drift }),
 +          ...(only === undefined ? {} : { secrets: false }),
          });
-@@ -864,8 +880,14 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
+@@ -901,9 +932,15 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
      }
 -    const left = await leftIn(ctx, client.api, options.known, [
 -      ...options.secrets,
@@ -6945,6 +8926,7 @@ index 28d2c3b..df016a2 100644
 -    ]);
 -    drift.push(...left.drift);
 -    diagnostics.push(...left.diagnostics);
+-    for (const change of left.unknown) add(change);
 +    // Keep looks for its one resource among those left, when the stack doesn't want it.
 +    if (only === undefined || wanted.length === 0) {
 +      const left = await leftIn(
@@ -6956,13 +8938,14 @@ index 28d2c3b..df016a2 100644
 +      );
 +      drift.push(...left.drift);
 +      diagnostics.push(...left.diagnostics);
++      for (const change of left.unknown) add(change);
 +    }
    }
-@@ -920,2 +942,3 @@ async function leftIn(
+@@ -958,2 +995,3 @@ async function leftIn(
    secrets: readonly string[],
 +  only?: string,
- ): Promise<{ drift: Drift[]; diagnostics: Diagnostic[] }> {
-@@ -925,2 +948,3 @@ async function leftIn(
+ ): Promise<{ drift: Drift[]; diagnostics: Diagnostic[]; unknown: WiringChange[] }> {
+@@ -964,2 +1002,3 @@ async function leftIn(
      const address = resourceAddress(ctx.app, spec);
 +    if (only !== undefined && address !== only) continue;
      const record = known[address];
@@ -7006,10 +8989,13 @@ export interface KeepResult {
  * Mediaplane as the stack's, written as an override in stack.yaml, or stop managing a
  * resource deleted outside it (`<app>.<resource>: unmanaged`). Only what drift finds
  * there is kept: a managed field that drifted, or a resource that is missing. It looks
- * at that resource alone, and checks none of its secrets. It writes stack.yaml by adding
- * one line, keeping the rest as it is, and never a secret, and then records the value as
- * applied in state/resources.json, so that drift is clear and apply has nothing to do.
- * It runs under apply's lock.
+ * at that resource alone: it checks that its app takes Mediaplane's key, reads the
+ * resource, and checks none of its secrets, so every request it makes goes to the app's
+ * own address on the stack; what only the app can say (Seerr's profile) is what was
+ * applied. It writes stack.yaml by adding one line, keeping the rest as it is, its mode
+ * and its group (not an ACL), and never a secret, and then records the value as applied
+ * in state/resources.json, so that drift is clear and apply has nothing to do for it. It
+ * runs under apply's lock.
  */
 export async function keep(options: KeepOptions): Promise<KeepResult> {
   const home = resolve(options.home);
@@ -7124,7 +9110,9 @@ export async function keep(options: KeepOptions): Promise<KeepResult> {
         ),
       ]);
     }
-    await writeFileAtomic(stackPath, written.text, (await stat(stackPath)).mode & 0o777);
+    // Its mode and group as they were (stackFileProblem refused a group it couldn't keep).
+    const held = await stat(stackPath);
+    await writeFileAtomic(stackPath, written.text, held.mode & 0o777, held.gid);
     const diagnostics = [...result.diagnostics];
     try {
       // As applied now: drift is clear, and apply finds the resource as it should be.
@@ -7173,10 +9161,39 @@ index a829978..6a2841a 100644
          ...(options.wiring === undefined ? {} : { seams: options.wiring }),
 ```
 
+**Change** `packages/engine/src/util/atomic.ts`:
+
+```diff
+diff --git a/packages/engine/src/util/atomic.ts b/packages/engine/src/util/atomic.ts
+index 49a1bff..bcdfeb1 100644
+--- a/packages/engine/src/util/atomic.ts
++++ b/packages/engine/src/util/atomic.ts
+@@ -1,3 +1,3 @@
+ import { randomBytes } from 'node:crypto';
+-import { chmod, link, mkdir, open, rename, rm } from 'node:fs/promises';
++import { chmod, chown, link, mkdir, open, rename, rm } from 'node:fs/promises';
+ import { dirname } from 'node:path';
+@@ -8,3 +8,4 @@ import { codeOf } from './error-code';
+  * to disk, then rename it over the original. Readers see the old file or the new one,
+- * never half of either.
++ * never half of either. With `group`, the new file has that group (the old file's, say),
++ * or nothing is replaced. An ACL or extended attribute of the old file isn't kept.
+  */
+@@ -14,2 +15,3 @@ export async function writeFileAtomic(
+   mode = 0o644,
++  group?: number,
+ ): Promise<void> {
+@@ -27,2 +29,4 @@ export async function writeFileAtomic(
+     await chmod(temp, mode);
++    // -1 leaves the owner as it is: the user running Mediaplane.
++    if (group !== undefined) await chown(temp, -1, group);
+     await rename(temp, path);
+```
+
 - [ ] **Step 4: Run them to see them pass, and regenerate the references**
 
 ```bash
-pnpm vitest run catalog/_shared/servarr-download.test.ts packages/cli/src/output.test.ts packages/cli/src/run.test.ts packages/engine/src/config/overrides-file.test.ts packages/engine/src/drift.test.ts packages/engine/src/integrations/overrides.test.ts packages/engine/src/keep.test.ts
+pnpm vitest run packages/cli/src/output.test.ts packages/cli/src/run.test.ts packages/engine/src/config/overrides-file.test.ts packages/engine/src/keep.test.ts packages/engine/src/util/atomic.test.ts
 pnpm docs:generate
 ```
 
@@ -7192,24 +9209,25 @@ git add packages catalog docs/reference
 git commit -m "feat: mediaplane keep writes what an app holds as an override in stack.yaml, changing nothing else in the file" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 2056 tests pass in 93 files.
+Expected: 2080 tests pass in 93 files.
 
 ---
 
 ### Task 6: End-to-end: success criterion 4 on the real apps, and from the image
 
-Decision: the end-to-end test of success criterion 4 (decision 21).
+Decision: the end-to-end test of success criterion 4, a kept category made by `apply`
+among it (decision 23).
 Decision: no new socket-proxy permission: `drift` and `keep` run from the image through the
-proxy as it is (decision 22).
+proxy as it is (decision 24).
 
 **Files:**
-- Create: `test/e2e/drift.e2e.test.ts`
-- Modify: `test/e2e/deploy.e2e.test.ts`, `test/e2e/helpers.ts`
+- Modify: `test/e2e/helpers.ts`
+- Test: `test/e2e/deploy.e2e.test.ts`, `test/e2e/drift.e2e.test.ts`
 
 **Interfaces:**
 - **Consumes:** Tasks 1 to 5: `apply`, `drift`, `keep`, `readSecretStore`; the e2e
   helpers (`makeHome`, `composeDown`, `expectWiringRemoved`, `getJson`, `api`,
-  `servarrFailure`).
+  `servarrFailure`, `runTeardown`).
 - **Produces:** in `test/e2e/helpers.ts`:
   `setServarrSetting(port, path, key, setting: { name; value }, secrets): Promise<void>`,
   `qbittorrentForm(port, path, key, fields): Promise<void>`: the apps changed by hand, as
@@ -7221,7 +9239,7 @@ proxy as it is (decision 22).
 
 ```diff
 diff --git a/test/e2e/deploy.e2e.test.ts b/test/e2e/deploy.e2e.test.ts
-index 6f5c0b5..36ccd73 100644
+index 6f5c0b5..432ba6d 100644
 --- a/test/e2e/deploy.e2e.test.ts
 +++ b/test/e2e/deploy.e2e.test.ts
 @@ -21,2 +21,3 @@ import {
@@ -7240,14 +9258,14 @@ index 6f5c0b5..36ccd73 100644
 +    const clear = await mediaplane('drift', '--json');
 +    expect(clear.code, clear.stdout + clear.stderr).toBe(0);
 +    // Sonarr's download client changed by hand: it files under "television", a category
-+    // made in qBittorrent first.
++    // made in qBittorrent first, with the save path Mediaplane gives one of that name.
 +    await qbittorrentForm(
 +      8080,
 +      '/api/v2/torrents/createCategory',
 +      store.apps.qbittorrent?.apiKey ?? '',
 +      {
 +        category: 'television',
-+        savePath: '/data/torrents/tv',
++        savePath: '/data/torrents/television',
 +      },
 +    );
 +    await setServarrSetting(
@@ -7523,9 +9541,9 @@ describe('drift, Re-apply and Keep mine (success criterion 4)', () => {
       expect(found(afterApply)).toEqual([]);
       expect(afterApply.clear).toBe(true);
 
-      // Changed by hand again, and kept: the category, with a qBittorrent category of
-      // that name made first, the folder added to Movies, and Sonarr's root folder
-      // deleted, which Mediaplane then no longer manages.
+      // Changed by hand again, and kept: the category, which qBittorrent doesn't have,
+      // the folder added to Movies, and Sonarr's root folder deleted, which Mediaplane
+      // then no longer manages.
       await setServarrSetting(
         SONARR,
         downloadClients,
@@ -7533,10 +9551,6 @@ describe('drift, Re-apply and Keep mine (success criterion 4)', () => {
         television,
         secrets,
       );
-      await qbtForm('/api/v2/torrents/createCategory', {
-        category: 'television',
-        savePath: '/data/torrents/television',
-      });
       await addMoviesFolder();
       const [root] = await getJson<{ id: number }[]>(
         SONARR,
@@ -7558,6 +9572,8 @@ describe('drift, Re-apply and Keep mine (success criterion 4)', () => {
         ['sonarr.download_client.apiKey', 'overrides.secret'],
         ['sonarr.download_client.priority', 'overrides.unmanaged-field'],
         ['jellyfin.library_movies.name', 'overrides.locked'],
+        // Where Sonarr sends qBittorrent's key.
+        ['sonarr.download_client.host', 'overrides.locked'],
         ['radarr.download_client.category', 'keep.no-drift'],
       ] as const) {
         const refused = await keepNow(path);
@@ -7584,20 +9600,42 @@ describe('drift, Re-apply and Keep mine (success criterion 4)', () => {
       expect(await readFile(join(home, 'stack.yaml'), 'utf8')).toBe(
         `${stack}overrides:\n  sonarr.download_client.category: television\n  jellyfin.library_movies.paths: /data/media/extra,/data/media/movies\n  sonarr.root_folder: unmanaged\n`,
       );
+      // Nothing changed outside Mediaplane now; but qBittorrent is to have the kept
+      // category, which apply makes, and Sonarr's own test of its client would make it
+      // with no save path: drift leaves the client's key unchecked until then.
       const kept = await driftNow();
       expect(found(kept)).toEqual([]);
-      expect(kept.clear, 'drift is clear once kept').toBe(true);
-      // apply then changes nothing, twice: what was kept stays as the apps hold it.
-      for (const run of [1, 2]) {
-        const settled = await apply(unconfirmed);
-        expect(
-          settled.plan.wiring
-            .filter((w) => w.action !== 'unchanged')
-            .map((w) => `${w.resource} ${w.action} ${(w.changes ?? []).join(',')}`),
-          `apply ${String(run)} after keep`,
-        ).toEqual([]);
-        expect(settled.outcome).toBe('no-changes');
-      }
+      expect(kept.clear, 'drift waits for the kept category').toBe(false);
+      expect(
+        kept.checks
+          .filter((c) => c.verdict === 'unchecked')
+          .map((c) => `${c.resource}.${c.secret}: ${c.reason ?? ''}`),
+      ).toEqual([
+        'sonarr.download_client.apiKey: what it requires is yet to be put in place, which apply does first',
+      ]);
+      expect((await qbt()).categories).toEqual(['movies', 'tv']);
+      // apply makes it, and changes nothing else; then drift is clear, and apply has
+      // nothing more to do: what was kept stays as the apps hold it.
+      const made = await apply(options);
+      expect(
+        made.plan.wiring
+          .filter((w) => w.action !== 'unchanged')
+          .map((w) => `${w.resource} ${w.action} ${(w.changes ?? []).join(',')}`),
+        'apply after keep',
+      ).toEqual(['qbittorrent.category_tv create ']);
+      expect(made.outcome).toBe('success');
+      expect((await qbt()).categories).toEqual(['movies', 'television', 'tv']);
+      const cleared = await driftNow();
+      expect(found(cleared)).toEqual([]);
+      expect(cleared.clear, 'drift is clear once apply made it').toBe(true);
+      const settled = await apply(unconfirmed);
+      expect(
+        settled.plan.wiring
+          .filter((w) => w.action !== 'unchanged')
+          .map((w) => `${w.resource} ${w.action} ${(w.changes ?? []).join(',')}`),
+        'apply again',
+      ).toEqual([]);
+      expect(settled.outcome).toBe('no-changes');
       expect(await categoryOf()).toBe('television');
       expect(await moviesFolders()).toEqual(['/data/media/extra', '/data/media/movies']);
       expect(await getJson<unknown[]>(SONARR, '/api/v3/rootfolder', sonarrKey)).toEqual(
@@ -7718,19 +9756,19 @@ git add test/e2e
 git commit -m "test(e2e): drift, Re-apply and Keep mine against the real apps, and from the image (success criterion 4)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: 2056 tests pass in 93 files (the e2e files aren't among them).
+Expected: 2080 tests pass in 93 files (the e2e files aren't among them).
 
 ---
 
 ### Task 7: Docs
 
-The §9 set for what Tasks 1 to 6 built (decision 23). Each block below is a hand-written
+The §9 set for what Tasks 1 to 6 built (decision 25). Each block below is a hand-written
 doc; the generated parts were regenerated in Tasks 2 to 5.
 
 - [ ] **Step 1: See the docs still promise Slice 8**
 
-Run: `grep -rnE "Slice 8|S8 \(drift" README.md catalog/*/README.md deploy/README.md docs/architecture.md docs/security docs/runbooks | grep -vE "including Slice 8\.|and S8 \(drift\)\."`
-Expected: 22 lines, in the README, the app READMEs, the architecture, the threat model and the wiring failed runbook, such as `README.md:553:- **Next:** S8 (drift detection).`
+Run: `grep -rnE 'Slice 8 (does|adds|automates|decides|restores)|comes in Slice 8|\(Slice 8( adds|\))|\*\*Slice 8:\*\*|S8 \(drift detection\)' README.md catalog/*/README.md deploy/README.md docs/architecture.md docs/security docs/runbooks docs/design`
+Expected: 25 lines, in the README, the app READMEs, the architecture, the threat model, the wiring failed runbook and the spec (ruling M1), such as `README.md:553:- **Next:** S8 (drift detection).` and `docs/design/m1-engine-cli.md:1011:  counts as seeded, because there is no way to tell. Slice 8 automates the fix, with`.
 
 - [ ] **Step 2: The runbooks**
 
@@ -7760,23 +9798,37 @@ the app". Everything else in the apps is yours, and is never drift.
     ! radarr.connection_jellyfin.apiKey: refused by the app's own check
     ~ sonarr.download_client.category: expected "tv", actual "television"
   Secrets, checked with each app's own check: 11 passed, 1 refused, 2 not checked.
-    - radarr.download_client.apiKey: what it requires is yet to be put in place
+    - radarr.download_client.apiKey: what it requires is yet to be put in place, which apply does first
     - sonarr.download_client.apiKey: a managed field differs: apply sets the secrets with it
-  Drift found. apply puts it back; mediaplane keep <app>.<resource>.<field> keeps what the app holds instead, and <app>.<resource> stops Mediaplane managing one deleted.
+  Drift found.
+    apply puts back each field, resource and secret changed in the apps; mediaplane keep <app>.<resource>.<field> keeps what the app holds instead, and <app>.<resource> stops Mediaplane managing one deleted.
   ```
+
+  The last lines say what puts each kind right: `apply` for a field, a resource or a
+  secret; for a key changed at its source, or what is left in an app, they say what does
+  instead, and never that `apply` puts it back.
 
 - **`mediaplane plan` shows the same lines,** under
   `Drift, changed outside Mediaplane since it was applied:`, before the wiring that would
   put each back.
-- **`mediaplane drift` exits 2 with no drift,** saying it could not look everywhere: an
-  app wasn't running and healthy, didn't answer, or a secret went unchecked. Those are
-  listed under `Not checked:`, and under the secrets.
+- **`mediaplane drift` exits 2 with no drift,** saying it could not look at everything,
+  or check every secret: an app wasn't running and healthy, or didn't answer; a resource
+  Mediaplane made that the stack no longer wants, whose app couldn't say whether it still
+  holds it (`drift.left-unknown`); or a secret went unchecked. Those are listed under
+  `Not checked:`, and under the secrets, each with why. A warning from an app's own
+  health check (`drift.health`) doesn't change the exit code.
+- **`passed (1 as last checked)`** in the secrets line, with a line starting `=`: drift
+  took that verdict from its last check, at the time it names, rather than check again
+  now. Jellyfin's admin password is checked once a day at most, while it passes: a
+  password changed in Jellyfin since shows up within a day, and at once in `plan`.
 
 Each line says what kind of drift it is:
 
-- `~` **a field changed:** what Mediaplane last applied (`expected`) and what the app
-  holds now (`actual`). `actual one Mediaplane can't read` means the app holds the field
-  in a shape Mediaplane doesn't understand, such as a number where it expects text.
+- `~` **a field changed:** the value `apply` sets (`expected`), what Mediaplane last
+  applied when that is another (`Mediaplane applied …; stack.yaml has changed it since`),
+  and what the app holds now (`actual`). `actual one Mediaplane can't read` means the app
+  holds the field in a shape Mediaplane doesn't understand, such as a number where it
+  expects text.
 - `-` **deleted outside Mediaplane:** the app no longer holds the resource.
 - `!` **a secret refused by the app's own check:** a key or password that no longer
   works. Mediaplane never compares or shows a secret: it uses it, with the app's own test
@@ -7787,7 +9839,9 @@ Each line says what kind of drift it is:
   app, such as qBittorrent's made anew in its web UI. Each resource that holds that key,
   in another app, is listed too, as `holds qbittorrent's key, which qbittorrent refuses`.
 - `?` **still in the app, though the stack no longer wants it:** Mediaplane made it, such
-  as Prowlarr's link to Sonarr, and Sonarr has since left the stack. `apply` leaves it.
+  as Prowlarr's link to Sonarr, and Sonarr has since left the stack. `apply` leaves it:
+  remove it in the app, or keep it as yours with `mediaplane keep <app>.<resource>`.
+  Removing it for you comes in Slice 10.
 
 ## Checks
 
@@ -7820,9 +9874,16 @@ Choose, for each change, which side wins.
   ```
 
   It adds one line under `overrides:` in `stack.yaml`, and changes nothing else in the
-  file, its comments neither. `apply` then sets that value, as it would any other
+  file, its comments neither, and keeps its mode and its group (not an ACL or extended
+  attributes, which a rewrite drops). `apply` then sets that value, as it would any other
   setting of the stack, so the change stays, and drift is clear. To undo it, take the
   line out of `overrides:`, and run `apply`.
+
+  What `keep` asks: it checks that the app takes Mediaplane's key, and reads that one
+  resource. It checks none of its secrets and runs no test of the app's, so each request
+  it makes goes to the app's own address on the stack; a value only the app can say,
+  such as Seerr's quality profile, is the one last applied. Keeping a download client's
+  category makes qBittorrent's category follow it: `apply` makes it.
 
 - **Stop managing a resource deleted outside Mediaplane, or left in an app:**
   `mediaplane keep <app>.<resource>` writes `<app>.<resource>: unmanaged`. Mediaplane
@@ -7832,6 +9893,18 @@ Choose, for each change, which side wins.
   stored key back in the app, as the
   [wiring failed runbook](wiring-failed.md#fix) shows for each app, then run `apply`.
   Mediaplane doesn't do it for you yet (Slice 10).
+- **A download client's key not checked, because qBittorrent lacks a category it
+  names.** Sonarr's or Radarr's own test of its download client makes each such
+  category in qBittorrent, with no save path, so `plan` and drift don't run it:
+  - a category you kept (`keep sonarr.download_client.category`) is qBittorrent's to
+    have: `plan` shows `qbittorrent.category_tv`, and `apply` makes it, with its save
+    path, then checks the key. The reason says `what it requires is yet to be put in
+place, which apply does first`;
+  - its post-import category, which Mediaplane doesn't manage, or a category you stopped
+    Mediaplane managing (`qbittorrent.category_tv: unmanaged`) and deleted: make it in
+    qBittorrent, or name one in the arr that qBittorrent has, then run drift again. The
+    reason names the category and the setting;
+  - qBittorrent didn't answer: run drift again once it does.
 
 `keep` refuses, saying why, and changes nothing:
 
@@ -7840,8 +9913,10 @@ Choose, for each change, which side wins.
 - **a field it doesn't manage**, with the closest name it does: the other settings are
   yours already;
 - **a fixed field**, which the app's README marks `(fixed)`: a root folder's path, a
-  library's name or what it holds, whether an arr reaches its root folder, Seerr's setup.
-  Changing one changes what the resource is. To keep a library you renamed, for
+  library's name or what it holds, whether an arr reaches its root folder, Seerr's setup,
+  and every field that says where an app sends a key (a host, a port, TLS, a URL), as
+  the stack's keys go only to its own addresses. Changing one changes what the resource
+  is, or where a key goes. `apply` puts such a field back. To keep a library you renamed, for
   instance, stop Mediaplane managing it: `mediaplane keep jellyfin.library_movies` once
   drift says it was deleted, or add `jellyfin.library_movies: unmanaged` under
   `overrides:` yourself;
@@ -7850,9 +9925,9 @@ Choose, for each change, which side wins.
 - **a value Mediaplane can't read,** or one that holds one of the stack's secrets: set
   it in the app to what you want, then keep it, or run `apply`;
 - **a `stack.yaml` it won't write:** a link, a file with other names (hard links), one
-  that belongs to another user, one written as a single `{ … }` block, or one managed by
-  automation (`managed_by: external`). The error gives the line to add under
-  `overrides:` yourself.
+  that belongs to another user, or to a group Mediaplane's user isn't in, one written as
+  a single `{ … }` block, or one managed by automation (`managed_by: external`). The
+  error gives the line to add under `overrides:` yourself.
 
 Two warnings come from drift itself:
 
@@ -7860,7 +9935,8 @@ Two warnings come from drift itself:
   of Mediaplane's. Prowlarr's checks its indexer proxy every six hours: `All indexer
 proxies are unavailable due to failures` means the Cloudflare solver (Byparr or
   FlareSolverr) is down or can't reach the internet. `apply` can't put that right. Check
-  the solver with `mediaplane status`; Prowlarr's next health check clears it.
+  the solver with `mediaplane status`; Prowlarr's next health check clears it. A health
+  check Mediaplane can't read is a warning too. Neither changes drift's exit code.
 - **`drift.locked`:** another `apply`, `drift` or `keep` is running. Wait for it, then run
   drift again. If nothing is running, delete `state/lock`.
 
@@ -7910,7 +9986,7 @@ index 0c6adec..66f8e3b 100644
 
 ````diff
 diff --git a/docs/architecture.md b/docs/architecture.md
-index c948d18..2aa2bd7 100644
+index c948d18..1adde83 100644
 --- a/docs/architecture.md
 +++ b/docs/architecture.md
 @@ -3,3 +3,3 @@
@@ -7965,7 +10041,7 @@ index c948d18..2aa2bd7 100644
 +    proxy's host, timeout and tags on every run. `drift` reads what Prowlarr's own health
 +    check, which tests its proxies every six hours, last found.
    - The indexers are yours: you add them in Prowlarr, which syncs them to the arrs, and
-@@ -710,2 +718,61 @@ mediaplane (the stack)
+@@ -710,2 +718,70 @@ mediaplane (the stack)
  
 +## Drift and Keep mine
 +
@@ -7994,9 +10070,12 @@ index c948d18..2aa2bd7 100644
 +    them, never compared or shown;
 +  - an app that refuses the key Mediaplane holds for it, and each resource of another app
 +    that holds that key: a shared key changed at its source;
-+  - a resource Mediaplane made that the stack no longer wants, still in the app.
++  - a resource Mediaplane made that the stack no longer wants, still in the app; one
++    whose app can't say counts as not looked at.
 +
-+  `plan` shows the same drift, as what `apply` would put back. Its exit code is 0 when
++  `plan` shows the same drift. What puts each right is said by its kind: `apply` puts
++  back a field, a resource or a secret; a key changed at its source, and what is left in
++  an app, are put right by hand, or kept, until Slice 10. Its exit code is 0 when
 +  nothing changed and every resource and secret was checked, and 2 otherwise.
 +
 +- **Its checks leave few marks** (the owner's decisions of 2026-10-17). A secret it finds
@@ -8014,20 +10093,26 @@ index c948d18..2aa2bd7 100644
 +  `<app>.<resource>: unmanaged` stops Mediaplane managing a resource. `plan` checks each:
 +  a field that isn't managed, a secret, a fixed field or a value of another type fails
 +  it, with the closest name. A few fields are fixed (a resource's `locked`): what it is
-+  known by, what its app can't change, and what Mediaplane only checks.
++  known by, what its app can't change, what Mediaplane only checks, and every field that
++  says where an app sends a key. Every request that carries a key is built from the
++  stack's own address for the other app (a resource's `sendsTo`), never from a field an
++  override could set or from what the app holds.
 +- **`mediaplane keep <app>.<resource>.<field>`** takes what the app holds, where drift
 +  found a change, as an override: it adds one line under `overrides:` in `stack.yaml`,
-+  changing nothing else in the file, and records the value as applied, so drift is clear
-+  and `apply` has nothing to do. For a resource deleted, or left in the app,
-+  `mediaplane keep <app>.<resource>` writes `unmanaged`. It never writes a secret, and
-+  refuses a `stack.yaml` it can't write safely, giving the line to add instead
-+  ([ADR 0003](adr/0003-drift-detect-and-warn-with-keep-mine.md)).
++  changing nothing else in the file (its mode and group kept, not an ACL), and records
++  the value as applied, so drift is clear and `apply` has nothing to do for it. It checks
++  that the app takes Mediaplane's key and reads the one resource, and checks no secret.
++  For a resource deleted, or left in the app, `mediaplane keep <app>.<resource>` writes
++  `unmanaged`. It never writes a secret, and refuses a `stack.yaml` it can't write
++  safely, giving the line to add instead
++  ([ADR 0003](adr/0003-drift-detect-and-warn-with-keep-mine.md)). Keeping a download
++  client's category gives qBittorrent's category that name: `apply` makes it.
 +- **Not yet:** putting back a key at its source, or giving a new one to every app that
 +  holds it, and removing what Mediaplane made when its app leaves the stack (Slice 10);
 +  drift on a schedule (M2).
 +
  ## `vpn-check`
-@@ -767,3 +834,2 @@ The [roadmap](plans/m1-roadmap.md) has the order:
+@@ -767,3 +843,2 @@ The [roadmap](plans/m1-roadmap.md) has the order:
  
 -- drift detection (Slice 8);
  - releases and safe updates (Slice 9);
@@ -8037,7 +10122,7 @@ index c948d18..2aa2bd7 100644
 
 ```diff
 diff --git a/docs/security/threat-model.md b/docs/security/threat-model.md
-index 39475b8..ca3b89a 100644
+index 39475b8..0aa392a 100644
 --- a/docs/security/threat-model.md
 +++ b/docs/security/threat-model.md
 @@ -2,3 +2,3 @@
@@ -8045,7 +10130,7 @@ index 39475b8..ca3b89a 100644
 -This is the threat model for Mediaplane as built today: M1, up to and including Slice 7.
 +This is the threat model for Mediaplane as built today: M1, up to and including Slice 8.
  It makes spec §7 concrete. To report a vulnerability, see [SECURITY.md](../../SECURITY.md).
-@@ -149,6 +149,7 @@ mounts ──► plex.tv
+@@ -149,6 +149,8 @@ mounts ──► plex.tv
    out at once: Seerr's own key works after that.
 -  `plan` checks a download client with the arr's own test, which also makes a missing
 -  post-import category in qBittorrent, a setting Mediaplane doesn't manage: one you set
@@ -8054,10 +10139,11 @@ index 39475b8..ca3b89a 100644
 +  `plan` checks a download client with the arr's own test, which would make in
 +  qBittorrent each category the client names that qBittorrent lacks: its own, or a
 +  post-import one you set in the arr (`tvImportedCategory`, `movieImportedCategory`). So
-+  `plan` asks qBittorrent first, and leaves the key unchecked while one is missing;
-+  `apply`'s test makes it. It checks Prowlarr's links with Prowlarr's own test, which calls the arr
++  `plan` asks qBittorrent first, and leaves the key unchecked while one is missing, or
++  qBittorrent can't be asked; a category you kept is made by `apply` first, and one you
++  no longer have Mediaplane manage is yours to make (see the drift reported runbook). It checks Prowlarr's links with Prowlarr's own test, which calls the arr
    with its key, and has the arr call Prowlarr back, and an arr's connection to Jellyfin
-@@ -164,2 +165,14 @@ mounts ──► plex.tv
+@@ -164,2 +166,16 @@ mounts ──► plex.tv
    arr's web UI does.
 +- **Drift and Keep mine.** `mediaplane drift` asks the apps what `plan` asks them, and
 +  changes nothing in them: its checks leave the marks above, fewer. A secret it found
@@ -8066,20 +10152,22 @@ index 39475b8..ca3b89a 100644
 +  address after five); Jellyfin's admin password is checked once a day at most, while it
 +  passes. Drift keeps what it found of each secret in `state/resources.json`: its name,
 +  `passed` or `refused`, and when. It reads Prowlarr's own health check of its indexer
-+  proxy, and never tests the proxy. `mediaplane keep` reads the one resource it keeps,
-+  checking none of its secrets, and writes `stack.yaml`: one line under `overrides:`,
-+  the rest as it was, never a secret. It refuses a `stack.yaml` that is a link, has other
-+  names, belongs to another user, or is managed by automation. Both run under apply's
-+  lock (`state/lock`), so none of the three runs while another does.
++  proxy, and never tests the proxy. `mediaplane keep` checks that the app takes
++  Mediaplane's key and reads the one resource it keeps, checking none of its secrets and
++  running no test of the app's, and writes `stack.yaml`: one line under `overrides:`,
++  the rest as it was, its mode and group kept (not an ACL), never a secret. It refuses a
++  `stack.yaml` that is a link, has other names, belongs to another user or to a group
++  its user isn't in, or is managed by automation. Both run under apply's lock
++  (`state/lock`), so none of the three runs while another does.
  - **The Cloudflare solver.** Byparr, or FlareSolverr, runs a browser for Prowlarr on the
-@@ -333,4 +346,4 @@ What remains:
+@@ -333,4 +349,4 @@ What remains:
  - A link stays in Prowlarr when its arr leaves the stack, and keeps that arr's key,
 -  until it is removed by hand (in Prowlarr's web UI) or, if Slice 8 does that, by drift
 -  detection.
 +  until it is removed by hand (in Prowlarr's web UI). `mediaplane drift` reports it, as
 +  still in the app though the stack no longer wants it; removing it for you is Slice 10.
  - The apps' calls to each other, and Mediaplane's to them, are plain HTTP on Docker's own
-@@ -433,2 +446,7 @@ Controls today:
+@@ -433,2 +449,7 @@ Controls today:
    errors, and kept out of change records, `state/resources.json` and `plan`'s output.
 +- `drift` and `plan` show a managed field's values, what was applied and what the app
 +  holds, never a secret's: a value an app holds that contains one of the run's secrets is
@@ -8087,7 +10175,7 @@ index 39475b8..ca3b89a 100644
 +  secret, so `stack.yaml` never holds one (ADR 0009). What drift keeps of a secret in
 +  `state/resources.json` is its name, a verdict and a time.
  - Gluetun's control key reaches vpn-check's probe on its standard input, and the probe
-@@ -884,2 +902,31 @@ What remains:
+@@ -884,2 +905,49 @@ What remains:
  
 +### T17. A change made in an app by someone else is kept
 +
@@ -8102,17 +10190,35 @@ index 39475b8..ca3b89a 100644
 +  same, and `apply`, which asks first, puts each back.
 +- A change is never kept by itself: only `mediaplane keep`, run by you, makes it the
 +  stack's, one field at a time.
-+- While a managed field differs, `plan` checks none of the resource's secrets, so a key
-+  isn't tested at a host someone changed. A key goes only to the stack's own address for
-+  an app (T5).
++- Every field that says where an app sends a key is fixed, and can't be kept or
++  overridden: the host, port and TLS of an arr's download client and of its connections
++  to Jellyfin and Plex, the URLs of Prowlarr's links to the arrs (and its indexer
++  proxy's, which your indexers' requests go through), and the host and port of Seerr's
++  media server and of its Sonarr and Radarr servers. Drift still reports a change to
++  one, and `apply` puts the stack's own address back.
++- Every request that carries a key, Mediaplane's own and each test it has an app run
++  with a key the app holds (an arr's test of its download client or connection,
++  Prowlarr's of a link, Seerr's of a server), is built from the stack's own service
++  address for the other app (`sendsTo`), never from a managed field an override could
++  set, nor from what the app holds: a host, port, TLS or URL base changed in the app
++  doesn't move where the key goes. Seerr's list of Jellyfin's users, which Seerr asks
++  with the key it holds at the address it holds, is asked only while Seerr holds the
++  stack's. Each catalog resource has a test of it. A key goes only to the stack's own
++  address for an app (T5).
++- While a managed field differs, `plan` checks none of the resource's secrets.
 +- What a resource is known by can't be kept: a root folder's path, a library's name and
 +  what it holds.
++- `mediaplane keep` checks that the app takes Mediaplane's key and reads one resource;
++  it checks no secret and runs no test of the app's, so it sends no key but Mediaplane's
++  own, to the app's own address.
 +
 +What remains:
 +
-+- Keep only what you changed yourself. A kept value is what the app will hold from then
-+  on: a download client kept at another host sends qBittorrent's key there, as the arr
-+  uses it.
++- Keep only what you changed yourself. A kept value is what the app holds from then on:
++  a category, a folder, a tag, a library left to you.
++- An app's admin can still point the app itself somewhere else between two `apply`s:
++  the app then uses the key it holds there, as it would without Mediaplane. Drift reports
++  it, and only `apply` puts it back.
 +- Drift sees only what Mediaplane manages. A change to anything else in an app, its
 +  indexers, profiles or users, is yours, and never reported.
 +- Drift runs only when you run it, or `plan` or `apply` does. Running it on a schedule
@@ -8170,13 +10276,17 @@ address after five failed sign-ins in a row.
 - **Keep mine writes one line.** It adds the line under `overrides:`, or replaces a value
   it wrote before, and changes nothing else in the file: comments, key order, quoting,
   spacing and line ends stay. The new file must parse to the same stack with that
-  override, or nothing is written. It refuses a `stack.yaml` that is a link, has other
-  names, belongs to another user, or is managed by automation (`managed_by: external`),
-  and gives the line to add by hand instead.
+  override, or nothing is written. It keeps the file's mode and group, not an ACL. It
+  refuses a `stack.yaml` that is a link, has other names, belongs to another user or to
+  a group its user isn't in, or is managed by automation (`managed_by: external`), and
+  gives the line to add by hand instead.
 - **Only managed fields can be kept.** Each resource declares them; a few are fixed: what
   the resource is known by (a root folder's path, a library's name), what its app can't
-  change (what a library holds), and what Mediaplane only checks (whether an arr reaches
-  its root folder's folder). A secret is never kept, nor a value that holds one.
+  change (what a library holds), what Mediaplane only checks (whether an arr reaches its
+  root folder's folder), and where an app sends a key (a host, a port, TLS, a URL): the
+  stack's keys go only to its own addresses, and every request that carries one is built
+  from them, whatever an override or the app holds. A secret is never kept, nor a value
+  that holds one.
 - **Drift keeps its marks few** (the owner's decisions of 2026-10-17):
   - a secret it finds refused isn't checked again, by drift or `plan`, until `apply`
     sets it. That spares qBittorrent's sign-in ban, and leaves one failure in an app's
@@ -8412,10 +10522,10 @@ index 864b935..28538f7 100644
 
 ```diff
 diff --git a/catalog/prowlarr/README.md b/catalog/prowlarr/README.md
-index 1704405..6f79bcf 100644
+index 267679d..e2ad79a 100644
 --- a/catalog/prowlarr/README.md
 +++ b/catalog/prowlarr/README.md
-@@ -90,10 +90,23 @@ to the solver only when the site answers with a Cloudflare challenge.
+@@ -90,10 +90,27 @@ to the solver only when the site answers with a Cloudflare challenge.
  
 -## Not built yet
 -
@@ -8436,6 +10546,10 @@ index 1704405..6f79bcf 100644
 +  and `apply` then leaves it. A field marked `(fixed)` above, and a secret, can't be
 +  kept. `mediaplane keep prowlarr.indexer_proxy` stops Mediaplane managing a resource deleted
 +  in Prowlarr. The [drift runbook](../../docs/runbooks/drift-reported.md) says more.
++- **Where Prowlarr sends a key** is fixed: each link's `baseUrl` and `prowlarrUrl`, and
++  the proxy's host, which your indexers' requests go through. Drift reports a change to
++  one, and `apply` puts the stack's own address back; Prowlarr's test of a link is
++  always aimed there.
 +- **The proxy's tags,** kept with other labels than `cloudflare`
 +  (`prowlarr.indexer_proxy.tags`): Mediaplane gives the proxy each, making a tag it
 +  lacks.
@@ -8447,7 +10561,7 @@ index 1704405..6f79bcf 100644
 +  drift reports it as still in the app. Remove it in Prowlarr, or stop the report with
 +  `mediaplane keep prowlarr.application_sonarr` (or `_radarr`).
  
-@@ -155,4 +168,4 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
+@@ -155,4 +172,4 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
    Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
 -  `sudo mv`. The old file keeps your settings, to enter again in Prowlarr. Slice 8 does
 -  this for you.
@@ -8460,10 +10574,10 @@ index 1704405..6f79bcf 100644
 
 ```diff
 diff --git a/catalog/qbittorrent/README.md b/catalog/qbittorrent/README.md
-index d83125c..25a77d6 100644
+index d83125c..137a6b8 100644
 --- a/catalog/qbittorrent/README.md
 +++ b/catalog/qbittorrent/README.md
-@@ -85,7 +85,20 @@ unmodified, and by default puts it behind Gluetun's VPN.
+@@ -85,7 +85,28 @@ unmodified, and by default puts it behind Gluetun's VPN.
  
 -## Not built yet
 -
@@ -8484,19 +10598,27 @@ index d83125c..25a77d6 100644
 +- **Its password, changed in qBittorrent,** is checked by signing in, once per `plan`.
 +  Once drift has found it refused, neither drift nor `plan` signs in again until `apply`
 +  sets it, which spares Mediaplane the ban below.
++- **A download client's category, kept as another** (`mediaplane keep
++sonarr.download_client.category`), becomes this category's name too: the category
++  `qbittorrent.category_tv` makes is then the kept one, with its save path under
++  `/data/torrents`, and `apply` makes it. Until it does, drift leaves Sonarr's client's
++  key unchecked, saying `apply` puts what it requires in place first. The category made
++  before stays, yours.
 +- **A category you stop Mediaplane managing** (`qbittorrent.category_tv: unmanaged`, or
 +  `_movies`) is yours, and stays the category Sonarr's or Radarr's download client files
 +  under: while qBittorrent lacks it, `plan` and drift leave that client's key unchecked,
-+  as the arr's own test would make it.
++  as the arr's own test would make it, with no save path. To clear it, make the category
++  in qBittorrent, or name one in the arr that qBittorrent has (and keep that), then run
++  drift again.
  
-@@ -108,4 +121,4 @@ manages ("Keep mine") comes in Slice 8. See the
+@@ -108,4 +129,4 @@ manages ("Keep mine") comes in Slice 8. See the
    next `apply`: the login, the save path, Automatic Torrent Management, who may skip the
 -  login, and the two categories' save paths. `plan` shows it first. Slice 8 adds "Keep
 -  mine".
 +  login, and the two categories' save paths. `plan` and `mediaplane drift` show it first,
 +  and `mediaplane keep` keeps it instead (see above).
  - **Five failed sign-ins in a row ban an address for an hour.** Mediaplane checks the
-@@ -147,3 +160,3 @@ manages ("Keep mine") comes in Slice 8. See the
+@@ -147,3 +168,3 @@ manages ("Keep mine") comes in Slice 8. See the
    sign in with what `mediaplane credentials` shows. The old file keeps your settings,
 -  to enter again in qBittorrent. Slice 8 does this for you.
 +  to enter again in qBittorrent. Slice 10 does this for you.
@@ -8507,10 +10629,10 @@ index d83125c..25a77d6 100644
 
 ```diff
 diff --git a/catalog/radarr/README.md b/catalog/radarr/README.md
-index 4ed9c4f..acc5bc4 100644
+index 5149b88..2c0a85c 100644
 --- a/catalog/radarr/README.md
 +++ b/catalog/radarr/README.md
-@@ -107,6 +107,25 @@ LinuxServer.io image, unmodified.
+@@ -107,6 +107,31 @@ LinuxServer.io image, unmodified.
  
 -## Not built yet
 -
@@ -8528,10 +10650,16 @@ index 4ed9c4f..acc5bc4 100644
 +  kept. `mediaplane keep radarr.root_folder` stops Mediaplane managing a resource deleted
 +  in Radarr. The [drift runbook](../../docs/runbooks/drift-reported.md) says more.
 +- **Its download client's category,** kept as another (`radarr.download_client.category`):
-+  make that category in qBittorrent first. Radarr's own test of the client makes a
-+  category qBittorrent lacks, with no save path, so `plan` and drift leave the client's
-+  key unchecked while one is missing: the client's own, or the post-import one you set
-+  in Radarr (`movieImportedCategory`), which stays yours.
++  qBittorrent's category (`qbittorrent.category_movies`) then has that name, and `apply`
++  makes it, with its save path. Radarr's own test of the client makes a category
++  qBittorrent lacks, with no save path, so `plan` and drift leave the client's key
++  unchecked while one is missing, saying what clears it: the kept one until `apply`
++  makes it, or the post-import one you set in Radarr (`movieImportedCategory`), which stays yours
++  to make in qBittorrent.
++- **Where Radarr sends a key** is fixed: its download client's host, port and TLS, and its
++  connections' host and port. Drift reports a change to one, and `apply` puts the
++  stack's own address back; every test Mediaplane has Radarr run is aimed there, whatever
++  Radarr holds.
 +- **Its root folder's folder, deleted by hand:** drift says Radarr can't reach it
 +  (`radarr.root_folder.accessible`), and `apply` makes the folder again. Its path is
 +  fixed: Radarr knows a root folder by its path. To move your library, move it in
@@ -8540,7 +10668,7 @@ index 4ed9c4f..acc5bc4 100644
 +- **A connection's events,** which change files it tells the media server of, are yours:
 +  drift doesn't report them.
  
-@@ -155,4 +174,4 @@ LinuxServer.io image, unmodified.
+@@ -155,4 +180,4 @@ LinuxServer.io image, unmodified.
    Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
 -  `sudo mv`. The old file keeps your settings, to enter again in Radarr. Slice 8 does
 -  this for you.
@@ -8553,10 +10681,10 @@ index 4ed9c4f..acc5bc4 100644
 
 ```diff
 diff --git a/catalog/seerr/README.md b/catalog/seerr/README.md
-index 3cfe43d..38b5432 100644
+index 8762eed..081c2d0 100644
 --- a/catalog/seerr/README.md
 +++ b/catalog/seerr/README.md
-@@ -111,6 +111,24 @@ With Jellyfin as the media server (with Plex, see below):
+@@ -111,6 +111,29 @@ With Jellyfin as the media server (with Plex, see below):
  
 +## Drift and Keep mine
 +
@@ -8573,6 +10701,11 @@ index 3cfe43d..38b5432 100644
 +  `media_server_plex`): Mediaplane then enables only the libraries kept, and the others
 +  are yours, to turn on or off. A library Mediaplane no longer manages in Jellyfin or
 +  Plex is never enabled by it.
++- **Where Seerr sends a key** is fixed: the host and port of its media server and of its
++  Sonarr and Radarr servers. Drift reports a change to one, and `apply` puts the stack's
++  own address back; Mediaplane's tests of a server are aimed there, and Seerr's list of
++  Jellyfin's users is asked only while Seerr holds the stack's address. `keep` reads a
++  server's profile from what was applied, rather than run Seerr's test.
 +- **A server's profile, root folder or default,** kept
 +  (`seerr.server_sonarr.activeProfile`, `activeDirectory`, `isDefault`), stays. Its setup
 +  (`seerr.setup.initialized`) is fixed: Seerr can't be taken back to its setup wizard.
@@ -8583,7 +10716,7 @@ index 3cfe43d..38b5432 100644
 -  Seerr a new Plex token: it keeps the one it signed in with.
 +- **Slice 10:** a way to give Seerr a new Plex token: it keeps the one it signed in with.
  
-@@ -128,3 +146,3 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
+@@ -128,3 +151,3 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
    changed in Seerr: its Jellyfin or Plex, its libraries, and each server's host, port,
 -  profile, root folder and default. Keep mine comes in Slice 8.
 +  profile, root folder and default, unless you keep it (see above).
@@ -8594,10 +10727,10 @@ index 3cfe43d..38b5432 100644
 
 ```diff
 diff --git a/catalog/sonarr/README.md b/catalog/sonarr/README.md
-index 03ebaff..453eb0d 100644
+index 3562961..a7c61f8 100644
 --- a/catalog/sonarr/README.md
 +++ b/catalog/sonarr/README.md
-@@ -109,6 +109,25 @@ LinuxServer.io image, unmodified.
+@@ -109,6 +109,31 @@ LinuxServer.io image, unmodified.
  
 -## Not built yet
 -
@@ -8615,10 +10748,16 @@ index 03ebaff..453eb0d 100644
 +  kept. `mediaplane keep sonarr.root_folder` stops Mediaplane managing a resource deleted
 +  in Sonarr. The [drift runbook](../../docs/runbooks/drift-reported.md) says more.
 +- **Its download client's category,** kept as another (`sonarr.download_client.category`):
-+  make that category in qBittorrent first. Sonarr's own test of the client makes a
-+  category qBittorrent lacks, with no save path, so `plan` and drift leave the client's
-+  key unchecked while one is missing: the client's own, or the post-import one you set
-+  in Sonarr (`tvImportedCategory`), which stays yours.
++  qBittorrent's category (`qbittorrent.category_tv`) then has that name, and `apply`
++  makes it, with its save path. Sonarr's own test of the client makes a category
++  qBittorrent lacks, with no save path, so `plan` and drift leave the client's key
++  unchecked while one is missing, saying what clears it: the kept one until `apply`
++  makes it, or the post-import one you set in Sonarr (`tvImportedCategory`), which stays yours
++  to make in qBittorrent.
++- **Where Sonarr sends a key** is fixed: its download client's host, port and TLS, and its
++  connections' host and port. Drift reports a change to one, and `apply` puts the
++  stack's own address back; every test Mediaplane has Sonarr run is aimed there, whatever
++  Sonarr holds.
 +- **Its root folder's folder, deleted by hand:** drift says Sonarr can't reach it
 +  (`sonarr.root_folder.accessible`), and `apply` makes the folder again. Its path is
 +  fixed: Sonarr knows a root folder by its path. To move your library, move it in
@@ -8627,7 +10766,7 @@ index 03ebaff..453eb0d 100644
 +- **A connection's events,** which change files it tells the media server of, are yours:
 +  drift doesn't report them.
  
-@@ -148,4 +167,4 @@ LinuxServer.io image, unmodified.
+@@ -148,4 +173,4 @@ LinuxServer.io image, unmodified.
    Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
 -  `sudo mv`. The old file keeps your settings, to enter again in Sonarr. Slice 8 does
 -  this for you.
@@ -8664,7 +10803,7 @@ index 39217bc..6926808 100644
 
 ```diff
 diff --git a/docs/design/m1-engine-cli.md b/docs/design/m1-engine-cli.md
-index 1dcb888..6c8ffa3 100644
+index 1dcb888..65b7780 100644
 --- a/docs/design/m1-engine-cli.md
 +++ b/docs/design/m1-engine-cli.md
 @@ -222,3 +222,3 @@ converges on desired state.
@@ -8683,7 +10822,26 @@ index 1dcb888..6c8ffa3 100644
 +| `drift` | Report drift only (§6.3): it changes nothing in the apps but for its checks' marks, fewer than `plan`'s, and keeps what it found of each secret in `state/resources.json` (§11, Slice 8) |
 +| `keep <path>` | Keep mine: record a drifted value, or a resource deleted or left in an app, as an override, adding one line to `stack.yaml` (§11, Slice 8) |
  | `history [id]` | List change records, or show one in full |
-@@ -1786 +1786,120 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
+@@ -1010,4 +1010,4 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
+   with `<app>.not-seeded`, and its hint gives the steps. A file Mediaplane can't read
+-  counts as seeded, because there is no way to tell. Slice 8 automates the fix, with
+-  the rest of "restore the key at the source" (§6.3).
++  counts as seeded, because there is no way to tell. Slice 10 automates the fix, with
++  the rest of "restore the key at the source" (§6.3; moved from Slice 8 on 2026-10-25).
+ - **The shared admin (§6.1).** `admin.username` is 3 to 32 letters, digits, `.`, `_`
+@@ -1357,3 +1357,4 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
+   stack drops its Cloudflare solver, as a download client stays when qBittorrent leaves:
+-  Mediaplane doesn't remove what it made yet. Slice 8 decides, with §8.1(3) step 4.
++  Mediaplane doesn't remove what it made yet. Slice 8 reports it (`left` drift), and
++  `keep <app>.<resource>` makes it yours; removing it is Slice 10's, with §8.1(3) step 4.
+ - **One way to wire a Servarr provider.** The arrs' download client and Prowlarr's links
+@@ -1470,3 +1471,4 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
+   so. Removing it from `state/secrets.json` has the next `apply` sign in, make a new one,
+-  and give it to the arrs' connections; Slice 8 automates that, with key recovery.
++  and give it to the arrs' connections; Slice 10 automates that, with key recovery
++  (moved from Slice 8 on 2026-10-25). Slice 8's drift reports the refused key.
+ 
+@@ -1786 +1788,147 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
    same unpublished `up` and recreate as Jellyfin's (§7.2(2)).
 +
 +### Slice 8: drift (2026-10-25)
@@ -8695,11 +10853,17 @@ index 1dcb888..6c8ffa3 100644
 +  the app, isn't drift. Drift needs a record: a resource never applied has none. Each
 +  item says what drifted (`mediaplane.drift/v1`, and `drift` in `plan`'s `--json`,
 +  additive within `mediaplane.plan/v1`):
-+  - `field`: the managed field, what was applied (`expected`) and what the app holds
++  - `field`: the managed field, the value `apply` sets (`expected`, D), what was
++    applied (`applied`, L) when stack.yaml has changed it since, and what the app holds
 +    (`actual`), redacted, and marked `redacted` when that changed it; or `actual: null`
-+    with `unreadable` when the app holds it in another shape than Mediaplane reads
-+    (another type, or missing): such a field is never read as empty, and differs, so
-+    `apply` sets it (the roadmap's S8 items on shapes, and on `enable`);
++    with `unreadable` (redacted too) when the app holds it in another shape than
++    Mediaplane reads (another type, or missing): such a field is never read as empty,
++    and differs, so `apply` sets it (the roadmap's S8 items on shapes, and on `enable`).
++    Every observe reads its managed fields with a `FieldReader`; what a resource is
++    found by (its id, its name) is still parsed strictly, and an answer Mediaplane can't
++    parse leaves the resource unknown. A record of another name than the stack now wants
++    is of what it wanted before, such as qBittorrent's category once Sonarr's is kept as
++    another: what differs from it is a change, not drift;
 +  - `missing`: the app no longer holds it;
 +  - `secret`: the app's own check refuses one of its secrets, by name, with `since` when
 +    drift found it before;
@@ -8708,7 +10872,11 @@ index 1dcb888..6c8ffa3 100644
 +    shared key of §6.3's last row, reported on the source and each consumer;
 +  - `left`: a resource Mediaplane recorded that the stack no longer wants, still in the
 +    app, such as Prowlarr's link to an arr taken out of the stack. One the app can't say
-+    about is a warning (`drift.left-unknown`), never said to be gone.
++    about is a warning (`drift.left-unknown`) and a wiring check that couldn't be made,
++    never said to be gone: drift isn't clear then.
++  - What puts each right is said by its kind: `apply` for a field, a resource or a
++    secret; for a key, the wiring failed runbook's steps (Slice 10 restores it); for what
++    is left, removing it in the app or `keep <app>.<resource>` (Slice 10 removes it).
 +- **`mediaplane drift`** (§5.2) is `plan`, looking only: no preflight, and every app that
 +  runs and is healthy is asked, even one `apply` would recreate. It runs under apply's
 +  lock, which now records the command that holds it (`drift`, `keep`), so a held lock
@@ -8734,9 +10902,13 @@ index 1dcb888..6c8ffa3 100644
 +    check it every time;
 +  - `plan` and drift leave an arr's download client key unchecked while qBittorrent
 +    lacks a category the client names: its post-import one (the owner's decision), or
-+    its own, kept as another or no longer managed. The arr's own test would make it,
-+    with no save path (probed). They ask qBittorrent first, through the run's client
-+    for it (`VerifyContext.peer`). `apply`'s test runs as before;
++    its own, once qBittorrent's is no longer managed and deleted; and while the setting
++    isn't text, or qBittorrent can't be asked. The arr's own test would make it, with no
++    save path (probed, its own category too). They ask qBittorrent first, through the
++    run's client for it (`VerifyContext.peer`), and say what clears it. A category the
++    client is kept with is qBittorrent's to have (`qbittorrent.category_<name>` wants it,
++    with its save path), so `apply` makes it, and the client waits for it. `apply`'s
++    test runs as before;
 +  - Seerr's Jellyfin key, found refused, isn't checked again by the update that gives
 +    Seerr Mediaplane's key: one failed check, one line in Seerr's log, per `apply`
 +    (`update` is told what differs). A failing Seerr test logs one line each time, with
@@ -8745,8 +10917,9 @@ index 1dcb888..6c8ffa3 100644
 +  before it asks any app: an app, resource or field that isn't there fails it, with the
 +  closest name (names are case-sensitive); so do a secret, a fixed field, a value of
 +  another type than the field's, and `<app>.<resource>` with anything but `unmanaged`.
-+  One for an app the stack doesn't have, or a field of a resource it doesn't want, is a
-+  warning (`overrides.unused`). `<app>.<resource>: unmanaged` takes the resource out of
++  One for an app the stack doesn't have, a field of a resource it doesn't want, or a
++  field of a resource made `unmanaged`, is a warning (`overrides.unused`); `unmanaged` of
++  a resource the stack doesn't want is quiet. `<app>.<resource>: unmanaged` takes the resource out of
 +  what the stack wants: it is neither made, looked at, nor reported. A field held as a
 +  comma-separated list (`lists`) is compared as a set. Seerr enables only the libraries
 +  of Jellyfin's or Plex's that Mediaplane still manages, and those an override names.
@@ -8759,8 +10932,17 @@ index 1dcb888..6c8ffa3 100644
 +  a root folder's path (the arr knows a root folder by it, and can't move one: another
 +  would be added beside the one holding your library, the roadmap's S8 item); a
 +  library's name, which Mediaplane finds it by and Seerr enables it by, and what it holds;
-+  whether an arr reaches its root folder's folder; and Seerr's `initialized`. To keep a
-+  renamed library, it is made `unmanaged`.
++  whether an arr reaches its root folder's folder; Seerr's `initialized`; and every
++  field that says where an app sends a key ("it sets where a key is sent", §11 Slice 6:
++  keys go only to the stack's own addresses): the host, port and TLS of the arrs'
++  download clients and connections, the URLs of Prowlarr's links (and its proxy's host),
++  and the host and port of Seerr's media server and servers. To keep a renamed library,
++  it is made `unmanaged`.
++- **Keys go only to the stack's own addresses, both ways:** besides those fixed fields,
++  every request that carries a key, Mediaplane's and each test it has an app run with a
++  key the app holds, is built from the stack's own service address for the other app
++  (`DesiredResource.sendsTo`), never from a managed field nor from what the app holds;
++  Seerr's list of Jellyfin's users is asked only while Seerr holds the stack's address.
 +- **A root folder's folder, deleted by hand** (the roadmap's S8 item): a new managed field,
 +  `accessible`, which the arr reads from the disk each time it is asked (probed); `apply`
 +  makes the folder again, as it makes it for a new root folder. After upgrading, `plan`
@@ -8779,7 +10961,9 @@ index 1dcb888..6c8ffa3 100644
 +  its app's health (`health`); drift warns of it (`drift.health`), and of a health check
 +  it can't read, never taking that as healthy.
 +- **Keep mine** (§5.2, §6.3) is `mediaplane keep <app>.<resource>.<field>`. It looks at
-+  that one resource, checking none of its secrets, under the lock, and keeps only what
++  that one resource, under the lock: it checks that the app takes Mediaplane's key and
++  reads the resource, checks none of its secrets and runs no test of the app's (what
++  only the app can say, Seerr's profile, is the value applied), and keeps only what
 +  drift finds there: a field that drifted, or, for `<app>.<resource>`, a resource missing
 +  or left (`unmanaged`). It writes the override into `stack.yaml` by adding one line
 +  under `overrides:`, in the indentation of those there, or a new `overrides:` at the
@@ -8787,9 +10971,10 @@ index 1dcb888..6c8ffa3 100644
 +  key order, quoting, spacing and line ends stay. A rewrite through the YAML library was
 +  probed and kept neither aligned comments nor a comment's place, so it is a textual
 +  insertion, checked to parse to the same stack with the override, or nothing is
-+  written. It keeps the file's mode, writes atomically, and refuses a `stack.yaml` that
-+  is a link, has other names (hard links), belongs to another user, or is written as one
-+  `{ … }` block, giving the line to add instead. With `managed_by: external` it writes
++  written. It keeps the file's mode and group (not an ACL), writes atomically, and
++  refuses a `stack.yaml` that is a link, has other names (hard links), belongs to another
++  user or to a group its user isn't in, or is written as one `{ … }` block, giving the
++  line to add instead. With `managed_by: external` it writes
 +  nothing and gives that line (the rest of externally managed mode is Slice 10). It never
 +  keeps a secret, a value that holds one, or one it can't read. It then records the value
 +  as applied, or forgets the resource's record, so drift is clear and `apply` has nothing
@@ -8810,7 +10995,7 @@ index 1dcb888..6c8ffa3 100644
 
 ```diff
 diff --git a/docs/plans/m1-roadmap.md b/docs/plans/m1-roadmap.md
-index 255dd28..b1f7f05 100644
+index 255dd28..e4bbb19 100644
 --- a/docs/plans/m1-roadmap.md
 +++ b/docs/plans/m1-roadmap.md
 @@ -25,2 +25,3 @@ Detailed plans so far:
@@ -8842,25 +11027,33 @@ index 255dd28..b1f7f05 100644
 +- from S8: FlareSolverr's anonymous volume, and a wiring network whose settings change
 +  with an update.
  
-@@ -83,3 +86,6 @@ leaves the stack running.
+@@ -83,3 +86,14 @@ leaves the stack running.
  - externally managed mode, name-based re-adoption, key recovery from appdata, and
 -  shared-key propagation;
 +  shared-key propagation, with restoring a key at its source (S8 reports a shared key
 +  changed at its source);
 +- removing what Mediaplane made when its app leaves the stack (S8 reports it), and
 +  signing a setup in again: Seerr with a new Plex token, or another Jellyfin key;
++- each S8 item below marked "Moved to S10": restoring the keys of installs from before
++  S3a, Jellyfin's key deleted by hand, rotating the admin password, every setup getting
++  every stored key, the setups' contract leftovers, the fake Seerr's `/auth/me`, a failed
++  first-run setup stopping all wiring, and asking Seerr rather than reading its
++  `settings.json`;
++- in externally managed mode, `keep`'s line to add, as a field of `mediaplane.keep/v1`
++  rather than only an error's hint (S8 gives it in the hint);
++- `plan --help` and `drift --help` pointing at the published docs, not a repo path;
  - a contract for automation: the `--json` output shapes pinned and in the generated
-@@ -254,3 +260,4 @@ added an S9 item and changed one, and its final review an S8 item and an S9 item
+@@ -254,3 +268,4 @@ added an S9 item and changed one, and its final review an S8 item and an S9 item
  (2026-10-16) marked the S7 items done, and added five S8 items and three S9 items, and
 -its conflict check an S9 item. Each
 +its conflict check an S9 item. Slice 8 (2026-10-25) settled each S8 item: built, decided,
 +or moved with its reason, as each says. Each
  slice plan must address the items for that slice.
-@@ -524,2 +531,3 @@ password, which are S3c's (and listed again below).
+@@ -524,2 +539,3 @@ password, which are S3c's (and listed again below).
    - **Seerr's key checked twice per apply:** check it once.
 +  - **Done in S8:** each of the five, as the items below say.
  - **Seerr keeps the Plex token it signed in with** (S7). After `plex-login` saves a new
-@@ -529,4 +537,10 @@ password, which are S3c's (and listed again below).
+@@ -529,4 +545,10 @@ password, which are S3c's (and listed again below).
    needs the setup's care: never to a Seerr that isn't Mediaplane's).
 +  - **Moved to S10:** giving Seerr a new token means signing Seerr in again, which needs
 +    the setup's care and plex.tv, with the recovery of a key that changed. Drift can't
@@ -8871,80 +11064,84 @@ index 255dd28..b1f7f05 100644
 +    left; the new token reaches them once Plex refuses the old one. Moving them to it is
 +    rotation, with S10.
  - **Plex's libraries are known by name** (S7), as Jellyfin's are: one renamed by hand
-@@ -535,2 +549,5 @@ password, which are S3c's (and listed again below).
+@@ -535,2 +557,5 @@ password, which are S3c's (and listed again below).
    Keep mine must cover `location`.
 +  - **Done in S8:** found by Plex's key while `resources.json` has it, so a renamed
 +    one is drift on its name, which `apply` puts back; `location` can be kept; the name
 +    is fixed; and no library is made on a folder another of Plex's holds.
  - **Plex's devices grow** (S7): each arr's first test of its connection to Plex lists
-@@ -538,2 +555,4 @@ password, which are S3c's (and listed again below).
+@@ -538,2 +563,4 @@ password, which are S3c's (and listed again below).
    reports old ones.
 +  - **Decided in S8:** not reported. Plex's devices aren't Mediaplane's to manage, and
 +    an arr's later tests add none: only its first, or one after Plex is made anew.
  - **A Plex claimed by another account stays unpublished on every `apply`** (S7), with
-@@ -541,2 +560,6 @@ password, which are S3c's (and listed again below).
+@@ -541,2 +568,6 @@ password, which are S3c's (and listed again below).
    settings were removed by hand while it runs, which then looks unclaimed to it.
 +  - **Decided in S8:** drift reports what `plan` reports when Plex refuses your token
 +    (`key` drift); `plan` lists Plex's setup when its file holds no `PlexOnlineToken`.
 +    A Plex unclaimed while it runs was not probed in S8; claiming it again is recovery:
 +    S10.
  - **Every setup gets every stored key** (S7): `BootstrapContext.keys` holds each app's,
-@@ -544,2 +567,3 @@ password, which are S3c's (and listed again below).
+@@ -544,2 +575,3 @@ password, which are S3c's (and listed again below).
    give or to the Plex token alone, when S8 changes the setups for signing in again.
 +  - **Moved to S10:** S8 changes no setup; S10 signs setups in again.
  - **The setups' contract has leftovers** (S7): `Bootstrap.firstStart`'s `stack` is
-@@ -548,2 +572,3 @@ password, which are S3c's (and listed again below).
+@@ -548,2 +580,3 @@ password, which are S3c's (and listed again below).
    `mediaplane.credentials/v1` has it, but say it is for later slices.
 +  - **Moved to S10,** with the setups, for the same reason.
  - **The fake Seerr's `/auth/me` answers a session that isn't its admin's** with the
-@@ -551,2 +576,3 @@ password, which are S3c's (and listed again below).
+@@ -551,2 +584,3 @@ password, which are S3c's (and listed again below).
    yet. Fix the fake when signing Seerr in again reads sessions.
 +  - **Moved to S10,** with signing Seerr in again.
  
-@@ -554,2 +580,4 @@ password, which are S3c's (and listed again below).
+@@ -554,2 +588,4 @@ password, which are S3c's (and listed again below).
    match them exactly.
 +  - **Done in S8:** `plan` refuses a key that names no managed field, with the closest
 +    name, whatever its case.
  - **A root folder whose path changes.** Sonarr and Radarr can't move a root folder, so a
-@@ -557,2 +585,5 @@ password, which are S3c's (and listed again below).
+@@ -557,2 +593,5 @@ password, which are S3c's (and listed again below).
    library (S3c). Decide what drift and Keep mine do with the old one.
 +  - **Done in S8:** a root folder's path is fixed: an override or Keep mine of it is
 +    refused, saying to move the library in the arr, then make the root folder
 +    `unmanaged`.
  - **A root folder whose folder was deleted.** Mediaplane makes a root folder's folder
-@@ -562,2 +593,4 @@ password, which are S3c's (and listed again below).
+@@ -562,2 +601,4 @@ password, which are S3c's (and listed again below).
    `apply` makes the folder again.
 +  - **Done in S8:** the new managed field `accessible`: drift reports it, and `apply`
 +    makes the folder again.
  - **qBittorrent's sign-in ban.** qBittorrent bans an address from signing in for an hour
-@@ -568,2 +601,4 @@ password, which are S3c's (and listed again below).
+@@ -568,2 +609,4 @@ password, which are S3c's (and listed again below).
    the password less often, or not at all while it differs.
 +  - **Done in S8,** as the owner decided: once drift finds the password refused,
 +    neither drift nor `plan` signs in again until `apply` sets it.
  - **`plan` can make a post-import category in qBittorrent.** The arr's own test, which
-@@ -575,2 +610,5 @@ password, which are S3c's (and listed again below).
+@@ -575,2 +618,6 @@ password, which are S3c's (and listed again below).
    test while that category is missing.
-+  - **Done in S8,** as the owner decided, and for the client's own category too, kept
-+    as another or no longer managed: `plan` and drift leave the key unchecked while
-+    qBittorrent lacks one.
++  - **Done in S8,** as the owner decided, and for the client's own category too, once
++    qBittorrent's is no longer managed and deleted: `plan` and drift leave the key
++    unchecked while qBittorrent lacks one, and say what clears it. A category the client
++    is kept with is qBittorrent's to have, so `apply` makes it.
  - **Settings Mediaplane manages in qBittorrent are put back.** A whitelist, a save path
-@@ -578,4 +616,7 @@ password, which are S3c's (and listed again below).
+@@ -578,4 +625,10 @@ password, which are S3c's (and listed again below).
    (S3c). Keep mine must cover them, with the arrs' download clients and root folders.
-+  - **Done in S8:** drift reports each, and `mediaplane keep` keeps it, as for every
-+    managed field.
++  - **Done in S8:** drift reports each, and `mediaplane keep` keeps a whitelist, a save
++    path, a category's path, and a download client's category, which qBittorrent's
++    category then follows. A root folder's fields are fixed: one deleted is kept as
++    `unmanaged`. A download client's host, port and TLS are fixed too: they say where its
++    key goes.
  - **Appdata ownership is checked only on change.** Apply checks it only when
    something else changes, and never re-checks it for apps that are running.
 +  - **Moved to M2 (`doctor`):** it is the host's state, not a change in an app.
  - **An override can move an appdata mount.** When `compose.override.yaml`
-@@ -585,2 +626,3 @@ password, which are S3c's (and listed again below).
+@@ -585,2 +638,3 @@ password, which are S3c's (and listed again below).
    it.
 +  - **Moved to M2 (`doctor`),** for the same reason.
  - **Installs from before Slice 3a.** `plan` reports a `config.xml` without `ApiKey`,
-@@ -590,2 +632,3 @@ password, which are S3c's (and listed again below).
+@@ -590,2 +644,3 @@ password, which are S3c's (and listed again below).
    the key at the source", spec §6.3).
 +  - **Moved to S10 on 2026-10-25,** with restoring a key at its source.
  - **FlareSolverr's anonymous volume.** Its image declares `VOLUME /config`, and the
-@@ -594,4 +637,7 @@ password, which are S3c's (and listed again below).
+@@ -594,4 +649,7 @@ password, which are S3c's (and listed again below).
    remove them with `down -v` since S3a.)
 +  - **Moved to S9:** each recreate leaves one, and recreates come with updates. Mounting
 +    a folder there needs the image's user probed first.
@@ -8952,109 +11149,111 @@ index 255dd28..b1f7f05 100644
    yet. Add one, which reaches every app through its API.
 +  - **Moved to S10 on 2026-10-25.**
  - **A wiring network whose settings change.** Compose must make it anew then, and
-@@ -599,2 +645,3 @@ password, which are S3c's (and listed again below).
+@@ -599,2 +657,3 @@ password, which are S3c's (and listed again below).
    gives the steps by hand. Decide whether Mediaplane should do them.
 +  - **Moved to S9:** its settings change only with Mediaplane's own updates.
  - **The `partial` outcome.** Spec §5 step 12 names `success`, `partial` and `failed`.
-@@ -602,2 +649,4 @@ password, which are S3c's (and listed again below).
+@@ -602,2 +661,4 @@ password, which are S3c's (and listed again below).
    re-apply needs `partial`.
 +  - **Decided in S8:** not needed. Re-apply is `apply`, and `failed`, with each
 +    resource's result, says what is left; `partial` stays unused.
  - **Links to an app that leaves the stack.** Remove Sonarr or Radarr from `stack.yaml`,
-@@ -608,2 +657,5 @@ password, which are S3c's (and listed again below).
+@@ -608,2 +669,5 @@ password, which are S3c's (and listed again below).
    whether `apply` removes what it made, or drift reports it.
 +  - **Done in S8:** drift reports each as still in the app, and `mediaplane keep
 +    <app>.<resource>` stops it. **Moved to S10:** removing them, which needs a delete
 +    for every kind of resource, and its own end-to-end test (spec §8.1(3) step 4).
  - **Settings Mediaplane manages in Prowlarr are put back.** A link's addresses, sync
-@@ -611,2 +663,3 @@ password, which are S3c's (and listed again below).
+@@ -611,2 +675,5 @@ password, which are S3c's (and listed again below).
    UI, are undone by the next `apply` (S4). Keep mine must cover them.
-+  - **Done in S8:** Keep mine covers them, the proxy's tags too.
++  - **Done in S8:** Keep mine covers the sync level, categories, the proxy's timeout and
++    tags. The links' addresses and the proxy's host are fixed: they say where a key, or
++    your indexers' requests, go.
  - **Mediaplane never tests the indexer proxy.** It holds no secret, so `plan` sends no
-@@ -617,2 +670,4 @@ password, which are S3c's (and listed again below).
+@@ -617,2 +684,4 @@ password, which are S3c's (and listed again below).
      could read `GET /api/v1/health` instead of running a test.
 +  - **Done in S8:** Prowlarr's own health check does test it, every six hours (probed):
 +    drift reads it, and never tests the proxy.
  - **`plan`'s key checks can record a failing status in the app; drift runs them on a
-@@ -626,2 +681,5 @@ password, which are S3c's (and listed again below).
+@@ -626,2 +695,5 @@ password, which are S3c's (and listed again below).
      to that arr and raise a health warning. S4's probe saw only escalation 1.
 +  - **Done in S8:** probed: escalation stays at 1, and once the first failure is five
 +    minutes old, each failing test disables the client for a minute. Drift and `plan`
 +    test no more a secret drift found refused, as the owner decided.
  - **The shared provider schema doesn't check `enable` is a boolean** (S4). A download
-@@ -630,2 +688,3 @@ password, which are S3c's (and listed again below).
+@@ -630,2 +702,3 @@ password, which are S3c's (and listed again below).
    for every managed field.
 +  - **Done in S8:** a field of another type is reported as one Mediaplane can't read.
  - **Categories or tags in an unexpected shape read as empty** (S4, as S3c's code), so
-@@ -633,2 +692,3 @@ password, which are S3c's (and listed again below).
+@@ -633,2 +706,3 @@ password, which are S3c's (and listed again below).
    can't read.
 +  - **Done in S8:** reported as a value Mediaplane can't read, never as empty.
  - **Jellyfin's key, deleted by hand,** shuts Mediaplane out of Jellyfin (S5): `plan`
-@@ -638,2 +698,4 @@ password, which are S3c's (and listed again below).
+@@ -638,2 +712,4 @@ password, which are S3c's (and listed again below).
    take it.
 +  - **Moved to S10 on 2026-10-25,** with key recovery. Drift reports it, as Jellyfin
 +    refusing its key.
  - **Checking Jellyfin's admin password signs in** (S5), and Jellyfin's activity log keeps
-@@ -641,2 +703,4 @@ password, which are S3c's (and listed again below).
+@@ -641,2 +717,4 @@ password, which are S3c's (and listed again below).
    Decide whether drift checks it less often.
 +  - **Done in S8,** as the owner decided: drift checks it once a day at most, while it
 +    passes.
  - **Jellyfin's libraries are known by name** (S5). A library renamed by hand is left
-@@ -645,2 +709,4 @@ password, which are S3c's (and listed again below).
+@@ -645,2 +723,4 @@ password, which are S3c's (and listed again below).
    added to them by hand is put back: Keep mine must cover `paths`.
 +  - **Done in S8:** a renamed one is reported deleted; `apply` refuses to make it again
 +    on the folder the renamed one holds, saying what to do; `paths` can be kept.
  - **The triggers of an arr's connection to Jellyfin are the user's** after it is made
-@@ -648,2 +714,4 @@ password, which are S3c's (and listed again below).
+@@ -648,2 +728,4 @@ password, which are S3c's (and listed again below).
    and tells Jellyfin of nothing. Decide whether drift reports it.
 +  - **Decided in S8:** not reported: they are yours (spec §6.2), and reporting them would
 +    be managing them.
  - **A Jellyfin whose appdata Mediaplane can't read** (S5) is taken as set up when its key
-@@ -651,2 +719,4 @@ password, which are S3c's (and listed again below).
+@@ -651,2 +733,4 @@ password, which are S3c's (and listed again below).
    (`bootstrap.unreadable`). Decide whether drift should also report it.
 +  - **Decided in S8:** drift runs `plan`'s checks of the setups, so it warns
 +    (`bootstrap.unreadable`) as `plan` does.
  - **A failed first-run setup stops all wiring** (S5): the bootstrap step's failure skips
-@@ -656,2 +726,3 @@ password, which are S3c's (and listed again below).
+@@ -656,2 +740,3 @@ password, which are S3c's (and listed again below).
    app's resources are skipped; a failed one still stops the wiring.
 +  - **Moved to S10:** it changes apply's steps, not drift.
  - **Seerr's checks log a line when they fail** (S6, probed): Seerr's own test of a
-@@ -660,2 +731,4 @@ password, which are S3c's (and listed again below).
+@@ -660,2 +745,4 @@ password, which are S3c's (and listed again below).
    run them.
 +  - **Done in S8:** probed again, one line each, with no throttling; drift checks no
 +    more a secret it found refused.
  - **Seerr's Jellyfin key is checked twice in one `apply`** (S6): once as the
-@@ -663,2 +736,4 @@ password, which are S3c's (and listed again below).
+@@ -663,2 +750,4 @@ password, which are S3c's (and listed again below).
    writes a second error line in Seerr's log. Check it once, with the item above.
 +  - **Done in S8,** as the owner decided: the update is told the key was refused, and
 +    doesn't check it again.
  - **Seerr keeps its own Jellyfin key** (S6): the one its first sign-in made, named
-@@ -668,2 +743,4 @@ password, which are S3c's (and listed again below).
+@@ -668,2 +757,4 @@ password, which are S3c's (and listed again below).
    whether drift should replace it, and remove the one Seerr made.
 +  - **Decided in S8:** drift never writes to an app. Replacing it is rotation: moved to
 +    S10.
  - **A Seerr whose `settings.json` Mediaplane can't read** is set up again, unpublished,
-@@ -672,2 +749,4 @@ password, which are S3c's (and listed again below).
+@@ -672,2 +763,4 @@ password, which are S3c's (and listed again below).
    it, or asks Seerr over the wiring network instead.
 +  - **Decided in S8:** drift warns as `plan` does. Asking Seerr over the wiring network
 +    instead changes its setup: moved to S10.
  - **Seerr's libraries are enabled by name, from Seerr's last sync** (S6). A library made
-@@ -675,2 +754,4 @@ password, which are S3c's (and listed again below).
+@@ -675,2 +768,4 @@ password, which are S3c's (and listed again below).
    only when the libraries differ. Decide whether drift syncs them, which writes to Seerr.
 +  - **Decided in S8:** drift doesn't sync them, which would write to Seerr; `apply` syncs
 +    them when the libraries differ, or Jellyfin moves.
  - **Seerr's servers are its default** (S6): making `Sonarr (Mediaplane)` the default
-@@ -678,2 +759,4 @@ password, which are S3c's (and listed again below).
+@@ -678,2 +773,4 @@ password, which are S3c's (and listed again below).
    Keep mine must cover the servers' fields, and Seerr's libraries.
-+  - **Done in S8:** Keep mine covers the servers' fields, `isDefault` included, and
-+    Seerr's libraries.
++  - **Done in S8:** Keep mine covers the servers' profile, folder and `isDefault`, and
++    Seerr's libraries. Their host and port are fixed: they say where a key goes.
  - **A folder with a comma in its name, added by hand to a Jellyfin library** (S5), is
-@@ -682,2 +765,4 @@ password, which are S3c's (and listed again below).
+@@ -682,2 +779,4 @@ password, which are S3c's (and listed again below).
    `Locations` in `update`, with Keep mine's change to how `paths` is held.
 +  - **Done in S8:** the update reads Jellyfin's folders whole; drift reports such a
 +    folder as one it can't list, and Keep mine refuses it.
  
-@@ -796,2 +881,8 @@ password, which are S3c's (and listed again below).
+@@ -796,2 +895,8 @@ password, which are S3c's (and listed again below).
  
 +- **From S8, for `doctor`:** appdata ownership, checked only when something else changes,
 +  and an override that moves an appdata mount, which leaves the pre-start files where the
@@ -9068,13 +11267,13 @@ index 255dd28..b1f7f05 100644
 - [ ] **Step 6: Check the docs rules, and commit**
 
 ```bash
-grep -rnE "Slice 8|S8 \(drift" README.md catalog/*/README.md deploy/README.md docs/architecture.md docs/security docs/runbooks | grep -vE "including Slice 8\.|and S8 \(drift\)\."
+grep -rnE 'Slice 8 (does|adds|automates|decides|restores)|comes in Slice 8|\(Slice 8( adds|\))|\*\*Slice 8:\*\*|S8 \(drift detection\)' README.md catalog/*/README.md deploy/README.md docs/architecture.md docs/security docs/runbooks docs/design
 pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check
 git add README.md catalog deploy/README.md docs
 git commit -m "docs: drift and Keep mine in the drift reported runbook, ADR 0003, the architecture, the threat model, the READMEs, the spec and the roadmap" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Expected: the `grep` prints nothing. The check passes (2056 tests pass in 93 files). Every
+Expected: the `grep` prints nothing. The check passes (2080 tests pass in 93 files). Every
 `text` block in the changed docs is at most 40 columns wide.
 
 ## Slice 8 completion checklist
@@ -9083,33 +11282,39 @@ Expected: the `grep` prints nothing. The check passes (2056 tests pass in 93 fil
   sudo modprobe wireguard`), this passes:
   `pnpm format && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm docs:check && pnpm test:e2e`.
   Coverage stays at or above 90% on lines, functions, branches and statements. When this
-  plan was replayed: 98.27% statements, 92.96% branches, 98.43% functions and 99.4% lines, with 2056 tests in 93 files.
+  plan was replayed: 98.31% statements, 93.01% branches, 98.43% functions and 99.43% lines, with 2080 tests in 93 files.
 - [ ] `pnpm test:e2e` passes with Compose 2.38.2 as the host plugin too, and leaves no
   `mediaplane-e2e-*` container or network, no new volume, and no `mediaplane-e2e-*`
   folder. When this plan was replayed, alone on the dev box, warm, without the plex.tv
   token (so the nightly test was skipped):
-  - with Compose 5.5.1, 27 tests passed and 1 skipped in 11 files, in 14 min 38 s;
-  - with Compose 2.38.2, 27 passed and 1 skipped, in 15 min 21 s.
+  - with Compose 5.5.1, 27 tests passed and 1 skipped in 11 files, in 14 min 47 s;
+  - with Compose 2.38.2, 27 passed and 1 skipped, in 15 min 26 s.
 
   CI's e2e job allows 60 minutes, so `ci.yml` keeps its timeout.
 - [ ] Success criterion 4 holds on the real apps: the drift end-to-end test sees `drift`
-  report each change made through an app's API with what was applied and what the app
-  holds, `apply` put each back, `keep` record three of them, `drift` clear, and two
-  `apply`s change nothing (criterion 3).
+  report each change made through an app's API with what `apply` sets and what the app
+  holds, `apply` put each back, `keep` record three of them, `apply` make the kept
+  category in qBittorrent, `drift` clear, and the next `apply` change nothing
+  (criterion 3).
 - [ ] Drift writes to no app: its unit tests send no write to the fakes but the checks'
   own, the CLI test sees one qBittorrent sign-in and one Jellyfin sign-in over six
   `drift`s, and the download client's test isn't sent while qBittorrent lacks a category
-  it names. Its one write is `checks` in `state/resources.json`.
+  it names, or can't be asked. Its one write is `checks` in `state/resources.json`.
+- [ ] Keys go only to the stack's own addresses: `catalog.test.ts` refuses an override of
+  each field that says where a key goes, and each key-carrying resource's tests send its
+  key to the stack's address whatever an override or the app holds (ruling B1).
 - [ ] No secret shows: the tests that check it pass (drift's and keep's output and JSON,
   `state/resources.json`, `stack.yaml`, the restoring `apply`'s result); an app's value
-  holding a secret is shown with `***` and refused by `keep`.
+  holding a secret is shown with `***` and refused by `keep`, and `unreadable` is
+  redacted too.
 - [ ] `keep` keeps `stack.yaml` as it was but for its line: the writer's tests on the spec's
   own example (comments lined up after values), `init`'s starter, CRLF line ends, a file
   without a last line end, flow and block `overrides:`, and the end-to-end test's file
-  with comments; and it refuses a link, a file with other names, one of another user, a
-  `{ … }` file and `managed_by: external`, giving the line to add.
+  with comments; it keeps the file's mode and group; and it refuses a link, a file with
+  other names, one of another user or another group, a `{ … }` file and
+  `managed_by: external`, giving the line to add.
 - [ ] The socket proxy's allow-list is unchanged: `git diff 3439f9d --
-  deploy/mediaplane.compose.yaml deploy/deploy.test.ts` prints nothing (decision 22).
+  deploy/mediaplane.compose.yaml deploy/deploy.test.ts` prints nothing (decision 24).
   `3439f9d` is `main` before this slice.
 - [ ] No committed file contains a real path, user name, host name, address or token:
   `git grep -n -i -e cyclopsgd -e '/home/' -- ':!docs/plans'` prints nothing but the
@@ -9125,9 +11330,12 @@ Expected: the `grep` prints nothing. The check passes (2056 tests pass in 93 fil
     (`drift`'s exit code 2 for anything it couldn't check), 3 (`checks` in
     `state/resources.json`, drift's one write), 4 (`plan` too takes a secret drift found
     refused as refused), 6 (the owner's post-import decision widened to the client's own
-    category), 9 (fixed fields, and a renamed library made `unmanaged` to keep it), 12
-    (keep's textual insertion, and its refusals), 13 (shared keys reported, repaired in
-    S10), 15 (Prowlarr's health read, as a warning) and 21 (the end-to-end test);
+    category), 7 (a kept category is qBittorrent's to have), 9 and 10 (fixed fields, and
+    keys only to the stack's own addresses), 13 (keep's textual insertion, its refusals,
+    and what it asks), 14 (shared keys reported, repaired in S10), 17 (Prowlarr's health
+    read, as a warning) and 23 (the end-to-end test);
   - for the owner: after upgrading, the first `plan` shows each root folder as `adopt`,
-    changing nothing (decision 10); a `stack.yaml` written as one `{ … }` block, or with
-    a key written `? key`, can't be written by `keep`, which gives the line to add.
+    changing nothing (decision 11); keeping a download client's category makes `plan`
+    show qBittorrent's category to make, and drift waits for it (decision 7); a
+    `stack.yaml` written as one `{ … }` block, or with a key written `? key`, can't be
+    written by `keep`, which gives the line to add.
