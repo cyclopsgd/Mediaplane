@@ -1,4 +1,14 @@
-import { readdir, readFile, rename, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  chown,
+  link,
+  readdir,
+  readFile,
+  rename,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Catalog } from './catalog/types';
@@ -9,7 +19,7 @@ import { LOCK_PATH, RESOURCES_PATH } from './paths';
 import { plan } from './plan/plan';
 import type { Runtime } from './runtime/types';
 import { fakeProbe, fakeRuntime } from './testing/fakes';
-import { FIXTURE_HOST } from './testing/fixtures';
+import { FIXTURE_API, FIXTURE_HOST } from './testing/fixtures';
 import { wiredHome, wiredRuntime } from './testing/home';
 import { tempDir } from './testing/temp';
 import { FAKE_LOGIN, fakeSonarr, WIRED_CATALOG } from './testing/wiring';
@@ -47,6 +57,12 @@ function home(stack = STACK): Promise<string> {
 }
 
 const runtimeFor = wiredRuntime;
+
+/** One of this user's groups other than its own, if it has one. */
+function otherGroup(): number | undefined {
+  const own = process.getgid?.();
+  return (process.getgroups?.() ?? []).find((group) => group !== own);
+}
 
 type Fake = Awaited<ReturnType<typeof fakeSonarr>>;
 
@@ -307,6 +323,139 @@ describe('keep', () => {
       message:
         "Mediaplane won't write stack.yaml: its top level is not a YAML block of keys, one per line",
       hint: line,
+    });
+  });
+
+  it('gives the line to add when stack.yaml has other names, or the write itself fails', async () => {
+    const line =
+      'add this line under overrides: in stack.yaml yourself: sonarr.login.user: someone';
+    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+    const linked = await home();
+    await link(join(linked, 'stack.yaml'), join(linked, 'other.yaml'));
+    expect(
+      (await keep(options(linked, sonarr, 'sonarr.login.user'))).diagnostics[0],
+    ).toMatchObject({
+      code: 'keep.stack-file',
+      message:
+        "Mediaplane won't write stack.yaml: it has other names (hard links), which a rewrite would part from it",
+      hint: line,
+    });
+    // A home it can't write in: the new stack.yaml can't be put in place.
+    if (process.getuid?.() === 0) return;
+    const shut = await home();
+    await chmod(shut, 0o555);
+    try {
+      const result = await keep(options(shut, sonarr, 'sonarr.login.user'));
+      expect(result).toMatchObject({ ok: false, value: undefined });
+      expect(result.diagnostics[0]).toMatchObject({
+        code: 'keep.stack-file',
+        message: `Mediaplane couldn't write stack.yaml: cannot write ${join(shut, 'stack.yaml')} (EACCES)`,
+        hint: line,
+      });
+    } finally {
+      await chmod(shut, 0o755);
+    }
+    expect(await readFile(join(shut, 'stack.yaml'), 'utf8')).toBe(STACK);
+  });
+
+  it.skipIf(otherGroup() === undefined)(
+    "keeps stack.yaml's group, one of its user's others (skipped where the user has one group)",
+    async () => {
+      const group = otherGroup() ?? 0;
+      const dir = await home();
+      await chown(join(dir, 'stack.yaml'), -1, group);
+      const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+      expect((await keep(options(dir, sonarr, 'sonarr.login.user'))).ok).toBe(true);
+      expect((await stat(join(dir, 'stack.yaml'))).gid).toBe(group);
+    },
+  );
+
+  it('checks again what stack.yaml says, in the file it writes', async () => {
+    // Handed to automation while keep looked at the app: it writes nothing then.
+    const dir = await home();
+    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+    const runtime = runtimeFor(sonarr.addresses);
+    const handing: Runtime = {
+      ...runtime,
+      wiringAddresses: async (ids) => {
+        await writeFile(join(dir, 'stack.yaml'), `${STACK}managed_by: external\n`);
+        return runtime.wiringAddresses(ids);
+      },
+    };
+    const result = await keep(
+      options(dir, sonarr, 'sonarr.login.user', { runtime: handing }),
+    );
+    expect(codes(result)).toEqual(['keep.external']);
+    expect(await readFile(join(dir, 'stack.yaml'), 'utf8')).toBe(
+      `${STACK}managed_by: external\n`,
+    );
+  });
+
+  it('refuses a value that could make stack.yaml show what it does not hold', async () => {
+    const dir = await home();
+    for (const odd of ['some\u2028one', 'some\u202eone', 'some\tone', 'some\u0085one']) {
+      const sonarr = await fakeSonarr({ key: KEY, user: odd, password: PASSWORD });
+      const result = await keep(options(dir, sonarr, 'sonarr.login.user'));
+      expect(result.diagnostics, JSON.stringify(odd)).toEqual([
+        expect.objectContaining({
+          code: 'keep.value',
+          message: expect.stringContaining(
+            'a control character, a line or paragraph separator, or one that turns the direction of text',
+          ) as string,
+        }),
+      ]);
+    }
+    expect(await readFile(join(dir, 'stack.yaml'), 'utf8')).toBe(STACK);
+  });
+
+  it('asks no app but the one that holds what it keeps', async () => {
+    const catalog: Catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'qbittorrent'
+        ? {
+            ...def,
+            api: FIXTURE_API,
+            integration: { after: [], resources: [FAKE_LOGIN] },
+          }
+        : def,
+    );
+    const dir = await home();
+    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+    const both = { ...sonarr.addresses, 'fake-qbittorrent': '127.0.0.1' };
+    const kept = await keep(
+      options(dir, sonarr, 'sonarr.login.user', {
+        catalog,
+        runtime: runtimeFor(both),
+      }),
+    );
+    expect(kept.ok).toBe(true);
+    expect(
+      sonarr.app.requests.filter((r) => (r.headers.host ?? '').startsWith('qbittorrent')),
+    ).toEqual([]);
+  });
+
+  it("says it couldn't look at a resource left in an app that isn't running", async () => {
+    const gone: ResourceSpec = { ...FAKE_LOGIN, name: 'gone', desired: () => undefined };
+    const catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr'
+        ? { ...def, integration: { after: [], resources: [FAKE_LOGIN, gone] } }
+        : def,
+    );
+    const dir = await home();
+    await writeResources(dir, {
+      'sonarr.login': RECORD,
+      'sonarr.gone': { ...RECORD, name: 'gone' },
+    });
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const result = await keep(
+      options(dir, sonarr, 'sonarr.gone', {
+        catalog,
+        runtime: fakeRuntime({ hashes: { ok: true, hashes: {} } }),
+      }),
+    );
+    expect(result.diagnostics[0]).toMatchObject({
+      code: 'keep.no-drift',
+      message:
+        "sonarr.gone has not changed outside Mediaplane: Mediaplane couldn't look at it: its app isn't running and healthy",
     });
   });
 

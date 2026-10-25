@@ -1,42 +1,72 @@
 import { randomBytes } from 'node:crypto';
-import { chmod, chown, link, mkdir, open, rename, rm } from 'node:fs/promises';
+import { chmod, link, lstat, mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { codeOf } from './error-code';
+
+/** What writeFileAtomic keeps of the file it replaces, beyond its mode. */
+export interface AtomicOptions {
+  /** The group the new file has (the old file's, say), or nothing is replaced. */
+  group?: number;
+  /**
+   * The file `path` must still be, by its device and inode, when the new one is put in
+   * its place (the one read): one put there meanwhile isn't replaced.
+   */
+  replaces?: { dev: number; ino: number };
+}
+
+/** `path` is no longer the file it was meant to replace. */
+class Replaced extends Error {}
 
 /**
  * Replace `path` with `content` all at once: write a temporary file next to it, flush it
  * to disk, then rename it over the original. Readers see the old file or the new one,
- * never half of either. With `group`, the new file has that group (the old file's, say),
- * or nothing is replaced. An ACL or extended attribute of the old file isn't kept.
+ * never half of either. With `group`, the new file has that group, or nothing is
+ * replaced; it is changed only when it differs, as some filesystems refuse any change of
+ * group. With `replaces`, nothing is replaced unless `path` is still that file. An ACL or
+ * extended attribute of the old file isn't kept.
  */
 export async function writeFileAtomic(
   path: string,
   content: string,
   mode = 0o644,
-  group?: number,
+  options: AtomicOptions = {},
 ): Promise<void> {
+  const { group, replaces } = options;
   const temp = `${path}.tmp-${String(process.pid)}-${randomBytes(4).toString('hex')}`;
   try {
     await mkdir(dirname(path), { recursive: true });
     const file = await open(temp, 'wx', mode);
     try {
       await file.writeFile(content, 'utf8');
+      // The group first: a change of group can clear set-id bits, which the mode sets.
+      // -1 leaves the owner as it is: the user running Mediaplane.
+      if (group !== undefined && (await file.stat()).gid !== group) {
+        await file.chown(-1, group);
+      }
+      // open()'s mode is filtered by the umask; set the one we mean.
+      await file.chmod(mode);
       await file.sync();
     } finally {
       await file.close();
     }
-    // open()'s mode is filtered by the umask; set the one we mean.
-    await chmod(temp, mode);
-    // -1 leaves the owner as it is: the user running Mediaplane.
-    if (group !== undefined) await chown(temp, -1, group);
+    if (replaces !== undefined) {
+      const now = await lstat(path).catch(() => undefined);
+      if (now?.dev !== replaces.dev || now.ino !== replaces.ino) {
+        throw new Replaced('another file was put in its place meanwhile');
+      }
+    }
     await rename(temp, path);
   } catch (cause) {
     // Best effort: a cleanup failure (say ENOTDIR) must not hide the error that matters.
     await rm(temp, { force: true }).catch(() => undefined);
     const code = codeOf(cause);
-    throw new Error(`cannot write ${path}${code === undefined ? '' : ` (${code})`}`, {
-      cause,
-    });
+    const why =
+      cause instanceof Replaced
+        ? `: ${cause.message}`
+        : code === undefined
+          ? ''
+          : ` (${code})`;
+    throw new Error(`cannot write ${path}${why}`, { cause });
   }
 }
 

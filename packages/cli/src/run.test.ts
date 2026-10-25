@@ -1877,7 +1877,7 @@ describe('mediaplane keep', () => {
       ),
     ).toBe(0);
     expect(term.stdout()).toBe(
-      'Wrote sonarr.download_client.category: "television" under overrides: in stack.yaml. apply now leaves it as the app holds it, and drift no longer reports it.\n',
+      'Wrote sonarr.download_client.category: television under overrides: in stack.yaml. apply now leaves it as the app holds it, and drift no longer reports it.\n',
     );
     expect(await readFile(join(home, 'stack.yaml'), 'utf8')).toBe(
       `${before}overrides:\n  sonarr.download_client.category: television\n`,

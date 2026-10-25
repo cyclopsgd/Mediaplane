@@ -1,10 +1,21 @@
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rename,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ensureDir, writeFileAtomic, writeFileExclusive } from './atomic';
 import { tempDir } from '../testing/temp';
 
 const modeOf = async (path: string) => (await stat(path)).mode & 0o777;
+
+/** One of this user's groups other than its own, if it has one. */
+const otherGroup = (process.getgroups?.() ?? []).find((g) => g !== process.getgid?.());
 
 describe('writeFileAtomic', () => {
   it('writes the content with the exact mode, creating parent folders', async () => {
@@ -15,16 +26,63 @@ describe('writeFileAtomic', () => {
     expect(await modeOf(path)).toBe(0o600);
   });
 
-  it('gives the new file the group it is given', async () => {
+  it.skipIf(otherGroup === undefined)(
+    'gives the new file the group it is given (skipped where the user has one group)',
+    async () => {
+      const dir = await tempDir('mediaplane-atomic-');
+      const path = join(dir, 'stack.yaml');
+      await writeFile(path, 'old\n');
+      const group = otherGroup ?? 0;
+      expect((await stat(path)).gid).not.toBe(group);
+      await writeFileAtomic(path, 'new\n', 0o640, { group });
+      expect((await stat(path)).gid).toBe(group);
+      expect(await modeOf(path)).toBe(0o640);
+    },
+  );
+
+  it("changes no group that wouldn't change: some filesystems refuse any", async () => {
     const dir = await tempDir('mediaplane-atomic-');
     const path = join(dir, 'stack.yaml');
     await writeFile(path, 'old\n');
-    // One of this user's other groups, where there is one, else its own.
-    const own = process.getgid?.() ?? 0;
-    const group = (process.getgroups?.() ?? []).find((g) => g !== own) ?? own;
-    await writeFileAtomic(path, 'new\n', 0o640, group);
-    expect((await stat(path)).gid).toBe(group);
-    expect(await modeOf(path)).toBe(0o640);
+    const own = (await stat(path)).gid;
+    // Any change of group fails, as on a filesystem without them.
+    const handle = await open(path, 'r');
+    const proto = Object.getPrototypeOf(handle) as { chown: () => Promise<void> };
+    await handle.close();
+    const refusing = vi
+      .spyOn(proto, 'chown')
+      .mockRejectedValue(Object.assign(new Error('refused'), { code: 'EPERM' }));
+    try {
+      await writeFileAtomic(path, 'new\n', 0o640, { group: own });
+      expect(refusing).not.toHaveBeenCalled();
+      expect(await readFile(path, 'utf8')).toBe('new\n');
+      await expect(
+        writeFileAtomic(path, 'newer\n', 0o640, { group: own + 1 }),
+      ).rejects.toThrow(`cannot write ${path} (EPERM)`);
+      expect(await readFile(path, 'utf8')).toBe('new\n');
+    } finally {
+      refusing.mockRestore();
+    }
+  });
+
+  it('replaces only the file it is told to, by its identity', async () => {
+    const dir = await tempDir('mediaplane-atomic-');
+    const path = join(dir, 'stack.yaml');
+    await writeFile(path, 'old\n');
+    const { dev, ino } = await stat(path);
+    // Another file put in its place since it was read: left as it is.
+    await writeFile(join(dir, 'other.yaml'), 'other\n');
+    await rename(join(dir, 'other.yaml'), path);
+    await expect(
+      writeFileAtomic(path, 'new\n', 0o644, { replaces: { dev, ino } }),
+    ).rejects.toThrow(
+      `cannot write ${path}: another file was put in its place meanwhile`,
+    );
+    expect(await readFile(path, 'utf8')).toBe('other\n');
+    expect(await readdir(dir)).toEqual(['stack.yaml']);
+    const now = await stat(path);
+    await writeFileAtomic(path, 'new\n', 0o644, { replaces: now });
+    expect(await readFile(path, 'utf8')).toBe('new\n');
   });
 
   it('replaces an existing file and leaves no temporary file behind', async () => {

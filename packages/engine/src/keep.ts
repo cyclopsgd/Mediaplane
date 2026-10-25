@@ -1,6 +1,11 @@
-import { readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { overrideLine, stackFileProblem, withOverride } from './config/overrides-file';
+import { parseConfig } from './config/load';
+import {
+  overrideLine,
+  readStackFile,
+  valueProblem,
+  withOverride,
+} from './config/overrides-file';
 import { error, warning, type Diagnostic } from './diagnostics';
 import {
   isUnmanaged,
@@ -135,9 +140,20 @@ export async function keep(options: KeepOptions): Promise<KeepResult> {
         ),
       ]);
     }
-    const value: Scalar = field === undefined ? UNMANAGED : (found.actual ?? '');
-    // A value the field's own rule refuses, as plan would refuse it as an override.
-    const broken = field === undefined ? undefined : overrideRefused(spec, field, value);
+    // A value it holds none of is one it can't read, never an empty one.
+    const value = field === undefined ? UNMANAGED : found.actual;
+    if (value === undefined || value === null) {
+      return refused([
+        error('keep.unreadable', `${key} holds no value Mediaplane can read`, {
+          hint: `set it in ${def.name} to what you want, or run apply to put it back`,
+        }),
+      ]);
+    }
+    // A value the field's own rule refuses, as plan would refuse it as an override, or
+    // one that could make stack.yaml show what it doesn't hold.
+    const broken =
+      (field === undefined ? undefined : overrideRefused(spec, field, value)) ??
+      valueProblem(value);
     if (broken !== undefined) {
       return refused([
         error('keep.value', `${key} can't be kept as ${def.name} holds it: ${broken}`, {
@@ -145,32 +161,49 @@ export async function keep(options: KeepOptions): Promise<KeepResult> {
         }),
       ]);
     }
-    const line = overrideLine(key, value);
-    const byHand = `add this line under overrides: in stack.yaml yourself: ${line}`;
-    if (context.stack.config.managed_by === 'external') {
-      return refused([
+    // Quoted where `overrides: { … }` would need it, and right under a block one too.
+    const byHand = `add this line under overrides: in stack.yaml yourself: ${overrideLine(key, value, true)}`;
+    const external = () =>
+      refused([
         error(
           'keep.external',
           `stack.yaml is managed outside Mediaplane (managed_by: external), so Mediaplane doesn't write it`,
           { hint: `${byHand}, where it is kept, such as your playbook` },
         ),
       ]);
-    }
-    const problem = await stackFileProblem(stackPath);
-    const source = await readFile(stackPath, 'utf8');
-    const written = problem === undefined ? withOverride(source, key, value) : undefined;
-    if (written === undefined || !written.ok) {
+    if (context.stack.config.managed_by === 'external') return external();
+    const cannot = (why: string) =>
+      refused([error('keep.stack-file', why, { hint: byHand })]);
+    // Read once, through one handle, as it is checked: the file written is the one read.
+    const read = await readStackFile(stackPath);
+    if (!read.ok) return cannot(`Mediaplane won't write stack.yaml: ${read.reason}`);
+    const { file } = read;
+    // What the file says now, which may have changed since the plan read it.
+    const current = parseConfig(file.text);
+    if (current.ok && current.config.managed_by === 'external') return external();
+    if (current.ok && current.config.overrides[address] === UNMANAGED) {
       return refused([
         error(
-          'keep.stack-file',
-          `Mediaplane won't write stack.yaml: ${problem ?? (written?.ok === false ? written.reason : '')}`,
-          { hint: byHand },
+          'keep.unmanaged',
+          `${address} is not Mediaplane's to keep: stack.yaml says it is ${UNMANAGED}`,
         ),
       ]);
     }
-    // Its mode and group as they were (stackFileProblem refused a group it couldn't keep).
-    const held = await stat(stackPath);
-    await writeFileAtomic(stackPath, written.text, held.mode & 0o777, held.gid);
+    const written = withOverride(file.text, key, value);
+    if (!written.ok)
+      return cannot(`Mediaplane won't write stack.yaml: ${written.reason}`);
+    try {
+      // Its mode and group as they were (readStackFile refused a group it couldn't keep),
+      // and only in place of the file read.
+      await writeFileAtomic(stackPath, written.text, file.mode, {
+        group: file.gid,
+        replaces: { dev: file.dev, ino: file.ino },
+      });
+    } catch (cause) {
+      return cannot(
+        `Mediaplane couldn't write stack.yaml: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
     const diagnostics = [...result.diagnostics];
     try {
       // As applied now: drift is clear, and apply finds the resource as it should be.

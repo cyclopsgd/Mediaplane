@@ -1,5 +1,6 @@
 import {
   NONE_NEEDED,
+  overrideLine,
   unhealthyServices,
   WIRING_RUNBOOK,
   type ActionResult,
@@ -299,7 +300,7 @@ export function printKeep(result: KeepResult, options: { json: boolean }, io: Io
   io.stdout(
     result.value === 'unmanaged' && result.key.split('.').length === 2
       ? `Wrote ${result.key}: unmanaged under overrides: in stack.yaml. Mediaplane no longer manages it, and apply doesn't make it again.\n`
-      : `Wrote ${result.key}: ${JSON.stringify(result.value)} under overrides: in stack.yaml. apply now leaves it as the app holds it, and drift no longer reports it.\n`,
+      : `Wrote ${overrideLine(result.key, result.value)} under overrides: in stack.yaml. apply now leaves it as the app holds it, and drift no longer reports it.\n`,
   );
 }
 
