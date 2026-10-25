@@ -586,7 +586,7 @@ Controls today:
 
 What remains:
 
-- vpn-check runs only when you run it, or `apply` does. Alerts come in M3.
+- vpn-check runs only when you run it, or `apply` does. Alerts may come in M2.
 - The address comparison asks one IP-echo service; one that answers wrongly could hide a
   leak. The checks before it don't depend on that service.
 - vpn-check measures IPv4 only. An IPv6 egress check waits for Docker's IPv6 to be turned

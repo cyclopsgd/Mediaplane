@@ -766,5 +766,5 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
 - drift detection (Slice 8);
-- releases (Slice 9);
-- the web panel (M2).
+- releases and safe updates (Slice 9);
+- recovery and automation (Slice 10), which completes M1.

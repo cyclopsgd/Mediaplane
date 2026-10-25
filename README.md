@@ -57,31 +57,32 @@ Mediaplane does that part for you:
 
 ## What works so far
 
-| Capability                                                                        | Status       |
-| --------------------------------------------------------------------------------- | ------------ |
-| Validate `stack.yaml`, with errors that say what to change                        | Done         |
-| Render a readable Compose project with images pinned by tag and digest            | Done         |
-| Check the host first: Docker versions, disk, data folder, ports, the VPN device   | Done         |
-| Refuse to publish web UIs on a cloud VM's private address by mistake              | Done         |
-| Predict exactly which containers will change, using Compose's own config hashes   | Done         |
-| Generate keys and start the stack (`mediaplane apply`)                            | Done         |
-| See each app's health and every past apply (`status`, `history`)                  | Done         |
-| Write a starter `stack.yaml` (`init`)                                             | Done         |
-| One admin login for qBittorrent, Sonarr, Radarr, Prowlarr, Jellyfin and Seerr     | Done         |
-| Reach the apps' APIs over a private network with no route out                     | Done         |
-| A VPN kill switch, tested against a real WireGuard server, and `vpn-check`        | Done         |
-| Run in a hardened container, behind a Docker socket proxy                         | Done         |
-| Documentation generated from code: the `stack.yaml` and CLI references, app facts | Done         |
-| Link Sonarr and Radarr to qBittorrent: download clients, categories, root folders | Done         |
-| Link Prowlarr to Sonarr and Radarr, with Byparr or FlareSolverr as its proxy      | Done         |
-| Set up Jellyfin before it is published, with its libraries and links              | Done         |
-| Sign Seerr in through Jellyfin before it is published, and link it                | Done         |
-| Sign in to Plex (`plex-login`), and claim Plex before it is published             | Done         |
-| Plex's libraries and links, and Seerr signed in with your Plex account            | Done         |
-| Guided install: `install.sh`, then `init` asks for everything, Plex sign-in too   | Done         |
-| Hardware transcoding for Plex or Jellyfin (`hardware_transcoding`)                | Done         |
-| Detect manual changes and offer Re-apply or "Keep mine"                           | Planned      |
-| Web panel with a setup wizard                                                     | Planned (M2) |
+| Capability                                                                        | Status  |
+| --------------------------------------------------------------------------------- | ------- |
+| Validate `stack.yaml`, with errors that say what to change                        | Done    |
+| Render a readable Compose project with images pinned by tag and digest            | Done    |
+| Check the host first: Docker versions, disk, data folder, ports, the VPN device   | Done    |
+| Refuse to publish web UIs on a cloud VM's private address by mistake              | Done    |
+| Predict exactly which containers will change, using Compose's own config hashes   | Done    |
+| Generate keys and start the stack (`mediaplane apply`)                            | Done    |
+| See each app's health and every past apply (`status`, `history`)                  | Done    |
+| Write a starter `stack.yaml` (`init`)                                             | Done    |
+| One admin login for qBittorrent, Sonarr, Radarr, Prowlarr, Jellyfin and Seerr     | Done    |
+| Reach the apps' APIs over a private network with no route out                     | Done    |
+| A VPN kill switch, tested against a real WireGuard server, and `vpn-check`        | Done    |
+| Run in a hardened container, behind a Docker socket proxy                         | Done    |
+| Documentation generated from code: the `stack.yaml` and CLI references, app facts | Done    |
+| Link Sonarr and Radarr to qBittorrent: download clients, categories, root folders | Done    |
+| Link Prowlarr to Sonarr and Radarr, with Byparr or FlareSolverr as its proxy      | Done    |
+| Set up Jellyfin before it is published, with its libraries and links              | Done    |
+| Sign Seerr in through Jellyfin before it is published, and link it                | Done    |
+| Sign in to Plex (`plex-login`), and claim Plex before it is published             | Done    |
+| Plex's libraries and links, and Seerr signed in with your Plex account            | Done    |
+| Guided install: `install.sh`, then `init` asks for everything, Plex sign-in too   | Done    |
+| Hardware transcoding for Plex or Jellyfin (`hardware_transcoding`)                | Done    |
+| Detect manual changes and offer Re-apply or "Keep mine"                           | Planned |
+| Releases, and updating Mediaplane without touching the stack                      | Planned |
+| Rebuild a host, or deploy with automation such as Ansible                         | Planned |
 
 ## The stack
 
@@ -490,7 +491,7 @@ the rest of each app's settings to you. Today it sets the shared login, sets Jel
 (or Plex) and Seerr up, links Sonarr and Radarr to qBittorrent and the media server,
 Prowlarr to them, and Seerr to all three.
 
-They can be used together. Recyclarr is planned for M4.
+They can be used together. Recyclarr is planned for M3.
 
 ### Can it take over my existing setup?
 
@@ -532,12 +533,14 @@ and the whole branch is reviewed again before it merges.
 
 ## Roadmap
 
-| Milestone              | Delivers                                                                                       |
-| ---------------------- | ---------------------------------------------------------------------------------------------- |
-| **M1: engine and CLI** | `plan` and `apply`, key generation, wiring for the core stack, drift detection, change history |
-| **M2: panel**          | A web wizard (including "Sign in with Plex"), dashboard and drift view                         |
-| **M3: operations**     | Safe updates with rollback, scheduled backups and restore, alerts                              |
-| **M4: more apps**      | SABnzbd, Audiobookshelf, Bazarr, Recyclarr, Portainer, Homepage                                |
+- **M1: engine and CLI.** `plan` and `apply`, key generation, wiring for the core
+  stack, drift detection, change history, releases, and rebuilding a host.
+- **M2: everyday CLI.** Safe app updates with rollback, backup and restore, `doctor`,
+  quality presets, using a media server you already run, and optional alerts.
+- **M3: more apps.** SABnzbd, Audiobookshelf, Bazarr, Recyclarr, Portainer, Homepage.
+
+A web panel isn't planned for now: the CLI comes first. Mediaplane works on its own,
+and automation such as Ansible can drive the same commands.
 
 M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it stands:
 
@@ -548,7 +551,8 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
   have added a guided install (`deploy/install.sh`, and `init` asking for your own admin
   password and signing you in to Plex) and hardware transcoding.
 - **Next:** S8 (drift detection).
-- **After that:** S9: the release.
+- **After that:** S9 (releases and safe updates), then S10 (recovery and automation),
+  which completes M1.
 
 ## Documentation
 

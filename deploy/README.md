@@ -2,8 +2,8 @@
 
 Mediaplane runs as two containers in their own Compose project, `mediaplane-system`:
 
-- **`mediaplane`**: the CLI. It idles until you run a command, and has no web interface
-  yet (the panel arrives in M2).
+- **`mediaplane`**: the CLI. It idles until you run a command, and has no web
+  interface.
 - **`socket-proxy`**: the only container that talks to Docker. It passes on only the
   Docker API calls Mediaplane makes
   ([ADR 0008](../docs/adr/0008-docker-socket-proxy-on-by-default.md)).

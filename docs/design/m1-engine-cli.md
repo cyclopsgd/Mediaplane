@@ -82,9 +82,14 @@ The gap Mediaplane fills is all four of the following together:
 | Milestone | Delivers |
 |---|---|
 | **M1: Engine + CLI** (this spec) | `stack.yaml` schema, catalog format, compose rendering, key pre-seeding, wiring for the core video stack, drift detection with Keep mine, `plan`/`apply`, change history, CI with real-container end-to-end tests |
-| **M2: Panel UI** | Web wizard (including a "Sign in with Plex" step), dashboard, enabling and disabling apps, drift view with Re-apply and Keep mine, change-history view, panel authentication |
-| **M3: Operations** | Safe updates with snapshot-based rollback, scheduled backups and restore, alerts (ntfy, email, webhook) |
-| **M4: Catalog expansion** | SABnzbd, Audiobookshelf, Bookshelf (experimental, books and audiobooks), Bazarr, Recyclarr, Portainer, Homepage |
+| **M2: Everyday CLI** | Safe app updates with rollback, backup and restore (also onto another host), `doctor`, quality presets, a media server you already run, and optional scheduled drift and alerts |
+| **M3: Catalog expansion** | SABnzbd, Audiobookshelf, Bookshelf (experimental, books and audiobooks), Bazarr, Recyclarr, Portainer, Homepage |
+
+**Changed by the owner on 2026-10-25.** The web panel (wizard, dashboard, drift view,
+change-history view, panel authentication) is no longer scheduled: the CLI is refined
+instead. The old M3 (operations) became M2, and the old M4 (more apps) became M3.
+Mentions elsewhere in this spec are from before the change: read the panel's "M2" as
+not scheduled, "M3" as M2, and "M4" as M3.
 
 Documentation is written alongside each milestone (see §9).
 
@@ -127,9 +132,9 @@ easy:
 
 ### 2.2 Out of scope for M1
 
-- Any web UI or HTTP listener (M2).
-- Updates with rollback, backups and alerts (M3).
-- Any app outside the core video stack (M4).
+- Any web UI or HTTP listener (not scheduled).
+- Updates with rollback, backups and alerts (M2).
+- Any app outside the core video stack (M3).
 - Ansible content (a separate project).
 
 ### 2.3 Success criteria

@@ -2,8 +2,8 @@
 
 **Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md)
 
-M1 is too large for one implementation plan, so it is delivered in 14 vertical
-slices: S1, S2 in three parts, S3 in four, and S4 to S9. Each slice:
+M1 is too large for one implementation plan, so it is delivered in 15 vertical
+slices: S1, S2 in three parts, S3 in four, and S4 to S10. Each slice:
 
 - ends with working, tested software and a green CI;
 - gets its **own detailed plan**, written when the previous slice has landed, so
@@ -32,11 +32,12 @@ Where M1 stands (the README shows the same):
   offering the Plex sign-in and asking for your own admin password, and
   `deploy/install.sh`.
 - **Next:** S8 (drift detection).
-- **After that:** S9.
+- **After that:** S9 (releases and safe updates), then S10 (recovery and automation),
+  which completes M1. [After M1](#after-m1) has what comes next.
 
 ## Slices
 
-> **Renumbered twice, by the owner's decisions.** A plan uses the numbers of its day.
+> **Renumbered three times, by the owner's decisions.** A plan uses the numbers of its day.
 >
 > - **2026-10-11:** drift moved after requests, so that it is designed against every
 >   app and a hands-off stack comes sooner. S4 indexers (was S5), S5 media servers (was
@@ -44,6 +45,9 @@ Where M1 stands (the README shows the same):
 > - **2026-10-15:** the media servers split, Jellyfin first. S5 Jellyfin and the arrs'
 >   links to it (from S5), S6 requests (unchanged), S7 Plex (from S5), S8 drift (was
 >   S7), S9 release (was S8).
+> - **2026-10-25:** the rest of M1 split in three, so that a deployment can be updated
+>   safely sooner. S8 drift (unchanged), S9 releases and safe updates (from S9), S10
+>   recovery and automation (from S8 and S9).
 
 | # | Slice | Delivers | Spec sections | Proves |
 |---|---|---|---|---|
@@ -54,8 +58,9 @@ Where M1 stands (the README shows the same):
 | S5 | **Jellyfin** | Jellyfin bootstrap-before-publish, its API key and libraries, and the arr → Jellyfin connections | §6.1 (Jellyfin), §6.2 (media-server rows), §6.4 | Jellyfin is wired headlessly |
 | S6 | **Requests** | The Seerr first sign-in through the Jellyfin admin, libraries, the Sonarr/Radarr servers, initialize, and the full-stack end-to-end test | §6.1 (Seerr), §6.2 (Seerr row) | Success criterion 1 |
 | S7 | **Plex** | `plex-login` (the plex.tv PIN flow), the Plex claim through a plex.tv helper, its libraries, the arr → Plex connections, Seerr's sign-in with the Plex token, and a nightly Plex CI job | §6.1 (Plex, Seerr), §6.2 (media-server rows), §8.1 (Plex) | Success criterion 2: Plex is wired headlessly, except for the single Plex sign-in |
-| S8 | **Drift** | The three-way drift model, `drift`, `keep`, a comment-preserving override writer, `unmanaged`, externally managed mode, name-based re-adoption, key recovery from appdata, and shared-key propagation | §6.3, §6.1 (key recovery) | Success criterion 4 |
-| S9 | **Release and public readiness** | Trivy for the catalog images (Mediaplane's own image is scanned from S2c), SBOM and provenance, release-please, Renovate (a custom manager for catalog pins plus SHA-pinned Actions), a multi-arch release workflow and manifest (arm64 CI itself runs from S2c), the `--json` output shapes in the generated docs (the `stack.yaml`, JSON Schema and CLI references, with their freshness check, arrive in S2c), `migrate`, the full README, the add-an-app guide, the code of conduct, templates and CODEOWNERS | §8.2, §9 | Success criterion 7. Everything is green on both architectures |
+| S8 | **Drift** | The three-way drift model, `drift`, `keep` (Keep mine), a comment-preserving override writer, `unmanaged`, the "drift reported" runbook, and the S8 items below, with the owner's decisions of 2026-10-17 | §6.3 | Success criterion 4 |
+| S9 | **Releases and safe updates** | release-please and versioned releases; a multi-arch release workflow that publishes Mediaplane's image, with SBOM and provenance; Trivy for the catalog images; Renovate (a custom manager for catalog pins, the pins outside the catalog, and SHA-pinned Actions); `install.sh` installing a pinned release, which it pulls rather than builds; updating Mediaplane by running it again, which never restarts the stack; `migrate`; the licence's SPDX field; and `main` protected | §8.2, §9 | Success criterion 7. A release is green on both architectures, and updating Mediaplane leaves the stack running |
+| S10 | **Recovery and automation** | Externally managed mode, name-based re-adoption, key recovery from appdata, and shared-key propagation. A contract for automation: the `--json` output shapes pinned and in the generated docs, exit codes, commands that ask nothing when a script runs them, and a second `apply` that changes nothing. A "deploying with automation" guide, with a short Ansible example. Then the rest of the S9 items below: the full README, the add-an-app guide and the test gaps | §6.1 (key recovery), §6.3 (externally managed), §9 | M1 is done. A host can be rebuilt from `stack.yaml` and its appdata, by hand or by a playbook |
 
 ### S2 is delivered in three parts (decided 2026-10-09)
 
@@ -107,7 +112,7 @@ Every slice writes its own docs as it goes:
   - 0001, 0002, 0005 and 0009 in S1;
   - 0010 in S2a, 0004 in S2b, and 0006 and 0008 in S2c;
   - 0003 in S8.
-  - 0007 (books) belongs to M4.
+  - 0007 (books) belongs to M3.
 - **Each app's `catalog/<app>/README.md`**, written in S2c, and updated when that
   app's integration lands.
 - **Runbooks**, written with the feature they cover:
@@ -118,6 +123,32 @@ Every slice writes its own docs as it goes:
   spec §9 artefacts the slice touches: it runs `pnpm docs:generate` for the generated
   references, and updates each touched app's README, the runbooks and ADRs, and
   `docs/architecture.md`.
+
+## After M1
+
+Decided by the owner on 2026-10-25. The web panel is no longer the next milestone. The
+CLI is refined instead, and the work after M1 is smaller: a feature at a time, by the
+lighter route, or as a slice when it is big or touches security.
+
+- **M2: everyday CLI.**
+  - Safe app updates: `mediaplane update`, with a backup first and a rollback.
+  - Backup and restore, including a restore onto a different host.
+  - `mediaplane doctor`, which checks a running stack and says what to fix.
+  - Quality presets for Sonarr and Radarr in `init` (see "Not scheduled yet").
+  - A media server you already run, used as it is (`external`).
+  - Drift checked on a schedule, with alerts (optional).
+- **M3: more apps.** SABnzbd, Audiobookshelf, Bookshelf (experimental), Bazarr,
+  Recyclarr, Portainer and Homepage.
+- **Not scheduled:** the web panel (wizard, dashboard, drift view). Its items are kept
+  below.
+
+Two rules hold for all of it:
+
+- **Mediaplane stays a standalone tool.** `install.sh` and the CLI are the way in.
+  Automation such as Ansible runs the same commands, and S10 makes sure it can, but
+  nothing in Mediaplane needs it.
+- **Updates happen only when you run them.** Mediaplane never updates itself or an app
+  on its own.
 
 ## CI architecture coverage
 
@@ -274,7 +305,7 @@ slice plan must address the items for that slice.
   another home already manages a project with this name.
 
 **S3:** S3a handles the first five, except Mediaplane's network in TRUSTEDNETWORKS,
-which moved to M2. S3b handles the rest, except qBittorrent's settings and admin
+which waits for the panel. S3b handles the rest, except qBittorrent's settings and admin
 password, which are S3c's (and listed again below).
 
 - Gluetun's `FIREWALL_OUTBOUND_SUBNETS` and Servarr's `TRUSTEDNETWORKS` should
@@ -450,6 +481,9 @@ password, which are S3c's (and listed again below).
 
 **S8:**
 
+- **Moved to S10 on 2026-10-25:** the items here about recovery: restoring a key at
+  its source (installs from before Slice 3a), Jellyfin's key deleted by hand, and
+  rotating the admin password. S8 keeps drift and Keep mine.
 - **Decided by the owner on 2026-10-17,** for the items below:
   - **qBittorrent's post-import category:** `plan` skips the arr's download-client test
     while that category is missing.
@@ -618,8 +652,13 @@ password, which are S3c's (and listed again below).
   pieces, which Jellyfin answers 404, so the library fails on every `apply`. Re-read
   `Locations` in `update`, with Keep mine's change to how `paths` is held.
 
-**S9 (before going public):**
+**S9 and S10 (before going public):**
 
+- **Split on 2026-10-25.** S9 takes the release items: the licence, `main`'s
+  protection, Renovate and the pins outside the catalog, publishing the image, the
+  registry rate limits, Node's vulnerabilities and the Docker version CI tests. S10
+  takes the rest: the docs, the `--json` contract, the Plex job's items and the test
+  gaps.
 - **Decided by the owner on 2026-10-17:**
   - the licence is GPL-3.0-or-later;
   - no code of conduct, and no community-support material such as issue templates or
@@ -715,7 +754,7 @@ password, which are S3c's (and listed again below).
   secret (never given to fork PRs), or through a pull-through cache, for the e2e and
   image jobs. S6 adds no image: each e2e file pulls only what is missing.
 
-**M2 (the panel):**
+**The panel (not scheduled since 2026-10-25):**
 
 - `trigger: 'cli'` is a literal in `mediaplane.change/v1`. Fields may be added
   within v1 when they are optional (spec §11, Slice 3a); decide whether a new
@@ -723,6 +762,9 @@ password, which are S3c's (and listed again below).
 - **Servarr `TRUSTEDNETWORKS` and Mediaplane's network (ruling R12).** Once the panel
   proxies requests to the apps, add its network, so Sonarr believes the
   `X-Forwarded-For` header it sends (spec §11, Slice 3a).
+
+**M2 (everyday CLI):**
+
 - **A `network.lan_subnet` that covers the stack's Docker networks.** With
   `security.login_on_lan: false` and the web UIs on the LAN, qBittorrent lets any
   sign-in from the LAN subnets through (S3c, threat model T2). A hand-typed subnet wide
@@ -737,7 +779,7 @@ password, which are S3c's (and listed again below).
   Mediaplane leaves the arrs' quality profiles as they ship, and only picks Seerr's
   (`HD-1080p`, else `Any`). Decide the default (resolution, sources, size limits,
   language), and whether Mediaplane sets a profile of its own, offers presets in
-  `init`, or leaves it to Recyclarr (M4); and how drift treats a profile changed by hand.
+  `init`, or leaves it to Recyclarr (M3); and how drift treats a profile changed by hand.
 - **Use a media server you already run** (possible future feature, 2026-10-17). Two
   levels:
   - **Use it as it is:** an `external` media server, given by address and token.
