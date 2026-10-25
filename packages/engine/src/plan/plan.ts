@@ -71,6 +71,11 @@ export interface PlanOptions {
    * and the apps' own health checks read.
    */
   drift?: { now: () => Date };
+  /**
+   * `mediaplane keep`'s: look at this one resource ("<app>.<resource>"), and check none of
+   * its secrets.
+   */
+  only?: string;
 }
 
 export interface PlanResult {
@@ -291,6 +296,7 @@ export async function planStack(
         secrets: knownSecrets(values, preview, admin, given),
         known,
         ...(options.drift === undefined ? {} : { drift: options.drift }),
+        ...(options.only === undefined ? {} : { only: options.only }),
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });
       ({ drift, checks } = planned);

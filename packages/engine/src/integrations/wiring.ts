@@ -371,6 +371,12 @@ export interface ExamineOptions {
    * `checkEvery` has gone by, from `now`.
    */
   drift?: { now: () => Date };
+  /**
+   * false: check none of its secrets, and ask the app nothing but to read the resource
+   * (`mediaplane keep`, which needs only its fields): what only the app can say
+   * (`resolve`, which may use the app's own test, as Seerr's does) is what was applied.
+   */
+  secrets?: boolean;
 }
 
 /** Apply's VerifyContext, without another app: what a check gets by default. */
@@ -393,9 +399,17 @@ export async function examine(
   const wanted = desiredOf(spec, ctx);
   if (wanted === undefined) return undefined;
   const address = resourceAddress(ctx.app, spec);
-  // What only the app can say, then the overrides again: Keep mine's value wins.
-  const desired =
-    options.verify !== false && spec.resolve !== undefined
+  // What only the app can say, then the overrides again: Keep mine's value wins. Keep
+  // takes it from what was applied instead, and so asks the app nothing more.
+  const keeping = options.secrets === false && spec.resolve !== undefined;
+  const desired = keeping
+    ? withOverrides(
+        spec,
+        address,
+        { ...wanted, fields: { ...known?.fields, ...wanted.fields } },
+        ctx.stack.config.overrides,
+      )
+    : options.verify !== false && spec.resolve !== undefined
       ? withOverrides(
           spec,
           address,
@@ -427,7 +441,7 @@ export async function examine(
   }
   // A field left to a `resolve` that wasn't run isn't known yet: it isn't compared.
   // Every other field is, set or not.
-  const unresolved = spec.resolve !== undefined && options.verify === false;
+  const unresolved = spec.resolve !== undefined && options.verify === false && !keeping;
   const compared = unresolved
     ? spec.fields.filter((field) => desired.fields[field] !== undefined)
     : spec.fields;
@@ -548,6 +562,7 @@ async function checkSecrets(
       verdict,
       ...(reason === undefined ? {} : { reason }),
     }));
+  if (options.secrets === false) return all('unchecked', 'keep checks no secret');
   const planned = (options.refused ?? []).filter((name) => spec.secrets.includes(name));
   if (planned.length > 0) {
     return spec.secrets.map((secret) =>
@@ -578,7 +593,10 @@ async function checkSecrets(
     });
   }
   if (options.verify === false) {
-    return all('unchecked', 'what it requires is yet to be put in place');
+    return all(
+      'unchecked',
+      'what it requires is yet to be put in place, which apply does first',
+    );
   }
   // Drift checks again what passed only once its time has gone by: each check of
   // Jellyfin's admin signs in, which its activity log keeps (the owner's decision).
@@ -697,6 +715,11 @@ export interface PlanWiringOptions {
    * `checkEvery` has gone by, and reads the apps' own health checks (`health`).
    */
   drift?: { now: () => Date };
+  /**
+   * `mediaplane keep`'s: look at this one resource ("<app>.<resource>") and its app only,
+   * checking none of its secrets.
+   */
+  only?: string;
   seams?: WiringSeams;
 }
 
@@ -768,7 +791,9 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       pending.add(change.resource);
     }
   };
+  const { only } = options;
   for (const app of order) {
+    if (only !== undefined && !only.startsWith(`${app.def.id}.`)) continue;
     const ctx: WiringContext = {
       stack: options.stack,
       app,
@@ -776,7 +801,10 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       keys: options.keys,
     };
     // Only what the stack wants is listed: a resource it doesn't want isn't wiring.
-    const targets = wiringTargets(ctx);
+    const targets =
+      only === undefined
+        ? wiringTargets(ctx)
+        : wiringTargets(ctx).filter((target) => target === only);
     // A resource that holds the key of an app that refuses it: drift on the consumer
     // too (§6.3), whether or not its own app can be asked.
     drift.push(...holdingRefused(ctx, refusedKeys));
@@ -814,7 +842,9 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       continue;
     }
     checked.set(app.def.id, client.api);
-    const wanted = wantedResources(ctx);
+    const wanted = wantedResources(ctx).filter(
+      (spec) => only === undefined || resourceAddress(app, spec) === only,
+    );
     if (wanted.length === 0) add({ resource: app.def.id, action: 'unchanged' });
     for (const [index, spec] of wanted.entries()) {
       const address = resourceAddress(app, spec);
@@ -841,6 +871,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
           verify: !waiting,
           context,
           ...(options.drift === undefined ? {} : { drift: options.drift }),
+          ...(only === undefined ? {} : { secrets: false }),
         });
       } catch (cause) {
         if (!(cause instanceof AppApiError)) throw cause;
@@ -899,13 +930,19 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
         }
       }
     }
-    const left = await leftIn(ctx, client.api, options.known, [
-      ...options.secrets,
-      ...found.values,
-    ]);
-    drift.push(...left.drift);
-    diagnostics.push(...left.diagnostics);
-    for (const change of left.unknown) add(change);
+    // Keep looks for its one resource among those left, when the stack doesn't want it.
+    if (only === undefined || wanted.length === 0) {
+      const left = await leftIn(
+        ctx,
+        client.api,
+        options.known,
+        [...options.secrets, ...found.values],
+        only,
+      );
+      drift.push(...left.drift);
+      diagnostics.push(...left.diagnostics);
+      for (const change of left.unknown) add(change);
+    }
   }
   return { changes, diagnostics, drift, checks };
 }
@@ -956,12 +993,14 @@ async function leftIn(
   api: AppApi,
   known: KnownResources,
   secrets: readonly string[],
+  only?: string,
 ): Promise<{ drift: Drift[]; diagnostics: Diagnostic[]; unknown: WiringChange[] }> {
   const drift: Drift[] = [];
   const diagnostics: Diagnostic[] = [];
   const unknown: WiringChange[] = [];
   for (const spec of ctx.app.def.integration?.resources ?? []) {
     const address = resourceAddress(ctx.app, spec);
+    if (only !== undefined && address !== only) continue;
     const record = known[address];
     if (record === undefined || isUnmanaged(ctx.stack, address)) continue;
     if (desiredOf(spec, ctx) !== undefined) continue;

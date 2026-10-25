@@ -1,17 +1,19 @@
 import { randomBytes } from 'node:crypto';
-import { chmod, link, mkdir, open, rename, rm } from 'node:fs/promises';
+import { chmod, chown, link, mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { codeOf } from './error-code';
 
 /**
  * Replace `path` with `content` all at once: write a temporary file next to it, flush it
  * to disk, then rename it over the original. Readers see the old file or the new one,
- * never half of either.
+ * never half of either. With `group`, the new file has that group (the old file's, say),
+ * or nothing is replaced. An ACL or extended attribute of the old file isn't kept.
  */
 export async function writeFileAtomic(
   path: string,
   content: string,
   mode = 0o644,
+  group?: number,
 ): Promise<void> {
   const temp = `${path}.tmp-${String(process.pid)}-${randomBytes(4).toString('hex')}`;
   try {
@@ -25,6 +27,8 @@ export async function writeFileAtomic(
     }
     // open()'s mode is filtered by the umask; set the one we mean.
     await chmod(temp, mode);
+    // -1 leaves the owner as it is: the user running Mediaplane.
+    if (group !== undefined) await chown(temp, -1, group);
     await rename(temp, path);
   } catch (cause) {
     // Best effort: a cleanup failure (say ENOTDIR) must not hide the error that matters.

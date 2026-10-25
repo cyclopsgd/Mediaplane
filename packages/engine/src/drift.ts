@@ -20,7 +20,10 @@ export interface DriftOptions extends PlanOptions {
 export interface DriftResult {
   /** False when it couldn't look: an error diagnostic says why. */
   ok: boolean;
-  /** Nothing changed outside Mediaplane, as far as it could see, and it saw everything. */
+  /**
+   * Nothing changed outside Mediaplane, and it saw everything: every resource looked at,
+   * and every secret checked.
+   */
   clear: boolean;
   /** What changed in the apps outside Mediaplane since it applied them. */
   drift: Drift[];

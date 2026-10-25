@@ -277,13 +277,13 @@ const stackShape = {
     )
     .default({})
     .describe(
-      "Your own values for what Mediaplane manages in the apps, by <app>.<resource>.<field>, such as sonarr.download_client.category: television: apply sets them instead of its own. Each app's README lists the fields; one marked fixed, and a secret, can't be overridden. <app>.<resource>: unmanaged stops Mediaplane managing that resource.",
+      'Your own values for what Mediaplane manages in the apps, by <app>.<resource>.<field>, such as sonarr.download_client.category: television: apply sets them instead of its own. "mediaplane keep" writes them, from what an app holds. Each app\'s README lists the fields; one marked fixed, and a secret, can\'t be overridden. <app>.<resource>: unmanaged stops Mediaplane managing that resource.',
     ),
   managed_by: z
     .enum(['mediaplane', 'external'])
     .default('mediaplane')
     .describe(
-      'external: Mediaplane never writes this file, for when automation such as Ansible owns it. Today only init writes it, and init never overwrites. Matters from Slice 8.',
+      'external: Mediaplane never writes this file, for when automation such as Ansible owns it. init never overwrites it, and keep, which writes overrides, gives you the line to add instead.',
     ),
 };
 

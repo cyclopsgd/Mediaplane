@@ -51,6 +51,8 @@ export * from './apply/pull';
 export * from './apply/apply';
 export * from './status';
 export * from './drift';
+export * from './keep';
+export * from './config/overrides-file';
 export * from './credentials';
 export * from './vpn/egress';
 export * from './vpn/probe';

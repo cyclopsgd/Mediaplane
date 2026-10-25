@@ -9,6 +9,7 @@ import {
   DEFAULT_VPN_CHECK_URL,
   detectHostFacts,
   drift,
+  keep,
   EGRESS_TIMEOUT_MS,
   fetchEgress,
   helperEgress,
@@ -43,6 +44,7 @@ import {
   printDiagnostics,
   printDrift,
   printError,
+  printKeep,
   printHistory,
   printPlan,
   printRecord,
@@ -110,6 +112,10 @@ export const EXIT_CODES: Readonly<Record<string, readonly string[]>> = {
     '0: nothing changed outside Mediaplane, and every resource was checked',
     '2: drift found, or a resource or secret was not checked',
     '1: an error; nothing was changed',
+  ],
+  keep: [
+    '0: stack.yaml keeps what the app holds, or stops managing what was deleted',
+    "1: nothing was kept: it hasn't drifted, can't be kept, or an error",
   ],
   history: ['0: the records were listed or shown', '1: an error, or no such record'],
   credentials: [
@@ -354,6 +360,35 @@ export function createProgram(
       });
       printDrift(result, { json: options.json === true }, io);
       setExitCode(result.ok ? (result.clear ? 0 : 2) : 1);
+    });
+
+  program
+    .command('keep')
+    .description(
+      'Keep mine: take what an app holds now, changed outside Mediaplane, as what you want, written as an override in stack.yaml, keeping the rest of the file as it is; or, for a resource deleted outside Mediaplane, stop managing it',
+    )
+    .argument(
+      '<path>',
+      'what to keep, as drift shows it: <app>.<resource>.<field>, or <app>.<resource> for one deleted',
+    )
+    .option('--home <dir>', 'Mediaplane home directory', defaultHome)
+    .option('--json', 'print machine-readable JSON')
+    .addHelpText('after', exitCodesHelp('keep'))
+    .action(async (path: string, options: { home: string; json?: boolean }) => {
+      const home = resolve(options.home);
+      const runtime = deps.runtime(home, project);
+      const result = await keep({
+        home,
+        catalog,
+        host: () => deps.host(runtime),
+        env: io.env,
+        runtime,
+        probe: deps.probe(runtime, home),
+        path,
+        ...(deps.wiring === undefined ? {} : { wiring: deps.wiring }),
+      });
+      printKeep(result, { json: options.json === true }, io);
+      setExitCode(result.ok ? 0 : 1);
     });
 
   program

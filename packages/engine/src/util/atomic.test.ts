@@ -15,6 +15,18 @@ describe('writeFileAtomic', () => {
     expect(await modeOf(path)).toBe(0o600);
   });
 
+  it('gives the new file the group it is given', async () => {
+    const dir = await tempDir('mediaplane-atomic-');
+    const path = join(dir, 'stack.yaml');
+    await writeFile(path, 'old\n');
+    // One of this user's other groups, where there is one, else its own.
+    const own = process.getgid?.() ?? 0;
+    const group = (process.getgroups?.() ?? []).find((g) => g !== own) ?? own;
+    await writeFileAtomic(path, 'new\n', 0o640, group);
+    expect((await stat(path)).gid).toBe(group);
+    expect(await modeOf(path)).toBe(0o640);
+  });
+
   it('replaces an existing file and leaves no temporary file behind', async () => {
     const dir = await tempDir('mediaplane-atomic-');
     const path = join(dir, 'compose.yaml');

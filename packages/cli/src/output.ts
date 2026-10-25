@@ -10,6 +10,7 @@ import {
   type Diagnostic,
   type Drift,
   type DriftResult,
+  type KeepResult,
   type PlanResult,
   type StatusResult,
   type StepEvent,
@@ -24,6 +25,11 @@ export const APPLY_JSON_SCHEMA = 'mediaplane.apply/v1';
 export const STATUS_JSON_SCHEMA = 'mediaplane.status/v1';
 export const HISTORY_JSON_SCHEMA = 'mediaplane.history/v1';
 export const DRIFT_JSON_SCHEMA = 'mediaplane.drift/v1';
+export const KEEP_JSON_SCHEMA = 'mediaplane.keep/v1';
+
+/** What keep takes, where drift shows a change: the field's address, or the resource's. */
+const KEEP_HINT =
+  'mediaplane keep <app>.<resource>.<field> keeps what the app holds instead, and <app>.<resource> stops Mediaplane managing one deleted';
 
 const MARKS: Record<ContainerAction, string> = {
   create: '+',
@@ -89,7 +95,9 @@ export function driftAdvice(drift: readonly Drift[]): string[] {
   const has = (...kinds: Drift['kind'][]) => drift.some((d) => kinds.includes(d.kind));
   return [
     ...(has('field', 'missing', 'secret')
-      ? ['apply puts back each field, resource and secret changed in the apps']
+      ? [
+          `apply puts back each field, resource and secret changed in the apps; ${KEEP_HINT}`,
+        ]
       : []),
     ...(has('key')
       ? [
@@ -98,7 +106,7 @@ export function driftAdvice(drift: readonly Drift[]): string[] {
       : []),
     ...(has('left')
       ? [
-          "apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it",
+          "apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it, or keep it as yours with mediaplane keep <app>.<resource>, which stops the report",
         ]
       : []),
   ];
@@ -273,6 +281,26 @@ export function printDrift(
       'No drift found where Mediaplane could look, but it could not look at everything, or check every secret: see above.\n',
     );
   }
+}
+
+/** What `mediaplane keep` kept, or why it kept nothing. */
+export function printKeep(result: KeepResult, options: { json: boolean }, io: Io): void {
+  if (options.json) {
+    io.stdout(
+      `${JSON.stringify({ schema: KEEP_JSON_SCHEMA, ...result, value: result.value ?? null }, null, 2)}\n`,
+    );
+    return;
+  }
+  for (const diagnostic of result.diagnostics) io.stderr(formatDiagnostic(diagnostic));
+  if (!result.ok || result.value === undefined) {
+    io.stderr('\nNothing was kept; stack.yaml is as it was.\n');
+    return;
+  }
+  io.stdout(
+    result.value === 'unmanaged' && result.key.split('.').length === 2
+      ? `Wrote ${result.key}: unmanaged under overrides: in stack.yaml. Mediaplane no longer manages it, and apply doesn't make it again.\n`
+      : `Wrote ${result.key}: ${JSON.stringify(result.value)} under overrides: in stack.yaml. apply now leaves it as the app holds it, and drift no longer reports it.\n`,
+  );
 }
 
 function count(n: number, noun: string, verb: string): string | undefined {

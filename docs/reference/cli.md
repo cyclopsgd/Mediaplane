@@ -62,6 +62,28 @@ Exit codes:
 - 2: drift found, or a resource or secret was not checked
 - 1: an error; nothing was changed
 
+## `mediaplane keep`
+
+Keep mine: take what an app holds now, changed outside Mediaplane, as what you want, written as an override in stack.yaml, keeping the rest of the file as it is; or, for a resource deleted outside Mediaplane, stop managing it.
+
+```text
+mediaplane keep [options] <path>
+```
+
+| Argument | Description                                                                                         |
+| -------- | --------------------------------------------------------------------------------------------------- |
+| `path`   | what to keep, as drift shows it: \<app>.\<resource>.\<field>, or \<app>.\<resource> for one deleted |
+
+| Option         | Description                                            |
+| -------------- | ------------------------------------------------------ |
+| `--home <dir>` | Mediaplane home directory (default: "/opt/mediaplane") |
+| `--json`       | print machine-readable JSON                            |
+
+Exit codes:
+
+- 0: stack.yaml keeps what the app holds, or stops managing what was deleted
+- 1: nothing was kept: it hasn't drifted, can't be kept, or an error
+
 ## `mediaplane status`
 
 Show each app's container, and the last apply.

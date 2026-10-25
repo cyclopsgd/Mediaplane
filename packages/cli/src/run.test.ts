@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
@@ -1727,7 +1727,7 @@ describe('mediaplane drift', () => {
       'Changed outside Mediaplane since it was applied:\n  ~ sonarr.download_client.category: expected "tv", actual "television"\n',
     );
     expect(term.stdout()).toContain(
-      'Drift found.\n  apply puts back each field, resource and secret changed in the apps.\n',
+      'Drift found.\n  apply puts back each field, resource and secret changed in the apps; mediaplane keep <app>.<resource>.<field> keeps what the app holds instead, and <app>.<resource> stops Mediaplane managing one deleted.\n',
     );
     const json = capture();
     expect(await run(['drift', '--home', home, '--json'], json.io, deps(runtime))).toBe(
@@ -1794,6 +1794,110 @@ describe('mediaplane drift', () => {
     expect(await run(['drift', '--home', home, '--json'], term.io, deps())).toBe(1);
     expect(JSON.parse(term.stdout())).toMatchObject({ ok: false, clear: false });
     expect(await readdir(home)).toEqual([]);
+  });
+});
+
+describe('mediaplane keep', () => {
+  const current = () =>
+    fakeRuntime({ hashes: { ok: true, hashes: HASHES }, containers: running(HASHES) });
+
+  it("writes what an app holds as an override in stack.yaml, its mode kept; qBittorrent's category follows, and drift is then clear", async () => {
+    const runtime = current();
+    const home = await currentHome(runtime);
+    const before = await readFile(join(home, 'stack.yaml'), 'utf8');
+    await chmod(join(home, 'stack.yaml'), 0o640);
+    const client = apis.apps.get('sonarr')?.downloadClients[0];
+    if (client === undefined) throw new Error('no download client faked');
+    client.fields = client.fields.map((f) =>
+      f.name === 'tvCategory' ? { ...f, value: 'television' } : f,
+    );
+    // As Sonarr's own test made it, with no save path.
+    const qbittorrent = apis.apps.get('qbittorrent');
+    if (qbittorrent === undefined) throw new Error('no qBittorrent faked');
+    qbittorrent.categories.television = '';
+    const term = capture();
+    expect(
+      await run(
+        ['keep', 'sonarr.download_client.category', '--home', home],
+        term.io,
+        deps(runtime),
+      ),
+    ).toBe(0);
+    expect(term.stdout()).toBe(
+      'Wrote sonarr.download_client.category: "television" under overrides: in stack.yaml. apply now leaves it as the app holds it, and drift no longer reports it.\n',
+    );
+    expect(await readFile(join(home, 'stack.yaml'), 'utf8')).toBe(
+      `${before}overrides:\n  sonarr.download_client.category: television\n`,
+    );
+    expect((await stat(join(home, 'stack.yaml'))).mode & 0o777).toBe(0o640);
+    // qBittorrent's category is now the one kept: plan shows apply putting it in place,
+    // with its save path, and drift waits for it before it checks the client's key.
+    const planned = capture();
+    expect(await run(['plan', '--home', home], planned.io, deps(runtime))).toBe(2);
+    expect(planned.stdout()).toContain(
+      '  ~ update      qbittorrent.category_tv (savePath)\n',
+    );
+    const waiting = capture();
+    expect(await run(['drift', '--home', home], waiting.io, deps(runtime))).toBe(2);
+    expect(waiting.stdout()).toContain(
+      '  - sonarr.download_client.apiKey: what it requires is yet to be put in place, which apply does first\n',
+    );
+    expect(waiting.stdout()).not.toContain('Changed outside Mediaplane');
+    // Put in place, as apply does: drift is clear, with the client's key checked.
+    qbittorrent.categories.television = '/data/torrents/television';
+    expect(await run(['drift', '--home', home], capture().io, deps(runtime))).toBe(0);
+  });
+
+  it('refuses to keep where an app sends a key, saying why, and writes nothing', async () => {
+    const runtime = current();
+    const home = await currentHome(runtime);
+    const before = await readFile(join(home, 'stack.yaml'), 'utf8');
+    const term = capture();
+    expect(
+      await run(
+        ['keep', 'seerr.server_sonarr.hostname', '--home', home],
+        term.io,
+        deps(runtime),
+      ),
+    ).toBe(1);
+    expect(term.stderr()).toContain(
+      "error: seerr.server_sonarr.hostname can't be kept: it sets where a key is sent (spec §11, Slice 6)\n",
+    );
+    expect(await readFile(join(home, 'stack.yaml'), 'utf8')).toBe(before);
+  });
+
+  it('exits 1, writing nothing, for what has not drifted, saying why, in JSON too', async () => {
+    const runtime = current();
+    const home = await currentHome(runtime);
+    const before = await readFile(join(home, 'stack.yaml'), 'utf8');
+    const term = capture();
+    expect(
+      await run(
+        ['keep', 'sonarr.download_client.category', '--home', home, '--json'],
+        term.io,
+        deps(runtime),
+      ),
+    ).toBe(1);
+    expect(JSON.parse(term.stdout())).toMatchObject({
+      schema: 'mediaplane.keep/v1',
+      ok: false,
+      key: 'sonarr.download_client.category',
+      value: null,
+      diagnostics: [{ code: 'keep.no-drift' }],
+    });
+    const human = capture();
+    expect(
+      await run(
+        ['keep', 'sonarr.download_client.apiKey', '--home', home],
+        human.io,
+        deps(runtime),
+      ),
+    ).toBe(1);
+    expect(human.stderr()).toContain(
+      "error: sonarr.download_client.apiKey is a secret: Mediaplane checks it with Sonarr's own check, and never keeps it\n",
+    );
+    expect(human.stderr()).toContain('Nothing was kept; stack.yaml is as it was.\n');
+    expect(await readFile(join(home, 'stack.yaml'), 'utf8')).toBe(before);
   });
 });
 
