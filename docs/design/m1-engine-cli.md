@@ -1842,8 +1842,9 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   An older Mediaplane refuses a `state/resources.json` that holds either: moving it aside
   recovers, as its hint says. It is built to be called as it is by a schedule (M2).
 - **Fewer marks** (§5.2; the owner's decisions of 2026-10-17):
-  - an app found refusing its own key isn't sent it again, by drift or `plan`, until
-    `apply` checks it and the app takes it: its resources read as checks that couldn't
+  - an app that a drift found refusing its own key isn't sent it again, by drift or
+    `plan`, until `apply` checks it and the app takes it (`plan` writes nothing, so
+    until a drift has run, `plan` still tries it): its resources read as checks that couldn't
     be made, and drift exits 2 (the owner's decision on qBittorrent's ban, for
     Mediaplane's own key too; whether a refused key counts towards the ban wasn't
     probed, so it is taken as counting);

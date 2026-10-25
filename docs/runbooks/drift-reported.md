@@ -71,10 +71,11 @@ Each line says what kind of drift it is:
 - `!` **refuses the key Mediaplane holds for it:** the app's own key was changed in the
   app, such as qBittorrent's made anew in its web UI. Each resource that holds that key,
   in another app, is listed too, as `holds qbittorrent's key, which qbittorrent refuses`;
-  its secrets aren't checked. Drift keeps that the app refused it: `found at …; not sent
-again until apply checks it` says neither drift nor `plan` sends the app that key
-  again, and that app's resources are listed under `Not checked:`. Each key that fails
-  counts towards qBittorrent's ban of an address after five failed sign-ins.
+  its secrets aren't checked. Drift keeps that the app refused it. Then
+  `found at …; not sent again until apply checks it` says neither drift nor `plan` sends
+  the app that key again, and that app's resources are listed under `Not checked:`.
+  Until a drift has found the refusal, each `plan` still tries the key. Each key that
+  fails counts towards qBittorrent's ban of an address after five failed sign-ins.
 - `?` **still in the app, though the stack no longer wants it:** Mediaplane made it, such
   as Prowlarr's link to Sonarr, and Sonarr has since left the stack. `apply` leaves it:
   remove it in the app, or keep it as yours with `mediaplane keep <app>.<resource>`.
