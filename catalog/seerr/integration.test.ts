@@ -382,6 +382,20 @@ describe("Seerr's media server", () => {
     expect(calls(before)).toContain('POST /api/v1/settings/jellyfin/library/sync');
   });
 
+  it('gives Seerr the key at once when the check found it refused: one failed check per apply', async () => {
+    const { api, state, jellyfin, calls } = await seerr();
+    const desired = wanted(spec);
+    jellyfin.apiKeys = jellyfin.apiKeys.filter((k) => k.AppName !== 'Seerr');
+    const observed = await spec.observe(api, undefined, desired);
+    if (observed === undefined) throw new Error('observed');
+    expect(await spec.verify?.(api, desired, observed)).toBe(false);
+    const before = calls().length;
+    await spec.update(api, desired, observed, ['apiKey']);
+    expect(calls(before)).not.toContain('GET /api/v1/settings/jellyfin/users');
+    expect(state.seerr.jellyfin).toMatchObject({ apiKey: JELLYFIN_KEY });
+    expect(state.seerr.errors).toHaveLength(1);
+  });
+
   it("sends Mediaplane's Jellyfin key only to the stack's Jellyfin, whatever Seerr holds", async () => {
     const { api, apis, state } = await seerr();
     const desired = wanted(spec);
@@ -773,6 +787,21 @@ describe.each([
     if (observed === undefined) throw new Error('observed');
     await spec.update(api, kept, observed);
     expect(state.seerr[arr][0]?.isDefault).toBe(false);
+  });
+
+  it("reads a setting Seerr holds in another shape as one it can't, never as false or empty", async () => {
+    const { api, state } = await seerr();
+    const desired =
+      (await spec.resolve?.(api, wanted(spec), contextOf())) ?? wanted(spec);
+    await spec.create(api, desired);
+    const held = state.seerr[arr][0];
+    if (held === undefined) throw new Error('held');
+    Object.assign(held, { isDefault: 'yes', useSsl: 'no' });
+    expect((await spec.observe(api, undefined, desired))?.unreadable).toEqual({
+      hostname:
+        "its TLS, URL base or port is held in a shape Mediaplane can't read, so where Seerr sends the key it holds can't be told",
+      isDefault: 'text, not true or false',
+    });
   });
 
   it('puts back what was changed by hand: its profile, folder and default', async () => {

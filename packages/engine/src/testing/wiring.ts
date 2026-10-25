@@ -252,9 +252,19 @@ function qbittorrentTemplate(service: string): Omit<FakeDownloadClient, 'id'> & 
       { name: 'username' },
       { name: 'password' },
       { name: category, value: service === 'radarr' ? 'radarr' : 'tv-sonarr' },
+      // Unset, the arrs leave it out (probed).
+      { name: service === 'radarr' ? 'movieImportedCategory' : 'tvImportedCategory' },
     ],
   };
 }
+
+/** The settings of an arr's download client that name a qBittorrent category. */
+const CLIENT_CATEGORIES = [
+  'tvCategory',
+  'movieCategory',
+  'tvImportedCategory',
+  'movieImportedCategory',
+];
 
 /**
  * Sonarr's or Radarr's test of the download client `sent`, holding `key` in clear: its
@@ -286,9 +296,19 @@ function testClient(
     typeof key === 'string' &&
     key !== '' &&
     (qbittorrent.key === '' || key === qbittorrent.key);
-  return right
-    ? undefined
-    : refusal('ApiKey', 'Authentication Failure', 'Please verify your credentials.');
+  if (!right) {
+    return refusal('ApiKey', 'Authentication Failure', 'Please verify your credentials.');
+  }
+  // A test that reaches qBittorrent makes each category the client names that
+  // qBittorrent lacks, its own and its post-import one, with no save path (probed on
+  // Sonarr 4 and Radarr 6).
+  for (const setting of CLIENT_CATEGORIES) {
+    const category = value(setting);
+    if (typeof category === 'string' && category !== '') {
+      qbittorrent.categories[category] ??= '';
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -317,7 +337,12 @@ function fakeServarrDownloads(
   if (path === folders && method === 'GET') {
     return {
       status: 200,
-      body: state.rootFolders.map((f) => ({ ...f, accessible: true, freeSpace: 1 })),
+      // The arrs read `accessible` from the disk each time they are asked (probed).
+      body: state.rootFolders.map((f) => ({
+        ...f,
+        accessible: state.folders.includes(withoutSlash(f.path)),
+        freeSpace: 1,
+      })),
     };
   }
   if (path === folders && method === 'POST') {

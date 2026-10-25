@@ -1,6 +1,7 @@
 import {
   AppApiError,
   defineIntegration,
+  fieldReader,
   listItems,
   type AppApi,
   type DesiredResource,
@@ -10,7 +11,7 @@ import { z } from 'zod';
 import { secretOf } from '../_shared/secret';
 import { signIn } from './bootstrap';
 
-const user = z.looseObject({ Id: z.string(), Name: z.string() });
+const user = z.looseObject({ Id: z.string(), Name: z.unknown() });
 
 /**
  * The shared admin (spec §6.1): the user Mediaplane made in Jellyfin's startup wizard,
@@ -34,9 +35,11 @@ const admin: ResourceSpec = {
     const held =
       users.find((u) => known !== undefined && u.Id === known.id) ??
       users.find((u) => u.Name === desired?.fields.username);
-    return held === undefined
-      ? undefined
-      : { id: held.Id, name: 'admin', fields: { username: held.Name } };
+    if (held === undefined) return undefined;
+    const read = fieldReader();
+    return read.observed(held.Id, 'admin', {
+      username: read.text('username', held.Name),
+    });
   },
   async verify(api, desired) {
     const token = await signIn(api, {
@@ -90,8 +93,8 @@ const VIRTUAL_FOLDERS = '/Library/VirtualFolders';
 
 const library = z.looseObject({
   Name: z.string(),
-  /** Absent for mixed content. */
-  CollectionType: z.string().optional(),
+  /** Absent for mixed content: read as one Mediaplane can't, never as empty. */
+  CollectionType: z.unknown().optional(),
   Locations: z.array(z.string()),
 });
 
@@ -181,19 +184,33 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
       const held = (await api.get(VIRTUAL_FOLDERS, z.array(library))).find(
         (l) => l.Name === spec.name,
       );
-      return held === undefined
-        ? undefined
-        : {
-            id: spec.name,
-            name: spec.name,
-            fields: {
-              name: held.Name,
-              collectionType: held.CollectionType ?? '',
-              paths: pathsOf(held.Locations),
-            },
-          };
+      if (held === undefined) return undefined;
+      const read = fieldReader();
+      // `paths` is one comma-separated list: a folder with a comma in its name can't be
+      // told apart in it, so it is said to be, and the update reads the folders again.
+      const odd = held.Locations.find((path) => path.includes(','));
+      return read.observed(spec.name, spec.name, {
+        name: held.Name,
+        collectionType: read.text('collectionType', held.CollectionType),
+        paths:
+          odd === undefined
+            ? pathsOf(held.Locations)
+            : read.refuse('paths', `a folder with a comma in its name, ${odd}`),
+      });
     },
     async create(api, desired) {
+      // A library of another name may hold the folder already: this one renamed by hand,
+      // which Jellyfin keys by its name. Another would put the folder in two libraries.
+      const wanted = wantedPaths(desired);
+      const holder = (await api.get(VIRTUAL_FOLDERS, z.array(library))).find((l) =>
+        l.Locations.some((path) => wanted.includes(trimmed(path))),
+      );
+      if (holder !== undefined) {
+        throw new AppApiError(
+          `${api.name} at ${api.where} has no library named ${spec.name}, but its library ${holder.Name} holds its folder: if it is ${spec.name} renamed, rename it back in Jellyfin; to keep it as it is, stop Mediaplane managing ${spec.name} with jellyfin.${spec.resource}: unmanaged under overrides: (GET ${VIRTUAL_FOLDERS})`,
+          { kind: 'rejected' },
+        );
+      }
       const query = new URLSearchParams([
         ['name', spec.name],
         ['collectionType', spec.collectionType],
@@ -206,10 +223,10 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
       return { id: spec.name };
     },
     async update(api, desired, observed) {
-      const holds = String(observed.fields.collectionType);
+      const holds = observed.fields.collectionType;
       if (holds !== spec.collectionType) {
         throw new AppApiError(
-          `${api.name} at ${api.where} has a library named ${spec.name} that holds ${holds === '' ? 'mixed content' : holds}, not ${spec.collectionType}, and Jellyfin can't change what a library holds: rename or remove it in Jellyfin, and the next apply makes ${spec.name} (GET ${VIRTUAL_FOLDERS})`,
+          `${api.name} at ${api.where} has a library named ${spec.name} that holds ${holds === undefined ? "mixed content, or a kind Mediaplane can't read" : String(holds)}, not ${spec.collectionType}, and Jellyfin can't change what a library holds: rename or remove it in Jellyfin, and the next apply makes ${spec.name} (GET ${VIRTUAL_FOLDERS})`,
           { kind: 'rejected' },
         );
       }

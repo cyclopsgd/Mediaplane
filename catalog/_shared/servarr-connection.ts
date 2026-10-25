@@ -2,16 +2,16 @@ import {
   SENDS_A_KEY,
   serviceAddress,
   type DesiredResource,
+  type FieldReader,
   type ResourceSpec,
   type WiringContext,
 } from '@mediaplane/engine';
 import {
-  numberOf,
+  optionalText,
   secretOf,
   sendsToOf,
   servarrProvider,
   settingOf,
-  textOf,
   type Provider,
   type ProviderKind,
 } from './servarr-provider';
@@ -77,13 +77,22 @@ const PLEX: MediaServer = {
  * or a URL base, the whole URL the arr builds from them, which is never the stack's
  * service (a URL base of `@<host>` is another host).
  */
-function heldHost(held: Provider): string {
-  const host = textOf(settingOf(held, 'host'));
-  const tls = settingOf(held, 'useSsl') === true;
-  const base = textOf(settingOf(held, 'urlBase'));
+function heldHost(held: Provider, read: FieldReader): string | undefined {
+  const host = read.text('host', settingOf(held, 'host'));
+  if (host === undefined) return undefined;
+  const tls = settingOf(held, 'useSsl');
+  const base = optionalText(settingOf(held, 'urlBase'));
+  // Where the arr sends the key can't be told from a setting of another type.
+  if (typeof tls !== 'boolean' || base === undefined) {
+    read.refuse(
+      'host',
+      `its ${typeof tls !== 'boolean' ? 'useSsl is not true or false' : 'urlBase is not text'}, so where the arr sends the key can't be told`,
+    );
+    return undefined;
+  }
   if (!tls && base === '') return host;
-  const port = String(numberOf(settingOf(held, 'port')));
-  return `${tls ? 'https' : 'http'}://${host}:${port}${base}`;
+  const port = settingOf(held, 'port');
+  return `${tls ? 'https' : 'http'}://${host}:${typeof port === 'number' ? String(port) : '?'}${base}`;
 }
 
 /**
@@ -144,10 +153,10 @@ function servarrMediaServer(
       kind: server.kind,
       name: server.name,
       credentials: server.credentials,
-      fieldsOf: (held) => ({
-        host: heldHost(held),
-        port: numberOf(settingOf(held, 'port')),
-        updateLibrary: settingOf(held, 'updateLibrary') === true,
+      fieldsOf: (held, read) => ({
+        host: heldHost(held, read),
+        port: read.number('port', settingOf(held, 'port')),
+        updateLibrary: read.flag('updateLibrary', settingOf(held, 'updateLibrary')),
       }),
       settingsOf,
       topOf: (desired) => ({ name: desired.name }),

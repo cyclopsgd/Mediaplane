@@ -380,6 +380,46 @@ describe("an arr's connection to Jellyfin, at another address", () => {
     await connection.update(api, elsewhere, held);
     expect(at()).toEqual(['host=jellyfin', 'port=8096', 'useSsl=false', 'urlBase=']);
   });
+
+  it("reads a host or a setting it can't as one it can't, never as empty", async () => {
+    const { api, state } = await sonarr();
+    await connection.create(api, wanted());
+    const [made] = state.connections;
+    if (made === undefined) throw new Error('no connection made');
+    made.fields = made.fields.map((f) =>
+      f.name === 'host'
+        ? { ...f, value: 8096 }
+        : f.name === 'updateLibrary'
+          ? { name: 'updateLibrary' }
+          : f,
+    );
+    expect(await connection.observe(api, undefined)).toMatchObject({
+      fields: { port: 8096 },
+      unreadable: {
+        host: 'a number, not text',
+        updateLibrary: 'nothing, not true or false',
+      },
+    });
+    // A TLS or URL base setting of another type: where the key goes can't be told.
+    for (const [name, value, why] of [
+      ['useSsl', 'yes', 'useSsl is not true or false'],
+      ['urlBase', 7, 'urlBase is not text'],
+    ] as const) {
+      made.fields = made.fields.map((f) =>
+        f.name === 'host'
+          ? { ...f, value: 'jellyfin' }
+          : f.name === 'useSsl'
+            ? { ...f, value: false }
+            : f.name === 'urlBase'
+              ? { ...f, value: '' }
+              : f,
+      );
+      made.fields = made.fields.map((f) => (f.name === name ? { ...f, value } : f));
+      expect((await connection.observe(api, undefined))?.unreadable?.host).toBe(
+        `its ${why}, so where the arr sends the key can't be told`,
+      );
+    }
+  });
 });
 
 describe("an arr's connection to Plex", () => {

@@ -228,6 +228,25 @@ apps:
       });
       expect((await settings.observe(api, undefined))?.fields).toEqual(desired.fields);
     });
+
+    it("reads a setting held in another shape as one it can't, never as false or empty", async () => {
+      const { api, state } = await qbittorrent();
+      state.preferences = {
+        ...state.preferences,
+        auto_tmm_enabled: 'yes',
+        save_path: '',
+      };
+      expect(await settings.observe(api, undefined)).toEqual({
+        id: null,
+        name: 'preferences',
+        fields: {
+          savePath: '',
+          authSubnetWhitelistEnabled: false,
+          authSubnetWhitelist: '',
+        },
+        unreadable: { autoTmm: 'text, not true or false' },
+      });
+    });
   });
 
   describe('categories', () => {

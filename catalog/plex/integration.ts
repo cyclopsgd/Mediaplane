@@ -1,6 +1,7 @@
 import {
   AppApiError,
   defineIntegration,
+  fieldReader,
   listItems,
   type AppApi,
   type DesiredResource,
@@ -39,12 +40,10 @@ const server: ResourceSpec = {
   },
   async observe(api) {
     const { Setting } = (await api.get('/:/prefs', prefs)).MediaContainer;
-    const name = Setting.find((s) => s.id === 'FriendlyName')?.value;
-    return {
-      id: null,
-      name: 'server',
-      fields: { name: typeof name === 'string' ? name : '' },
-    };
+    const read = fieldReader();
+    return read.observed(null, 'server', {
+      name: read.text('name', Setting.find((s) => s.id === 'FriendlyName')?.value),
+    });
   },
   async create(api, desired) {
     await setName(api, String(desired.fields.name));
@@ -90,7 +89,7 @@ const SECTIONS = '/library/sections';
 const section = z.looseObject({
   key: z.string(),
   title: z.string(),
-  type: z.string(),
+  type: z.unknown(),
   agent: z.string(),
   Location: z.array(z.looseObject({ path: z.string() })).optional(),
 });
@@ -108,12 +107,16 @@ async function sectionsOf(api: AppApi): Promise<z.infer<typeof section>[]> {
   return (await api.get(SECTIONS, sections)).MediaContainer.Directory ?? [];
 }
 
-/** A library's folders as one sorted list, each once and without a trailing "/". */
-function locationsOf(held: z.infer<typeof section>): string {
-  const trimmed = (held.Location ?? []).map(({ path }) =>
+/** A library's folders, each without a trailing "/". */
+function foldersOf(held: z.infer<typeof section>): string[] {
+  return (held.Location ?? []).map(({ path }) =>
     path.length > 1 ? path.replace(/\/+$/, '') : path,
   );
-  return [...new Set(trimmed)].sort().join(',');
+}
+
+/** A library's folders as one sorted list, each once. */
+function locationsOf(held: z.infer<typeof section>): string {
+  return [...new Set(foldersOf(held))].sort().join(',');
 }
 
 /** The folders a desired library holds: `location`, one comma-separated list. */
@@ -151,15 +154,33 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
       const found =
         held.find((s) => known !== undefined && s.key === known.id) ??
         held.find((s) => s.title === spec.name);
-      return found === undefined
-        ? undefined
-        : {
-            id: found.key,
-            name: found.title,
-            fields: { name: found.title, type: found.type, location: locationsOf(found) },
-          };
+      if (found === undefined) return undefined;
+      const read = fieldReader();
+      // `location` is one comma-separated list: a folder with a comma in its name can't be
+      // told apart in it, so it is said to be. The update sends the folders wanted.
+      const odd = foldersOf(found).find((path) => path.includes(','));
+      return read.observed(found.key, found.title, {
+        name: found.title,
+        type: read.text('type', found.type),
+        location:
+          odd === undefined
+            ? locationsOf(found)
+            : read.refuse('location', `a folder with a comma in its name, ${odd}`),
+      });
     },
     async create(api, desired) {
+      // A library of another name may hold the folder already: this one renamed by hand,
+      // and lost from state/resources.json. Another would put the folder in two libraries.
+      const wanted = wantedLocations(desired);
+      const holder = (await sectionsOf(api)).find((s) =>
+        foldersOf(s).some((path) => wanted.includes(path)),
+      );
+      if (holder !== undefined) {
+        throw new AppApiError(
+          `${api.name} at ${api.where} has no library named ${spec.name}, but its library ${holder.title} holds its folder: if it is ${spec.name} renamed, rename it back in Plex; to keep it as it is, stop Mediaplane managing ${spec.name} with plex.${spec.resource}: unmanaged under overrides: (GET ${SECTIONS})`,
+          { kind: 'rejected' },
+        );
+      }
       const query = new URLSearchParams([
         ['name', spec.name],
         ['type', spec.type],
@@ -182,10 +203,10 @@ function libraryResource(spec: (typeof LIBRARIES)[number]): ResourceSpec {
       return { id: created.key };
     },
     async update(api, desired, observed) {
-      const holds = String(observed.fields.type);
+      const holds = observed.fields.type;
       if (holds !== spec.type) {
         throw new AppApiError(
-          `${api.name} at ${api.where} has a library named ${String(observed.fields.name)} that holds ${holds}, not ${spec.type}, and Plex can't change what a library holds: rename or remove it in Plex, and the next apply makes ${spec.name} (GET ${SECTIONS})`,
+          `${api.name} at ${api.where} has a library named ${String(observed.fields.name)} that holds ${holds === undefined ? "a kind Mediaplane can't read" : String(holds)}, not ${spec.type}, and Plex can't change what a library holds: rename or remove it in Plex, and the next apply makes ${spec.name} (GET ${SECTIONS})`,
           { kind: 'rejected' },
         );
       }

@@ -49,7 +49,11 @@ function contextOf(resolved: ResolvedStack = stack()): WiringContext {
   };
 }
 
-const client = servarrDownloadClient({ category: 'tv', setting: 'tvCategory' });
+const client = servarrDownloadClient({
+  category: 'tv',
+  setting: 'tvCategory',
+  imported: 'tvImportedCategory',
+});
 
 /** Sonarr, faked as fakeStackApis fakes it, and a client for it; qBittorrent takes QBT_KEY. */
 async function sonarr() {
@@ -66,7 +70,17 @@ async function sonarr() {
     secrets: [SONARR_KEY, QBT_KEY],
     retry: { deadlineMs: 0 },
   });
-  return { api, app: apis.app, state };
+  // qBittorrent, as plan reaches it: what a check may ask of another app.
+  const qbittorrent = createAppApi({
+    name: 'qBittorrent',
+    service: 'qbittorrent',
+    port: 8080,
+    endpoint: { host: '127.0.0.1', port: apis.app.port },
+    key: { scheme: 'bearer', value: QBT_KEY },
+    secrets: [SONARR_KEY, QBT_KEY],
+    retry: { deadlineMs: 0 },
+  });
+  return { api, app: apis.app, state, qbittorrent, apis };
 }
 
 function wanted(ctx: WiringContext = contextOf()) {
@@ -206,6 +220,163 @@ describe('servarrDownloadClient', () => {
     expect(await client.verify?.(api, desired, observed)).toBe(false);
     await client.update(api, desired, observed);
     expect(await client.verify?.(api, desired, observed)).toBe(true);
+  });
+
+  it("leaves the key unchecked in plan when the arr's test would make a missing post-import category", async () => {
+    const { api, app, state, qbittorrent, apis } = await sonarr();
+    const desired = wanted();
+    await client.create(api, desired);
+    const qbt = apis.apps.get('qbittorrent');
+    if (qbt === undefined) throw new Error('no qBittorrent faked');
+    qbt.categories = { tv: '/data/torrents/tv' };
+    const [held] = state.downloadClients;
+    if (held === undefined) throw new Error('no client made');
+    held.fields = held.fields.map((f) =>
+      f.name === 'tvImportedCategory' ? { ...f, value: 'tv-imported' } : f,
+    );
+    const observed = await client.observe(api, undefined);
+    if (observed === undefined) throw new Error('no client observed');
+    const tests = () =>
+      app.requests.filter((r) => r.path === '/api/v3/downloadclient/test').length;
+    const before = tests();
+    const plan = {
+      readOnly: true,
+      peer: (id: string) => (id === 'qbittorrent' ? qbittorrent : undefined),
+    };
+    expect(await client.verify?.(api, desired, observed, plan)).toEqual({
+      unchecked:
+        "qBittorrent has no category tv-imported (tvImportedCategory), which Sonarr's download client names, and Sonarr's own test of it would make it with no save path, so it isn't run: make it in qBittorrent, or name one in Sonarr that qBittorrent has, then run drift again",
+    });
+    expect(tests()).toBe(before);
+    expect(Object.keys(qbt.categories)).toEqual(['tv']);
+    // qBittorrent out of reach: unchecked too.
+    expect(
+      await client.verify?.(api, desired, observed, {
+        readOnly: true,
+        peer: () => undefined,
+      }),
+    ).toEqual({
+      unchecked:
+        "Sonarr's own test of its download client would make any of tv (tvCategory) and tv-imported (tvImportedCategory) that qBittorrent lacks, with no save path, so it isn't run while qBittorrent can't be asked which it has: run drift again once it answers",
+    });
+    // Apply's check runs the test, which makes the category, as the arr's own does.
+    expect(await client.verify?.(api, desired, observed)).toBe(true);
+    expect(qbt.categories['tv-imported']).toBe('');
+    // Once qBittorrent has it, plan runs the test.
+    expect(await client.verify?.(api, desired, observed, plan)).toBe(true);
+    expect(tests()).toBe(before + 2);
+  });
+
+  it('leaves the key unchecked in plan while qBittorrent lacks the category the client files under', async () => {
+    // No longer Mediaplane's in qBittorrent (unmanaged), and deleted there.
+    const { api, app, state, qbittorrent, apis } = await sonarr();
+    const desired = wanted();
+    await client.create(api, desired);
+    const qbt = apis.apps.get('qbittorrent');
+    if (qbt === undefined) throw new Error('no qBittorrent faked');
+    qbt.categories = {};
+    const observed = await client.observe(api, undefined);
+    if (observed === undefined) throw new Error('no client observed');
+    const tests = () =>
+      app.requests.filter((r) => r.path === '/api/v3/downloadclient/test').length;
+    const before = tests();
+    const plan = { readOnly: true, peer: () => qbittorrent };
+    expect(await client.verify?.(api, desired, observed, plan)).toEqual({
+      unchecked:
+        "qBittorrent has no category tv (tvCategory), which Sonarr's download client names, and Sonarr's own test of it would make it with no save path, so it isn't run: make it in qBittorrent, or name one in Sonarr that qBittorrent has, then run drift again",
+    });
+    expect(tests()).toBe(before);
+    expect(qbt.categories).toEqual({});
+    // Apply's check runs the test, which makes it, with no save path, as the arr's does.
+    expect(state.downloadClients).toHaveLength(1);
+    expect(await client.verify?.(api, desired, observed)).toBe(true);
+    expect(qbt.categories).toEqual({ tv: '' });
+  });
+
+  it("leaves the key unchecked in plan while qBittorrent can't say which categories it has", async () => {
+    const { api, app } = await sonarr();
+    const desired = wanted();
+    await client.create(api, desired);
+    const observed = await client.observe(api, undefined);
+    if (observed === undefined) throw new Error('no client observed');
+    const broken = await fakeHttpApp(() => ({ status: 500 }));
+    const failing = createAppApi({
+      name: 'qBittorrent',
+      service: 'qbittorrent',
+      port: 8080,
+      endpoint: { host: '127.0.0.1', port: broken.port },
+      key: { scheme: 'bearer', value: QBT_KEY },
+      secrets: [QBT_KEY],
+      retry: { deadlineMs: 0 },
+    });
+    const tests = () =>
+      app.requests.filter((r) => r.path === '/api/v3/downloadclient/test').length;
+    const before = tests();
+    const verdict = await client.verify?.(api, desired, observed, {
+      readOnly: true,
+      peer: () => failing,
+    });
+    expect(verdict).toEqual({
+      unchecked: expect.stringMatching(
+        /^Sonarr's own test of its download client would make any of tv \(tvCategory\) that qBittorrent lacks, with no save path, so it isn't run while qBittorrent can't be asked which it has \(qBittorrent at .*\/api\/v2\/torrents\/categories\)\): run drift again once it answers$/,
+      ) as string,
+    });
+    expect(tests()).toBe(before);
+  });
+
+  it("leaves the key unchecked in plan while the client's post-import category isn't text", async () => {
+    const { api, app, state, qbittorrent } = await sonarr();
+    const desired = wanted();
+    await client.create(api, desired);
+    const [held] = state.downloadClients;
+    if (held === undefined) throw new Error('no client made');
+    held.fields = held.fields.map((f) =>
+      f.name === 'tvImportedCategory' ? { ...f, value: 7 } : f,
+    );
+    const observed = await client.observe(api, undefined);
+    if (observed === undefined) throw new Error('no client observed');
+    const before = app.requests.length;
+    expect(
+      await client.verify?.(api, desired, observed, {
+        readOnly: true,
+        peer: () => qbittorrent,
+      }),
+    ).toEqual({
+      unchecked:
+        "Sonarr's download client holds a tvImportedCategory that isn't text, so its own test of it, which could make a category in qBittorrent, isn't run: set tvImportedCategory in Sonarr, then run drift again",
+    });
+    expect(app.requests.slice(before).some((r) => r.path.endsWith('/test'))).toBe(false);
+  });
+
+  it("reads a client setting it can't, of another type or missing, as one it can't, never as empty", async () => {
+    const { api } = await sonarrAnswering({
+      'GET /api/v3/downloadclient': {
+        status: 200,
+        body: [
+          {
+            id: 1,
+            name: DOWNLOAD_CLIENT_NAME,
+            implementation: 'QBittorrent',
+            fields: [
+              { name: 'host', value: 'gluetun' },
+              { name: 'port', value: '8080' },
+              { name: 'useSsl', value: false },
+              { name: 'tvCategory' },
+            ],
+          },
+        ],
+      },
+    });
+    expect(await client.observe(api, undefined)).toEqual({
+      id: 1,
+      name: DOWNLOAD_CLIENT_NAME,
+      fields: { host: 'gluetun', useSsl: false },
+      unreadable: {
+        category: 'nothing, not text',
+        enable: 'nothing, not true or false',
+        port: 'text, not a number',
+      },
+    });
   });
 
   it("says the app's own words when its test fails for another reason", async () => {
@@ -370,7 +541,7 @@ describe('servarrRootFolder', () => {
   it('needs its folder made first, and is known by its path', async () => {
     expect(folder.desired(contextOf())).toEqual({
       name: '/data/media/tv',
-      fields: { path: '/data/media/tv' },
+      fields: { path: '/data/media/tv', accessible: true },
       secrets: {},
       folders: ['/data/media/tv'],
     });
@@ -387,7 +558,31 @@ describe('servarrRootFolder', () => {
     expect(await folder.observe(api, undefined)).toEqual({
       id: 1,
       name: '/data/media/tv',
+      fields: { path: '/data/media/tv', accessible: true },
+    });
+  });
+
+  it('says the arr can no longer reach its folder, deleted by hand, so apply makes it again', async () => {
+    const { api, state } = await sonarr();
+    state.rootFolders = [{ id: 1, path: '/data/media/tv' }];
+    expect((await folder.observe(api, undefined))?.fields).toEqual({
+      path: '/data/media/tv',
+      accessible: false,
+    });
+  });
+
+  it("says when the arr doesn't say whether it reaches the folder, rather than guess", async () => {
+    const { api } = await sonarrAnswering({
+      'GET /api/v3/rootfolder': {
+        status: 200,
+        body: [{ id: 1, path: '/data/media/tv' }],
+      },
+    });
+    expect(await folder.observe(api, undefined)).toEqual({
+      id: 1,
+      name: '/data/media/tv',
       fields: { path: '/data/media/tv' },
+      unreadable: { accessible: 'nothing, not true or false' },
     });
   });
 });

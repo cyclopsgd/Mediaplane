@@ -1,4 +1,5 @@
 import {
+  fieldReader,
   listItems,
   provides,
   SENDS_A_KEY,
@@ -12,12 +13,10 @@ import { servarrIntegration } from '../_shared/servarr';
 import {
   createProvider,
   findProvider,
-  numberOf,
   secretOf,
   sendsToOf,
   servarrProvider,
   settingOf,
-  textOf,
   updateProvider,
   type ProviderKind,
 } from '../_shared/servarr-provider';
@@ -136,11 +135,11 @@ function application(link: (typeof LINKED)[number]): ResourceSpec {
       kind,
       name,
       credentials: ['ApiKey'],
-      fieldsOf: (held) => ({
-        prowlarrUrl: textOf(settingOf(held, 'prowlarrUrl')),
-        baseUrl: textOf(settingOf(held, 'baseUrl')),
-        syncLevel: textOf(held.syncLevel),
-        syncCategories: categoriesOf(settingOf(held, 'syncCategories')),
+      fieldsOf: (held, read) => ({
+        prowlarrUrl: read.text('prowlarrUrl', settingOf(held, 'prowlarrUrl')),
+        baseUrl: read.text('baseUrl', settingOf(held, 'baseUrl')),
+        syncLevel: read.text('syncLevel', held.syncLevel),
+        syncCategories: read.numbers('syncCategories', settingOf(held, 'syncCategories')),
       }),
       settingsOf,
       topOf,
@@ -209,18 +208,17 @@ const indexerProxy: ResourceSpec = {
       (await api.get(TAGS, z.array(tag))).map((t) => [t.id, t.label]),
     );
     const ids = tagIds.safeParse(held.tags);
-    return {
-      id: held.id,
-      name: held.name,
-      fields: {
-        host: textOf(settingOf(held, 'host')),
-        requestTimeout: numberOf(settingOf(held, 'requestTimeout')),
-        tags: (ids.success ? ids.data : [])
-          .map((id) => labels.get(id) ?? String(id))
-          .sort()
-          .join(','),
-      },
-    };
+    const read = fieldReader();
+    return read.observed(held.id, held.name, {
+      host: read.text('host', settingOf(held, 'host')),
+      requestTimeout: read.number('requestTimeout', settingOf(held, 'requestTimeout')),
+      tags: ids.success
+        ? ids.data
+            .map((id) => labels.get(id) ?? String(id))
+            .sort()
+            .join(',')
+        : read.refuse('tags', 'not a list of tag ids'),
+    });
   },
   async create(api, desired) {
     const { settings, top } = await proxyBody(api, desired);

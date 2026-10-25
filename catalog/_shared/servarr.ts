@@ -1,5 +1,6 @@
 import {
   defineIntegration,
+  fieldReader,
   type ApiSpec,
   type AppApi,
   type AppContext,
@@ -57,7 +58,7 @@ export function servarrApi(version: 'v1' | 'v3'): ApiSpec {
 }
 
 /** What Mediaplane reads of the app's host settings; the rest goes back as it came. */
-const hostSettings = z.looseObject({ id: z.number(), username: z.string() });
+const hostSettings = z.looseObject({ id: z.number(), username: z.unknown() });
 
 /**
  * The shared admin login (spec §6.1) in Sonarr, Radarr or Prowlarr: the singleton
@@ -91,9 +92,9 @@ export function servarrAdmin(version: 'v1' | 'v3'): ResourceSpec {
     async observe(api) {
       const { username } = await api.get(path, hostSettings);
       // No user yet: the app asks for a login that nobody can give.
-      return username === ''
-        ? undefined
-        : { id: null, name: 'admin', fields: { username } };
+      if (username === '') return undefined;
+      const read = fieldReader();
+      return read.observed(null, 'admin', { username: read.text('username', username) });
     },
     async verify(api, desired) {
       const signedIn = await api.login('/login', {

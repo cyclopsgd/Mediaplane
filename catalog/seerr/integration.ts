@@ -1,12 +1,14 @@
 import {
   AppApiError,
   defineIntegration,
+  fieldReader,
   isUnmanaged,
   listItems,
   SENDS_A_KEY,
   stackAddress,
   type AppApi,
   type DesiredResource,
+  type FieldReader,
   type ObservedResource,
   type ResolvedStack,
   type ResourceSpec,
@@ -18,8 +20,8 @@ import { LIBRARIES } from '../jellyfin/integration';
 import { LIBRARIES as PLEX_LIBRARIES } from '../plex/integration';
 import { ROOT_FOLDER as MOVIES } from '../radarr/integration';
 import { ROOT_FOLDER as TV } from '../sonarr/integration';
-import { heldHost, jellyfinSettings as heldJellyfin } from './jellyfin';
-import { heldPlexHost, plexSettings as heldPlex } from './plex';
+import { heldHost } from './jellyfin';
+import { heldPlexHost } from './plex';
 
 const SETTINGS = '/api/v1/settings';
 
@@ -73,26 +75,75 @@ function stackApp(
   };
 }
 
-const library = z.looseObject({ id: z.string(), name: z.string(), enabled: z.boolean() });
+const library = z.looseObject({ id: z.string(), name: z.string(), enabled: z.unknown() });
 /**
- * `serverId` is the server's own identifier, which Seerr sets at its first sign-in
- * through Jellyfin and on each link to Jellyfin it saves (read from Seerr's code): without
- * one, the link reads as not saved, as Plex's does without `machineId` (probed: a failed
- * save to Plex still leaves the address in Seerr's settings).
+ * Seerr's Jellyfin settings (`GET /api/v1/settings/jellyfin`), its key in clear, and the
+ * managed ones read with a FieldReader. `serverId` is the server's own identifier, which
+ * Seerr sets at its first sign-in through Jellyfin and on each link to Jellyfin it saves
+ * (read from Seerr's code): without one, the link reads as not saved, as Plex's does
+ * without `machineId` (probed: a failed save to Plex still leaves the address in Seerr's
+ * settings).
  */
-const jellyfinSettings = heldJellyfin.extend({
+const jellyfinSettings = z.looseObject({
+  ip: z.unknown(),
+  port: z.unknown(),
+  useSsl: z.unknown(),
+  urlBase: z.unknown(),
+  apiKey: z.string(),
   libraries: z.array(library),
   serverId: z.string().optional(),
 });
 
-/** Which of the libraries `wanted` Seerr has enabled, as one list. */
+/**
+ * Which of the libraries `wanted` Seerr has enabled, as one list; none, said to be, when
+ * one of them is held as neither enabled nor not.
+ */
 function enabledOf(
+  read: FieldReader,
   libraries: readonly z.infer<typeof library>[],
   wanted: readonly string[],
-): string {
+): string | undefined {
+  const odd = libraries.find(
+    (held) => wanted.includes(held.name) && typeof held.enabled !== 'boolean',
+  );
+  if (odd !== undefined) {
+    read.refuse('libraries', `${odd.name} is held as neither enabled nor not`);
+    return undefined;
+  }
   return wanted
-    .filter((name) => libraries.some((held) => held.name === name && held.enabled))
+    .filter((name) =>
+      libraries.some((held) => held.name === name && held.enabled === true),
+    )
     .join(',');
+}
+
+/**
+ * Where Seerr reaches a media server or an arr, read: its host as `fold` makes it of the
+ * settings (the URL Seerr calls, with TLS or a URL base), and its port. A setting of
+ * another type says the host can't be read: where Seerr sends the key it holds can't be
+ * told then.
+ */
+function addressOf(
+  read: FieldReader,
+  held: { host: unknown; port: unknown; useSsl: unknown; base: unknown },
+  fold: (at: { host: string; port: number; useSsl: boolean; base: string }) => string,
+): { hostname: string | undefined; port: number | undefined } {
+  const port = read.number('port', held.port);
+  const host = read.text('hostname', held.host);
+  if (host === undefined) return { hostname: undefined, port };
+  const base = held.base ?? '';
+  if (
+    typeof held.useSsl !== 'boolean' ||
+    typeof base !== 'string' ||
+    port === undefined
+  ) {
+    read.refuse(
+      'hostname',
+      "its TLS, URL base or port is held in a shape Mediaplane can't read, so where Seerr sends the key it holds can't be told",
+    );
+    return { hostname: undefined, port };
+  }
+  return { hostname: fold({ host, port, useSsl: held.useSsl, base }), port };
 }
 
 /**
@@ -158,7 +209,7 @@ async function enableLibraries(
         { kind: 'rejected' },
       );
     }
-    if (!held.enabled) {
+    if (held.enabled !== true) {
       await api.put(`${at}/${encodeURIComponent(held.id)}`, { enabled: true });
     }
   }
@@ -202,18 +253,19 @@ const mediaServer: ResourceSpec = {
   async observe(api, _known, desired) {
     const held = await api.get(`${SETTINGS}/jellyfin`, jellyfinSettings);
     api.addSecret(held.apiKey);
-    return held.ip === '' || (held.serverId ?? '') === ''
-      ? undefined
-      : {
-          id: null,
-          name: 'Jellyfin',
-          fields: {
-            // With TLS or a URL base, the URL Seerr calls: another host than the stack's.
-            hostname: heldHost(held),
-            port: held.port,
-            libraries: enabledOf(held.libraries, librariesIn(desired, WANTED)),
-          },
-        };
+    if (held.ip === '' || (held.serverId ?? '') === '') return undefined;
+    const read = fieldReader();
+    // With TLS or a URL base, the URL Seerr calls: another host than the stack's.
+    const at = addressOf(
+      read,
+      { host: held.ip, port: held.port, useSsl: held.useSsl, base: held.urlBase },
+      ({ host, port, useSsl, base }) =>
+        heldHost({ ip: host, port, useSsl, urlBase: base }),
+    );
+    return read.observed(null, 'Jellyfin', {
+      ...at,
+      libraries: enabledOf(read, held.libraries, librariesIn(desired, WANTED)),
+    });
   },
   verify: (api, desired, observed) =>
     atStack(desired, observed)
@@ -227,9 +279,14 @@ const mediaServer: ResourceSpec = {
     await enableLibraries(api, librariesIn(desired, WANTED));
     return { id: null };
   },
-  async update(api, desired, observed) {
+  async update(api, desired, observed, changes = []) {
     const moved = !atStack(desired, observed);
-    if (moved || !(await heldKeyWorks(api))) await saveJellyfin(api, desired);
+    // A key the check found refused is given at once: each check that fails logs a line
+    // in Seerr's log, so one is enough (the owner's decision of 2026-10-17). One left
+    // unchecked, because a field differs, is checked here, once.
+    if (moved || changes.includes('apiKey') || !(await heldKeyWorks(api))) {
+      await saveJellyfin(api, desired);
+    }
     // Another Jellyfin has other library ids, though the names match: sync them again.
     if (moved || observed.fields.libraries !== desired.fields.libraries) {
       await enableLibraries(api, librariesIn(desired, WANTED));
@@ -239,8 +296,14 @@ const mediaServer: ResourceSpec = {
 
 const PLEX = { path: 'plex', name: 'Plex' } as const;
 
-/** `machineId` is Plex's own identifier, which Seerr sets only once it has saved a link. */
-const plexSettings = heldPlex.extend({
+/**
+ * Seerr's Plex settings, the managed ones read with a FieldReader. `machineId` is Plex's
+ * own identifier, which Seerr sets only once it has saved a link.
+ */
+const plexSettings = z.looseObject({
+  ip: z.unknown(),
+  port: z.unknown(),
+  useSsl: z.unknown(),
   libraries: z.array(library),
   machineId: z.string().optional(),
 });
@@ -290,17 +353,17 @@ const mediaServerPlex: ResourceSpec = {
   },
   async observe(api, _known, desired) {
     const held = await api.get(`${SETTINGS}/plex`, plexSettings);
-    return held.ip === '' || (held.machineId ?? '') === ''
-      ? undefined
-      : {
-          id: null,
-          name: 'Plex',
-          fields: {
-            hostname: heldPlexHost(held),
-            port: held.port,
-            libraries: enabledOf(held.libraries, librariesIn(desired, WANTED_PLEX)),
-          },
-        };
+    if (held.ip === '' || (held.machineId ?? '') === '') return undefined;
+    const read = fieldReader();
+    const at = addressOf(
+      read,
+      { host: held.ip, port: held.port, useSsl: held.useSsl, base: '' },
+      ({ host, port, useSsl }) => heldPlexHost({ ip: host, port, useSsl }),
+    );
+    return read.observed(null, 'Plex', {
+      ...at,
+      libraries: enabledOf(read, held.libraries, librariesIn(desired, WANTED_PLEX)),
+    });
   },
   async create(api, desired) {
     await savePlex(api, desired);
@@ -346,27 +409,27 @@ const ARRS = {
   },
 } as const;
 
+/** A server as Seerr holds it, its key in clear, the managed fields read with a FieldReader. */
 const server = z.looseObject({
   id: z.number(),
   name: z.string(),
-  hostname: z.string(),
-  port: z.number(),
+  hostname: z.unknown(),
+  port: z.unknown(),
   apiKey: z.string(),
-  useSsl: z.boolean(),
-  baseUrl: z.string().optional(),
-  activeProfileName: z.string(),
-  activeDirectory: z.string(),
-  isDefault: z.boolean(),
+  useSsl: z.unknown(),
+  baseUrl: z.unknown().optional(),
+  activeProfileName: z.unknown(),
+  activeDirectory: z.unknown(),
+  isDefault: z.unknown(),
 });
 /**
  * Where Seerr reaches a server's arr, as one host to compare: its `hostname`, or, with
  * TLS or a URL base, the whole URL Seerr builds from them (`buildUrl`), which is never
  * the stack's service.
  */
-function serverHost(held: z.infer<typeof server>): string {
-  const base = held.baseUrl ?? '';
-  if (!held.useSsl && base === '') return held.hostname;
-  return `${held.useSsl ? 'https' : 'http'}://${held.hostname}:${String(held.port)}${base}`;
+function serverHost(at: { host: string; port: number; useSsl: boolean; base: string }) {
+  if (!at.useSsl && at.base === '') return at.host;
+  return `${at.useSsl ? 'https' : 'http'}://${at.host}:${String(at.port)}${at.base}`;
 }
 
 const offered = z.looseObject({
@@ -514,20 +577,24 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
       const found =
         held.find((s) => known !== undefined && s.id === known.id) ??
         held.find((s) => s.name === name);
-      return found === undefined
-        ? undefined
-        : {
-            id: found.id,
-            name: found.name,
-            fields: {
-              // With TLS or a URL base, the URL Seerr calls: not the stack's host.
-              hostname: serverHost(found),
-              port: found.port,
-              activeProfile: found.activeProfileName,
-              activeDirectory: found.activeDirectory,
-              isDefault: found.isDefault,
-            },
-          };
+      if (found === undefined) return undefined;
+      const read = fieldReader();
+      return read.observed(found.id, found.name, {
+        // With TLS or a URL base, the URL Seerr calls: not the stack's host.
+        ...addressOf(
+          read,
+          {
+            host: found.hostname,
+            port: found.port,
+            useSsl: found.useSsl,
+            base: found.baseUrl,
+          },
+          serverHost,
+        ),
+        activeProfile: read.text('activeProfile', found.activeProfileName),
+        activeDirectory: read.text('activeDirectory', found.activeDirectory),
+        isDefault: read.flag('isDefault', found.isDefault),
+      });
     },
     async verify(api, desired, observed) {
       const held = await heldOf(api, observed.id);
@@ -597,9 +664,12 @@ const setup: ResourceSpec = {
   async observe(api) {
     const { initialized } = await api.get(
       `${SETTINGS}/public`,
-      z.looseObject({ initialized: z.boolean() }),
+      z.looseObject({ initialized: z.unknown() }),
     );
-    return { id: null, name: 'setup', fields: { initialized } };
+    const read = fieldReader();
+    return read.observed(null, 'setup', {
+      initialized: read.flag('initialized', initialized),
+    });
   },
   async create(api) {
     await api.submit('POST', `${SETTINGS}/initialize`);

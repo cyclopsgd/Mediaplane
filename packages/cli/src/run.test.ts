@@ -22,6 +22,7 @@ import {
   type ContainerState,
   type HostRequest,
   type KnownResources,
+  type PlanResult,
   type Runtime,
   type SecretStore,
 } from '@mediaplane/engine';
@@ -149,7 +150,7 @@ const WIRED: KnownResources = {
   'sonarr.root_folder': {
     id: 1,
     name: '/data/media/tv',
-    fields: { path: '/data/media/tv' },
+    fields: { path: '/data/media/tv', accessible: true },
     secrets: [],
     appliedAt: AT,
   },
@@ -245,6 +246,7 @@ async function currentHome(
       },
     ],
     rootFolders: [{ id: 1, path: '/data/media/tv' }],
+    folders: ['/data/media/tv'],
     connections: [
       {
         id: 1,
@@ -472,6 +474,39 @@ describe('mediaplane plan', () => {
     expect(tested()).toBe(0);
     // With the category in place, the test runs.
     qbittorrent.categories = { tv: '/data/torrents/tv' };
+    expect(await run(['plan', '--home', home], capture().io, deps(runtime))).toBe(0);
+    expect(tested()).toBe(1);
+  });
+
+  it('asks no arr to test its download client while the post-import category it names is missing', async () => {
+    // Sonarr's own test would make it in qBittorrent, which Mediaplane doesn't manage:
+    // plan leaves the key unchecked (the owner's decision of 2026-10-17).
+    const runtime = fakeRuntime({
+      hashes: { ok: true, hashes: HASHES },
+      containers: running(HASHES),
+    });
+    const home = await currentHome(runtime);
+    const sonarr = apis.apps.get('sonarr');
+    const qbittorrent = apis.apps.get('qbittorrent');
+    if (sonarr === undefined || qbittorrent === undefined)
+      throw new Error('no apps faked');
+    sonarr.downloadClients[0]?.fields.push({
+      name: 'tvImportedCategory',
+      value: 'tv-done',
+    });
+    const tested = () =>
+      apis.app.requests.filter((r) => r.path === '/api/v3/downloadclient/test').length;
+    const json = capture();
+    expect(await run(['plan', '--home', home, '--json'], json.io, deps(runtime))).toBe(0);
+    expect(tested()).toBe(0);
+    expect(Object.keys(qbittorrent.categories)).toEqual(['tv']);
+    expect(
+      (JSON.parse(json.stdout()) as PlanResult).checks.find(
+        (c) => c.resource === 'sonarr.download_client',
+      ),
+    ).toMatchObject({ secret: 'apiKey', verdict: 'unchecked' });
+    // Once qBittorrent has it, plan runs the test.
+    qbittorrent.categories['tv-done'] = '/data/torrents/tv-done';
     expect(await run(['plan', '--home', home], capture().io, deps(runtime))).toBe(0);
     expect(tested()).toBe(1);
   });

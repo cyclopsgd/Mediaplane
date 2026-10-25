@@ -30,7 +30,11 @@ export default servarrIntegration(
   'v3',
   ['jellyfin', 'plex', 'qbittorrent'],
   [
-    servarrDownloadClient({ category: 'movies', setting: 'movieCategory' }),
+    servarrDownloadClient({
+      category: 'movies',
+      setting: 'movieCategory',
+      imported: 'movieImportedCategory',
+    }),
     servarrRootFolder(ROOT_FOLDER),
     servarrJellyfin(LIBRARY_TRIGGERS),
     servarrPlex(LIBRARY_TRIGGERS, 'plex.library_movies'),

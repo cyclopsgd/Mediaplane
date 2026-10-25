@@ -380,6 +380,19 @@ apps:
     expect((await toSonarr.observe(api, undefined))?.fields).toEqual(desired.fields);
   });
 
+  it("reads categories it can't as such, never as none", async () => {
+    const { api, state } = await prowlarr();
+    await toSonarr.create(api, wanted(toSonarr));
+    const [held] = state.applications;
+    if (held === undefined) throw new Error('no link made');
+    held.fields = held.fields.map((f) =>
+      f.name === 'syncCategories' ? { ...f, value: '5000' } : f,
+    );
+    expect((await toSonarr.observe(api, undefined))?.unreadable).toEqual({
+      syncCategories: 'text, not a list of numbers',
+    });
+  });
+
   it('refuses a Prowlarr that offers no link to the arr, and sends nothing', async () => {
     const app = await fakeHttpApp((request) =>
       request.path === '/api/v1/applications/schema'
@@ -462,6 +475,18 @@ describe('the indexer proxy', () => {
     await proxy.update(api, wanted(proxy), observed);
     expect(state.proxies[0]?.tags).toEqual([2]);
     expect((await proxy.observe(api, undefined))?.fields).toEqual(wanted(proxy).fields);
+  });
+
+  it("reads tags it can't as such, never as none", async () => {
+    const { api, state } = await prowlarr();
+    await proxy.create(api, wanted(proxy));
+    const [held] = state.proxies;
+    if (held === undefined) throw new Error('no proxy made');
+    held.tags = 'cloudflare' as unknown as number[];
+    expect(await proxy.observe(api, undefined)).toMatchObject({
+      fields: { host: 'http://byparr:8191/', requestTimeout: 60 },
+      unreadable: { tags: 'not a list of tag ids' },
+    });
   });
 
   it('gives the proxy the tags an override names, finding or making each by its label', async () => {

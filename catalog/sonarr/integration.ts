@@ -30,7 +30,11 @@ export default servarrIntegration(
   'v3',
   ['jellyfin', 'plex', 'qbittorrent'],
   [
-    servarrDownloadClient({ category: 'tv', setting: 'tvCategory' }),
+    servarrDownloadClient({
+      category: 'tv',
+      setting: 'tvCategory',
+      imported: 'tvImportedCategory',
+    }),
     servarrRootFolder(ROOT_FOLDER),
     servarrJellyfin(LIBRARY_TRIGGERS),
     servarrPlex(LIBRARY_TRIGGERS, 'plex.library_tv'),

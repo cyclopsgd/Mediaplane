@@ -1,18 +1,25 @@
 import {
+  AppApiError,
+  fieldReader,
   SENDS_A_KEY,
   serviceAddress,
+  type AppApi,
   type DesiredResource,
-  type Fields,
+  type FieldReader,
+  type ObservedResource,
   type ResourceSpec,
+  type Scalar,
+  type VerifyContext,
 } from '@mediaplane/engine';
 import { z } from 'zod';
 import {
-  numberOf,
+  optionalText,
+  providerOf,
   secretOf,
   sendsToOf,
   servarrProvider,
   settingOf,
-  textOf,
+  testProvider,
   type Provider,
   type ProviderKind,
 } from './servarr-provider';
@@ -43,16 +50,74 @@ export interface DownloadLink {
   category: 'tv' | 'movies';
   /** The arr's setting that holds it: Sonarr's tvCategory, Radarr's movieCategory. */
   setting: 'tvCategory' | 'movieCategory';
+  /**
+   * The arr's setting of the category it moves a download to once imported, which
+   * Mediaplane doesn't manage: Sonarr's tvImportedCategory, Radarr's
+   * movieImportedCategory.
+   */
+  imported: 'tvImportedCategory' | 'movieImportedCategory';
 }
 
-/** The managed fields of a download client, from the app's settings. */
-function fieldsOf(held: Provider, link: DownloadLink): Fields {
+const QBT_CATEGORIES = '/api/v2/torrents/categories';
+
+/**
+ * Why plan and drift leave the client's key unchecked, if they do: the arr's own test
+ * makes in qBittorrent each category the client names that qBittorrent lacks, with no
+ * save path (probed), and they change nothing (spec §5.2). That is its post-import one,
+ * which Mediaplane doesn't manage (the owner's decision of 2026-10-17, which this widens
+ * in its direction), or its own, once qBittorrent's is no longer Mediaplane's
+ * (`unmanaged`) and deleted. (One kept as another, Keep mine, is qBittorrent's category to
+ * make, by apply: the client waits for it.) A setting it can't read, or a qBittorrent it
+ * can't ask, leaves the key unchecked too. With qBittorrent holding each, undefined: the
+ * test is run.
+ */
+async function testWouldMake(
+  api: AppApi,
+  link: DownloadLink,
+  observed: ObservedResource,
+  ctx: VerifyContext,
+): Promise<string | undefined> {
+  const held = await providerOf(api, CLIENTS, observed.id);
+  const named: { setting: string; category: string }[] = [];
+  for (const setting of [link.setting, link.imported]) {
+    // Unset, the arr leaves a setting out; cleared, it holds "" (probed).
+    const category = optionalText(settingOf(held, setting));
+    if (category === undefined) {
+      return `${api.name}'s download client holds a ${setting} that isn't text, so its own test of it, which could make a category in qBittorrent, isn't run: set ${setting} in ${api.name}, then run drift again`;
+    }
+    if (category !== '') named.push({ setting, category });
+  }
+  if (named.length === 0) return undefined;
+  const which = (list: typeof named) =>
+    list.map(({ setting, category }) => `${category} (${setting})`).join(' and ');
+  const cannot = `${api.name}'s own test of its download client would make any of ${which(named)} that qBittorrent lacks, with no save path, so it isn't run while qBittorrent can't be asked which it has`;
+  const qbittorrent = ctx.peer('qbittorrent');
+  if (qbittorrent === undefined) return `${cannot}: run drift again once it answers`;
+  let categories: Record<string, unknown>;
+  try {
+    categories = await qbittorrent.get(QBT_CATEGORIES, z.record(z.string(), z.unknown()));
+  } catch (cause) {
+    if (!(cause instanceof AppApiError)) throw cause;
+    return `${cannot} (${cause.message}): run drift again once it answers`;
+  }
+  const missing = named.filter(({ category }) => !Object.hasOwn(categories, category));
+  return missing.length === 0
+    ? undefined
+    : `qBittorrent has no category ${which(missing)}, which ${api.name}'s download client names, and ${api.name}'s own test of it would make it with no save path, so it isn't run: make it in qBittorrent, or name one in ${api.name} that qBittorrent has, then run drift again`;
+}
+
+/** The managed fields of a download client, read from the app's settings. */
+function fieldsOf(
+  held: Provider,
+  link: DownloadLink,
+  read: FieldReader,
+): Record<string, Scalar | undefined> {
   return {
-    host: textOf(settingOf(held, 'host')),
-    port: numberOf(settingOf(held, 'port')),
-    useSsl: settingOf(held, 'useSsl') === true,
-    category: textOf(settingOf(held, link.setting)),
-    enable: held.enable === true,
+    host: read.text('host', settingOf(held, 'host')),
+    port: read.number('port', settingOf(held, 'port')),
+    useSsl: read.flag('useSsl', settingOf(held, 'useSsl')),
+    category: read.text('category', settingOf(held, link.setting)),
+    enable: read.flag('enable', held.enable),
   };
 }
 
@@ -125,43 +190,73 @@ export function servarrDownloadClient(link: DownloadLink): ResourceSpec {
       kind: CLIENTS,
       name: DOWNLOAD_CLIENT_NAME,
       credentials: CREDENTIALS,
-      fieldsOf: (held) => fieldsOf(held, link),
+      fieldsOf: (held, read) => fieldsOf(held, link, read),
       settingsOf: (desired) => settingsOf(desired, link),
       topOf,
     }),
+    async verify(api, desired, observed, ctx) {
+      if (ctx?.readOnly === true) {
+        const unchecked = await testWouldMake(api, link, observed, ctx);
+        if (unchecked !== undefined) return { unchecked };
+      }
+      return testProvider(
+        api,
+        CLIENTS,
+        observed.id,
+        desired.name,
+        CREDENTIALS,
+        sendsToOf(desired),
+      );
+    },
   };
 }
 
-const rootFolder = z.looseObject({ id: z.number(), path: z.string() });
+const rootFolder = z.looseObject({
+  id: z.number(),
+  path: z.string(),
+  accessible: z.unknown().optional(),
+});
 
 /**
  * A root folder of Sonarr or Radarr (spec §6.2): where its library lives, under the data
  * folder, which the downloads share, so that an import is a hard link. The app needs the
- * folder to exist: the wire step makes it first. A root folder is known by its path, and
- * the app can't change one (a PUT answers 405), so a found one is always as wanted.
+ * folder to exist: the wire step makes it first, and again when the arr says it can't
+ * reach it (`accessible`, which the arr reads from the disk each time it is asked:
+ * probed). A root folder is known by its path, and the app can't change one (a PUT
+ * answers 405), so there is nothing else to update.
  */
 export function servarrRootFolder(path: string): ResourceSpec {
   return {
     name: 'root_folder',
-    fields: ['path'],
+    fields: ['path', 'accessible'],
     locked: {
       path: "the arr knows a root folder by its path, and can't move one: another path would add a second root folder beside this one, which holds your library. To move your library, move it in the arr, then stop Mediaplane managing this one with {resource}: unmanaged",
+      accessible:
+        'the arr says whether it can reach the folder, from the disk: apply makes the folder again',
     },
     secrets: [],
-    desired: () => ({ name: path, fields: { path }, secrets: {}, folders: [path] }),
+    desired: () => ({
+      name: path,
+      fields: { path, accessible: true },
+      secrets: {},
+      folders: [path],
+    }),
     async observe(api) {
       const held = (await api.get(ROOT_FOLDERS, z.array(rootFolder))).find(
         (folder) => folder.path.replace(/\/+$/, '') === path,
       );
-      return held === undefined
-        ? undefined
-        : { id: held.id, name: path, fields: { path } };
+      if (held === undefined) return undefined;
+      const read = fieldReader();
+      return read.observed(held.id, path, {
+        path,
+        accessible: read.flag('accessible', held.accessible),
+      });
     },
     async create(api) {
       const made = await api.post(ROOT_FOLDERS, { path }, created);
       return { id: made.id };
     },
-    // Found by its path, it never differs from the one wanted: there is nothing to update.
+    // The wire step made its folder again first, which is all an update can do.
     update: () => Promise.resolve(),
   };
 }

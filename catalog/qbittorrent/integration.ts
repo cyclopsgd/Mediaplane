@@ -1,5 +1,6 @@
 import {
   defineIntegration,
+  fieldReader,
   isUnmanaged,
   type AppApi,
   type DesiredResource,
@@ -27,22 +28,23 @@ const SET_PREFERENCES = '/api/v2/app/setPreferences';
 const CATEGORIES_PATH = '/api/v2/torrents/categories';
 
 /**
- * What Mediaplane reads of qBittorrent's preferences. They hold its API key too: z.object
- * drops every other field, so nothing else is kept.
+ * What Mediaplane reads of qBittorrent's preferences, each read with a FieldReader. They
+ * hold its API key too: z.object drops every other field, so nothing else is kept.
  */
 const preferences = z.object({
-  web_ui_username: z.string(),
-  save_path: z.string(),
-  auto_tmm_enabled: z.boolean(),
-  bypass_auth_subnet_whitelist_enabled: z.boolean(),
-  bypass_auth_subnet_whitelist: z.string(),
+  web_ui_username: z.unknown(),
+  save_path: z.unknown(),
+  auto_tmm_enabled: z.unknown(),
+  bypass_auth_subnet_whitelist_enabled: z.unknown(),
+  bypass_auth_subnet_whitelist: z.unknown(),
 });
 
 /** qBittorrent's categories, by name. */
-const categories = z.record(z.string(), z.object({ savePath: z.string() }));
+const categories = z.record(z.string(), z.looseObject({ savePath: z.unknown() }));
 
 /** A path as qBittorrent gives it back: without a trailing "/". */
-function asKept(path: string): string {
+function asKept(path: string | undefined): string | undefined {
+  if (path === undefined) return undefined;
   return path.length > 1 ? path.replace(/\/+$/, '') : path;
 }
 
@@ -83,7 +85,10 @@ const admin: ResourceSpec = {
   }),
   async observe(api) {
     const held = await api.get(PREFERENCES, preferences);
-    return { id: null, name: 'admin', fields: { username: held.web_ui_username } };
+    const read = fieldReader();
+    return read.observed(null, 'admin', {
+      username: read.text('username', held.web_ui_username),
+    });
   },
   async verify(api, desired) {
     // A 2xx signs in (204 in qBittorrent 5); 401 is a wrong user name or password. After
@@ -143,16 +148,17 @@ const settings: ResourceSpec = {
   },
   async observe(api) {
     const held = await api.get(PREFERENCES, preferences);
-    return {
-      id: null,
-      name: 'preferences',
-      fields: {
-        savePath: asKept(held.save_path),
-        autoTmm: held.auto_tmm_enabled,
-        authSubnetWhitelistEnabled: held.bypass_auth_subnet_whitelist_enabled,
-        authSubnetWhitelist: subnetList(held.bypass_auth_subnet_whitelist),
-      },
-    };
+    const read = fieldReader();
+    const whitelist = read.text('authSubnetWhitelist', held.bypass_auth_subnet_whitelist);
+    return read.observed(null, 'preferences', {
+      savePath: asKept(read.text('savePath', held.save_path)),
+      autoTmm: read.flag('autoTmm', held.auto_tmm_enabled),
+      authSubnetWhitelistEnabled: read.flag(
+        'authSubnetWhitelistEnabled',
+        held.bypass_auth_subnet_whitelist_enabled,
+      ),
+      authSubnetWhitelist: whitelist === undefined ? undefined : subnetList(whitelist),
+    });
   },
   async create(api, desired) {
     await saveSettings(api, desired);
@@ -215,9 +221,11 @@ function category(arr: string, name: string): ResourceSpec {
     async observe(api, _known, desired) {
       const named = desired?.name ?? name;
       const held = (await api.get(CATEGORIES_PATH, categories))[named];
-      return held === undefined
-        ? undefined
-        : { id: named, name: named, fields: { savePath: asKept(held.savePath) } };
+      if (held === undefined) return undefined;
+      const read = fieldReader();
+      return read.observed(named, named, {
+        savePath: asKept(read.text('savePath', held.savePath)),
+      });
     },
     async create(api, desired) {
       await save(api, '/api/v2/torrents/createCategory', desired);

@@ -265,6 +265,53 @@ describe("Plex's libraries", () => {
     });
   });
 
+  it('says a library of another name holds its folder, rather than put it in two', async () => {
+    const { api, plex } = await plexOf();
+    plex.sections.push({
+      key: '3',
+      title: 'Series',
+      type: 'show',
+      agent: 'tv.plex.agents.series',
+      scanner: 'Plex TV Series',
+      language: 'en-US',
+      locations: ['/data/media/tv'],
+    });
+    const tv = resource('library_tv');
+    expect(await tv.observe(api, undefined)).toBeUndefined();
+    expect(await thrown(tv.create(api, wanted('library_tv')))).toMatchObject({
+      kind: 'rejected',
+      message:
+        'Plex at http://plex:32400 (127.0.0.1) has no library named TV Shows, but its library Series holds its folder: if it is TV Shows renamed, rename it back in Plex; to keep it as it is, stop Mediaplane managing TV Shows with plex.library_tv: unmanaged under overrides: (GET /library/sections)',
+    });
+    expect(plex.sections.map((s) => s.title)).toEqual(['Series']);
+    // Known by its key, renamed is found, and its name put back.
+    const movies = resource('library_movies');
+    await movies.create(api, wanted('library_movies'));
+    const made = plex.sections.find((s) => s.title === 'Movies');
+    if (made === undefined) throw new Error('no library made');
+    made.title = 'Films';
+    const known = {
+      id: made.key,
+      name: 'Movies',
+      fields: {},
+      secrets: [],
+      appliedAt: '2026-10-20T08:00:00.000Z',
+    };
+    expect((await movies.observe(api, known))?.fields.name).toBe('Films');
+  });
+
+  it("reads a folder with a comma in its name, and a name it can't, as such", async () => {
+    const { api, plex } = await plexOf();
+    const movies = resource('library_movies');
+    await movies.create(api, wanted('library_movies'));
+    const [made] = plex.sections;
+    if (made === undefined) throw new Error('no library made');
+    made.locations = ['/data/media/movies', '/data/a,b'];
+    expect((await movies.observe(api, undefined))?.unreadable).toEqual({
+      location: 'a folder with a comma in its name, /data/a,b',
+    });
+  });
+
   it('holds the folders an override names, made in one go and put back', async () => {
     const { api, plex } = await plexOf();
     const movies = resource('library_movies');

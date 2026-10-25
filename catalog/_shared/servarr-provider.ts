@@ -1,11 +1,13 @@
 import {
   AppApiError,
+  fieldReader,
   type AppApi,
   type DesiredResource,
-  type Fields,
+  type FieldReader,
   type KnownResource,
   type ObservedResource,
   type ResourceSpec,
+  type Scalar,
 } from '@mediaplane/engine';
 import { z } from 'zod';
 import { sendsToOf } from './secret';
@@ -50,14 +52,14 @@ export function settingOf(held: Provider, name: string): unknown {
   return held.fields.find((f) => f.name === name)?.value;
 }
 
-/** A setting's text, or "" when it holds none. */
-export function textOf(value: unknown): string {
-  return typeof value === 'string' ? value : '';
-}
-
-/** A setting's number, or 0 when it holds none. */
-export function numberOf(value: unknown): number {
-  return typeof value === 'number' ? value : 0;
+/**
+ * A setting the app leaves out while it is unset, such as a URL base: its text, "" when
+ * it holds none (left out, or cleared), or undefined when it holds a value of another
+ * type, which is never read as empty. A managed field is read with a FieldReader instead.
+ */
+export function optionalText(value: unknown): string | undefined {
+  if (value === undefined || value === null) return '';
+  return typeof value === 'string' ? value : undefined;
 }
 
 export { secretOf, sendsToOf } from './secret';
@@ -79,6 +81,15 @@ export async function findProvider(
     held.find((p) => known !== undefined && p.id === known.id) ??
     held.find((p) => p.name === name)
   );
+}
+
+/** The provider the app holds as `id`, as it gives it: its secrets masked. */
+export function providerOf(
+  api: AppApi,
+  kind: ProviderKind,
+  id: ObservedResource['id'],
+): Promise<Provider> {
+  return api.get(`${kind.path}/${String(id)}`, provider);
 }
 
 /**
@@ -229,8 +240,8 @@ export interface ProviderOptions {
   name: string;
   /** The settings a refused sign-in names: `testProvider`'s `credentials`. */
   credentials: readonly string[];
-  /** Its managed fields, from what the app holds. */
-  fieldsOf: (held: Provider) => Fields;
+  /** Its managed fields, read from what the app holds: one it can't read is noted. */
+  fieldsOf: (held: Provider, read: FieldReader) => Record<string, Scalar | undefined>;
   /**
    * The settings to set, secrets in clear (this request body only): where the app sends
    * a key among them from `desired.sendsTo` (sendsToOf), never from a managed field.
@@ -259,9 +270,9 @@ export function servarrProvider(
   return {
     async observe(api, known) {
       const held = await findProvider(api, kind, known, name);
-      return held === undefined
-        ? undefined
-        : { id: held.id, name: held.name, fields: fieldsOf(held) };
+      if (held === undefined) return undefined;
+      const read = fieldReader();
+      return read.observed(held.id, held.name, fieldsOf(held, read));
     },
     verify: (api, desired, observed) =>
       testProvider(api, kind, observed.id, desired.name, credentials, sendsToOf(desired)),

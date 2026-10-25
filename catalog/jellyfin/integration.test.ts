@@ -541,6 +541,22 @@ describe("Jellyfin's libraries", () => {
     expect(state.libraries[0]?.Locations).toEqual(['/data/media/tv']);
   });
 
+  it('says a library of another name holds its folder, rather than put it in two', async () => {
+    const { api, state } = await jellyfin(setUp(), true);
+    state.folders.push('/data/media/tv');
+    state.libraries.push({
+      Name: 'Series',
+      CollectionType: 'tvshows',
+      Locations: ['/data/media/tv/'],
+      LibraryOptions: {},
+    });
+    expect(await shows.observe(api, undefined)).toBeUndefined();
+    expect((await failure(shows.create(api, wanted(shows)))).message).toBe(
+      'Jellyfin at http://jellyfin:8096 (127.0.0.1) has no library named Shows, but its library Series holds its folder: if it is Shows renamed, rename it back in Jellyfin; to keep it as it is, stop Mediaplane managing Shows with jellyfin.library_shows: unmanaged under overrides: (GET /Library/VirtualFolders)',
+    );
+    expect(state.libraries.map((l) => l.Name)).toEqual(['Series']);
+  });
+
   it('removes a folder with a comma in its name, which `paths` cannot tell apart', async () => {
     const { api, state } = await jellyfin(setUp(), true);
     state.folders.push('/data/media/tv', '/data/media/a,b');
@@ -552,6 +568,10 @@ describe("Jellyfin's libraries", () => {
     });
     const held = await shows.observe(api, undefined);
     if (held === undefined) throw new Error('Shows is there');
+    // It can't be listed in `paths`, so it is said to be.
+    expect(held.unreadable).toEqual({
+      paths: 'a folder with a comma in its name, /data/media/a,b',
+    });
     await shows.update(api, wanted(shows), held);
     expect(state.libraries[0]?.Locations).toEqual(['/data/media/tv']);
   });
@@ -582,9 +602,11 @@ describe("Jellyfin's libraries", () => {
     });
     const held = await shows.observe(api, undefined);
     if (held === undefined) throw new Error('Shows is there');
-    expect(held.fields.collectionType).toBe('');
+    // Jellyfin gives none for mixed content: read as one Mediaplane can't, never empty.
+    expect(held.fields.collectionType).toBeUndefined();
+    expect(held.unreadable).toEqual({ collectionType: 'nothing, not text' });
     expect((await failure(shows.update(api, wanted(shows), held))).message).toBe(
-      "Jellyfin at http://jellyfin:8096 (127.0.0.1) has a library named Shows that holds mixed content, not tvshows, and Jellyfin can't change what a library holds: rename or remove it in Jellyfin, and the next apply makes Shows (GET /Library/VirtualFolders)",
+      "Jellyfin at http://jellyfin:8096 (127.0.0.1) has a library named Shows that holds mixed content, or a kind Mediaplane can't read, not tvshows, and Jellyfin can't change what a library holds: rename or remove it in Jellyfin, and the next apply makes Shows (GET /Library/VirtualFolders)",
     );
   });
 });
