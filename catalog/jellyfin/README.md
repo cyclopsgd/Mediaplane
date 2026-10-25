@@ -94,12 +94,28 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
   healthy.
 - **Listing Plex as well** is an error, unless Plex says `enabled: false`.
 
-## Not built yet
+## Drift and Keep mine
 
-- **Slice 8:** drift: reporting a setting changed by hand, rather than putting it back,
-  and Keep mine.
-
-See the [roadmap](../../docs/plans/m1-roadmap.md).
+- **What drift reports.** `mediaplane drift`, and `plan`, report a change made in
+  Jellyfin's web UI to what Mediaplane manages here, listed above under "Managed in the
+  app": what Mediaplane set, and what Jellyfin holds now. A secret is checked with
+  Jellyfin's own test, and named, never shown. `apply` puts each back.
+- **Keeping yours.** `mediaplane keep jellyfin.<resource>.<field>`, as drift names it,
+  keeps what Jellyfin holds instead: it adds the line under `overrides:` in `stack.yaml`,
+  and `apply` then leaves it. A field marked `(fixed)` above, and a secret, can't be
+  kept. `mediaplane keep jellyfin.library_movies` stops Mediaplane managing a resource deleted
+  in Jellyfin. The [drift runbook](../../docs/runbooks/drift-reported.md) says more.
+- **A folder added to `Movies` or `Shows`,** kept (`jellyfin.library_movies.paths`):
+  the library then holds each folder kept, one comma-separated list. A folder with a
+  comma in its name can't be listed: drift says so, and `apply` takes it out.
+- **A library renamed in Jellyfin** is no longer found by its name: drift reports it
+  deleted, and `apply` refuses to make it again while the renamed one holds its folder,
+  saying what to do. Rename it back, or keep it as yours with
+  `mediaplane keep jellyfin.library_movies` (or `library_shows`). Seerr then no longer
+  enables it either.
+- **Its admin password** is checked by drift once a day at most, while it passes: each
+  check signs in, which Jellyfin's activity log keeps. `plan` and `apply` check it every
+  time.
 
 ## Changing it
 
@@ -111,8 +127,7 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   [`stack.yaml` reference](../../docs/reference/stack-yaml.md).
 - **The `Movies` and `Shows` libraries' names, what they hold and their folders** are
   Mediaplane's. A folder you add to one, or one of them you remove, is put back by the
-  next `apply` (Slice 8 adds Keep mine). Add a library of your own instead. A library you
-  rename is no longer Mediaplane's: the next `apply` makes `Movies` or `Shows` again.
+  next `apply`, unless you keep it (see above). Add a library of your own instead.
   Everything else in them, such as their metadata language, is yours.
 - **Hardware transcoding** (Intel Quick Sync, or AMD): set
   `hardware_transcoding: true` under `apps.jellyfin`. Mediaplane then gives Jellyfin the
@@ -157,7 +172,7 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 - **Its key deleted in Jellyfin's dashboard** (API Keys). `plan` warns that Jellyfin
   refuses Mediaplane's API key. Remove the `jellyfin` entry under `apps` from
   `state/secrets.json`, keeping the file valid JSON, and apply: Mediaplane signs in as the
-  admin, makes a new key, and gives it to Sonarr and Radarr. Slice 8 does this for you.
+  admin, makes a new key, and gives it to Sonarr and Radarr. Slice 10 does this for you.
   The [wiring failed runbook](../../docs/runbooks/wiring-failed.md) has the details.
 - **Its `appdata/` emptied by hand.** Jellyfin starts its wizard again. Stop Jellyfin
   first (`docker stop mediaplane-jellyfin-1`), then remove `appdata/jellyfin`, then run

@@ -109,10 +109,33 @@ With Jellyfin as the media server (with Plex, see below):
 - **`LOG_LEVEL=info`.**
 - **Its web UI,** published as `network.bind` says, once it is set up.
 
+## Drift and Keep mine
+
+- **What drift reports.** `mediaplane drift`, and `plan`, report a change made in
+  Seerr's web UI to what Mediaplane manages here, listed above under "Managed in the
+  app": what Mediaplane set, and what Seerr holds now. A secret is checked with
+  Seerr's own test, and named, never shown. `apply` puts each back.
+- **Keeping yours.** `mediaplane keep seerr.<resource>.<field>`, as drift names it,
+  keeps what Seerr holds instead: it adds the line under `overrides:` in `stack.yaml`,
+  and `apply` then leaves it. A field marked `(fixed)` above, and a secret, can't be
+  kept. `mediaplane keep seerr.server_radarr` stops Mediaplane managing a resource deleted
+  in Seerr. The [drift runbook](../../docs/runbooks/drift-reported.md) says more.
+- **A library turned off in Seerr,** kept (`seerr.media_server.libraries`, or
+  `media_server_plex`): Mediaplane then enables only the libraries kept, and the others
+  are yours, to turn on or off. A library Mediaplane no longer manages in Jellyfin or
+  Plex is never enabled by it.
+- **Where Seerr sends a key** is fixed: the host and port of its media server and of its
+  Sonarr and Radarr servers. Drift reports a change to one, and `apply` puts the stack's
+  own address back; Mediaplane's tests of a server are aimed there, and Seerr's list of
+  Jellyfin's users is asked only while Seerr holds the stack's address. `keep` reads a
+  server's profile from what was applied, rather than run Seerr's test.
+- **A server's profile, root folder or default,** kept
+  (`seerr.server_sonarr.activeProfile`, `activeDirectory`, `isDefault`), stays. Its setup
+  (`seerr.setup.initialized`) is fixed: Seerr can't be taken back to its setup wizard.
+
 ## Not built yet
 
-- **Slice 8:** drift detection and Keep mine for what it manages here, and a way to give
-  Seerr a new Plex token: it keeps the one it signed in with.
+- **Slice 10:** a way to give Seerr a new Plex token: it keeps the one it signed in with.
 
 See the [roadmap](../../docs/plans/m1-roadmap.md).
 
@@ -126,7 +149,7 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   arr doesn't have fails, listing those it has.
 - **What Mediaplane manages** (the fields above) is put back by the next `apply` when
   changed in Seerr: its Jellyfin or Plex, its libraries, and each server's host, port,
-  profile, root folder and default. Keep mine comes in Slice 8.
+  profile, root folder and default, unless you keep it (see above).
 - **Anything else** goes in `compose.override.yaml` in the Mediaplane home.
 
 ## Known issues

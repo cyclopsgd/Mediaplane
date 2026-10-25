@@ -88,14 +88,31 @@ Prowlarr (Indexers, then edit the indexer, then Tags). Prowlarr sends an indexer
 proxy only when they share a tag. Even then it asks the indexer itself first, and turns
 to the solver only when the site answers with a Cloudflare challenge.
 
-## Not built yet
+## Drift and Keep mine
 
-- **Slice 8:** keeping a setting of your own in place of one Mediaplane manages ("Keep
-  mine"). Until then, the next `apply` puts back a link's addresses, sync level or
-  categories, or the proxy's host, timeout or tags, changed in Prowlarr's web UI. `plan`
-  shows it first.
-
-See the [roadmap](../../docs/plans/m1-roadmap.md).
+- **What drift reports.** `mediaplane drift`, and `plan`, report a change made in
+  Prowlarr's web UI to what Mediaplane manages here, listed above under "Managed in the
+  app": what Mediaplane set, and what Prowlarr holds now. A secret is checked with
+  Prowlarr's own test, and named, never shown. `apply` puts each back.
+- **Keeping yours.** `mediaplane keep prowlarr.<resource>.<field>`, as drift names it,
+  keeps what Prowlarr holds instead: it adds the line under `overrides:` in `stack.yaml`,
+  and `apply` then leaves it. A field marked `(fixed)` above, and a secret, can't be
+  kept. `mediaplane keep prowlarr.indexer_proxy` stops Mediaplane managing a resource deleted
+  in Prowlarr. The [drift runbook](../../docs/runbooks/drift-reported.md) says more.
+- **Where Prowlarr sends a key** is fixed: each link's `baseUrl` and `prowlarrUrl`, and
+  the proxy's host, which your indexers' requests go through. Drift reports a change to
+  one, and `apply` puts the stack's own address back; Prowlarr's test of a link is
+  always aimed there.
+- **The proxy's tags,** kept with other labels than `cloudflare`
+  (`prowlarr.indexer_proxy.tags`): Mediaplane gives the proxy each, making a tag it
+  lacks.
+- **The proxy's health.** Mediaplane never tests the proxy itself, which needs the
+  internet: drift reads Prowlarr's own health check, which tests it every six hours, and
+  warns (`drift.health`) when it says the proxy is unavailable. `apply` can't put that
+  right: check the Cloudflare solver.
+- **A link to an arr taken out of the stack** stays in Prowlarr, with that arr's key, and
+  drift reports it as still in the app. Remove it in Prowlarr, or stop the report with
+  `mediaplane keep prowlarr.application_sonarr` (or `_radarr`).
 
 ## Changing it
 
@@ -153,8 +170,8 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   ```
 
   Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
-  `sudo mv`. The old file keeps your settings, to enter again in Prowlarr. Slice 8 does
-  this for you.
+  `sudo mv`. The old file keeps your settings, to enter again in Prowlarr. Slice 10
+  does this for you.
 
   If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the
   stack's `user:`, not to the user Mediaplane runs as (`MEDIAPLANE_UID` in its

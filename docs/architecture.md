@@ -1,7 +1,7 @@
 # Architecture
 
 This page is a condensed version of the [M1 design](design/m1-engine-cli.md), §3 to §6,
-covering what is built so far (Slices 1 to 7). The design describes the whole of M1;
+covering what is built so far (Slices 1 to 8). The design describes the whole of M1;
 this page describes what exists.
 
 ## The idea
@@ -11,14 +11,17 @@ You describe the stack you want in one file, `stack.yaml`. Mediaplane then works
 
 - `plan` works out what would change, and changes nothing in your stack (in the image,
   it joins the stack's wiring network, to ask the apps: see [The wiring](#the-wiring)).
-  Checking a key or a password can leave small marks in an app: a post-import category
-  made in qBittorrent, a failure recorded in an app's status of a client, link or
-  connection, a sign-in in Jellyfin's activity log, a line in Seerr's log for each of
-  its checks that fails (and one in the arr's, for a key the arr refuses), and an arr
-  listed among Plex's devices, by the arr's first test of its connection to Plex. It
-  never runs an app's first-run setup, nor finishes Seerr's, and never calls plex.tv. The
-  [threat model](security/threat-model.md#what-runs-and-who-can-reach-it) says more;
-- `apply` makes those changes, then plans again to check that nothing is left.
+  Checking a key or a password can leave small marks in an app: a failure recorded in an
+  app's status of a client, link or connection, a sign-in in Jellyfin's activity log, a
+  line in Seerr's log for each of its checks that fails (and one in the arr's, for a key
+  the arr refuses), and an arr listed among Plex's devices, by the arr's first test of
+  its connection to Plex. It never runs an app's first-run setup, nor finishes Seerr's,
+  and never calls plex.tv. The
+  [threat model](security/threat-model.md#what-runs-and-who-can-reach-it) says more. It
+  also says what changed in the apps outside Mediaplane since it applied them: drift;
+- `apply` makes those changes, then plans again to check that nothing is left;
+- `drift` reports only what changed outside Mediaplane, and `keep` keeps a change of
+  yours (see [Drift and Keep mine](#drift-and-keep-mine)).
 
 What it writes is an ordinary Docker Compose project, which runs without Mediaplane.
 
@@ -149,10 +152,12 @@ Each part, and where its code is:
 - **vpn** (`packages/engine/src/vpn`): `vpn-check`. It reads the containers, runs a probe
   inside qBittorrent's network, and compares where qBittorrent's traffic and the host's
   leave from (see [`vpn-check`](#vpn-check)).
+- **drift and keep** (`packages/engine/src/drift.ts`, `packages/engine/src/keep.ts`, the
+  overrides in `packages/engine/src/integrations/overrides.ts`, and the writer of
+  `stack.yaml` in `packages/engine/src/config/overrides-file.ts`): what changed in the
+  apps outside Mediaplane, and Keep mine (see [Drift and Keep mine](#drift-and-keep-mine)).
 - **CLI** (`packages/cli`): the commands, human and `--json` output, and exit codes
   ([reference](reference/cli.md)).
-
-Not built yet: drift detection, with Keep mine (Slice 8).
 
 ## `plan`
 
@@ -184,7 +189,9 @@ diff
 ask the apps
   each resource: create,
   update, adopt, unchanged,
-  or after the start
+  or after the start; and
+  what changed outside
+  Mediaplane: drift
 ```
 
 `plan` writes nothing. Its exit code is 0 when nothing would change, 2 when something
@@ -556,7 +563,8 @@ mediaplane (the stack)
     it creates the proxy: it has the solver fetch a page of Prowlarr's own service on
     the internet, so that `apply` needs the internet. The proxy holds no secret, so
     Mediaplane never runs that test, and `plan` never sends it; `plan` does compare the
-    proxy's host, timeout and tags on every run.
+    proxy's host, timeout and tags on every run. `drift` reads what Prowlarr's own health
+    check, which tests its proxies every six hours, last found.
   - The indexers are yours: you add them in Prowlarr, which syncs them to the arrs, and
     sends those tagged `cloudflare` through the solver when their site answers with a
     challenge.
@@ -708,6 +716,74 @@ mediaplane (the stack)
   checks its shape, and shows only the app's own message about a refusal, with every
   secret replaced.
 
+## Drift and Keep mine
+
+```text
+stack.yaml, overrides: (D)
+  what the stack wants
+state/resources.json (L)
+  what was last applied
+the app's API (O)
+  what it holds now
+
+D ≠ L: you changed stack.yaml
+O ≠ L, O ≠ D: drift, changed
+  in the app, outside
+  Mediaplane
+```
+
+- **`mediaplane drift`** is `plan`, looking only (spec §6.3): no host checks, and every
+  app that runs and is healthy is asked, even one `apply` would change. It runs under
+  apply's lock. It reports, for each resource Mediaplane recorded:
+  - a managed field the app holds otherwise than it was applied, and than the stack wants
+    now, with both values; one the app holds in a shape Mediaplane can't read is said to
+    be, never read as empty (`unreadable`);
+  - a resource deleted outside Mediaplane;
+  - a secret the app's own check refuses, by name only: secrets are checked by using
+    them, never compared or shown;
+  - an app that refuses the key Mediaplane holds for it, and each resource of another app
+    that holds that key: a shared key changed at its source;
+  - a resource Mediaplane made that the stack no longer wants, still in the app; one
+    whose app can't say counts as not looked at.
+
+  `plan` shows the same drift. What puts each right is said by its kind: `apply` puts
+  back a field, a resource or a secret; a key changed at its source, and what is left in
+  an app, are put right by hand, or kept, until Slice 10. Its exit code is 0 when
+  nothing changed and every resource and secret was checked, and 2 otherwise.
+
+- **Its checks leave few marks** (the owner's decisions of 2026-10-17). A secret it finds
+  refused isn't checked again, by drift or `plan`, until `apply` sets it: qBittorrent bans
+  an address after five failed sign-ins, and the arrs and Seerr record each failed test.
+  Jellyfin's admin password is checked once a day at most while it passes (a resource's
+  `checkEvery`): each check is in Jellyfin's activity log. `plan` and drift leave an
+  arr's download client key unchecked while qBittorrent lacks a category the client
+  names, which the arr's own test would make. Drift keeps each check's verdict and time,
+  by the secret's name, in `state/resources.json`: its one write. It reads an app's own
+  health check where one tests a resource (Prowlarr's, of its indexer proxy), and warns
+  of what it found.
+- **Overrides** (`overrides:` in `stack.yaml`, spec §4.2) are part of what the stack
+  wants: `<app>.<resource>.<field>: <value>` sets a managed field, and
+  `<app>.<resource>: unmanaged` stops Mediaplane managing a resource. `plan` checks each:
+  a field that isn't managed, a secret, a fixed field or a value of another type fails
+  it, with the closest name. A few fields are fixed (a resource's `locked`): what it is
+  known by, what its app can't change, what Mediaplane only checks, and every field that
+  says where an app sends a key. Every request that carries a key is built from the
+  stack's own address for the other app (a resource's `sendsTo`), never from a field an
+  override could set or from what the app holds.
+- **`mediaplane keep <app>.<resource>.<field>`** takes what the app holds, where drift
+  found a change, as an override: it adds one line under `overrides:` in `stack.yaml`,
+  changing nothing else in the file (its mode and group kept, not an ACL), and records
+  the value as applied, so drift is clear and `apply` has nothing to do for it. It checks
+  that the app takes Mediaplane's key and reads the one resource, and checks no secret.
+  For a resource deleted, or left in the app, `mediaplane keep <app>.<resource>` writes
+  `unmanaged`. It never writes a secret, and refuses a `stack.yaml` it can't write
+  safely, giving the line to add instead
+  ([ADR 0003](adr/0003-drift-detect-and-warn-with-keep-mine.md)). Keeping a download
+  client's category gives qBittorrent's category that name: `apply` makes it.
+- **Not yet:** putting back a key at its source, or giving a new one to every app that
+  holds it, and removing what Mediaplane made when its app leaves the stack (Slice 10);
+  drift on a schedule (M2).
+
 ## `vpn-check`
 
 `mediaplane vpn-check` checks that qBittorrent reaches the internet only through the
@@ -765,6 +841,5 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
-- drift detection (Slice 8);
 - releases and safe updates (Slice 9);
 - recovery and automation (Slice 10), which completes M1.

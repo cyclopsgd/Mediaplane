@@ -83,11 +83,32 @@ unmodified, and by default puts it behind Gluetun's VPN.
   login and the settings above through qBittorrent's API, and the rest are yours to
   change in qBittorrent's web UI.
 
-## Not built yet
+## Drift and Keep mine
 
-Nothing for qBittorrent itself. Keeping a setting of your own in place of one Mediaplane
-manages ("Keep mine") comes in Slice 8. See the
-[roadmap](../../docs/plans/m1-roadmap.md).
+- **What drift reports.** `mediaplane drift`, and `plan`, report a change made in
+  qBittorrent's web UI to what Mediaplane manages here, listed above under "Managed in the
+  app": what Mediaplane set, and what qBittorrent holds now. A secret is checked with
+  qBittorrent's own test, and named, never shown. `apply` puts each back.
+- **Keeping yours.** `mediaplane keep qbittorrent.<resource>.<field>`, as drift names it,
+  keeps what qBittorrent holds instead: it adds the line under `overrides:` in `stack.yaml`,
+  and `apply` then leaves it. A field marked `(fixed)` above, and a secret, can't be
+  kept. `mediaplane keep qbittorrent.category_movies` stops Mediaplane managing a resource deleted
+  in qBittorrent. The [drift runbook](../../docs/runbooks/drift-reported.md) says more.
+- **Its password, changed in qBittorrent,** is checked by signing in, once per `plan`.
+  Once drift has found it refused, neither drift nor `plan` signs in again until `apply`
+  sets it, which spares Mediaplane the ban below.
+- **A download client's category, kept as another** (`mediaplane keep
+sonarr.download_client.category`), becomes this category's name too: the category
+  `qbittorrent.category_tv` makes is then the kept one, with its save path under
+  `/data/torrents`, and `apply` makes it. Until it does, drift leaves Sonarr's client's
+  key unchecked, saying `apply` puts what it requires in place first. The category made
+  before stays, yours.
+- **A category you stop Mediaplane managing** (`qbittorrent.category_tv: unmanaged`, or
+  `_movies`) is yours, and stays the category Sonarr's or Radarr's download client files
+  under: while qBittorrent lacks it, `plan` and drift leave that client's key unchecked,
+  as the arr's own test would make it, with no save path. To clear it, make the category
+  in qBittorrent, or name one in the arr that qBittorrent has (and keep that), then run
+  drift again.
 
 ## Changing it
 
@@ -106,8 +127,8 @@ manages ("Keep mine") comes in Slice 8. See the
   see [Gluetun's README](../gluetun/README.md).
 - **A change made in qBittorrent's web UI to what Mediaplane manages is undone** by the
   next `apply`: the login, the save path, Automatic Torrent Management, who may skip the
-  login, and the two categories' save paths. `plan` shows it first. Slice 8 adds "Keep
-  mine".
+  login, and the two categories' save paths. `plan` and `mediaplane drift` show it first,
+  and `mediaplane keep` keeps it instead (see above).
 - **Five failed sign-ins in a row ban an address for an hour.** Mediaplane checks the
   password by signing in, once per `plan` and once per `apply`, and never again after a
   timeout. So after you change `admin.password`, run `apply` soon: four `plan`s, or
@@ -145,7 +166,7 @@ manages ("Keep mine") comes in Slice 8. See the
   Stop it first: qBittorrent writes the file again when it stops. Use your own home,
   and the container name `docker ps` shows. If `mv` is refused, use `sudo mv`. Then
   sign in with what `mediaplane credentials` shows. The old file keeps your settings,
-  to enter again in qBittorrent. Slice 8 does this for you.
+  to enter again in qBittorrent. Slice 10 does this for you.
 
   If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the
   stack's `user:`, not to the user Mediaplane runs as (`MEDIAPLANE_UID` in its

@@ -23,17 +23,18 @@ Detailed plans so far:
 - Slice 5: [`m1-s5-jellyfin.md`](m1-s5-jellyfin.md) (done).
 - Slice 6: [`m1-s6-requests.md`](m1-s6-requests.md) (done).
 - Slice 7: [`m1-s7-plex.md`](m1-s7-plex.md) (done).
+- Slice 8: [`m1-s8-drift.md`](m1-s8-drift.md) (done).
 
 Where M1 stands (the README shows the same):
 
-- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4, S5, S6 and S7.
-- **Since S7 (2026-10-17), outside the slices** by the lighter route for small changes
-  (test-first, one review, CI): `hardware_transcoding` for Plex and Jellyfin, `init`
-  offering the Plex sign-in and asking for your own admin password, and
+- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4, S5, S6, S7 and S8.
+- **Between S7 and S8 (2026-10-17), outside the slices** by the lighter route for small
+  changes (test-first, one review, CI): `hardware_transcoding` for Plex and Jellyfin,
+  `init` offering the Plex sign-in and asking for your own admin password, and
   `deploy/install.sh`.
-- **Next:** S8 (drift detection).
-- **After that:** S9 (releases and safe updates), then S10 (recovery and automation),
-  which completes M1. [After M1](#after-m1) has what comes next.
+- **Next:** S9 (releases and safe updates).
+- **After that:** S10 (recovery and automation), which completes M1.
+  [After M1](#after-m1) has what comes next.
 
 ## Slices
 
@@ -73,7 +74,9 @@ Where M1 stands (the README shows the same):
 - `install.sh` installing a pinned release, which it pulls rather than builds;
 - updating Mediaplane by running it again, which never restarts the stack;
 - `migrate`;
-- the licence's SPDX field, and `main` protected.
+- the licence's SPDX field, and `main` protected;
+- from S8: FlareSolverr's anonymous volume, and a wiring network whose settings change
+  with an update.
 
 It proves that a release is green on both architectures, and that updating Mediaplane
 leaves the stack running.
@@ -81,7 +84,18 @@ leaves the stack running.
 **S10, recovery and automation:**
 
 - externally managed mode, name-based re-adoption, key recovery from appdata, and
-  shared-key propagation;
+  shared-key propagation, with restoring a key at its source (S8 reports a shared key
+  changed at its source);
+- removing what Mediaplane made when its app leaves the stack (S8 reports it), and
+  signing a setup in again: Seerr with a new Plex token, or another Jellyfin key;
+- each S8 item below marked "Moved to S10": restoring the keys of installs from before
+  S3a, Jellyfin's key deleted by hand, rotating the admin password, every setup getting
+  every stored key, the setups' contract leftovers, the fake Seerr's `/auth/me`, a failed
+  first-run setup stopping all wiring, and asking Seerr rather than reading its
+  `settings.json`;
+- in externally managed mode, `keep`'s line to add, as a field of `mediaplane.keep/v1`
+  rather than only an error's hint (S8 gives it in the hint);
+- `plan --help` and `drift --help` pointing at the published docs, not a repo path;
 - a contract for automation: the `--json` output shapes pinned and in the generated
   docs, exit codes, commands that ask nothing when a script runs them, and a second
   `apply` that changes nothing;
@@ -252,7 +266,8 @@ item, and extended one, and its final review an S8 item and four S9 items. Slice
 (2026-10-16) added an S7 item and changed one, added five S8 items and changed one, and
 added an S9 item and changed one, and its final review an S8 item and an S9 item. Slice 7
 (2026-10-16) marked the S7 items done, and added five S8 items and three S9 items, and
-its conflict check an S9 item. Each
+its conflict check an S9 item. Slice 8 (2026-10-25) settled each S8 item: built, decided,
+or moved with its reason, as each says. Each
 slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
@@ -522,50 +537,78 @@ password, which are S3c's (and listed again below).
   - **qBittorrent's sign-in ban:** drift stops checking a password it knows differs,
     until `apply` sets it.
   - **Seerr's key checked twice per apply:** check it once.
+  - **Done in S8:** each of the five, as the items below say.
 - **Seerr keeps the Plex token it signed in with** (S7). After `plex-login` saves a new
   token, Seerr still holds the old one, which it uses to reach Plex, and Mediaplane can't
   check it with Seerr's key. When the old one is revoked, Seerr's libraries stop
   syncing. Decide how drift finds it, and whether Mediaplane signs Seerr in again (which
   needs the setup's care: never to a Seerr that isn't Mediaplane's).
+  - **Moved to S10:** giving Seerr a new token means signing Seerr in again, which needs
+    the setup's care and plex.tv, with the recovery of a key that changed. Drift can't
+    check that token with Seerr's key without a call that reaches plex.tv.
 - **The arrs keep a Plex token while Plex takes it** (S7): a new token from `plex-login`
   reaches them only once the old one is refused. Decide whether drift moves them to it.
+  - **Decided in S8:** no. Secrets are checked, never compared, and one that works is
+    left; the new token reaches them once Plex refuses the old one. Moving them to it is
+    rotation, with S10.
 - **Plex's libraries are known by name** (S7), as Jellyfin's are: one renamed by hand
   is left, and the next `apply` makes `Movies` or `TV Shows` again on the same folder.
   Decide whether drift reports the renamed one. A folder added by hand is put back:
   Keep mine must cover `location`.
+  - **Done in S8:** found by Plex's key while `resources.json` has it, so a renamed
+    one is drift on its name, which `apply` puts back; `location` can be kept; the name
+    is fixed; and no library is made on a folder another of Plex's holds.
 - **Plex's devices grow** (S7): each arr's first test of its connection to Plex lists
   it among Plex's devices, and a Plex made anew lists them again. Decide whether drift
   reports old ones.
+  - **Decided in S8:** not reported. Plex's devices aren't Mediaplane's to manage, and
+    an arr's later tests add none: only its first, or one after Plex is made anew.
 - **A Plex claimed by another account stays unpublished on every `apply`** (S7), with
   its remedies in the error. Decide whether drift reports a Plex whose `PlexOnline`
   settings were removed by hand while it runs, which then looks unclaimed to it.
+  - **Decided in S8:** drift reports what `plan` reports when Plex refuses your token
+    (`key` drift); `plan` lists Plex's setup when its file holds no `PlexOnlineToken`.
+    A Plex unclaimed while it runs was not probed in S8; claiming it again is recovery:
+    S10.
 - **Every setup gets every stored key** (S7): `BootstrapContext.keys` holds each app's,
   but Plex's and Seerr's setups read only your Plex token. Narrow it, to the keys you
   give or to the Plex token alone, when S8 changes the setups for signing in again.
+  - **Moved to S10:** S8 changes no setup; S10 signs setups in again.
 - **The setups' contract has leftovers** (S7): `Bootstrap.firstStart`'s `stack` is
   unused; `AppLoginKind`'s `{ own: string }` could be `{ own: 'Plex' }`; and no app uses
   `{ comingIn }` or the `login: 'not-yet'` of `credentials` any more. Keep `not-yet` while
   `mediaplane.credentials/v1` has it, but say it is for later slices.
+  - **Moved to S10,** with the setups, for the same reason.
 - **The fake Seerr's `/auth/me` answers a session that isn't its admin's** with the
   admin's `plexId` and `jellyfinUsername` (S7). Nothing reads them from such a session
   yet. Fix the fake when signing Seerr in again reads sessions.
+  - **Moved to S10,** with signing Seerr in again.
 
 - Override field names are case-sensitive, so the managed-field comparison must
   match them exactly.
+  - **Done in S8:** `plan` refuses a key that names no managed field, with the closest
+    name, whatever its case.
 - **A root folder whose path changes.** Sonarr and Radarr can't move a root folder, so a
   `root_folder.path` override would add a new one and leave the old, which may hold a
   library (S3c). Decide what drift and Keep mine do with the old one.
+  - **Done in S8:** a root folder's path is fixed: an override or Keep mine of it is
+    refused, saying to move the library in the arr, then make the root folder
+    `unmanaged`.
 - **A root folder whose folder was deleted.** Mediaplane makes a root folder's folder
   only when it adds the root folder (S3c). Deleted later, the arr shows the root folder
   as inaccessible, but Mediaplane finds it as wanted, and `plan` says `unchanged`: it
   doesn't read the arr's `accessible`. Decide whether drift reports it, and whether
   `apply` makes the folder again.
+  - **Done in S8:** the new managed field `accessible`: drift reports it, and `apply`
+    makes the folder again.
 - **qBittorrent's sign-in ban.** qBittorrent bans an address from signing in for an hour
   after five failed sign-ins in a row, and Mediaplane checks its password by signing in
   (S3c). A changed `admin.password` costs one failure per `plan`, and one for the
   `apply` that sets it. When drift is checked on a schedule (M2), a changed password left
   unapplied would ban Mediaplane's address within the hour. Decide whether drift checks
   the password less often, or not at all while it differs.
+  - **Done in S8,** as the owner decided: once drift finds the password refused,
+    neither drift nor `plan` signs in again until `apply` sets it.
 - **`plan` can make a post-import category in qBittorrent.** The arr's own test, which
   `plan` runs to check a download client's key, makes a missing post-import category
   (`tvImportedCategory`, `movieImportedCategory`). Mediaplane doesn't manage that
@@ -573,48 +616,74 @@ password, which are S3c's (and listed again below).
   qBittorrent (S3c, probed on the pinned images). That is a small exception to "`plan`
   changes nothing". `plan` already reads qBittorrent's categories, so it could skip the
   test while that category is missing.
+  - **Done in S8,** as the owner decided, and for the client's own category too, once
+    qBittorrent's is no longer managed and deleted: `plan` and drift leave the key
+    unchecked while qBittorrent lacks one, and say what clears it. A category the client
+    is kept with is qBittorrent's to have, so `apply` makes it.
 - **Settings Mediaplane manages in qBittorrent are put back.** A whitelist, a save path
   or a category's path changed in qBittorrent's web UI is undone by the next `apply`
   (S3c). Keep mine must cover them, with the arrs' download clients and root folders.
+  - **Done in S8:** drift reports each, and `mediaplane keep` keeps a whitelist, a save
+    path, a category's path, and a download client's category, which qBittorrent's
+    category then follows. A root folder's fields are fixed: one deleted is kept as
+    `unmanaged`. A download client's host, port and TLS are fixed too: they say where its
+    key goes.
 - **Appdata ownership is checked only on change.** Apply checks it only when
   something else changes, and never re-checks it for apps that are running.
+  - **Moved to M2 (`doctor`):** it is the host's state, not a change in an app.
 - **An override can move an appdata mount.** When `compose.override.yaml`
   remaps an app's appdata mount, the ownership helper's chown runs on the
   override's host path, not on `appdata/<app>`. Pre-start files (S3a) are still
   written to `appdata/<app>`, so the app starts without them, and nothing reports
   it.
+  - **Moved to M2 (`doctor`),** for the same reason.
 - **Installs from before Slice 3a.** `plan` reports a `config.xml` without `ApiKey`,
   a `qBittorrent.conf` without `WebUI\APIKey`, or Gluetun's `auth/config.toml` without
   Mediaplane's role, as `<app>.not-seeded`, and the app READMEs give the manual fix.
   Automate it: stop the app, add the stored key to its file, and start it ("restore
   the key at the source", spec §6.3).
+  - **Moved to S10 on 2026-10-25,** with restoring a key at its source.
 - **FlareSolverr's anonymous volume.** Its image declares `VOLUME /config`, and the
   catalog mounts nothing there, so every container it creates leaves an anonymous
   volume behind. Mount a folder there, or document it. (The end-to-end helpers
   remove them with `down -v` since S3a.)
+  - **Moved to S9:** each recreate leaves one, and recreates come with updates. Mounting
+    a folder there needs the image's user probed first.
 - **Rotating the admin password.** There is no way to replace the generated password
   yet. Add one, which reaches every app through its API.
+  - **Moved to S10 on 2026-10-25.**
 - **A wiring network whose settings change.** Compose must make it anew then, and
   through the socket proxy it can't delete a network (S3b). The wiring failed runbook
   gives the steps by hand. Decide whether Mediaplane should do them.
+  - **Moved to S9:** its settings change only with Mediaplane's own updates.
 - **The `partial` outcome.** Spec §5 step 12 names `success`, `partial` and `failed`.
   Apply records `failed` when part of the wiring failed (S3b). Decide whether drift's
   re-apply needs `partial`.
+  - **Decided in S8:** not needed. Re-apply is `apply`, and `failed`, with each
+    resource's result, says what is left; `partial` stays unused.
 - **Links to an app that leaves the stack.** Remove Sonarr or Radarr from `stack.yaml`,
   and Prowlarr keeps its link to it (S4), as the arrs keep their download client when
   qBittorrent goes; so does Prowlarr's indexer proxy, when the stack drops its
   Cloudflare solver, and requests of indexers tagged `cloudflare` that meet a Cloudflare
   challenge then fail. Spec §8.1(3) step 4 asks that an app's links go with it. Decide
   whether `apply` removes what it made, or drift reports it.
+  - **Done in S8:** drift reports each as still in the app, and `mediaplane keep
+    <app>.<resource>` stops it. **Moved to S10:** removing them, which needs a delete
+    for every kind of resource, and its own end-to-end test (spec §8.1(3) step 4).
 - **Settings Mediaplane manages in Prowlarr are put back.** A link's addresses, sync
   level or categories, or the proxy's host, timeout or tags, changed in Prowlarr's web
   UI, are undone by the next `apply` (S4). Keep mine must cover them.
+  - **Done in S8:** Keep mine covers the sync level, categories, the proxy's timeout and
+    tags. The links' addresses and the proxy's host are fixed: they say where a key, or
+    your indexers' requests, go.
 - **Mediaplane never tests the indexer proxy.** It holds no secret, so `plan` sends no
   test of it (S4). Prowlarr runs the test itself when it creates the proxy, by having the
   solver fetch a page of Prowlarr's own service on the internet, so that `apply` needs
   the internet. Decide whether drift tests it, and how often.
   - First, check whether Prowlarr's own health check tests the proxy, and use it: drift
     could read `GET /api/v1/health` instead of running a test.
+  - **Done in S8:** Prowlarr's own health check does test it, every six hours (probed):
+    drift reads it, and never tests the proxy.
 - **`plan`'s key checks can record a failing status in the app; drift runs them on a
   schedule.** A failing test of a download client (S3c), a Prowlarr link (S4) or an
   arr's connection to Jellyfin (S5) records a failure in the app's status of it
@@ -624,62 +693,92 @@ password, which are S3c's (and listed again below).
   - First, probe the row under repeated failing checks. The apps may escalate it, and
     disable the client or link for growing periods, which could block Prowlarr's sync
     to that arr and raise a health warning. S4's probe saw only escalation 1.
+  - **Done in S8:** probed: escalation stays at 1, and once the first failure is five
+    minutes old, each failing test disables the client for a minute. Drift and `plan`
+    test no more a secret drift found refused, as the owner decided.
 - **The shared provider schema doesn't check `enable` is a boolean** (S4). A download
   client an arr gives back without it reads as disabled, and plans an `enable` update.
   Real arrs always send it. Check it with drift, which reports expected against actual
   for every managed field.
+  - **Done in S8:** a field of another type is reported as one Mediaplane can't read.
 - **Categories or tags in an unexpected shape read as empty** (S4, as S3c's code), so
   every `apply` plans an update, with no message. Decide how drift reports a value it
   can't read.
+  - **Done in S8:** reported as a value Mediaplane can't read, never as empty.
 - **Jellyfin's key, deleted by hand,** shuts Mediaplane out of Jellyfin (S5): `plan`
   warns, and the runbook has the key removed from `state/secrets.json` so that `apply`
   signs in as the admin and makes another. Automate it, with key recovery: a key
   Jellyfin refuses, while its wizard is done, is made anew, and the arrs' connections
   take it.
+  - **Moved to S10 on 2026-10-25,** with key recovery. Drift reports it, as Jellyfin
+    refusing its key.
 - **Checking Jellyfin's admin password signs in** (S5), and Jellyfin's activity log keeps
   three lines for each check. Drift every 15 minutes (M2) would add about 300 a day.
   Decide whether drift checks it less often.
+  - **Done in S8,** as the owner decided: drift checks it once a day at most, while it
+    passes.
 - **Jellyfin's libraries are known by name** (S5). A library renamed by hand is left
   as it is, and the next `apply` makes `Movies` or `Shows` again, on the same folder, so
   the folder is in two libraries. Decide whether drift reports the renamed one. A folder
   added to them by hand is put back: Keep mine must cover `paths`.
+  - **Done in S8:** a renamed one is reported deleted; `apply` refuses to make it again
+    on the folder the renamed one holds, saying what to do; `paths` can be kept.
 - **The triggers of an arr's connection to Jellyfin are the user's** after it is made
   (S5): a connection whose triggers were all turned off by hand still passes its test,
   and tells Jellyfin of nothing. Decide whether drift reports it.
+  - **Decided in S8:** not reported: they are yours (spec §6.2), and reporting them would
+    be managing them.
 - **A Jellyfin whose appdata Mediaplane can't read** (S5) is taken as set up when its key
   is stored, so an emptied appdata there would start it published. `plan` already warns
   (`bootstrap.unreadable`). Decide whether drift should also report it.
+  - **Decided in S8:** drift runs `plan`'s checks of the setups, so it warns
+    (`bootstrap.unreadable`) as `plan` does.
 - **A failed first-run setup stops all wiring** (S5): the bootstrap step's failure skips
   the wire step, as a failed start does. Let the wire step run past a failed first-run
   setup, with that app's resources failed so `requires` skips them (spec §5.1). S6 did
   this for a setup that waits (Seerr's, while Jellyfin refuses the shared admin), whose
   app's resources are skipped; a failed one still stops the wiring.
+  - **Moved to S10:** it changes apply's steps, not drift.
 - **Seerr's checks log a line when they fail** (S6, probed): Seerr's own test of a
   server, and its list of Jellyfin's users that checks its Jellyfin key, log an error in
   Seerr's log, and a refused key one in the arr's. Decide how often scheduled drift may
   run them.
+  - **Done in S8:** probed again, one line each, with no throttling; drift checks no
+    more a secret it found refused.
 - **Seerr's Jellyfin key is checked twice in one `apply`** (S6): once as the
   resource's check, and again in the update that follows it, so a key Jellyfin refuses
   writes a second error line in Seerr's log. Check it once, with the item above.
+  - **Done in S8,** as the owner decided: the update is told the key was refused, and
+    doesn't check it again.
 - **Seerr keeps its own Jellyfin key** (S6): the one its first sign-in made, named
   `Seerr` in Jellyfin, which Mediaplane checks by using and never keeps, so it can't be
   rotated; it is redacted only once Mediaplane has read it in that run. Mediaplane gives
   Seerr its own Jellyfin key only when Seerr's is refused, or Jellyfin moves. Decide
   whether drift should replace it, and remove the one Seerr made.
+  - **Decided in S8:** drift never writes to an app. Replacing it is rotation: moved to
+    S10.
 - **A Seerr whose `settings.json` Mediaplane can't read** is set up again, unpublished,
   on every `apply` (S6): two recreates each time, with a warning, and `apply` fails at
   verify (exit 1) each time, until the file is readable. Decide whether drift reports
   it, or asks Seerr over the wiring network instead.
+  - **Decided in S8:** drift warns as `plan` does. Asking Seerr over the wiring network
+    instead changes its setup: moved to S10.
 - **Seerr's libraries are enabled by name, from Seerr's last sync** (S6). A library made
   anew in Jellyfin has a new id; `plan` reads Seerr's last sync, which `apply` refreshes
   only when the libraries differ. Decide whether drift syncs them, which writes to Seerr.
+  - **Decided in S8:** drift doesn't sync them, which would write to Seerr; `apply` syncs
+    them when the libraries differ, or Jellyfin moves.
 - **Seerr's servers are its default** (S6): making `Sonarr (Mediaplane)` the default
   clears a default of yours of the same kind, and a profile changed in Seerr is put back.
   Keep mine must cover the servers' fields, and Seerr's libraries.
+  - **Done in S8:** Keep mine covers the servers' profile, folder and `isDefault`, and
+    Seerr's libraries. Their host and port are fixed: they say where a key goes.
 - **A folder with a comma in its name, added by hand to a Jellyfin library** (S5), is
   never removed, because `paths` is joined with ",": `apply` tries to remove the
   pieces, which Jellyfin answers 404, so the library fails on every `apply`. Re-read
   `Locations` in `update`, with Keep mine's change to how `paths` is held.
+  - **Done in S8:** the update reads Jellyfin's folders whole; drift reports such a
+    folder as one it can't list, and Keep mine refuses it.
 
 **S9 and S10 (before going public):**
 
@@ -793,6 +892,12 @@ password, which are S3c's (and listed again below).
   `X-Forwarded-For` header it sends (spec §11, Slice 3a).
 
 **M2 (everyday CLI):**
+
+- **From S8, for `doctor`:** appdata ownership, checked only when something else changes,
+  and an override that moves an appdata mount, which leaves the pre-start files where the
+  app doesn't look. Both are the host's state, not a change in an app.
+- **Drift on a schedule** (spec §6.3): `drift` takes apply's lock and checks no more than
+  it must (S8), so a schedule can call it as it is.
 
 - **A `network.lan_subnet` that covers the stack's Docker networks.** With
   `security.login_on_lan: false` and the web UIs on the LAN, qBittorrent lets any

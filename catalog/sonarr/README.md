@@ -107,10 +107,35 @@ LinuxServer.io image, unmodified.
 - **Its web UI,** published as `network.bind` says. `mediaplane credentials` shows its
   address.
 
-## Not built yet
+## Drift and Keep mine
 
-- **Slice 8:** drift detection and Keep mine for what it manages here. See the
-  [roadmap](../../docs/plans/m1-roadmap.md).
+- **What drift reports.** `mediaplane drift`, and `plan`, report a change made in
+  Sonarr's web UI to what Mediaplane manages here, listed above under "Managed in the
+  app": what Mediaplane set, and what Sonarr holds now. A secret is checked with
+  Sonarr's own test, and named, never shown. `apply` puts each back.
+- **Keeping yours.** `mediaplane keep sonarr.<resource>.<field>`, as drift names it,
+  keeps what Sonarr holds instead: it adds the line under `overrides:` in `stack.yaml`,
+  and `apply` then leaves it. A field marked `(fixed)` above, and a secret, can't be
+  kept. `mediaplane keep sonarr.root_folder` stops Mediaplane managing a resource deleted
+  in Sonarr. The [drift runbook](../../docs/runbooks/drift-reported.md) says more.
+- **Its download client's category,** kept as another (`sonarr.download_client.category`):
+  qBittorrent's category (`qbittorrent.category_tv`) then has that name, and `apply`
+  makes it, with its save path. Sonarr's own test of the client makes a category
+  qBittorrent lacks, with no save path, so `plan` and drift leave the client's key
+  unchecked while one is missing, saying what clears it: the kept one until `apply`
+  makes it, or the post-import one you set in Sonarr (`tvImportedCategory`), which stays yours
+  to make in qBittorrent.
+- **Where Sonarr sends a key** is fixed: its download client's host, port and TLS, and its
+  connections' host and port. Drift reports a change to one, and `apply` puts the
+  stack's own address back; every test Mediaplane has Sonarr run is aimed there, whatever
+  Sonarr holds.
+- **Its root folder's folder, deleted by hand:** drift says Sonarr can't reach it
+  (`sonarr.root_folder.accessible`), and `apply` makes the folder again. Its path is
+  fixed: Sonarr knows a root folder by its path. To move your library, move it in
+  Sonarr, then stop Mediaplane managing the root folder with
+  `sonarr.root_folder: unmanaged` under `overrides:`.
+- **A connection's events,** which change files it tells the media server of, are yours:
+  drift doesn't report them.
 
 ## Changing it
 
@@ -146,8 +171,8 @@ LinuxServer.io image, unmodified.
   ```
 
   Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
-  `sudo mv`. The old file keeps your settings, to enter again in Sonarr. Slice 8 does
-  this for you.
+  `sudo mv`. The old file keeps your settings, to enter again in Sonarr. Slice 10
+  does this for you.
 
   If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the
   stack's `user:`, not to the user Mediaplane runs as (`MEDIAPLANE_UID` in its

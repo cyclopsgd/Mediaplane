@@ -1,6 +1,6 @@
 # Threat model
 
-This is the threat model for Mediaplane as built today: M1, up to and including Slice 7.
+This is the threat model for Mediaplane as built today: M1, up to and including Slice 8.
 It makes spec §7 concrete. To report a vulnerability, see [SECURITY.md](../../SECURITY.md).
 
 ## The one thing to know
@@ -147,10 +147,12 @@ mounts ──► plex.tv
   Jellyfin's sign-in is signed out of again, and its activity log records both, as it
   records any sign-in. It signs in to Seerr only once, for its first sign-in, and signs
   out at once: Seerr's own key works after that.
-  `plan` checks a download client with the arr's own test, which also makes a missing
-  post-import category in qBittorrent, a setting Mediaplane doesn't manage: one you set
-  in the arr (`tvImportedCategory`, `movieImportedCategory`) and later deleted in
-  qBittorrent. It checks Prowlarr's links with Prowlarr's own test, which calls the arr
+  `plan` checks a download client with the arr's own test, which would make in
+  qBittorrent each category the client names that qBittorrent lacks: its own, or a
+  post-import one you set in the arr (`tvImportedCategory`, `movieImportedCategory`). So
+  `plan` asks qBittorrent first, and leaves the key unchecked while one is missing, or
+  qBittorrent can't be asked; a category you kept is made by `apply` first, and one you
+  no longer have Mediaplane manage is yours to make (see the drift reported runbook). It checks Prowlarr's links with Prowlarr's own test, which calls the arr
   with its key, and has the arr call Prowlarr back, and an arr's connection to Jellyfin
   with the arr's own test, which calls Jellyfin with its key. Each of those tests, when it
   fails, records a failure in that app's status of the client, link or connection, as a
@@ -162,6 +164,20 @@ mounts ──► plex.tv
   with the arr's own test, which calls Plex with your token: the first such test lists
   the arr among the devices of your Plex (Settings, Authorized Devices), as one from the
   arr's web UI does.
+- **Drift and Keep mine.** `mediaplane drift` asks the apps what `plan` asks them, and
+  changes nothing in them: its checks leave the marks above, fewer. A secret it found
+  refused isn't checked again, by drift or `plan`, until `apply` sets it, so a key or
+  password that changed costs one failed check, not one per run (qBittorrent bans an
+  address after five); Jellyfin's admin password is checked once a day at most, while it
+  passes. Drift keeps what it found of each secret in `state/resources.json`: its name,
+  `passed` or `refused`, and when. It reads Prowlarr's own health check of its indexer
+  proxy, and never tests the proxy. `mediaplane keep` checks that the app takes
+  Mediaplane's key and reads the one resource it keeps, checking none of its secrets and
+  running no test of the app's, and writes `stack.yaml`: one line under `overrides:`,
+  the rest as it was, its mode and group kept (not an ACL), never a secret. It refuses a
+  `stack.yaml` that is a link, has other names, belongs to another user or to a group
+  its user isn't in, or is managed by automation. Both run under apply's lock
+  (`state/lock`), so none of the three runs while another does.
 - **The Cloudflare solver.** Byparr, or FlareSolverr, runs a browser for Prowlarr on the
   stack's own network. Its port is never published, it has no login, and it isn't on
   the wiring network. Prowlarr sends it an indexer's request only for an indexer tagged
@@ -331,8 +347,8 @@ What remains:
   account. Use a plex.tv account of its own for the stack if that matters to you, and
   share your other servers with it as you need.
 - A link stays in Prowlarr when its arr leaves the stack, and keeps that arr's key,
-  until it is removed by hand (in Prowlarr's web UI) or, if Slice 8 does that, by drift
-  detection.
+  until it is removed by hand (in Prowlarr's web UI). `mediaplane drift` reports it, as
+  still in the app though the stack no longer wants it; removing it for you is Slice 10.
 - The apps' calls to each other, and Mediaplane's to them, are plain HTTP on Docker's own
   networks, with keys in them. An app with Docker's default capabilities could try to
   intercept another's traffic on a network they share.
@@ -431,6 +447,11 @@ Controls today:
   header plex.tv asks for), and keeps nothing of it.
 - Every value that comes from plex.tv, and your Plex token, is replaced with `***` in
   errors, and kept out of change records, `state/resources.json` and `plan`'s output.
+- `drift` and `plan` show a managed field's values, what was applied and what the app
+  holds, never a secret's: a value an app holds that contains one of the run's secrets is
+  shown with `***`, and marked so. `mediaplane keep` refuses to keep such a value, or a
+  secret, so `stack.yaml` never holds one (ADR 0009). What drift keeps of a secret in
+  `state/resources.json` is its name, a verdict and a time.
 - Gluetun's control key reaches vpn-check's probe on its standard input, and the probe
   hands it to curl the same way. It is never on a command line, which every user on the
   host can list, nor in the container's settings, and it is replaced with `***` in what
@@ -881,6 +902,53 @@ What remains:
   `API_KEY` at every start, so the next plan sees a done file and a record, and treats
   the claimed Seerr as its own. Inside `apply`, the record is dropped as soon as the
   file stops saying done. So stop Seerr before resetting its appdata.
+
+### T17. A change made in an app by someone else is kept
+
+Anyone with an app's admin login, or its key, can change what Mediaplane manages there:
+point Sonarr's download client at another host, add a folder to a Jellyfin library, or
+turn a library off in Seerr.
+
+Controls today:
+
+- `mediaplane drift` reports each change to a managed field, with what was applied and
+  what the app holds, a resource deleted, and a secret the app refuses. `plan` shows the
+  same, and `apply`, which asks first, puts each back.
+- A change is never kept by itself: only `mediaplane keep`, run by you, makes it the
+  stack's, one field at a time.
+- Every field that says where an app sends a key is fixed, and can't be kept or
+  overridden: the host, port and TLS of an arr's download client and of its connections
+  to Jellyfin and Plex, the URLs of Prowlarr's links to the arrs (and its indexer
+  proxy's, which your indexers' requests go through), and the host and port of Seerr's
+  media server and of its Sonarr and Radarr servers. Drift still reports a change to
+  one, and `apply` puts the stack's own address back.
+- Every request that carries a key, Mediaplane's own and each test it has an app run
+  with a key the app holds (an arr's test of its download client or connection,
+  Prowlarr's of a link, Seerr's of a server), is built from the stack's own service
+  address for the other app (`sendsTo`), never from a managed field an override could
+  set, nor from what the app holds: a host, port, TLS or URL base changed in the app
+  doesn't move where the key goes. Seerr's list of Jellyfin's users, which Seerr asks
+  with the key it holds at the address it holds, is asked only while Seerr holds the
+  stack's. Each catalog resource has a test of it. A key goes only to the stack's own
+  address for an app (T5).
+- While a managed field differs, `plan` checks none of the resource's secrets.
+- What a resource is known by can't be kept: a root folder's path, a library's name and
+  what it holds.
+- `mediaplane keep` checks that the app takes Mediaplane's key and reads one resource;
+  it checks no secret and runs no test of the app's, so it sends no key but Mediaplane's
+  own, to the app's own address.
+
+What remains:
+
+- Keep only what you changed yourself. A kept value is what the app holds from then on:
+  a category, a folder, a tag, a library left to you.
+- An app's admin can still point the app itself somewhere else between two `apply`s:
+  the app then uses the key it holds there, as it would without Mediaplane. Drift reports
+  it, and only `apply` puts it back.
+- Drift sees only what Mediaplane manages. A change to anything else in an app, its
+  indexers, profiles or users, is yours, and never reported.
+- Drift runs only when you run it, or `plan` or `apply` does. Running it on a schedule
+  comes in M2.
 
 ## What the proxy does not stop
 

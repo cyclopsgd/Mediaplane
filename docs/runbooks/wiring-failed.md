@@ -290,7 +290,9 @@ differ, and a `reason` when it is `unknown`.
   - **Seerr** takes the stored key from its environment at every start, whatever its
     `settings.json` says, so a key made anew in its web UI lasts only until Seerr
     restarts: `docker restart mediaplane-seerr-1` puts the stored one back.
-  - Slice 8 restores a key at its source for you, and makes Jellyfin's anew.
+  - `mediaplane drift` reports a key changed at its source, on the app and on each
+    resource that holds it. Slice 10 restores a key at its source for you, and makes
+    Jellyfin's anew.
 - **`refused the request (HTTP 403)`, with
   `banned after too many failed authentication attempts`** (`wire.auth`). qBittorrent
   stops an address from signing in for an hour after five failed sign-ins in a row.
@@ -307,7 +309,9 @@ differ, and a `reason` when it is `unknown`.
   works, and only Mediaplane's address is banned, not your browser's. Wait an hour, or
   restart qBittorrent, which forgets the ban (`docker restart mediaplane-qbittorrent-1`),
   then run `apply` again: it sets the password if it hasn't yet, and its check then
-  passes.
+  passes. Once `mediaplane drift` has found the password refused, neither drift nor `plan`
+  signs in again until `apply` sets it, so running `mediaplane drift` first spares the
+  failures.
 - **`Host: Unable to connect to qBittorrent`.** Sonarr or Radarr can't reach qBittorrent.
   Behind the VPN they reach it through Gluetun, as `gluetun`, at qBittorrent's port:
   check that both run and are healthy (`mediaplane status`), and that the VPN is up

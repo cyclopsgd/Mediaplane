@@ -29,9 +29,12 @@ Compose and wires the apps together for you.**
 >   in with your Plex account before Seerr is published, linked to Plex (when `apply`
 >   runs the stack; the same threat model entry says what voids that).
 >   `mediaplane vpn-check` confirms that qBittorrent reaches the internet only through
->   the VPN. Mediaplane runs in its own hardened container, behind a Docker socket
->   proxy, and reaches the apps over a private network with no route out.
-> - **Next:** drift detection: `plan` will report what was changed by hand.
+>   the VPN. `mediaplane drift` reports what was changed by hand in the apps, with what
+>   Mediaplane set and what the app holds now; `apply` puts it back, and
+>   `mediaplane keep` keeps it as yours instead, in `stack.yaml`. Mediaplane runs in its
+>   own hardened container, behind a Docker socket proxy, and reaches the apps over a
+>   private network with no route out.
+> - **Next:** releases, and updating Mediaplane without touching the stack.
 > - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
 >   your LAN (`network.bind: lan`) or keep them on this machine (`localhost`).
 >
@@ -80,7 +83,7 @@ Mediaplane does that part for you:
 | Plex's libraries and links, and Seerr signed in with your Plex account            | Done    |
 | Guided install: `install.sh`, then `init` asks for everything, Plex sign-in too   | Done    |
 | Hardware transcoding for Plex or Jellyfin (`hardware_transcoding`)                | Done    |
-| Detect manual changes and offer Re-apply or "Keep mine"                           | Planned |
+| Detect manual changes and offer Re-apply or "Keep mine" (`drift`, `keep`)         | Done    |
 | Releases, and updating Mediaplane without touching the stack                      | Planned |
 | Rebuild a host, or deploy with automation such as Ansible                         | Planned |
 
@@ -122,12 +125,14 @@ Secrets never go in `stack.yaml`: it only points to them, with `{ file: … }` o
 Mediaplane works like `terraform plan` and `apply`. `plan` validates `stack.yaml`, checks
 the host, renders the Compose project and diffs it against what is running. It shows you
 the changes and touches nothing in your stack, apart from small marks that checking a key
-or a password can leave in an app: a category in qBittorrent, a failure in an app's own
-status of a client, link or connection, a sign-in in Jellyfin's activity log, a line in
-Seerr's log (and an arr's) for a check of Seerr's that fails, and an arr listed among
-Plex's devices by its first test of its connection to Plex. The
+or a password can leave in an app: a failure in an app's own status of a client, link or
+connection, a sign-in in Jellyfin's activity log, a line in Seerr's log (and an arr's)
+for a check of Seerr's that fails, and an arr listed among Plex's devices by its first
+test of its connection to Plex. The
 [threat model](docs/security/threat-model.md#what-runs-and-who-can-reach-it) says more.
-`apply` does the same, then makes those changes.
+It also shows what was changed by hand in the apps since Mediaplane set it: drift.
+`apply` does the same, then makes those changes. `drift` reports only what was changed
+by hand, and `keep` keeps a change of yours as the stack's.
 
 ```text
 stack.yaml + secrets/
@@ -170,8 +175,9 @@ A few principles hold throughout:
   from other tools, or keep it running without Mediaplane. The generated file's header
   gives the exact `docker compose` command for that.
 - **You stay in control.** Container-level changes go in your own
-  `compose.override.yaml`, which Mediaplane never writes. Mediaplane will only manage
-  what it created, and it reports manual changes instead of reverting them.
+  `compose.override.yaml`, which Mediaplane never writes. Mediaplane manages only what it
+  created, and reports a change made by hand to it before `apply` puts it back: you
+  choose, and `mediaplane keep` keeps yours.
 - **Safe by default.** On a cloud VM, a private address is often reachable from the
   internet. Mediaplane notices, and refuses to publish web UIs there unless you say so
   explicitly. qBittorrent has no network of its own outside the VPN. Mediaplane controls
@@ -348,10 +354,10 @@ including your own admin password if you'd rather type one, and with Plex signs 
   first-run setup sets its admin.
 
 It changes nothing in your stack, apart from small marks that checking a key or a
-password can leave in an app: a category in qBittorrent, a failure in an app's own
-status of a client, link or connection, a sign-in in Jellyfin's activity log, a line in
-Seerr's log (and an arr's) for a check of Seerr's that fails, and an arr listed among
-Plex's devices by its first test of its connection to Plex. The
+password can leave in an app: a failure in an app's own status of a client, link or
+connection, a sign-in in Jellyfin's activity log, a line in Seerr's log (and an arr's)
+for a check of Seerr's that fails, and an arr listed among Plex's devices by its first
+test of its connection to Plex. The
 [threat model](docs/security/threat-model.md#what-runs-and-who-can-reach-it) says more.
 You need Docker (Engine 24 or newer, with the Compose plugin 2.24 or newer), Node 24 and
 pnpm.
@@ -399,6 +405,19 @@ pnpm --silent mediaplane credentials --home .mediaplane-dev
 This starts real containers on this machine, with the web UIs on `localhost`. The last
 command shows the admin login, which qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin
 use, and Seerr through Jellyfin, and each app's address.
+
+Then change something Mediaplane manages in an app's web UI, such as the category of the
+download client `qBittorrent (Mediaplane)` in Sonarr (Settings, Download Clients), and
+see what `drift` says:
+
+```bash
+MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane drift --home .mediaplane-dev
+MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane keep sonarr.download_client.category --home .mediaplane-dev
+```
+
+`drift` shows what Mediaplane set and what Sonarr holds now, and exits `2`. `apply` puts
+it back; `keep` instead adds it under `overrides:` in `stack.yaml`, and `drift` is
+clear. The [drift runbook](docs/runbooks/drift-reported.md) says more.
 The first `apply` downloads several GB of images, so it can take a while. To remove the
 containers, run `docker compose -p mediaplane-dev down`, then
 `sudo rm -rf .mediaplane-dev`. Seerr's folder belongs to uid 1000, which is why `sudo`
@@ -547,12 +566,11 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
 - **Merged:** S1 (the pure core), S2a (`plan` against a real host), S2b (`apply`), S2c
   (packaging), S3a (the shared admin and pre-start files), S3d (the VPN's kill-switch
   test and `vpn-check`), S3b (the wiring framework), S3c (the download path), S4
-  (indexers), S5 (Jellyfin), S6 (requests) and S7 (Plex). Since S7, smaller changes
-  have added a guided install (`deploy/install.sh`, and `init` asking for your own admin
-  password and signing you in to Plex) and hardware transcoding.
-- **Next:** S8 (drift detection).
-- **After that:** S9 (releases and safe updates), then S10 (recovery and automation),
-  which completes M1.
+  (indexers), S5 (Jellyfin), S6 (requests), S7 (Plex) and S8 (drift). Between S7 and
+  S8, smaller changes added a guided install (`deploy/install.sh`, and `init` asking for
+  your own admin password and signing you in to Plex) and hardware transcoding.
+- **Next:** S9 (releases and safe updates).
+- **After that:** S10 (recovery and automation), which completes M1.
 
 ## Documentation
 
@@ -577,6 +595,9 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
   key or a change, Jellyfin's or Seerr's first-run setup failed or waits, an arr can't
   reach qBittorrent or Jellyfin, Seerr can't reach an arr, Prowlarr can't make its proxy,
   or Mediaplane can't reach an app.
+- **[Runbook: drift reported](docs/runbooks/drift-reported.md):** something Mediaplane
+  manages was changed in an app: put it back with `apply`, or keep it with
+  `mediaplane keep`.
 - **[Threat model](docs/security/threat-model.md):** what is protected, how, and what
   isn't.
 - **[Architecture decision records](docs/adr/):** why things are the way they are.

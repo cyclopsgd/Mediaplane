@@ -145,6 +145,7 @@ mediaplane apply        # asks before it changes anything; --yes skips the quest
 mediaplane status
 mediaplane credentials  # the admin login, and where each app is
 mediaplane vpn-check    # with a VPN: qBittorrent gets out only through it
+mediaplane drift        # what was changed by hand in the apps since apply
 ```
 
 `init` checks the flags it can before its first question, including that it can create
@@ -514,6 +515,12 @@ Each item is a message you may see, then what to do.
 
   From `mediaplane plan` or `apply`. Follow the
   [wiring failed runbook](../docs/runbooks/wiring-failed.md).
+
+- `Drift found`, from `mediaplane drift`, or a `Drift` section in `plan`
+
+  Something Mediaplane manages was changed in an app's web UI. Follow the
+  [drift reported runbook](../docs/runbooks/drift-reported.md): `apply` puts it back,
+  and `mediaplane keep` keeps it.
 
 - `Resource is still in use`, from `docker compose -p mediaplane down`
 

@@ -126,11 +126,24 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
 - **`VERSION=docker`** leaves the Plex version to Docker, so Plex changes only when the
   pinned image does.
 
-## Not built yet
+## Drift and Keep mine
 
-- **Slice 8:** drift detection and Keep mine for what it manages here.
-
-See the [roadmap](../../docs/plans/m1-roadmap.md).
+- **What drift reports.** `mediaplane drift`, and `plan`, report a change made in
+  Plex's web UI to what Mediaplane manages here, listed above under "Managed in the
+  app": what Mediaplane set, and what Plex holds now. A secret is checked with
+  Plex's own test, and named, never shown. `apply` puts each back.
+- **Keeping yours.** `mediaplane keep plex.<resource>.<field>`, as drift names it,
+  keeps what Plex holds instead: it adds the line under `overrides:` in `stack.yaml`,
+  and `apply` then leaves it. A field marked `(fixed)` above, and a secret, can't be
+  kept. `mediaplane keep plex.library_movies` stops Mediaplane managing a resource deleted
+  in Plex. The [drift runbook](../../docs/runbooks/drift-reported.md) says more.
+- **Its name,** kept as another (`plex.server.name`), stays.
+- **A folder added to `Movies` or `TV Shows`,** kept (`plex.library_movies.location`):
+  the library then holds each folder kept, one comma-separated list.
+- **A library renamed in Plex** is still found, by Plex's key for it: drift reports its
+  name, and `apply` renames it back. Its name is fixed, as Seerr enables it by its name.
+  To keep the new name, stop Mediaplane managing it with `plex.library_movies: unmanaged`
+  (or `library_tv`) under `overrides:`; Seerr then no longer enables it either.
 
 ## Changing it
 
@@ -140,7 +153,7 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
   combination, and `plan` warns about it. See the
   [`stack.yaml` reference](../../docs/reference/stack-yaml.md).
 - **What Mediaplane manages** (its name, and its libraries' names, kinds and folders) is
-  put back by the next `apply` when changed in Plex. Keep mine comes in Slice 8.
+  put back by the next `apply` when changed in Plex, unless you keep it (see above).
 - **Hardware transcoding** (Intel Quick Sync, or AMD): set
   `hardware_transcoding: true` under `apps.plex`. Mediaplane then gives Plex the
   host's GPU (all of `/dev/dri`: the render node and the display node, as the image's own
@@ -170,7 +183,7 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 - **A new token from `plex-login` reaches the arrs only once the old one is refused.**
   Sonarr and Radarr keep the token they hold while Plex takes it, and get yours at the
   next `apply` when Plex refuses theirs. Seerr keeps the token it signed in with, and
-  Mediaplane can't give it another yet (Slice 8).
+  Mediaplane can't give it another yet (Slice 10).
 - **A Plex claimed outside `apply`,** with another account, stays unpublished: see the
   [runbook](../../docs/runbooks/wiring-failed.md).
 - **The first `apply` needs plex.tv,** from Docker's default bridge network in the image:
