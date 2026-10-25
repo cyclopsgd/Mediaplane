@@ -17,8 +17,8 @@ import {
   wiringStack as stackOf,
 } from '../testing/wiring';
 import { foundSecrets } from '../util/redact';
-import type { KnownResources } from './resources';
-import type { ResourceSpec } from './types';
+import type { KnownResource, KnownResources } from './resources';
+import type { Fields, ResourceSpec } from './types';
 import {
   joinFailure,
   knownSecrets,
@@ -1287,6 +1287,97 @@ describe('planWiring: drift (spec §6.3)', () => {
         redacted: true,
       },
     ]);
+  });
+
+  it('keeps out a secret the run reads after the drift it is in, and out of every reason', async () => {
+    const HELD = 'e'.repeat(32);
+    // The first resource drifted to a value that holds a key the second reads after it.
+    const first: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'first',
+      observe: () =>
+        Promise.resolve({ id: null, name: 'first', fields: { user: `x${HELD}` } }),
+    };
+    const second: ResourceSpec = {
+      ...FAKE_LOGIN,
+      observe: (api) => {
+        api.addSecret(HELD);
+        return FAKE_LOGIN.observe(api, undefined);
+      },
+      // A check that says why it left itself undone, quoting what the app holds.
+      verify: () => Promise.resolve({ unchecked: `the app holds ${HELD} and ${KEY}` }),
+    };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const planned = await planWiring(
+      options(sonarr, {
+        stack: sonarrWith([first, second]),
+        known: {
+          ...RECORDED,
+          'sonarr.first': RECORDED['sonarr.login'] as KnownResource,
+        },
+      }),
+    );
+    expect(planned.drift).toEqual([
+      {
+        resource: 'sonarr.first',
+        kind: 'field',
+        field: 'user',
+        expected: 'admin',
+        actual: 'x***',
+        redacted: true,
+      },
+    ]);
+    expect(planned.checks).toContainEqual({
+      resource: 'sonarr.login',
+      secret: 'password',
+      verdict: 'unchecked',
+      reason: 'the app holds *** and ***',
+    });
+    expect(JSON.stringify(planned)).not.toContain(HELD);
+    expect(JSON.stringify(planned)).not.toContain(KEY);
+  });
+
+  it('says a field the app gives none of has drifted, and holds no value', async () => {
+    const none: ResourceSpec = {
+      ...FAKE_LOGIN,
+      observe: () => Promise.resolve({ id: null, name: 'login', fields: {} }),
+    };
+    const sonarr = await fakeSonarr({ key: KEY });
+    const planned = await planWiring(
+      options(sonarr, { stack: sonarrWith([none]), known: RECORDED }),
+    );
+    expect(planned.drift).toEqual([
+      {
+        resource: 'sonarr.login',
+        kind: 'field',
+        field: 'user',
+        expected: 'admin',
+        actual: null,
+        unreadable: 'the app gave none',
+      },
+    ]);
+  });
+
+  it("finds no drift in a field the stack no longer sets: apply doesn't set it", async () => {
+    // Applied with a user name, which the stack no longer gives.
+    const unset: ResourceSpec = {
+      ...FAKE_LOGIN,
+      desired: (ctx) => {
+        const wanted = FAKE_LOGIN.desired(ctx);
+        return wanted === undefined ? undefined : { ...wanted, fields: {} };
+      },
+    };
+    for (const held of [{}, { user: 'someone' }] as Fields[]) {
+      const odd: ResourceSpec = {
+        ...unset,
+        observe: () => Promise.resolve({ id: null, name: 'login', fields: held }),
+      };
+      const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+      const planned = await planWiring(
+        options(sonarr, { stack: sonarrWith([odd]), known: RECORDED }),
+      );
+      expect(planned.drift, JSON.stringify(held)).toEqual([]);
+    }
   });
 
   it('gives a check what it may do and ask in plan, and says why it left one undone', async () => {

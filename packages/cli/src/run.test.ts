@@ -1788,6 +1788,32 @@ describe('mediaplane drift', () => {
     expect(signIns('/api/v2/auth/login')).toBe(1);
   });
 
+  it('keeps a secret out of why it left a check undone, which names what an app holds', async () => {
+    // A key pasted into the arr's post-import category, which qBittorrent lacks: the
+    // reason the client's key is left unchecked names the category.
+    const runtime = current();
+    const home = await currentHome(runtime);
+    const secrets = await secretsIn(home);
+    const [, pasted = ''] = secrets;
+    apis.apps.get('sonarr')?.downloadClients[0]?.fields.push({
+      name: 'tvImportedCategory',
+      value: `done-${pasted}`,
+    });
+    const term = capture();
+    expect(await run(['drift', '--home', home], term.io, deps(runtime))).toBe(2);
+    expect(term.stdout()).toContain('qBittorrent has no category done-*** (');
+    const json = capture();
+    expect(await run(['drift', '--home', home, '--json'], json.io, deps(runtime))).toBe(
+      2,
+    );
+    const plan = capture();
+    expect(await run(['plan', '--home', home, '--json'], plan.io, deps(runtime))).toBe(0);
+    expectNoSecrets(
+      term.stdout() + term.stderr() + json.stdout() + plan.stdout(),
+      secrets,
+    );
+  });
+
   it('exits 1 when it cannot look, changing nothing', async () => {
     const home = await tempDir('mediaplane-cli-');
     const term = capture();

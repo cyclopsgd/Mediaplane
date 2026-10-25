@@ -494,7 +494,8 @@ export async function examine(
 /**
  * The managed fields that changed in the app since they were applied (O ≠ L), unless the
  * app now holds what the stack wants (O = D: stack.yaml was changed to match). A field
- * the app holds in a shape Mediaplane can't read has drifted too, with no value.
+ * the app holds in a shape Mediaplane can't read has drifted too, with no value. One the
+ * stack no longer sets hasn't: apply doesn't set it, so it has nothing to put back.
  */
 function fieldDrift(
   spec: ResourceSpec,
@@ -506,12 +507,10 @@ function fieldDrift(
 ): Drift[] {
   return compared.flatMap((field): Drift[] => {
     const applied = known.fields[field];
-    if (applied === undefined) return [];
     // What apply would set; and what it applied, when stack.yaml has changed it since.
-    const wanted = desired.fields[field];
-    const expected = wanted ?? applied;
-    const was =
-      wanted === undefined || sameValue(spec, field, wanted, applied) ? {} : { applied };
+    const expected = desired.fields[field];
+    if (applied === undefined || expected === undefined) return [];
+    const was = sameValue(spec, field, expected, applied) ? {} : { applied };
     const unreadable =
       observed.unreadable?.[field] ??
       (observed.fields[field] === undefined ? 'the app gave none' : undefined);
@@ -531,7 +530,7 @@ function fieldDrift(
     const actual = observed.fields[field];
     if (
       sameValue(spec, field, actual, applied) ||
-      sameValue(spec, field, actual, wanted)
+      sameValue(spec, field, actual, expected)
     ) {
       return [];
     }
@@ -760,24 +759,6 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
     readOnly: true,
     peer: (app) => checked.get(app),
   };
-  /**
-   * A value from an app, and what was said of one Mediaplane can't read, shown without any
-   * secret the run knows of by then.
-   */
-  const shown = (entry: Drift): Drift => {
-    const values = redactionValues([...options.secrets, ...found.values]);
-    const hidden = (text: string | null | Scalar | undefined) =>
-      typeof text === 'string' ? redact(text, values) : text;
-    const actual = hidden(entry.actual);
-    const unreadable = hidden(entry.unreadable);
-    if (actual === entry.actual && unreadable === entry.unreadable) return entry;
-    return {
-      ...entry,
-      ...(actual === undefined ? {} : { actual }),
-      ...(typeof unreadable === 'string' ? { unreadable } : {}),
-      redacted: true,
-    };
-  };
   /** The keys of the apps that refuse their own, as Mediaplane holds them: by value. */
   const refusedKeys = new Map<string, string>();
   /**
@@ -907,7 +888,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
         action: result.action,
         ...(result.changes.length === 0 ? {} : { changes: result.changes }),
       });
-      drift.push(...result.drift.map(shown));
+      drift.push(...result.drift);
       checks.push(...result.checks);
       // Its secrets went unchecked, so it isn't known to be in place either: what
       // requires it waits too.
@@ -944,7 +925,43 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       for (const change of left.unknown) add(change);
     }
   }
-  return { changes, diagnostics, drift, checks };
+  return redacted({ changes, diagnostics, drift, checks }, [
+    ...options.secrets,
+    ...found.values,
+  ]);
+}
+
+/**
+ * What planWiring found, with every secret the run came to know of kept out, once, at its
+ * end: a key read in a later app's answer is kept out of what an earlier app said too.
+ * A value an app holds, and what was said of one Mediaplane can't read, is shown with
+ * *** and marked `redacted`; a check's reason and a change's are redacted as they are,
+ * since either may name what an app holds (a category, say), and so is each diagnostic's
+ * message, which was redacted as it was made with the secrets known then.
+ */
+function redacted(planned: PlannedWiring, secrets: readonly string[]): PlannedWiring {
+  const values = redactionValues(secrets);
+  const hidden = <T>(text: T): T =>
+    (typeof text === 'string' ? redact(text, values) : text) as T;
+  const drift = planned.drift.map((entry): Drift => {
+    const actual = hidden(entry.actual);
+    const unreadable = hidden(entry.unreadable);
+    if (actual === entry.actual && unreadable === entry.unreadable) return entry;
+    return {
+      ...entry,
+      ...(actual === undefined ? {} : { actual }),
+      ...(unreadable === undefined ? {} : { unreadable }),
+      redacted: true,
+    };
+  });
+  const reasoned = <T extends { reason?: string }>(entry: T): T =>
+    entry.reason === undefined ? entry : { ...entry, reason: hidden(entry.reason) };
+  return {
+    changes: planned.changes.map(reasoned),
+    diagnostics: planned.diagnostics.map((d) => ({ ...d, message: hidden(d.message) })),
+    drift,
+    checks: planned.checks.map(reasoned),
+  };
 }
 
 /**
