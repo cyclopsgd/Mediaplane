@@ -103,6 +103,8 @@ to the solver only when the site answers with a Cloudflare challenge.
   the proxy's host, which your indexers' requests go through. Drift reports a change to
   one, and `apply` puts the stack's own address back; Prowlarr's test of a link is
   always aimed there.
+- **A link's categories,** kept (`prowlarr.application_sonarr.syncCategories`): each is
+  a number, such as `5000`, separated by `,`. `keep` and `plan` refuse one that isn't.
 - **The proxy's tags,** kept with other labels than `cloudflare`
   (`prowlarr.indexer_proxy.tags`): Mediaplane gives the proxy each, making a tag it
   lacks.

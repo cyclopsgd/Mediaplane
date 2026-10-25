@@ -152,7 +152,9 @@ mounts ──► plex.tv
   post-import one you set in the arr (`tvImportedCategory`, `movieImportedCategory`). So
   `plan` asks qBittorrent first, and leaves the key unchecked while one is missing, or
   qBittorrent can't be asked; a category you kept is made by `apply` first, and one you
-  no longer have Mediaplane manage is yours to make (see the drift reported runbook). It checks Prowlarr's links with Prowlarr's own test, which calls the arr
+  no longer have Mediaplane manage is yours to make (see the
+  [drift reported runbook](../runbooks/drift-reported.md)). It checks Prowlarr's links
+  with Prowlarr's own test, which calls the arr
   with its key, and has the arr call Prowlarr back, and an arr's connection to Jellyfin
   with the arr's own test, which calls Jellyfin with its key. Each of those tests, when it
   fails, records a failure in that app's status of the client, link or connection, as a
@@ -166,18 +168,30 @@ mounts ──► plex.tv
   arr's web UI does.
 - **Drift and Keep mine.** `mediaplane drift` asks the apps what `plan` asks them, and
   changes nothing in them: its checks leave the marks above, fewer. A secret it found
-  refused isn't checked again, by drift or `plan`, until `apply` sets it, so a key or
-  password that changed costs one failed check, not one per run (qBittorrent bans an
-  address after five); Jellyfin's admin password is checked once a day at most, while it
-  passes. Drift keeps what it found of each secret in `state/resources.json`: its name,
-  `passed` or `refused`, and when. It reads Prowlarr's own health check of its indexer
-  proxy, and never tests the proxy. `mediaplane keep` checks that the app takes
-  Mediaplane's key and reads the one resource it keeps, checking none of its secrets and
-  running no test of the app's, and writes `stack.yaml`: one line under `overrides:`,
-  the rest as it was, its mode and group kept (not an ACL), never a secret. It refuses a
-  `stack.yaml` that is a link, has other names, belongs to another user or to a group
-  its user isn't in, or is managed by automation. Both run under apply's lock
-  (`state/lock`), so none of the three runs while another does.
+  refused isn't checked again, by drift or `plan`, until `apply` sets it, nor is what
+  only its app can say asked of that resource meanwhile (Seerr's test of an arr), so a
+  key or password that changed costs one failed check, not one per run (qBittorrent
+  bans an address after five); Jellyfin's admin password is checked once a day at most,
+  while it passes. An app that refuses its own key isn't sent it again, by drift or
+  `plan`, until `apply` checks it, nor are the secrets of what holds that key checked.
+  Drift keeps what it found of each secret in `state/resources.json`: its name, `passed`
+  or `refused`, and when; and each app found refusing its own key, by the key's name.
+  It reads Prowlarr's own health check of its indexer proxy, and never tests the proxy.
+  `mediaplane keep` checks that the app takes Mediaplane's key and reads the one
+  resource it keeps, checking none of its secrets and running no test of the app's, and
+  writes `stack.yaml`: one line under `overrides:`, the rest as it was, its mode and
+  group kept (not an ACL), never a secret. It then records the value as applied in
+  `state/resources.json`. It reads `stack.yaml` once, through one handle that doesn't
+  follow a link, replaces only that file, and refuses one that is a link, not a regular
+  file, has other names, belongs to another user or to a group its user isn't in, is
+  written as one `{ … }` block, can't be parsed, is managed by automation (checked
+  again in the file it writes), or that it fails to write, giving the line to add by
+  hand. It never writes a value with a control character, a line or paragraph
+  separator, or a bidirectional control, which an editor could show as what the file
+  doesn't hold, nor one its field's rule refuses (a category that would take
+  qBittorrent's downloads out of `/data/torrents`). Like `plan`, both join the wiring
+  network in the image, and both run under apply's lock (`state/lock`), so none of the
+  three runs while another does.
 - **The Cloudflare solver.** Byparr, or FlareSolverr, runs a browser for Prowlarr on the
   stack's own network. Its port is never published, it has no login, and it isn't on
   the wiring network. Prowlarr sends it an indexer's request only for an indexer tagged
@@ -449,9 +463,11 @@ Controls today:
   errors, and kept out of change records, `state/resources.json` and `plan`'s output.
 - `drift` and `plan` show a managed field's values, what was applied and what the app
   holds, never a secret's: a value an app holds that contains one of the run's secrets is
-  shown with `***`, and marked so. `mediaplane keep` refuses to keep such a value, or a
-  secret, so `stack.yaml` never holds one (ADR 0009). What drift keeps of a secret in
-  `state/resources.json` is its name, a verdict and a time.
+  shown with `***`, and marked so. So are a check's reason and a change's, which can name
+  what an app holds; all of it is redacted once, at the end of the run, with every secret
+  the run came to know, a key read in a later app's answer too. `mediaplane keep` refuses
+  to keep such a value, or a secret, so `stack.yaml` never holds one (ADR 0009). What
+  drift keeps of a secret in `state/resources.json` is its name, a verdict and a time.
 - Gluetun's control key reaches vpn-check's probe on its standard input, and the probe
   hands it to curl the same way. It is never on a command line, which every user on the
   host can list, nor in the container's settings, and it is replaced with `***` in what
@@ -913,12 +929,14 @@ Controls today:
 
 - `mediaplane drift` reports each change to a managed field, with what was applied and
   what the app holds, a resource deleted, and a secret the app refuses. `plan` shows the
-  same, and `apply`, which asks first, puts each back.
+  same, and `apply`, which asks first unless you pass `--yes` (its plan still shows the
+  drift), puts each back.
 - A change is never kept by itself: only `mediaplane keep`, run by you, makes it the
   stack's, one field at a time.
 - Every field that says where an app sends a key is fixed, and can't be kept or
-  overridden: the host, port and TLS of an arr's download client and of its connections
-  to Jellyfin and Plex, the URLs of Prowlarr's links to the arrs (and its indexer
+  overridden: the host, port and TLS of an arr's download client (a URL base held there
+  reads as part of its host, so it is drift too) and of its connections to Jellyfin and
+  Plex, the URLs of Prowlarr's links to the arrs (and its indexer
   proxy's, which your indexers' requests go through), and the host and port of Seerr's
   media server and of its Sonarr and Radarr servers. Drift still reports a change to
   one, and `apply` puts the stack's own address back.
@@ -933,7 +951,9 @@ Controls today:
   address for an app (T5).
 - While a managed field differs, `plan` checks none of the resource's secrets.
 - What a resource is known by can't be kept: a root folder's path, a library's name and
-  what it holds.
+  what it holds. Nor can what `stack.yaml` sets for every app: an app's admin user name,
+  the shared login, and who may skip qBittorrent's login, a security setting. A kept
+  download client's category must stay a folder in `/data/torrents`.
 - `mediaplane keep` checks that the app takes Mediaplane's key and reads one resource;
   it checks no secret and runs no test of the app's, so it sends no key but Mediaplane's
   own, to the app's own address.

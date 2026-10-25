@@ -92,7 +92,9 @@ leaves the stack running.
   S3a, Jellyfin's key deleted by hand, rotating the admin password, every setup getting
   every stored key, the setups' contract leftovers, the fake Seerr's `/auth/me`, a failed
   first-run setup stopping all wiring, and asking Seerr rather than reading its
-  `settings.json`;
+  `settings.json`; and the two S8 settled as S10's without that label: moving the arrs
+  to a new Plex token (rotation), and claiming again a Plex unclaimed while it runs
+  (recovery);
 - in externally managed mode, `keep`'s line to add, as a field of `mediaplane.keep/v1`
   rather than only an error's hint (S8 gives it in the hint);
 - `plan --help` and `drift --help` pointing at the published docs, not a repo path;

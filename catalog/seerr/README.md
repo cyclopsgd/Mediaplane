@@ -130,7 +130,10 @@ With Jellyfin as the media server (with Plex, see below):
   Jellyfin's users is asked only while Seerr holds the stack's address. `keep` reads a
   server's profile from what was applied, rather than run Seerr's test.
 - **A server's profile, root folder or default,** kept
-  (`seerr.server_sonarr.activeProfile`, `activeDirectory`, `isDefault`), stays. Its setup
+  (`seerr.server_sonarr.activeProfile`, `activeDirectory`, `isDefault`), stays; a
+  profile is kept by its name, as text. While Seerr's key for an arr is known refused,
+  neither drift nor `plan` asks Seerr to test the arr for its profiles: a key known wrong
+  leaves no new line in Seerr's log, nor in the arr's. Its setup
   (`seerr.setup.initialized`) is fixed: Seerr can't be taken back to its setup wizard.
 
 ## Not built yet

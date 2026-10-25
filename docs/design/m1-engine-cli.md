@@ -551,8 +551,8 @@ in `compose.override.yaml` is therefore wired automatically.
 | `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key or password check can leave a mark in an app: §11, Slices 3c, 4, 5, 6, 7 and 8; it never calls plex.tv); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
 | `apply` | Converge on `stack.yaml` (§5) |
 | `status [app]` | Container health, VPN state, and the last apply's outcome |
-| `drift` | Report drift only (§6.3): it changes nothing in the apps but for its checks' marks, fewer than `plan`'s, and keeps what it found of each secret in `state/resources.json` (§11, Slice 8) |
-| `keep <path>` | Keep mine: record a drifted value, or a resource deleted or left in an app, as an override, adding one line to `stack.yaml` (§11, Slice 8) |
+| `drift` | Report drift only (§6.3): it changes nothing in the apps but for its checks' marks, fewer than `plan`'s, and keeps what it found of each secret, and of each app's own key, in `state/resources.json`; like `plan`, it joins the wiring network in the image, and like `apply` it holds `state/lock` while it runs (§11, Slice 8) |
+| `keep <path>` | Keep mine: record a drifted value, or a resource deleted or left in an app, as an override, adding one line to `stack.yaml`, and record it as applied in `state/resources.json`; like `plan`, it joins the wiring network in the image, and it holds `state/lock` while it runs (§11, Slice 8) |
 | `history [id]` | List change records, or show one in full |
 | `credentials [app]` | Show the shared admin login and per-app URLs (never printed in `--json` unless `--reveal` is given) |
 | `plex-login` | Run the plex.tv PIN flow and save the token where `plex.token` names a file (`secrets/plex-token`), through a short-lived helper in the image (§11, Slice 7) |
@@ -1282,7 +1282,9 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   there. The arr's test also makes a missing post-import category (Sonarr's
   `tvImportedCategory`, Radarr's `movieImportedCategory`), which Mediaplane doesn't
   manage, so a `plan` makes one again in qBittorrent when you set it in the arr and later
-  delete it in qBittorrent. A test that fails also records a failure in the arr's status
+  delete it in qBittorrent (Slice 8 reverses that: `plan` and drift leave the key
+  unchecked while qBittorrent lacks a category the client names, so `plan` no longer
+  makes one). A test that fails also records a failure in the arr's status
   of that client (`DownloadClientStatus`), as a test from the arr's web UI does, and a
   later pass resets it (probed in Slice 4).
 - **Sonarr's and Radarr's root folder** (§6.2): `<arr>.root_folder`, `/data/media/tv` or
@@ -1806,17 +1808,23 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     found by (its id, its name) is still parsed strictly, and an answer Mediaplane can't
     parse leaves the resource unknown. A record of another name than the stack now wants
     is of what it wanted before, such as qBittorrent's category once Sonarr's is kept as
-    another: what differs from it is a change, not drift;
+    another: what differs from it is a change, not drift. A field the stack no longer
+    sets isn't drift either: `apply` doesn't set it. What an app holds, a check's reason
+    and a change's reason are redacted once, at the end of the run, with every secret it
+    came to know, a key read in a later app's answer too;
   - `missing`: the app no longer holds it;
   - `secret`: the app's own check refuses one of its secrets, by name, with `since` when
     drift found it before;
   - `key`: an app refuses the key Mediaplane holds for it, and each resource of another
     app that holds that key (`source`), whether or not that app can be asked: the
-    shared key of §6.3's last row, reported on the source and each consumer;
+    shared key of §6.3's last row, reported on the source and each consumer, whose
+    secrets, and what only its app can say (`resolve`), are then left unchecked;
   - `left`: a resource Mediaplane recorded that the stack no longer wants, still in the
     app, such as Prowlarr's link to an arr taken out of the stack. One the app can't say
     about is a warning (`drift.left-unknown`) and a wiring check that couldn't be made,
-    never said to be gone: drift isn't clear then.
+    never said to be gone: drift isn't clear then. It is looked up by its record (a
+    qBittorrent category by the name it was made with), and not at all once its app
+    stopped answering in the run, or isn't running: a check that couldn't be made.
   - What puts each right is said by its kind: `apply` for a field, a resource or a
     secret; for a key, the wiring failed runbook's steps (Slice 10 restores it); for what
     is left, removing it in the app or `keep <app>.<resource>` (Slice 10 removes it).
@@ -1827,11 +1835,22 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   and secret was checked, 2 otherwise, and 1 on an error. Each secret's check is listed
   (`checks`: `passed`, `refused`, or `unchecked` with why). Its one write is each check's
   verdict and time, by the secret's name, in its resource's record (`checks`, an optional
-  field within `mediaplane.resources/v1`): never a value. A record `apply` writes has
-  none. It is built to be called as it is by a schedule (M2).
+  field within `mediaplane.resources/v1`), and each app found refusing its own key, by
+  the key's name (`keys`, `<app>.<key>`, optional too): never a value. A record `apply`
+  writes has no `checks`, and `apply` takes a refusal out once its own check passes, of
+  a resource it leaves unchanged too, and an app's from `keys` once the app takes its key.
+  An older Mediaplane refuses a `state/resources.json` that holds either: moving it aside
+  recovers, as its hint says. It is built to be called as it is by a schedule (M2).
 - **Fewer marks** (§5.2; the owner's decisions of 2026-10-17):
+  - an app found refusing its own key isn't sent it again, by drift or `plan`, until
+    `apply` checks it and the app takes it: its resources read as checks that couldn't
+    be made, and drift exits 2 (the owner's decision on qBittorrent's ban, for
+    Mediaplane's own key too; whether a refused key counts towards the ban wasn't
+    probed, so it is taken as counting);
   - a secret drift found refused is taken as refused, without another check, by drift
-    and by `plan`, until `apply` sets it (its record then has no `checks`): qBittorrent's
+    and by `plan`, until `apply` sets it (its record then has no `checks`), and nothing
+    only its app can say is asked of that resource meanwhile (Seerr's test of an arr):
+    a key known wrong leaves no new failing mark. qBittorrent's
     password costs one failed sign-in, not one per run, and a failing test of an arr's
     client, link or connection leaves its status as it was, rather than once per run.
     The status probe: a failing test of Sonarr's download client records one failure
@@ -1857,15 +1876,21 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     (`update` is told what differs). A failing Seerr test logs one line each time, with
     no throttling (probed).
 - **Overrides** (§4.2) are part of D in `plan`, `apply` and drift. `plan` checks each
-  before it asks any app: an app, resource or field that isn't there fails it, with the
-  closest name (names are case-sensitive); so do a secret, a fixed field, a value of
-  another type than the field's, and `<app>.<resource>` with anything but `unmanaged`.
-  One for an app the stack doesn't have, a field of a resource it doesn't want, or a
-  field of a resource made `unmanaged`, is a warning (`overrides.unused`); `unmanaged` of
-  a resource the stack doesn't want is quiet. `<app>.<resource>: unmanaged` takes the resource out of
-  what the stack wants: it is neither made, looked at, nor reported. A field held as a
-  comma-separated list (`lists`) is compared as a set. Seerr enables only the libraries
-  of Jellyfin's or Plex's that Mediaplane still manages, and those an override names.
+  before it asks any app, in every stack, one Mediaplane wires nothing in too: an app,
+  resource or field that isn't there fails it, with the closest name (names are
+  case-sensitive); so do a secret, a fixed field, a value of another type than the
+  field's, a value its field's own rule refuses (`refuses`: a download client's category
+  stays a folder in `/data/torrents`, a subcategory such as `tv/anime` included, never
+  empty nor with a `.` or `..` folder, a `/` at either end or two together, a `\` or a
+  control character; a library holds a folder; Prowlarr's categories are numbers; Seerr's
+  profile is text), and `<app>.<resource>` with anything but `unmanaged`. One for an app
+  the stack doesn't have, a field of a resource it doesn't want, or a field of a resource
+  made `unmanaged`, is a warning (`overrides.unused`); `unmanaged` of a resource the stack
+  doesn't want is quiet. `<app>.<resource>: unmanaged` takes the resource out of what the
+  stack wants: it is neither made, looked at, nor reported. A field held as a
+  comma-separated list (`lists`) is compared as a set, each item without the spaces around
+  it. Seerr enables only the libraries of Jellyfin's or Plex's that Mediaplane still
+  manages, and those an override names.
 - **Every managed field reaches the app from D,** so that a kept value stays: Prowlarr's
   proxy gets each tag its `tags` names; Jellyfin's libraries hold each folder in `paths`,
   and an update reads the folders as Jellyfin lists them, so one with a comma in its name
@@ -1878,9 +1903,12 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   whether an arr reaches its root folder's folder; Seerr's `initialized`; and every
   field that says where an app sends a key ("it sets where a key is sent", §11 Slice 6:
   keys go only to the stack's own addresses): the host, port and TLS of the arrs'
-  download clients and connections, the URLs of Prowlarr's links (and its proxy's host),
-  and the host and port of Seerr's media server and servers. To keep a renamed library,
-  it is made `unmanaged`.
+  download clients and connections (a URL base held reads as part of the host, so it is
+  drift, and `apply` puts it back), the URLs of Prowlarr's links (and its proxy's host),
+  and the host and port of Seerr's media server and servers. And what `stack.yaml` sets
+  for every app: each app's admin user name (the shared login of Slice 3a,
+  `admin.username`, which `credentials` shows) and who may skip qBittorrent's login
+  (`security.login_on_lan`). To keep a renamed library, it is made `unmanaged`.
 - **Keys go only to the stack's own addresses, both ways:** besides those fixed fields,
   every request that carries a key, Mediaplane's and each test it has an app run with a
   key the app holds, is built from the stack's own service address for the other app
@@ -1893,10 +1921,11 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 - **A library renamed by hand** (the roadmap's S8 items): Jellyfin keys a library by its
   name, so a renamed one reads as missing; Plex's is found by its key, so its name reads
   as drift, which `apply` puts back. Neither makes a library again on a folder another of
-  its libraries holds: `create` refuses, saying to rename it back or make the library
+  its libraries holds: `create` refuses, naming the folder, and saying to rename it back,
+  take the folder out of the other library or of the override, or make the library
   `unmanaged`. Probed: a Jellyfin library renamed loses its id until Jellyfin refreshes,
-  and gets the same one back with its name; Plex's key survives a rename, and Plex takes
-  a library's folders as one `location` each, made or updated.
+  and gets the same one back with its name; Plex's key survives a rename, and Plex takes a
+  library's folders as one `location` each, made or updated.
 - **Prowlarr's indexer proxy** (the roadmap's S8 item): Mediaplane still never tests it.
   Prowlarr's own health check, every six hours, tests its proxies and reports
   `IndexerProxyStatusCheck`, `All indexer proxies are unavailable due to failures`, while
@@ -1914,19 +1943,25 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   key order, quoting, spacing and line ends stay. A rewrite through the YAML library was
   probed and kept neither aligned comments nor a comment's place, so it is a textual
   insertion, checked to parse to the same stack with the override, or nothing is
-  written. It keeps the file's mode and group (not an ACL), writes atomically, and
-  refuses a `stack.yaml` that is a link, has other names (hard links), belongs to another
-  user or to a group its user isn't in, or is written as one `{ … }` block, giving the
-  line to add instead. With `managed_by: external` it writes
-  nothing and gives that line (the rest of externally managed mode is Slice 10). It never
-  keeps a secret, a value that holds one, or one it can't read. It then records the value
-  as applied, or forgets the resource's record, so drift is clear and `apply` has nothing
-  to do. `--json` is `mediaplane.keep/v1`.
+  written. It reads the file once, through one handle that doesn't follow a link, keeps
+  its mode and group (not an ACL; the group changed only when it would differ), writes
+  atomically, replacing only the file it read, and refuses a `stack.yaml` that is a
+  link, has other names (hard links), belongs to another user or to a group its user
+  isn't in, is written as one `{ … }` block, or that it fails to write, giving the line
+  to add instead. With `managed_by: external`, checked again in the file it writes, it
+  writes nothing and gives that line (the rest of externally managed mode is Slice 10).
+  It never keeps a secret, a value that holds one, one it can't read, one its field's
+  rule refuses, or one with a control character, a line or paragraph separator, or a
+  bidirectional control. Into `overrides: { … }` a value with a "," or a bracket is
+  quoted, and so is the line it gives to add by hand. It then records the value as
+  applied, or forgets the resource's record, so drift is clear and `apply` has nothing
+  to do, but for a download client's category, which qBittorrent must then have: `apply`
+  makes it, and drift is clear after. `--json` is `mediaplane.keep/v1`.
 - **The integration contract** (§3.2) grows: `ObservedResource.unreadable` (with a
   `FieldReader` that notes a field of another shape), `ResourceSpec.lists`, `locked`,
-  `checkEvery` and `health`; `verify` may get a `VerifyContext` (`readOnly`, and `peer`
-  for another app's client) and answer `{ unchecked }`; `update` may get what differs
-  (`changes`). Those an integration leaves out keep their meaning.
+  `refuses`, `checkEvery` and `health`; `verify` may get a `VerifyContext` (`readOnly`,
+  and `peer` for another app's client) and answer `{ unchecked }`; `update` may get what
+  differs (`changes`). Those an integration leaves out keep their meaning.
 - **Not in S8:** restoring a key at its source, or giving a new one to every resource that
   holds it (§6.3's shared-key resolutions), with key recovery; removing what Mediaplane
   made when its app leaves the stack (§8.1(3) step 4); externally managed mode; giving

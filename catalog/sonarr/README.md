@@ -123,12 +123,18 @@ LinuxServer.io image, unmodified.
   makes it, with its save path. Sonarr's own test of the client makes a category
   qBittorrent lacks, with no save path, so `plan` and drift leave the client's key
   unchecked while one is missing, saying what clears it: the kept one until `apply`
-  makes it, or the post-import one you set in Sonarr (`tvImportedCategory`), which stays yours
-  to make in qBittorrent.
-- **Where Sonarr sends a key** is fixed: its download client's host, port and TLS, and its
-  connections' host and port. Drift reports a change to one, and `apply` puts the
-  stack's own address back; every test Mediaplane has Sonarr run is aimed there, whatever
-  Sonarr holds.
+  makes it, or the post-import one you set in Sonarr (`tvImportedCategory`), which stays
+  yours to make in qBittorrent. So after keeping it, run `apply`, then drift is clear.
+  A kept category must stay a folder in qBittorrent's `/data/torrents`: a folder name,
+  or several joined by `/` (such as `tv/anime`), never empty, nor with a `.` or `..`
+  folder, a `/` at either end or two together, a `\`, or a control character.
+- **Where Sonarr sends a key** is fixed: its download client's host, port and TLS (a URL
+  base set in the client reads as part of its host), and its connections' host and port.
+  Drift reports a change to one, and `apply` puts the stack's own address back; every
+  test Mediaplane has Sonarr run is aimed there, whatever Sonarr holds.
+- **Its admin user name** is fixed: it is the shared admin login, which
+  `mediaplane credentials` shows for every app. Change `admin.username` in `stack.yaml`
+  instead.
 - **Its root folder's folder, deleted by hand:** drift says Sonarr can't reach it
   (`sonarr.root_folder.accessible`), and `apply` makes the folder again. Its path is
   fixed: Sonarr knows a root folder by its path. To move your library, move it in

@@ -345,6 +345,24 @@ An update that brings Plex's wiring changes three things you may see:
   it by hand now reads as moved, and the next `apply` puts back `jellyfin:8096` without
   either, so Jellyfin's key goes only to the stack's own address.
 
+An update that brings drift (Slice 8) changes what you may see:
+
+- **The first `plan` adopts each root folder once,** and exits 2: Mediaplane now also
+  records whether Sonarr and Radarr reach the folder. It changes nothing in the arrs.
+  The next `apply` records it, and `plan` exits 0 again.
+- **An `overrides:` block in your `stack.yaml` now counts.** Before, the schema said it
+  wasn't used yet. Now `plan` checks every override, and `apply` sets what each says.
+  One that names nothing Mediaplane manages, a fixed field, a secret, or a value its
+  field can't take fails `plan`, with the closest name. Fix or remove it, then run
+  `plan` again.
+- **A URL base set by hand in Sonarr's or Radarr's download client** now reads as a
+  moved host. The next `apply` takes it out, so qBittorrent's key goes only to the
+  stack's own address.
+- **Going back to an older image after `drift` has run fails** with `resources.invalid`:
+  drift keeps what it found in `state/resources.json`, which an older Mediaplane
+  doesn't read. Move the file aside, as the error's hint says, then run `plan`: the
+  older version finds what it made by name, and adopts it.
+
 ## Running without the socket proxy
 
 The proxy is on by default. It is defence in depth, not a boundary: anything that can

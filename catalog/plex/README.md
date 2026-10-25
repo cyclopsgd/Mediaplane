@@ -139,7 +139,9 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
   in Plex. The [drift runbook](../../docs/runbooks/drift-reported.md) says more.
 - **Its name,** kept as another (`plex.server.name`), stays.
 - **A folder added to `Movies` or `TV Shows`,** kept (`plex.library_movies.location`):
-  the library then holds each folder kept, one comma-separated list.
+  the library then holds each folder kept, one comma-separated list, of at least one
+  folder. `apply` doesn't make a library on a folder another of Plex's holds: it names
+  the folder, and says what to do.
 - **A library renamed in Plex** is still found, by Plex's key for it: drift reports its
   name, and `apply` renames it back. Its name is fixed, as Seerr enables it by its name.
   To keep the new name, stop Mediaplane managing it with `plex.library_movies: unmanaged`

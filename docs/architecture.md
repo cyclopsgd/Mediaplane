@@ -733,18 +733,24 @@ O ≠ L, O ≠ D: drift, changed
 ```
 
 - **`mediaplane drift`** is `plan`, looking only (spec §6.3): no host checks, and every
-  app that runs and is healthy is asked, even one `apply` would change. It runs under
-  apply's lock. It reports, for each resource Mediaplane recorded:
+  app that runs and is healthy is asked, even one `apply` would change. Like `plan`, it
+  joins the wiring network in the image, and it runs under apply's lock
+  (`state/lock`). It reports, for each resource Mediaplane recorded:
   - a managed field the app holds otherwise than it was applied, and than the stack wants
     now, with both values; one the app holds in a shape Mediaplane can't read is said to
-    be, never read as empty (`unreadable`);
+    be, never read as empty (`unreadable`). A field the stack no longer sets isn't drift:
+    `apply` doesn't set it;
   - a resource deleted outside Mediaplane;
   - a secret the app's own check refuses, by name only: secrets are checked by using
     them, never compared or shown;
   - an app that refuses the key Mediaplane holds for it, and each resource of another app
     that holds that key: a shared key changed at its source;
-  - a resource Mediaplane made that the stack no longer wants, still in the app; one
-    whose app can't say counts as not looked at.
+  - a resource Mediaplane made that the stack no longer wants, still in the app, looked
+    up by its record; one whose app can't say, or stopped answering, counts as not looked
+    at.
+
+  What an app holds, and each reason it gives, is shown without any secret the run came
+  to know of, redacted once at the end of the run.
 
   `plan` shows the same drift. What puts each right is said by its kind: `apply` puts
   back a field, a resource or a secret; a key changed at its source, and what is left in
@@ -752,34 +758,45 @@ O ≠ L, O ≠ D: drift, changed
   nothing changed and every resource and secret was checked, and 2 otherwise.
 
 - **Its checks leave few marks** (the owner's decisions of 2026-10-17). A secret it finds
-  refused isn't checked again, by drift or `plan`, until `apply` sets it: qBittorrent bans
-  an address after five failed sign-ins, and the arrs and Seerr record each failed test.
+  refused isn't checked again, by drift or `plan`, until `apply` sets it, nor is what only
+  the app can say asked of that resource meanwhile: qBittorrent bans an address after
+  five failed sign-ins, and the arrs and Seerr record each failed test. An app that
+  refuses its own key isn't sent it again until `apply` checks it, and its resources,
+  and those of other apps that hold that key, go unchecked. A check `apply` makes that
+  passes takes a refusal out.
   Jellyfin's admin password is checked once a day at most while it passes (a resource's
   `checkEvery`): each check is in Jellyfin's activity log. `plan` and drift leave an
   arr's download client key unchecked while qBittorrent lacks a category the client
   names, which the arr's own test would make. Drift keeps each check's verdict and time,
-  by the secret's name, in `state/resources.json`: its one write. It reads an app's own
+  by the secret's name, and each app found refusing its own key, in
+  `state/resources.json`: its one write besides its lock. It reads an app's own
   health check where one tests a resource (Prowlarr's, of its indexer proxy), and warns
   of what it found.
 - **Overrides** (`overrides:` in `stack.yaml`, spec §4.2) are part of what the stack
   wants: `<app>.<resource>.<field>: <value>` sets a managed field, and
-  `<app>.<resource>: unmanaged` stops Mediaplane managing a resource. `plan` checks each:
-  a field that isn't managed, a secret, a fixed field or a value of another type fails
-  it, with the closest name. A few fields are fixed (a resource's `locked`): what it is
-  known by, what its app can't change, what Mediaplane only checks, and every field that
+  `<app>.<resource>: unmanaged` stops Mediaplane managing a resource. `plan` checks each,
+  in every stack: a field that isn't managed, a secret, a fixed field, a value of another
+  type, or one its field's own rule refuses (a resource's `refuses`: a download client's
+  category stays a folder in qBittorrent's downloads folder) fails it, with the closest
+  name. A few fields are fixed (a resource's `locked`): what it is known by, what its app
+  can't change, what Mediaplane only checks, what `stack.yaml` sets for every app (the
+  shared admin's user name, and who may skip qBittorrent's login), and every field that
   says where an app sends a key. Every request that carries a key is built from the
   stack's own address for the other app (a resource's `sendsTo`), never from a field an
   override could set or from what the app holds.
 - **`mediaplane keep <app>.<resource>.<field>`** takes what the app holds, where drift
   found a change, as an override: it adds one line under `overrides:` in `stack.yaml`,
   changing nothing else in the file (its mode and group kept, not an ACL), and records
-  the value as applied, so drift is clear and `apply` has nothing to do for it. It checks
-  that the app takes Mediaplane's key and reads the one resource, and checks no secret.
-  For a resource deleted, or left in the app, `mediaplane keep <app>.<resource>` writes
-  `unmanaged`. It never writes a secret, and refuses a `stack.yaml` it can't write
-  safely, giving the line to add instead
+  the value as applied in `state/resources.json`, so drift is clear and `apply` has
+  nothing to do for it. Like `plan`, it joins the wiring network in the image, and it
+  holds the lock. It checks that the app takes Mediaplane's key and reads the one
+  resource, and checks no secret. For a resource deleted, or left in the app,
+  `mediaplane keep <app>.<resource>` writes `unmanaged`. It never writes a secret, nor a
+  value that could make the file show what it doesn't hold, and refuses a `stack.yaml`
+  it can't write safely, or fails to write, giving the line to add instead
   ([ADR 0003](adr/0003-drift-detect-and-warn-with-keep-mine.md)). Keeping a download
-  client's category gives qBittorrent's category that name: `apply` makes it.
+  client's category gives qBittorrent's category that name: `apply` makes it, and drift
+  is clear once it has.
 - **Not yet:** putting back a key at its source, or giving a new one to every app that
   holds it, and removing what Mediaplane made when its app leaves the stack (Slice 10);
   drift on a schedule (M2).

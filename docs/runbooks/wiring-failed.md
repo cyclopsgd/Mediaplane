@@ -291,8 +291,9 @@ differ, and a `reason` when it is `unknown`.
     `settings.json` says, so a key made anew in its web UI lasts only until Seerr
     restarts: `docker restart mediaplane-seerr-1` puts the stored one back.
   - `mediaplane drift` reports a key changed at its source, on the app and on each
-    resource that holds it. Slice 10 restores a key at its source for you, and makes
-    Jellyfin's anew.
+    resource that holds it, and keeps that the app refused it: neither drift nor `plan`
+    sends the app that key again until `apply` checks it, so put the key back, then run
+    `apply`. Slice 10 restores a key at its source for you, and makes Jellyfin's anew.
 - **`refused the request (HTTP 403)`, with
   `banned after too many failed authentication attempts`** (`wire.auth`). qBittorrent
   stops an address from signing in for an hour after five failed sign-ins in a row.

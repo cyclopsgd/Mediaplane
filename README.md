@@ -177,7 +177,8 @@ A few principles hold throughout:
 - **You stay in control.** Container-level changes go in your own
   `compose.override.yaml`, which Mediaplane never writes. Mediaplane manages only what it
   created, and reports a change made by hand to it before `apply` puts it back: you
-  choose, and `mediaplane keep` keeps yours.
+  choose (`apply --yes` doesn't ask, though its plan still shows the drift), and
+  `mediaplane keep` keeps yours.
 - **Safe by default.** On a cloud VM, a private address is often reachable from the
   internet. Mediaplane notices, and refuses to publish web UIs there unless you say so
   explicitly. qBittorrent has no network of its own outside the VPN. Mediaplane controls
@@ -406,22 +407,35 @@ This starts real containers on this machine, with the web UIs on `localhost`. Th
 command shows the admin login, which qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin
 use, and Seerr through Jellyfin, and each app's address.
 
-Then change something Mediaplane manages in an app's web UI, such as the category of the
-download client `qBittorrent (Mediaplane)` in Sonarr (Settings, Download Clients), and
-see what `drift` says:
-
-```bash
-MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane drift --home .mediaplane-dev
-MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane keep sonarr.download_client.category --home .mediaplane-dev
-```
-
-`drift` shows what Mediaplane set and what Sonarr holds now, and exits `2`. `apply` puts
-it back; `keep` instead adds it under `overrides:` in `stack.yaml`, and `drift` is
-clear. The [drift runbook](docs/runbooks/drift-reported.md) says more.
 The first `apply` downloads several GB of images, so it can take a while. To remove the
 containers, run `docker compose -p mediaplane-dev down`, then
 `sudo rm -rf .mediaplane-dev`. Seerr's folder belongs to uid 1000, which is why `sudo`
 is needed.
+
+To see drift, change something Mediaplane manages in an app's web UI, such as the
+category of the download client `qBittorrent (Mediaplane)` in Sonarr (Settings,
+Download Clients), and see what `drift` says:
+
+```bash
+MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane drift --home .mediaplane-dev
+```
+
+`drift` shows what Mediaplane set and what Sonarr holds now, and exits `2`. You choose
+what happens next:
+
+- `apply` puts the category back. It shows the drift in its plan and asks first, unless
+  you pass `--yes`.
+- `keep` keeps Sonarr's category instead, as one line under `overrides:` in
+  `stack.yaml`. qBittorrent then needs a category of that name, which the next `apply`
+  makes. `drift` is clear once it has:
+
+```bash
+MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane keep sonarr.download_client.category --home .mediaplane-dev
+MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane apply --home .mediaplane-dev
+MEDIAPLANE_COMPOSE_PROJECT=mediaplane-dev pnpm --silent mediaplane drift --home .mediaplane-dev
+```
+
+The [drift runbook](docs/runbooks/drift-reported.md) says more.
 
 To try Plex instead, set `media_server: plex` and add
 `plex: { token: { file: secrets/plex-token } }`, then sign in to plex.tv once, before

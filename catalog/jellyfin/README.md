@@ -103,14 +103,20 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
 - **Keeping yours.** `mediaplane keep jellyfin.<resource>.<field>`, as drift names it,
   keeps what Jellyfin holds instead: it adds the line under `overrides:` in `stack.yaml`,
   and `apply` then leaves it. A field marked `(fixed)` above, and a secret, can't be
-  kept. `mediaplane keep jellyfin.library_movies` stops Mediaplane managing a resource deleted
-  in Jellyfin. The [drift runbook](../../docs/runbooks/drift-reported.md) says more.
+  kept. `mediaplane keep jellyfin.library_movies` stops Mediaplane managing a resource
+  deleted in Jellyfin. The [drift runbook](../../docs/runbooks/drift-reported.md) says
+  more.
+- **Its admin user name** is fixed: it is the shared admin login, which
+  `mediaplane credentials` shows for every app. Change `admin.username` in `stack.yaml`
+  instead.
 - **A folder added to `Movies` or `Shows`,** kept (`jellyfin.library_movies.paths`):
-  the library then holds each folder kept, one comma-separated list. A folder with a
-  comma in its name can't be listed: drift says so, and `apply` takes it out.
+  the library then holds each folder kept, one comma-separated list, of at least one
+  folder. A folder with a comma in its name can't be listed: drift says so, and `apply`
+  takes it out.
 - **A library renamed in Jellyfin** is no longer found by its name: drift reports it
   deleted, and `apply` refuses to make it again while the renamed one holds its folder,
-  saying what to do. Rename it back, or keep it as yours with
+  naming the folder and saying what to do: the same when another library of yours holds
+  a folder you kept. Rename it back, or keep it as yours with
   `mediaplane keep jellyfin.library_movies` (or `library_shows`). Seerr then no longer
   enables it either.
 - **Its admin password** is checked by drift once a day at most, while it passes: each

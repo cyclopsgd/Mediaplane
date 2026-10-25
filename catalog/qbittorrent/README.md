@@ -92,17 +92,30 @@ unmodified, and by default puts it behind Gluetun's VPN.
 - **Keeping yours.** `mediaplane keep qbittorrent.<resource>.<field>`, as drift names it,
   keeps what qBittorrent holds instead: it adds the line under `overrides:` in `stack.yaml`,
   and `apply` then leaves it. A field marked `(fixed)` above, and a secret, can't be
-  kept. `mediaplane keep qbittorrent.category_movies` stops Mediaplane managing a resource deleted
-  in qBittorrent. The [drift runbook](../../docs/runbooks/drift-reported.md) says more.
+  kept. `mediaplane keep qbittorrent.category_movies` stops Mediaplane managing a
+  resource deleted in qBittorrent. The
+  [drift runbook](../../docs/runbooks/drift-reported.md) says more.
+- **Its admin user name and who may skip its login** are fixed: the user name is the
+  shared admin login (change `admin.username` in `stack.yaml`), and the whitelist is a
+  security setting (set `security.login_on_lan`). Drift still reports a change to
+  either, and `apply` puts it back.
 - **Its password, changed in qBittorrent,** is checked by signing in, once per `plan`.
   Once drift has found it refused, neither drift nor `plan` signs in again until `apply`
   sets it, which spares Mediaplane the ban below.
-- **A download client's category, kept as another** (`mediaplane keep
-sonarr.download_client.category`), becomes this category's name too: the category
-  `qbittorrent.category_tv` makes is then the kept one, with its save path under
-  `/data/torrents`, and `apply` makes it. Until it does, drift leaves Sonarr's client's
-  key unchecked, saying `apply` puts what it requires in place first. The category made
-  before stays, yours.
+- **Its key, changed in qBittorrent,** reads as `qbittorrent: refuses the key Mediaplane
+holds for it`. Neither drift nor `plan` sends that key again until `apply` checks it,
+  as each refusal may count towards the ban below. Put the stored key back, as the
+  [wiring failed runbook](../../docs/runbooks/wiring-failed.md#fix) shows, then run
+  `apply`.
+- **A download client's category, kept as another**
+  (`mediaplane keep sonarr.download_client.category`), becomes this category's name too:
+  the category `qbittorrent.category_tv` makes is then the kept one, with its save path
+  under `/data/torrents`, and `apply` makes it. Until it does, drift leaves Sonarr's
+  client's key unchecked, saying `apply` puts what it requires in place first. The
+  category made before stays, yours. A kept category must stay a folder in
+  `/data/torrents`: a folder name, or several joined by `/` (a subcategory such as
+  `tv/anime`), never empty, nor with a `.` or `..` folder, a `/` at either end or two
+  together, a `\`, or a control character. `keep` and `plan` refuse one that isn't.
 - **A category you stop Mediaplane managing** (`qbittorrent.category_tv: unmanaged`, or
   `_movies`) is yours, and stays the category Sonarr's or Radarr's download client files
   under: while qBittorrent lacks it, `plan` and drift leave that client's key unchecked,
