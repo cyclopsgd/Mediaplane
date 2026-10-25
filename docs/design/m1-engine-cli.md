@@ -82,7 +82,7 @@ The gap Mediaplane fills is all four of the following together:
 | Milestone | Delivers |
 |---|---|
 | **M1: Engine + CLI** (this spec) | `stack.yaml` schema, catalog format, compose rendering, key pre-seeding, wiring for the core video stack, drift detection with Keep mine, `plan`/`apply`, change history, CI with real-container end-to-end tests |
-| **M2: Everyday CLI** | Safe app updates with rollback, backup and restore (also onto another host), `doctor`, quality presets, a media server you already run, and optional scheduled drift and alerts |
+| **M2: Everyday CLI** | Safe app updates with rollback, backup and restore, `doctor`, quality presets, a media server you already run, optional alerts |
 | **M3: Catalog expansion** | SABnzbd, Audiobookshelf, Bookshelf (experimental, books and audiobooks), Bazarr, Recyclarr, Portainer, Homepage |
 
 **Changed by the owner on 2026-10-25.** The web panel (wizard, dashboard, drift view,
@@ -96,8 +96,10 @@ Documentation is written alongside each milestone (see §9).
 **After v1:** music (Lidarr and a music server), more alert targets, offsite
 backup targets, Windows/macOS, NAS OSes, multi-host.
 
-**Ansible readiness.** Mediaplane will **not** ship Ansible content. The project
-owner will write the Ansible deployment separately, later. M1 must make that
+**Ansible readiness.** Mediaplane will **not** ship an Ansible role or
+collection, only one short example in its docs (Slice 10). The project owner will
+write the Ansible deployment separately, later. Mediaplane stays a standalone tool:
+Ansible is one way to drive it, never a need. M1 must make that
 easy:
 
 - a declarative, versioned, documented `stack.yaml` with a published JSON Schema;
@@ -135,7 +137,7 @@ easy:
 - Any web UI or HTTP listener (not scheduled).
 - Updates with rollback, backups and alerts (M2).
 - Any app outside the core video stack (M3).
-- Ansible content (a separate project).
+- Ansible roles or collections (a separate project). The docs carry one short example.
 
 ### 2.3 Success criteria
 
@@ -974,7 +976,7 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 - **Generated references from S2c.** The `stack.yaml` reference, its JSON Schema at
   `docs/reference/stack.schema.json` (§4.2, §9) and the CLI reference are generated
   from code, and CI fails when they are stale. They move here from S9, by the owner's
-  decision. The `--json` shapes stay in S9.
+  decision. The `--json` shapes stay in S9 (S10 since 2026-10-25).
 
 ### Slice 3a: shared admin and pre-start files (2026-10-10)
 
@@ -1361,7 +1363,9 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 - **No new Docker API call.** The new calls are the apps' APIs over the wiring network
   (§7.2(2)).
 - **The slices after S4 are renumbered** (the owner's decision, 2026-10-15): S5 Jellyfin,
-  S6 requests, S7 Plex, S8 drift and S9 release. The roadmap keeps the history.
+  S6 requests, S7 Plex, S8 drift and S9 release. On 2026-10-25 the owner split the rest
+  into S8 drift, S9 releases and safe updates, and S10 recovery and automation. The
+  roadmap keeps the history.
 
 ### Slice 5: Jellyfin (2026-10-15)
 

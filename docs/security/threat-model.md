@@ -540,7 +540,7 @@ What remains:
   four `plan`s, or declined `apply`s, before the `apply` ban Mediaplane's address, never
   your browser's. Its key still works. The [runbook](../runbooks/wiring-failed.md) says
   what to do.
-- There is no way yet to rotate the generated password (Slice 8).
+- There is no way yet to rotate the generated password (Slice 10).
 
 ### T11. Something on the stack's network uses Gluetun's control server
 

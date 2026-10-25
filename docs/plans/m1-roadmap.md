@@ -59,8 +59,37 @@ Where M1 stands (the README shows the same):
 | S6 | **Requests** | The Seerr first sign-in through the Jellyfin admin, libraries, the Sonarr/Radarr servers, initialize, and the full-stack end-to-end test | §6.1 (Seerr), §6.2 (Seerr row) | Success criterion 1 |
 | S7 | **Plex** | `plex-login` (the plex.tv PIN flow), the Plex claim through a plex.tv helper, its libraries, the arr → Plex connections, Seerr's sign-in with the Plex token, and a nightly Plex CI job | §6.1 (Plex, Seerr), §6.2 (media-server rows), §8.1 (Plex) | Success criterion 2: Plex is wired headlessly, except for the single Plex sign-in |
 | S8 | **Drift** | The three-way drift model, `drift`, `keep` (Keep mine), a comment-preserving override writer, `unmanaged`, the "drift reported" runbook, and the S8 items below, with the owner's decisions of 2026-10-17 | §6.3 | Success criterion 4 |
-| S9 | **Releases and safe updates** | release-please and versioned releases; a multi-arch release workflow that publishes Mediaplane's image, with SBOM and provenance; Trivy for the catalog images; Renovate (a custom manager for catalog pins, the pins outside the catalog, and SHA-pinned Actions); `install.sh` installing a pinned release, which it pulls rather than builds; updating Mediaplane by running it again, which never restarts the stack; `migrate`; the licence's SPDX field; and `main` protected | §8.2, §9 | Success criterion 7. A release is green on both architectures, and updating Mediaplane leaves the stack running |
-| S10 | **Recovery and automation** | Externally managed mode, name-based re-adoption, key recovery from appdata, and shared-key propagation. A contract for automation: the `--json` output shapes pinned and in the generated docs, exit codes, commands that ask nothing when a script runs them, and a second `apply` that changes nothing. A "deploying with automation" guide, with a short Ansible example. Then the rest of the S9 items below: the full README, the add-an-app guide and the test gaps | §6.1 (key recovery), §6.3 (externally managed), §9 | M1 is done. A host can be rebuilt from `stack.yaml` and its appdata, by hand or by a playbook |
+| S9 | **Releases and safe updates** | Versioned, published releases, and updating Mediaplane without touching the stack (listed below) | §8.2, §9 | Success criterion 7 |
+| S10 | **Recovery and automation** | Rebuilding a host, and running Mediaplane from automation (listed below) | §6.1 (key recovery), §6.3, §9 | M1 is done |
+
+**S9, releases and safe updates:**
+
+- release-please and versioned releases;
+- a multi-arch release workflow that publishes Mediaplane's image, with SBOM and
+  provenance;
+- Trivy for the catalog images;
+- Renovate: a custom manager for catalog pins, the pins outside the catalog, and
+  SHA-pinned Actions;
+- `install.sh` installing a pinned release, which it pulls rather than builds;
+- updating Mediaplane by running it again, which never restarts the stack;
+- `migrate`;
+- the licence's SPDX field, and `main` protected.
+
+It proves that a release is green on both architectures, and that updating Mediaplane
+leaves the stack running.
+
+**S10, recovery and automation:**
+
+- externally managed mode, name-based re-adoption, key recovery from appdata, and
+  shared-key propagation;
+- a contract for automation: the `--json` output shapes pinned and in the generated
+  docs, exit codes, commands that ask nothing when a script runs them, and a second
+  `apply` that changes nothing;
+- a "deploying with automation" guide, with a short Ansible example;
+- the S10 items below: the full README, the add-an-app guide and the test gaps.
+
+It proves that a host can be rebuilt from `stack.yaml` and its appdata, by hand or by a
+playbook. That completes M1.
 
 ### S2 is delivered in three parts (decided 2026-10-09)
 
@@ -134,7 +163,7 @@ lighter route, or as a slice when it is big or touches security.
   - Safe app updates: `mediaplane update`, with a backup first and a rollback.
   - Backup and restore, including a restore onto a different host.
   - `mediaplane doctor`, which checks a running stack and says what to fix.
-  - Quality presets for Sonarr and Radarr in `init` (see "Not scheduled yet").
+  - Quality presets for Sonarr and Radarr in `init` (see "Later ideas").
   - A media server you already run, used as it is (`external`).
   - Drift checked on a schedule, with alerts (optional).
 - **M3: more apps.** SABnzbd, Audiobookshelf, Bookshelf (experimental), Bazarr,
@@ -773,7 +802,7 @@ password, which are S3c's (and listed again below).
   hand. Detected subnets leave Docker's own networks out. Warn in `plan` when
   `lan_subnet` overlaps the wiring network or the stack's own.
 
-**Not scheduled yet:**
+**Later ideas (M2 and after):**
 
 - **Default quality settings for Sonarr and Radarr** (owner to discuss, 2026-10-17).
   Mediaplane leaves the arrs' quality profiles as they ship, and only picks Seerr's
@@ -791,7 +820,7 @@ password, which are S3c's (and listed again below).
     media paths to `/data`, taking over its libraries by name rather than adding
     `Movies` and `TV Shows` beside them, an "adopted" mode for the open-settings check
     (allowed networks may be set on purpose), and the same for any existing Sonarr and
-    Radarr. It builds on S8's re-adoption by name and key recovery from appdata.
+    Radarr. It builds on S10's re-adoption by name and key recovery from appdata.
 - **NVIDIA hardware transcoding.** `hardware_transcoding` gives the media server
   `/dev/dri`, which covers Intel Quick Sync and AMD. NVIDIA needs Docker's NVIDIA
   runtime instead: a later `gpu: nvidia` style option, tested on a host with the
