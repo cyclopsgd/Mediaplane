@@ -263,3 +263,22 @@ describe('Renovate (spec §8.2)', () => {
     expect(rule?.prBodyNotes?.join(' ')).toContain('pnpm docs:generate');
   });
 });
+
+describe('Node stays on its 24 line wherever its version is written (spec §3.3)', () => {
+  interface NodeRule {
+    matchDepNames?: string[];
+    matchFileNames?: string[];
+    allowedVersions?: string;
+  }
+  const rules = renovate.packageRules as NodeRule[];
+
+  it.each(['Dockerfile', '.nvmrc'])('caps Node below 25 in %s', (file) => {
+    const capped = rules.filter(
+      (rule) =>
+        rule.matchDepNames?.includes('node') === true &&
+        rule.matchFileNames?.includes(file) === true &&
+        rule.allowedVersions === '<25',
+    );
+    expect(capped).toHaveLength(1);
+  });
+});

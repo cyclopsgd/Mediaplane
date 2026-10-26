@@ -44,7 +44,7 @@
       "semanticCommitType": "fix",
       "semanticCommitScope": "catalog",
       "prBodyNotes": [
-        "Each app's README shows its pin: run `pnpm docs:generate` on this branch and commit what it writes, or CI's docs check fails. CI runs the full end-to-end suite on amd64 and arm64 before this can merge."
+        "Each app's README shows its pin: run `pnpm docs:generate` on this branch and commit what it writes, or CI's docs check fails. CI runs the full end-to-end suite on both architectures on this pull request."
       ]
     },
     {
@@ -83,6 +83,12 @@
       "allowedVersions": "<25",
       "semanticCommitType": "fix",
       "semanticCommitScope": "image"
+    },
+    {
+      "description": "CI's Node (.nvmrc) stays on the same 24 LTS line as the image's, which the nvm manager would otherwise move to 26",
+      "matchDepNames": ["node"],
+      "matchFileNames": [".nvmrc"],
+      "allowedVersions": "<25"
     },
     {
       "description": "The image's Docker CLI and Compose, and its socket proxy, are part of the image: a fix",
