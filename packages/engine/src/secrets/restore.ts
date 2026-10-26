@@ -126,7 +126,7 @@ export async function planKeyRestores(
           {
             hint:
               found.found === 'key'
-                ? `fix what stops it, as said above, then run apply, which puts the key back and restarts ${appName}; see ${REBUILD_RUNBOOK}`
+                ? `"mediaplane keep ${key}" keeps ${appName}'s own key instead, once ${appName} takes it; or fix what stops Mediaplane, as said above, and run apply, which puts its key back and restarts ${appName}. See ${REBUILD_RUNBOOK}`
                 : `stop ${appName}, move ${path} aside, then run apply, which writes a new one; see ${REBUILD_RUNBOOK}`,
           },
         ),

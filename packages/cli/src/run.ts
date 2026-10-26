@@ -117,6 +117,7 @@ export const EXIT_CODES: Readonly<Record<string, readonly string[]>> = {
   ],
   keep: [
     '0: stack.yaml keeps what the app holds, or stops managing what was deleted',
+    "0: or state/secrets.json keeps an app's own key, which the app takes",
     "1: nothing was kept: it hasn't drifted, can't be kept, or an error",
   ],
   migrate: [
@@ -371,11 +372,11 @@ export function createProgram(
   program
     .command('keep')
     .description(
-      'Keep mine: take what an app holds now, changed outside Mediaplane, as what you want, written as an override in stack.yaml, keeping the rest of the file as it is; or, for a resource deleted outside Mediaplane, stop managing it',
+      "Keep mine: take what an app holds now, changed outside Mediaplane, as what you want, written as an override in stack.yaml, keeping the rest of the file as it is; or, for a resource deleted outside Mediaplane, stop managing it; or, for an app's own key changed in the app, take the key its own file holds, once the app takes it, into state/secrets.json, which the next apply gives to every resource that holds the old one",
     )
     .argument(
       '<path>',
-      'what to keep, as drift shows it: <app>.<resource>.<field>, or <app>.<resource> for one deleted',
+      "what to keep, as drift shows it: <app>.<resource>.<field>, or <app>.<resource> for one deleted, or <app>.<key> for an app's own key",
     )
     .option('--home <dir>', 'Mediaplane home directory', defaultHome)
     .option('--json', 'print machine-readable JSON')

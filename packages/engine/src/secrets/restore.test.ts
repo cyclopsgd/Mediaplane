@@ -123,7 +123,7 @@ describe('planKeyRestores', () => {
         message:
           "appdata/sonarr/app.conf holds another key than the one Mediaplane holds for sonarr (sonarr.apiKey), and Mediaplane can't put its key there: it has other names (hard links), which a rewrite would part from it",
         hint: expect.stringContaining(
-          'then run apply, which puts the key back',
+          '"mediaplane keep sonarr.apiKey" keeps sonarr\'s own key instead',
         ) as string,
       },
     ]);

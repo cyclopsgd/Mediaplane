@@ -105,7 +105,7 @@ export function driftAdvice(drift: readonly Drift[]): string[] {
       : []),
     ...(has('key')
       ? [
-          `apply puts the key Mediaplane holds back where an app keeps it in a file of its own, such as qBittorrent's, and restarts the app; for any other app, put it back as ${WIRING_RUNBOOK} shows`,
+          `apply puts the key Mediaplane holds back where an app keeps it in a file of its own, such as qBittorrent's, and restarts the app; for any other app, put it back as ${WIRING_RUNBOOK} shows. mediaplane keep <app>.<key> keeps the app's own key instead`,
         ]
       : []),
     ...(has('left')
@@ -306,8 +306,21 @@ export function printKeep(result: KeepResult, options: { json: boolean }, io: Io
     return;
   }
   for (const diagnostic of result.diagnostics) io.stderr(formatDiagnostic(diagnostic));
+  if (result.ok && result.holders !== undefined) {
+    const [app] = result.key.split('.');
+    io.stdout(
+      `Kept ${String(app)}'s own key (${result.key}) in state/secrets.json, where Mediaplane keeps its keys; stack.yaml is as it was.\n${
+        result.holders.length === 0
+          ? 'No resource of the stack holds the old one.\n'
+          : `Run apply to give it to ${result.holders.join(', ')}, which hold the old one.\n`
+      }`,
+    );
+    return;
+  }
   if (!result.ok || result.value === undefined) {
-    io.stderr('\nNothing was kept; stack.yaml is as it was.\n');
+    io.stderr(
+      '\nNothing was kept; stack.yaml and state/secrets.json are as they were.\n',
+    );
     return;
   }
   io.stdout(

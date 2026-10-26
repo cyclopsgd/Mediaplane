@@ -1949,7 +1949,9 @@ describe('mediaplane keep', () => {
     expect(human.stderr()).toContain(
       "error: sonarr.download_client.apiKey is a secret: Mediaplane checks it with Sonarr's own check, and never keeps it\n",
     );
-    expect(human.stderr()).toContain('Nothing was kept; stack.yaml is as it was.\n');
+    expect(human.stderr()).toContain(
+      'Nothing was kept; stack.yaml and state/secrets.json are as they were.\n',
+    );
     expect(await readFile(join(home, 'stack.yaml'), 'utf8')).toBe(before);
   });
 });

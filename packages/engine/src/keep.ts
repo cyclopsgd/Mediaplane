@@ -13,17 +13,41 @@ import {
   overrideTarget,
   UNMANAGED,
 } from './integrations/overrides';
-import { readResources, writeResources } from './integrations/resources';
+import type { AppDefinition, KeyFile } from './catalog/types';
+import { AppApiError } from './http/client';
+import { readResources, readState, writeResources } from './integrations/resources';
 import type { Scalar } from './integrations/types';
-import { DRIFT_RUNBOOK } from './integrations/wiring';
+import {
+  checkApp,
+  DRIFT_RUNBOOK,
+  knownSecrets,
+  notOnNetwork,
+  PLAN_DEADLINE_MS,
+  reachApps,
+  redactionValues,
+  resourceAddress,
+  wantedResources,
+} from './integrations/wiring';
+import { desiredOf } from './integrations/overrides';
 import { STACK_PATH } from './paths';
-import { planStack, type PlanOptions } from './plan/plan';
+import { planStack, type PlanContext, type PlanOptions } from './plan/plan';
+import {
+  keyFilePath,
+  readKeyFile,
+  REBUILD_RUNBOOK,
+  withRecoveredKeys,
+} from './secrets/recover';
+import { APP_SECRET, writeSecretStore } from './secrets/store';
 import { acquireLock, LockedError, type Lock } from './state/lock';
 import { writeFileAtomic } from './util/atomic';
 import { fileKind } from './util/fs';
+import { foundSecrets, redact } from './util/redact';
 
 export interface KeepOptions extends PlanOptions {
-  /** What to keep: `<app>.<resource>.<field>`, or `<app>.<resource>` for one deleted. */
+  /**
+   * What to keep: `<app>.<resource>.<field>`, or `<app>.<resource>` for one deleted; or
+   * `<app>.<key>`, an app's own key, changed at its source (spec §6.3).
+   */
   path: string;
   now?: () => Date;
 }
@@ -31,11 +55,36 @@ export interface KeepOptions extends PlanOptions {
 /** What `mediaplane keep` did (spec §6.3, Keep mine): never a secret's value. */
 export interface KeepResult {
   ok: boolean;
-  /** The override key it wrote under `overrides:`. */
+  /** The override key it wrote under `overrides:`, or the app's key it kept. */
   key: string;
-  /** Its value: the app's, or `unmanaged` for a resource deleted outside Mediaplane. */
+  /**
+   * Its value: the app's, or `unmanaged` for a resource deleted outside Mediaplane; never
+   * a key's, which it keeps in state/secrets.json.
+   */
   value: Scalar | undefined;
+  /**
+   * For an app's own key it kept: the resources of the stack that hold the key, each
+   * given the kept one by the next apply. Added in Slice 10a.
+   */
+  holders?: string[];
   diagnostics: Diagnostic[];
+}
+
+/** An app's own key that keep can take: the app, the key's name, and where it keeps it. */
+interface KeyTarget {
+  def: AppDefinition;
+  name: string;
+  file: KeyFile;
+}
+
+/** The app's own key `path` names (`<app>.<key>`, which a key file holds), if it names one. */
+function keyTarget(catalog: PlanOptions['catalog'], path: string): KeyTarget | undefined {
+  const [app = '', name = '', ...rest] = path.split('.');
+  const def = catalog.find((d) => d.id === app);
+  const file = def?.keyFiles?.[name];
+  return def === undefined || file === undefined || rest.length > 0
+    ? undefined
+    : { def, name, file };
 }
 
 /**
@@ -61,10 +110,9 @@ export async function keep(options: KeepOptions): Promise<KeepResult> {
     value: undefined,
     diagnostics,
   });
-  const named = overrideTarget(options.catalog, key);
-  if (!named.ok) return refused([named.diagnostic]);
-  const { spec, def, field } = named.target;
-  const address = `${def.id}.${spec.name}`;
+  // An app's own key, or else what an override names.
+  const named = keyTarget(options.catalog, key) ?? overrideTarget(options.catalog, key);
+  if ('ok' in named && !named.ok) return refused([named.diagnostic]);
   const stackPath = join(home, STACK_PATH);
   // Never create state/ in a folder that isn't a Mediaplane home; plan explains why.
   // Looked at, not opened: a named pipe would make an open wait for a writer.
@@ -92,6 +140,9 @@ export async function keep(options: KeepOptions): Promise<KeepResult> {
     ]);
   }
   try {
+    if (!('ok' in named)) return await keepKey({ ...options, home }, now, named);
+    const { spec, def, field } = named.target;
+    const address = `${def.id}.${spec.name}`;
     const { result, context } = await planStack({
       ...options,
       home,
@@ -238,4 +289,141 @@ export async function keep(options: KeepOptions): Promise<KeepResult> {
   } finally {
     await lock.release();
   }
+}
+
+/**
+ * Keep mine for an app's own key, changed at its source (spec §6.3): the key the app's own
+ * file holds (its KeyFile), taken as the stack's, in state/secrets.json, once the app is
+ * shown to refuse the key Mediaplane holds, and to take that one. The next apply gives it
+ * to every resource of the stack that holds it (`holders`), as one the other app refuses:
+ * keep itself writes to no app. Under apply's lock, as keep is. Its plan asks the app with
+ * the key Mediaplane holds, and nothing else; then the app is asked with the file's.
+ * Never says either key.
+ */
+async function keepKey(
+  options: KeepOptions,
+  now: () => Date,
+  { def, name, file }: KeyTarget,
+): Promise<KeepResult> {
+  const key = `${def.id}.${name}`;
+  const refused = (code: string, message: string, hint?: string): KeepResult => ({
+    ok: false,
+    key,
+    value: undefined,
+    diagnostics: [error(code, message, hint === undefined ? {} : { hint })],
+  });
+  const where = keyFilePath(def.id, file);
+  if (def.api?.key.secret !== name) {
+    return refused(
+      'keep.no-check',
+      `Mediaplane can't ask ${def.name} whether it takes the key ${where} holds, so it doesn't keep it`,
+      `apply puts the key Mediaplane holds back in ${where}, and restarts ${def.name}; see ${REBUILD_RUNBOOK}`,
+    );
+  }
+  // Only this app is asked, with the key Mediaplane holds: `key` names no resource.
+  const { result, context } = await planStack({ ...options, drift: { now }, only: key });
+  if (!result.ok || context === undefined) {
+    return { ok: false, key, value: undefined, diagnostics: result.diagnostics };
+  }
+  const refusing = result.drift.some(
+    (d) => d.kind === 'key' && d.resource === def.id && d.source === undefined,
+  );
+  if (!refusing) {
+    return refused(
+      'keep.no-drift',
+      `${key} has not changed outside Mediaplane: ${def.name} takes the key Mediaplane holds, or couldn't be asked`,
+      `"mediaplane drift" says which; see ${DRIFT_RUNBOOK}`,
+    );
+  }
+  const found = await readKeyFile(context.stack.home, def.id, file);
+  const held = context.store.apps[def.id]?.[name];
+  if (found.found !== 'key' || !APP_SECRET.test(found.value) || found.value === held) {
+    const why =
+      found.found === 'unreadable'
+        ? found.why
+        : found.found !== 'key'
+          ? 'it holds none'
+          : found.value === held
+            ? 'it holds the one Mediaplane holds, which the app refuses'
+            : 'it holds the key in a form Mediaplane can\'t keep (only letters, digits and "_")';
+    return refused(
+      'keep.no-key',
+      `Mediaplane can't keep ${def.name}'s own key: ${where} can't give it: ${why}`,
+      `see "A key changed at its source" in ${REBUILD_RUNBOOK}`,
+    );
+  }
+  const value = found.value;
+  const asked = await askWith(options, context, def, name, value);
+  if (asked !== undefined)
+    return refused('keep.refused', asked, `see ${REBUILD_RUNBOOK}`);
+  await writeSecretStore(
+    context.stack.home,
+    withRecoveredKeys(context.store, [{ app: def.id, name, value }]),
+  );
+  // The app takes Mediaplane's key again: plan and drift may send it.
+  const state = await readState(context.stack.home);
+  if (Object.hasOwn(state.keys, key)) {
+    Reflect.deleteProperty(state.keys, key);
+    await writeResources(context.stack.home, state.resources, state.keys);
+  }
+  return {
+    ok: true,
+    key,
+    value: undefined,
+    holders: held === undefined ? [] : holdersOf(context, held),
+    // What the plan said of the app refusing the key it held is what keep has put right.
+    diagnostics: result.diagnostics.filter((d) => !d.code.startsWith('wire.')),
+  };
+}
+
+/**
+ * Why `def` doesn't take `value` as its key, asked as plan asks it, or undefined when it
+ * does. Any failure, a refusal or no answer, is a reason not to keep it: an unsure answer
+ * never becomes "it takes it". The key is kept out of what is said.
+ */
+async function askWith(
+  options: KeepOptions,
+  context: PlanContext,
+  def: AppDefinition,
+  name: string,
+  value: string,
+): Promise<string | undefined> {
+  const app = context.stack.apps.find((candidate) => candidate.def.id === def.id);
+  if (app === undefined) return `${def.name} is not in the stack`;
+  const secrets = [value, ...knownSecrets({}, context.store, { password: '' })];
+  const reached = await reachApps([app], {
+    runtime: options.runtime,
+    current: context.current,
+    keys: { [def.id]: { [name]: value } },
+    secrets,
+    found: foundSecrets(),
+    deadlineMs: PLAN_DEADLINE_MS,
+    ...(options.wiring === undefined ? {} : { seams: options.wiring }),
+  });
+  const client = reached.get(def.id);
+  if (client === undefined) return notOnNetwork(app);
+  try {
+    await checkApp(client);
+    return undefined;
+  } catch (cause) {
+    if (!(cause instanceof AppApiError)) throw cause;
+    const said = redact(cause.message, redactionValues(secrets));
+    return cause.kind === 'auth'
+      ? `${def.name} refuses the key its own file holds too: ${said}`
+      : `Mediaplane couldn't tell whether ${def.name} takes the key its own file holds: ${said}`;
+  }
+}
+
+/** Each resource the stack wants that holds `value` as one of its secrets, by address. */
+function holdersOf(context: PlanContext, value: string): string[] {
+  const { stack, store } = context;
+  const admin = { username: stack.config.admin.username, password: '' };
+  return stack.apps.flatMap((app) => {
+    const ctx = { stack, app, admin, keys: store.apps };
+    return wantedResources(ctx).flatMap((spec) =>
+      Object.values(desiredOf(spec, ctx)?.secrets ?? {}).includes(value)
+        ? [resourceAddress(app, spec)]
+        : [],
+    );
+  });
 }

@@ -11,6 +11,7 @@ import {
   printApply,
   printDrift,
   printHistory,
+  printKeep,
   printMigrate,
   printPlan,
   printRecord,
@@ -189,7 +190,7 @@ describe('printPlan: drift', () => {
         '  ! qbittorrent: refuses the key Mediaplane holds for it (apiKey), as if it was changed in the app',
         "  ! sonarr.download_client.apiKey: holds qbittorrent's key, which qbittorrent refuses",
         '  ? prowlarr.application_radarr: still in the app, though the stack no longer wants it; apply leaves it',
-        "  apply puts the key Mediaplane holds back where an app keeps it in a file of its own, such as qBittorrent's, and restarts the app; for any other app, put it back as https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md shows.",
+        "  apply puts the key Mediaplane holds back where an app keeps it in a file of its own, such as qBittorrent's, and restarts the app; for any other app, put it back as https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md shows. mediaplane keep <app>.<key> keeps the app's own key instead.",
         "  apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it, or keep it as yours with mediaplane keep <app>.<resource>, which stops the report.",
         'No changes.',
         '',
@@ -575,6 +576,47 @@ describe('the wire step, as apply shows it', () => {
     expect(term.stdout()).toContain(
       '20261010T120000Z-0a1b2c3d  failed   1 resource wired\n',
     );
+  });
+});
+
+describe('printKeep', () => {
+  it("says it kept an app's own key, never showing it, and what apply gives it to", () => {
+    const term = capture();
+    printKeep(
+      {
+        ok: true,
+        key: 'qbittorrent.apiKey',
+        value: undefined,
+        holders: ['radarr.download_client', 'sonarr.download_client'],
+        diagnostics: [],
+      },
+      { json: false },
+      term.io,
+    );
+    expect(term.stdout()).toBe(
+      "Kept qbittorrent's own key (qbittorrent.apiKey) in state/secrets.json, where Mediaplane keeps its keys; stack.yaml is as it was.\nRun apply to give it to radarr.download_client, sonarr.download_client, which hold the old one.\n",
+    );
+    const none = capture();
+    printKeep(
+      { ok: true, key: 'sonarr.apiKey', value: undefined, holders: [], diagnostics: [] },
+      { json: false },
+      none.io,
+    );
+    expect(none.stdout()).toContain('No resource of the stack holds the old one.\n');
+    const json = capture();
+    printKeep(
+      { ok: true, key: 'sonarr.apiKey', value: undefined, holders: [], diagnostics: [] },
+      { json: true },
+      json.io,
+    );
+    expect(JSON.parse(json.stdout())).toEqual({
+      schema: 'mediaplane.keep/v1',
+      ok: true,
+      key: 'sonarr.apiKey',
+      value: null,
+      holders: [],
+      diagnostics: [],
+    });
   });
 });
 

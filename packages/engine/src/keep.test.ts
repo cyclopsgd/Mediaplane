@@ -14,11 +14,12 @@ import {
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Catalog } from './catalog/types';
-import { readResources, writeResources } from './integrations/resources';
+import { readResources, readState, writeResources } from './integrations/resources';
 import type { ResourceSpec } from './integrations/types';
 import { keep } from './keep';
 import { LOCK_PATH, RESOURCES_PATH } from './paths';
 import { plan } from './plan/plan';
+import { readSecretStore } from './secrets/store';
 import type { Runtime } from './runtime/types';
 import { fakeProbe, fakeRuntime } from './testing/fakes';
 import { FIXTURE_API, FIXTURE_HOST } from './testing/fixtures';
@@ -523,5 +524,172 @@ describe('keep', () => {
     expect(await readFile(join(dir, 'stack.yaml'), 'utf8')).toContain(
       'sonarr.login.user: someone',
     );
+  });
+});
+
+describe("keep: an app's own key, changed at its source", () => {
+  /** Sonarr's key in its config.xml; qBittorrent with a link that holds Sonarr's key. */
+  const KEYED: Catalog = WIRED_CATALOG.map((def) =>
+    def.id === 'sonarr'
+      ? {
+          ...def,
+          keyFiles: {
+            apiKey: {
+              path: 'config.xml',
+              read: (text) => /<ApiKey>([^<]*)<\/ApiKey>/.exec(text)?.[1],
+            },
+          },
+        }
+      : def.id === 'qbittorrent'
+        ? {
+            ...def,
+            integration: {
+              after: [],
+              resources: [
+                {
+                  ...FAKE_LOGIN,
+                  name: 'link',
+                  secrets: ['sonarrKey'],
+                  desired: ({ keys }) => ({
+                    name: 'link',
+                    fields: {},
+                    secrets: { sonarrKey: keys.sonarr?.apiKey ?? '' },
+                  }),
+                },
+              ],
+            },
+          }
+        : def.id === 'gluetun'
+          ? {
+              ...def,
+              keyFiles: { controlApiKey: { path: 'auth.toml', read: () => 'x' } },
+            }
+          : def,
+  );
+  const NEW = '5'.repeat(32);
+
+  /** A home whose Sonarr's config.xml holds `held`. */
+  async function keyedHome(held: string | undefined): Promise<string> {
+    const dir = await home();
+    await mkdir(join(dir, 'appdata'), { mode: 0o700 });
+    await mkdir(join(dir, 'appdata', 'sonarr'));
+    await writeFile(
+      join(dir, 'appdata', 'sonarr', 'config.xml'),
+      held === undefined ? '<Config />' : `<Config><ApiKey>${held}</ApiKey></Config>`,
+    );
+    return dir;
+  }
+
+  it("keeps the key the app's file holds, once the app takes it and refuses Mediaplane's, and names who holds the old", async () => {
+    const dir = await keyedHome(NEW);
+    // A drift found Sonarr refusing the key Mediaplane holds: it isn't sent again.
+    await writeResources(
+      dir,
+      { 'sonarr.login': RECORD },
+      {
+        'sonarr.apiKey': { verdict: 'refused', at: AT.toISOString() },
+      },
+    );
+    const sonarr = await fakeSonarr({ key: NEW, user: 'admin', password: PASSWORD });
+    const kept = await keep(options(dir, sonarr, 'sonarr.apiKey', { catalog: KEYED }));
+    expect(kept).toEqual({
+      ok: true,
+      key: 'sonarr.apiKey',
+      value: undefined,
+      holders: ['qbittorrent.link'],
+      diagnostics: [],
+    });
+    expect((await readSecretStore(dir)).apps.sonarr).toEqual({ apiKey: NEW });
+    expect((await readState(dir)).keys).toEqual({});
+    // Asked with the new key only: the old one was found refused before.
+    expect(sonarr.app.requests.filter((r) => r.headers['x-api-key'] === KEY)).toEqual([]);
+    expect(JSON.stringify(kept)).not.toContain(NEW);
+    const after = await plan({
+      ...options(dir, sonarr, '', { catalog: KEYED }),
+      drift: { now: () => AT },
+    });
+    expect(after.drift.filter((d) => d.kind === 'key')).toEqual([]);
+    await expect(readFile(join(dir, LOCK_PATH))).rejects.toThrow();
+  });
+
+  it('keeps no key the app takes already, nor one its file holds that the app refuses too', async () => {
+    const takes = await keyedHome(NEW);
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    expect(
+      codes(await keep(options(takes, sonarr, 'sonarr.apiKey', { catalog: KEYED }))),
+    ).toEqual(['keep.no-drift']);
+    const neither = await keyedHome('6'.repeat(32));
+    const other = await fakeSonarr({ key: NEW, user: 'admin', password: PASSWORD });
+    const result = await keep(
+      options(neither, other, 'sonarr.apiKey', { catalog: KEYED }),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostics: [
+        expect.objectContaining({
+          code: 'keep.refused',
+          message: expect.stringMatching(
+            /^sonarr refuses the key its own file holds too: /,
+          ) as string,
+        }),
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain('6'.repeat(32));
+    expect((await readSecretStore(neither)).apps.sonarr).toEqual({ apiKey: KEY });
+  });
+
+  it("keeps no key an app doesn't answer about: an unsure answer is never a yes", async () => {
+    const dir = await keyedHome(NEW);
+    await writeResources(
+      dir,
+      { 'sonarr.login': RECORD },
+      {
+        'sonarr.apiKey': { verdict: 'refused', at: AT.toISOString() },
+      },
+    );
+    const sonarr = await fakeSonarr({
+      key: NEW,
+      user: 'admin',
+      password: PASSWORD,
+      up: false,
+    });
+    const result = await keep(options(dir, sonarr, 'sonarr.apiKey', { catalog: KEYED }));
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'keep.refused',
+        message: expect.stringMatching(
+          /^Mediaplane couldn't tell whether sonarr takes the key its own file holds: /,
+        ) as string,
+      }),
+    ]);
+    expect((await readSecretStore(dir)).apps.sonarr).toEqual({ apiKey: KEY });
+  });
+
+  it("keeps no key from a file that holds none, or the one the app refuses, or of an app it can't ask", async () => {
+    const sonarr = await fakeSonarr({ key: NEW, user: 'admin', password: PASSWORD });
+    for (const [held, why] of [
+      [undefined, 'it holds none'],
+      [KEY, 'it holds the one Mediaplane holds, which the app refuses'],
+    ] as const) {
+      const result = await keep(
+        options(await keyedHome(held), sonarr, 'sonarr.apiKey', { catalog: KEYED }),
+      );
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({
+          code: 'keep.no-key',
+          message: `Mediaplane can't keep sonarr's own key: appdata/sonarr/config.xml can't give it: ${why}`,
+        }),
+      ]);
+    }
+    const gluetun = await keep(
+      options(await keyedHome(NEW), sonarr, 'gluetun.controlApiKey', { catalog: KEYED }),
+    );
+    expect(gluetun.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'keep.no-check',
+        message:
+          "Mediaplane can't ask gluetun whether it takes the key appdata/gluetun/auth.toml holds, so it doesn't keep it",
+      }),
+    ]);
   });
 });
