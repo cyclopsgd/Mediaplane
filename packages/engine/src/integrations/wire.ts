@@ -403,29 +403,35 @@ export async function wire(options: WireOptions): Promise<string[]> {
     // 4): looked at again, removed only while still as Mediaplane made it, and forgotten.
     for (const { spec, address, record } of leftOf(ctx, known)) {
       if (spec.remove === undefined) continue;
+      let removed = false;
       try {
         const observed = await spec.observe(client.api, record);
-        // Gone already: nothing to remove.
-        if (observed === undefined) continue;
-        const stays = await whyItStays(spec, client.api, observed, record);
-        if (stays !== undefined) {
-          // One apply leaves, as plan and drift say why. If the plan listed it for
-          // removal, it has changed since: say so, redacted, and keep it and its record.
-          if (
-            options.planned?.some(
-              (change) => change.resource === address && change.action === 'remove',
-            ) === true
-          ) {
-            options.record({
-              step: 'wire',
-              resource: address,
-              result: 'skipped',
-              detail: redact(stays, redacting()),
-            });
+        // The app answered, and doesn't hold it: nothing to remove, and its record goes
+        // too, or a resource of yours that the app later gave its id and name would look
+        // as Mediaplane made it. Only that answer: an error keeps the record.
+        if (observed !== undefined) {
+          const stays = await whyItStays(spec, client.api, observed, record);
+          if (stays !== undefined) {
+            // One apply leaves, as plan and drift say why. If the plan listed it for
+            // removal, it has changed since: say so, redacted, and keep it and its
+            // record.
+            if (
+              options.planned?.some(
+                (change) => change.resource === address && change.action === 'remove',
+              ) === true
+            ) {
+              options.record({
+                step: 'wire',
+                resource: address,
+                result: 'skipped',
+                detail: redact(stays, redacting()),
+              });
+            }
+            continue;
           }
-          continue;
+          await spec.remove(client.api, observed);
+          removed = true;
         }
-        await spec.remove(client.api, observed);
       } catch (cause) {
         if (!(cause instanceof AppApiError)) throw stop([address], cause);
         fail(address, cause.message, `wire.${cause.kind}`);
@@ -442,6 +448,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
           `${app.def.name} no longer holds it, but state/resources.json could not be saved: `,
         );
       }
+      if (!removed) continue;
       done.push(`${address} removed`);
       options.record({
         step: 'wire',

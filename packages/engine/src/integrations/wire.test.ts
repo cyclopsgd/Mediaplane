@@ -1089,7 +1089,8 @@ describe('wire', () => {
         'sonarr.gone': made(7, 'gone'),
         // Renamed in the app since: maybe yours, so it stays.
         'sonarr.renamed': made(8, 'renamed'),
-        // Gone from the app already: nothing to remove.
+        // Gone from the app already: nothing to remove, and its record is forgotten, so
+        // that a resource of yours given its id and name later is never taken for it.
         'sonarr.vanished': made(9, 'vanished'),
       },
     });
@@ -1102,6 +1103,37 @@ describe('wire', () => {
     expect(Object.keys(await readResources(home))).toEqual([
       'sonarr.login',
       'sonarr.renamed',
+    ]);
+  });
+
+  it('keeps the record of what it could not tell the app no longer holds', async () => {
+    const known = { ...RECORDED, 'sonarr.vanished': made(9, 'vanished') };
+    const timedOut = new AppApiError('Sonarr at http://sonarr:8989 timed out', {
+      kind: 'timeout',
+    });
+    const asked = leftOver({}, undefined, undefined, () => Promise.reject(timedOut));
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const unsure = await wireWith(sonarr, { stack: asked.stack, known });
+    const failure = await unsure.run.catch((thrown: unknown) => thrown);
+    expect((failure as WiringFailed).message).toBe(
+      'the wiring failed for sonarr.vanished',
+    );
+    expect(Object.keys(await readResources(unsure.home))).toEqual([
+      'sonarr.login',
+      'sonarr.vanished',
+    ]);
+    // An error that isn't the app's stops the step, with the record kept as well.
+    const bug = leftOver({}, undefined, undefined, () =>
+      Promise.reject(new Error('a bug, near the vanished resource')),
+    );
+    const stopped = await wireWith(
+      await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD }),
+      { stack: bug.stack, known },
+    );
+    const stop = await stopped.run.catch((thrown: unknown) => thrown);
+    expect((stop as WiringFailed).message).toBe('a bug, near the vanished resource');
+    expect(Object.keys(await readResources(stopped.home))).toEqual([
+      'sonarr.login',
       'sonarr.vanished',
     ]);
   });
@@ -1209,6 +1241,7 @@ function leftOver(
   held: Record<number, string>,
   remove?: ResourceSpec['remove'],
   cannotRemove?: ResourceSpec['cannotRemove'],
+  observing?: ResourceSpec['observe'],
 ): { stack: ReturnType<typeof stackOf>; removed: number[] } {
   const removed: number[] = [];
   const holds = new Map(Object.entries(held).map(([id, name]) => [Number(id), name]));
@@ -1216,13 +1249,15 @@ function leftOver(
     ...FAKE_LOGIN,
     name,
     desired: () => undefined,
-    observe: (_api, known) => {
-      const id = Number(known?.id);
-      const holding = holds.get(id);
-      return Promise.resolve(
-        holding === undefined ? undefined : { id, name: holding, fields: {} },
-      );
-    },
+    observe:
+      observing ??
+      ((_api, known) => {
+        const id = Number(known?.id);
+        const holding = holds.get(id);
+        return Promise.resolve(
+          holding === undefined ? undefined : { id, name: holding, fields: {} },
+        );
+      }),
     ...(cannotRemove === undefined ? {} : { cannotRemove }),
     remove:
       remove ??
