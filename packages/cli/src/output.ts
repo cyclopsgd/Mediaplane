@@ -91,8 +91,9 @@ export function driftLine(drift: Drift): string {
 
 /**
  * What puts right the drift found, one line for each kind of it there is: apply puts back
- * a field, a resource or a secret changed in an app; it gives no app back a key changed
- * there, and removes nothing the stack no longer wants, so it is never said to.
+ * a field, a resource or a secret changed in an app, and an app's own key where the app
+ * keeps it in a file of its own; it removes nothing the stack no longer wants, so it is
+ * never said to.
  */
 export function driftAdvice(drift: readonly Drift[]): string[] {
   const has = (...kinds: Drift['kind'][]) => drift.some((d) => kinds.includes(d.kind));
@@ -104,7 +105,7 @@ export function driftAdvice(drift: readonly Drift[]): string[] {
       : []),
     ...(has('key')
       ? [
-          `apply doesn't give an app back its own key: put back the key Mediaplane holds, as ${WIRING_RUNBOOK} shows`,
+          `apply puts the key Mediaplane holds back where an app keeps it in a file of its own, such as qBittorrent's, and restarts the app; for any other app, put it back as ${WIRING_RUNBOOK} shows`,
         ]
       : []),
     ...(has('left')
@@ -179,11 +180,16 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
       );
     }
   }
-  const { generate, recover } = result.secrets;
+  const { generate, recover, restore } = result.secrets;
   if (recover.length > 0) {
     io.stdout(`Secrets to recover from the apps' appdata: ${recover.join(', ')}\n`);
   }
   if (generate.length > 0) io.stdout(`Secrets to generate: ${generate.join(', ')}\n`);
+  if (restore.length > 0) {
+    io.stdout(
+      `Keys to put back in their apps' own files, each app stopped first: ${restore.join(', ')}\n`,
+    );
+  }
   const unhealthy = result.unhealthy;
   if (unhealthy.length > 0) io.stdout(`Not healthy yet: ${unhealthy.join(', ')}\n`);
   if (result.bootstrap.length > 0) {
@@ -214,6 +220,7 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
     count(containers.length, 'container', 'to change'),
     count(recover.length, 'secret', 'to recover'),
     count(generate.length, 'secret', 'to generate'),
+    count(restore.length, 'key', 'to put back'),
     count(unhealthy.length, 'app', 'to wait for'),
     count(result.bootstrap.length, 'app', 'to set up'),
     count(tally('create', 'update', 'adopt'), 'resource', 'to wire'),
@@ -641,6 +648,10 @@ export function printRecord(
   }
   if (record.plan.secrets.generate.length > 0) {
     io.stdout(`  secrets generated: ${record.plan.secrets.generate.join(', ')}\n`);
+  }
+  const restored = record.plan.secrets.restore ?? [];
+  if (restored.length > 0) {
+    io.stdout(`  keys put back in their apps' files: ${restored.join(', ')}\n`);
   }
   for (const change of (record.plan.wiring ?? []).filter(
     (w) => w.action !== 'unchanged',

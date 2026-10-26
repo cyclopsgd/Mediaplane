@@ -59,6 +59,14 @@ describe('planPrestartFiles', () => {
     });
   });
 
+  it('leaves a file from before Mediaplane seeded the app to the key put back there', async () => {
+    const home = await homeWith('<Config>\n  <Port>8989</Port>\n</Config>\n');
+    expect(await planPrestartFiles(home, [FILE], new Set([FILE.path]))).toEqual({
+      changes: [{ path: FILE.path, status: 'unchanged', ...AS_PLANNED }],
+      diagnostics: [],
+    });
+  });
+
   it('gives Gluetun its own steps: stopping it cuts qBittorrent off, which apply restarts', async () => {
     const gluetun: PrestartFile = {
       app: 'gluetun',

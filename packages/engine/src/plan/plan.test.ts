@@ -47,6 +47,28 @@ const WITH_FILES: Catalog = fixtureCatalog.map((app) =>
   app.id === 'sonarr' ? { ...app, configFiles } : app,
 );
 
+/**
+ * A key file that says how its key is written back: `key=` on a line of its own, or a new
+ * first line.
+ */
+const keyLine = (path: string) => ({
+  path,
+  read: (text: string) => /^key=(.*)$/m.exec(text)?.[1],
+  write: (text: string, key: string) =>
+    /^key=/m.test(text)
+      ? text.replace(/^key=.*$/m, () => `key=${key}`)
+      : `key=${key}\n${text}`,
+});
+
+/** Sonarr's and Gluetun's keys, each in a file of the app's own that can take it back. */
+const WITH_SOURCES: Catalog = fixtureCatalog.map((app) =>
+  app.id === 'sonarr'
+    ? { ...app, configFiles, keyFiles: { apiKey: keyLine('config.ini') } }
+    : app.id === 'gluetun'
+      ? { ...app, keyFiles: { controlApiKey: keyLine('auth.toml') } }
+      : app,
+);
+
 /** WITH_FILES, with Sonarr's key read back from its pre-start file (spec §6.1). */
 const WITH_KEYS: Catalog = fixtureCatalog.map((app) =>
   app.id === 'sonarr'
@@ -284,6 +306,67 @@ describe('plan', () => {
     expect(result.secrets).toEqual({
       generate: ['admin.password', 'gluetun.controlApiKey', 'sonarr.apiKey'],
       recover: [],
+      restore: [],
+    });
+  });
+
+  describe('with a key changed at its source', () => {
+    const runtime = () =>
+      fakeRuntime({ hashes: { ok: true, hashes: HASHES }, containers: running(HASHES) });
+
+    it("puts the key back in the app's own file, restarting the app, and its guest", async () => {
+      const docker = runtime();
+      const home = await makeCurrentHome(docker);
+      await mkdir(join(home, 'appdata', 'gluetun'), { recursive: true, mode: 0o700 });
+      await chmod(join(home, 'appdata'), 0o700);
+      await writeFile(
+        join(home, 'appdata', 'gluetun', 'auth.toml'),
+        `key=${'9'.repeat(32)}\n`,
+      );
+      const result = await planFor(home, { runtime: docker, catalog: WITH_SOURCES });
+      expect(result).toMatchObject({ ok: true, changed: true, diagnostics: [] });
+      expect(result.secrets.restore).toEqual(['gluetun.controlApiKey']);
+      // Gluetun reads its file as it starts; qBittorrent, in its network, starts after it.
+      expect(result.containers.filter((c) => c.action !== 'unchanged')).toEqual([
+        { service: 'gluetun', action: 'restart' },
+        { service: 'qbittorrent', action: 'restart' },
+      ]);
+      expect(await readFile(join(home, 'appdata', 'gluetun', 'auth.toml'), 'utf8')).toBe(
+        `key=${'9'.repeat(32)}\n`,
+      );
+    });
+
+    it('puts a key in a file from before Mediaplane seeded the app, rather than fail', async () => {
+      const docker = runtime();
+      const home = await makeCurrentHome(docker);
+      await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+      await chmod(join(home, 'appdata'), 0o700);
+      await writeFile(join(home, 'appdata', 'sonarr', 'config.ini'), 'user=someone\n');
+      const result = await planFor(home, { runtime: docker, catalog: WITH_SOURCES });
+      expect(result).toMatchObject({ ok: true, diagnostics: [] });
+      expect(result.secrets.restore).toEqual(['sonarr.apiKey']);
+      expect(result.containers.filter((c) => c.action !== 'unchanged')).toEqual([
+        { service: 'sonarr', action: 'restart' },
+      ]);
+    });
+
+    it('has nothing to put back once the file holds the key Mediaplane holds', async () => {
+      const docker = runtime();
+      const home = await makeCurrentHome(docker);
+      await mkdir(join(home, 'appdata', 'gluetun'), { recursive: true });
+      await chmod(join(home, 'appdata'), 0o700);
+      await writeFile(
+        join(home, 'appdata', 'gluetun', 'auth.toml'),
+        `key=${'1'.repeat(32)}\n`,
+      );
+      await mkdir(join(home, 'appdata', 'sonarr'));
+      await writeFile(
+        join(home, 'appdata', 'sonarr', 'config.ini'),
+        `key=${'0'.repeat(32)}\n`,
+      );
+      const result = await planFor(home, { runtime: docker, catalog: WITH_SOURCES });
+      expect(result).toMatchObject({ ok: true, changed: false });
+      expect(result.secrets.restore).toEqual([]);
     });
   });
 
@@ -309,6 +392,7 @@ describe('plan', () => {
       expect(result.secrets).toEqual({
         generate: ['admin.password', 'gluetun.controlApiKey'],
         recover: ['sonarr.apiKey'],
+        restore: [],
       });
       // .env holds the key Sonarr has: Sonarr isn't recreated with another.
       expect(result.files.map((f) => [f.path, f.status])).toEqual([

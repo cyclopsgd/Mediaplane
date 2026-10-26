@@ -94,8 +94,8 @@ export interface ConfigFile {
  * Where an app keeps one of its keys in its appdata folder (spec §6.1, key recovery): a
  * key Mediaplane gave it, or one it made. When state/secrets.json lacks the key, plan and
  * apply read it from here before generating anything, so a lost store never locks
- * Mediaplane out of an app that still holds its key. Read only, never written, and never
- * through a link that leads out of the app's appdata folder.
+ * Mediaplane out of an app that still holds its key. Never read or written through a link
+ * that leads out of the app's appdata folder.
  */
 export type KeyFile =
   | {
@@ -107,6 +107,14 @@ export type KeyFile =
        * unreadable, which stops `plan`, rather than holding none.
        */
       read(text: string): string | undefined;
+      /**
+       * The file's text with `key` in it, as the app keeps it, everything else as it was;
+       * undefined when Mediaplane can't tell where it goes. For putting the key back at its
+       * source (spec §6.3), which apply does while the app is stopped: the app reads the
+       * file when it starts. Absent for a key the app takes from its environment alone.
+       * Pure.
+       */
+      write?(text: string, key: string): string | undefined;
     }
   | {
       /** Relative to the app's appdata folder: a SQLite database the app keeps. */

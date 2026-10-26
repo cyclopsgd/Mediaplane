@@ -158,14 +158,24 @@ export function servarrConfigFiles(ctx: ConfigFileContext): ConfigFile[] {
   ];
 }
 
+const API_KEY = /<ApiKey>([^<]*)<\/ApiKey>/;
+
 /**
  * Where Sonarr, Radarr and Prowlarr keep their key (spec §6.1, key recovery): config.xml's
- * ApiKey, which servarrConfigFiles writes. Each also takes it from its environment at
- * every start, which wins over the file's.
+ * ApiKey, which servarrConfigFiles writes, first in <Config>. Each also takes it from its
+ * environment at every start, which wins over the file's, and doesn't write that into a
+ * config.xml without one (probed), as one from before Slice 3a is.
  */
 export const servarrKeyFiles: Readonly<Record<string, KeyFile>> = {
   apiKey: {
     path: 'config.xml',
-    read: (text) => /<ApiKey>([^<]*)<\/ApiKey>/.exec(text)?.[1],
+    read: (text) => API_KEY.exec(text)?.[1],
+    write: (text, key) => {
+      const line = `<ApiKey>${key}</ApiKey>`;
+      if (API_KEY.test(text)) return text.replace(API_KEY, () => line);
+      return text.includes('<Config>')
+        ? text.replace('<Config>', () => `<Config>\n  ${line}`)
+        : undefined;
+    },
   },
 };

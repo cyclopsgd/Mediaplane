@@ -70,6 +70,13 @@ describe('strandedGuests', () => {
     expect(calls.filter((call) => call.startsWith('inspect'))).toEqual([]);
   });
 
+  it('restarts a running guest whose host apply restarts, to put its key back', async () => {
+    const runtime = runtimeWith({ qbittorrent: LATE, gluetun: EARLY });
+    expect(await strandedGuests(stack(), current, changes('restart'), runtime)).toEqual([
+      'qbittorrent',
+    ]);
+  });
+
   it('restarts a guest that started before its host last did', async () => {
     const runtime = runtimeWith({ qbittorrent: EARLY, gluetun: LATE });
     expect(await strandedGuests(stack(), current, changes('unchanged'), runtime)).toEqual(

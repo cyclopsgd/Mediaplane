@@ -22,9 +22,10 @@ export function startedBefore(
 /**
  * The guests apply must restart (spec §6.4): an app such as qBittorrent, running in
  * another app's network namespace and otherwise unchanged, whose host, Gluetun, apply
- * starts again, or which started before its host's current run. Compose restarts a guest
- * when it recreates its host (depends_on restart), but not when it starts a stopped host
- * again (verified with Compose 5.5.1), so a guest would be left with no network.
+ * starts again (a stopped one, or one it restarts, to put a key back in its file), or
+ * which started before its host's current run. Compose restarts a guest when it
+ * recreates its host (depends_on restart), but not when it starts a stopped host again
+ * (verified with Compose 5.5.1), so a guest would be left with no network.
  */
 export async function strandedGuests(
   stack: ResolvedStack,
@@ -42,7 +43,7 @@ export async function strandedGuests(
     const guest = runningOne(app.def.id);
     if (hostService === undefined || guest === undefined) continue;
     if (action(app.def.id) !== 'unchanged') continue;
-    if (action(hostService) === 'start') {
+    if (action(hostService) === 'start' || action(hostService) === 'restart') {
       stranded.push(app.def.id);
       continue;
     }

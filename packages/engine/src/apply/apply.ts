@@ -27,6 +27,7 @@ import {
   type Runtime,
 } from '../runtime/types';
 import { withGeneratedSecrets, type RandomBytes } from '../secrets/generate';
+import { restoreKeys } from '../secrets/restore';
 import { writeSecretStore } from '../secrets/store';
 import { secretValues, stackKeys, userSecrets } from '../secrets/values';
 import { acquireLock, LockedError, type Lock } from '../state/lock';
@@ -239,20 +240,47 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       if (!(cause instanceof RuntimeError)) throw cause;
       throw new LeaveFailed(cause.message, { cause });
     }
-    // A guest whose host up starts again (strandedGuests): stopped now, up starts it in
-    // the host's new network.
-    const restart = shown.containers
-      .filter((change) => change.action === 'restart')
-      .map((change) => change.service);
+    // A guest whose host up starts again (strandedGuests), and an app whose key goes
+    // back in its file, which it reads as it starts: stopped now, and up starts them.
+    // One that up recreates is stopped first too, for its file to be written.
+    const { restore } = shown.secrets;
+    const running = new Set(
+      context.current.filter((c) => c.state === 'running').map((c) => c.service),
+    );
+    const restart = [
+      ...new Set([
+        ...shown.containers
+          .filter((change) => change.action === 'restart')
+          .map((change) => change.service),
+        ...restore
+          .map((key) => key.split('.')[0] ?? '')
+          .filter((app) => running.has(app)),
+      ]),
+    ].sort(compare);
     if (restart.length > 0) succeeded(await runtime.stop(restart, values));
+    // Each key back in its file, the app stopped (spec §6.3). Up runs whatever happened,
+    // so that no app is left stopped; then a failure fails the step.
+    let restored: string[] = [];
+    let unrestored: Error | undefined;
+    try {
+      restored = await restoreKeys(stack, store, restore);
+    } catch (cause) {
+      unrestored = cause instanceof Error ? cause : new Error(String(cause));
+    }
     // An app whose first-run setup is open to anyone starts with no published port: the
     // bootstrap step publishes it once it is set up (spec §6.4).
     const unpublished = shown.bootstrap.filter((b) => b.unpublished).map((b) => b.app);
     await up(unpublished);
+    if (unrestored !== undefined) throw unrestored;
     const [its, it] = unpublished.length === 1 ? ['its', 'it'] : ['their', 'them'];
     return [
       'every app is running and healthy',
       ...(restart.length === 0 ? [] : [`restarted ${restart.join(', ')}`]),
+      ...(restored.length === 0
+        ? []
+        : [
+            `put ${restored.join(', ')} back in ${restored.length === 1 ? "its app's file" : "their apps' files"}`,
+          ]),
       ...(unpublished.length === 0
         ? []
         : [
@@ -579,6 +607,7 @@ function remaining(result: PlanResult): string {
       .map((c) => `${c.service} (${c.action})`),
     ...result.secrets.generate,
     ...result.secrets.recover,
+    ...result.secrets.restore,
     ...result.unhealthy,
     ...result.bootstrap.map((b) => `${b.app} (first-run setup)`),
     // An unknown one says why: its reason names the app and what failed, redacted.
@@ -612,7 +641,7 @@ function emptyPlan(): PlanResult {
     changed: false,
     files: [],
     containers: [],
-    secrets: { generate: [], recover: [] },
+    secrets: { generate: [], recover: [], restore: [] },
     unhealthy: [],
     wiring: [],
     drift: [],

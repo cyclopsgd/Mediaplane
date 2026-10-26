@@ -64,4 +64,19 @@ export const QBITTORRENT_CONF = 'qBittorrent/qBittorrent.conf';
 export const qbittorrentKeyFile: KeyFile = {
   path: QBITTORRENT_CONF,
   read: (text) => /^WebUI\\APIKey=(.*?)\r?$/m.exec(text)?.[1],
+  // In place of the line it holds, else first under [Preferences], else in a new one.
+  write: (text, key) => {
+    const line = `WebUI\\APIKey=${key}`;
+    const held = /^WebUI\\APIKey=.*?(\r?)$/m;
+    if (held.test(text)) return text.replace(held, (_all, cr: string) => `${line}${cr}`);
+    const section = /^\[Preferences\](\r?)$/m;
+    if (section.test(text)) {
+      return text.replace(
+        section,
+        (_all, cr: string) => `[Preferences]${cr}\n${line}${cr}`,
+      );
+    }
+    const end = text === '' || text.endsWith('\n') ? '' : '\n';
+    return `${text}${end}${text === '' ? '' : '\n'}[Preferences]\n${line}\n`;
+  },
 };

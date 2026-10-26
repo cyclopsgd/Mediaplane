@@ -433,7 +433,7 @@ function controlWarning(status: number, exit: number): VpnCheckItem {
             ? "Gluetun's control server refused Mediaplane's key"
             : `Gluetun's control server answered HTTP ${String(status)}`,
     hint: refused
-      ? 'appdata/gluetun/auth/config.toml holds another key than state/secrets.json: see Gluetun\'s README, "Set up before Slice 3a"'
+      ? '"mediaplane apply" puts the key state/secrets.json holds back in appdata/gluetun/auth/config.toml when the file holds another, and restarts Gluetun and qBittorrent; a file that holds it already was changed while Gluetun ran, which reads it as it starts: restart Gluetun, then qBittorrent. See Gluetun\'s README'
       : `see ${VPN_RUNBOOK}`,
   };
 }

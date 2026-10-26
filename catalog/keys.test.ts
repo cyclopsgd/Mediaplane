@@ -170,6 +170,60 @@ describe("the apps' key files (spec §6.1, key recovery)", () => {
     });
   });
 
+  it("puts the key back in Sonarr's, Radarr's and Prowlarr's config.xml, first in <Config> when it has none", () => {
+    const file = textKeyFile('sonarr', 'apiKey');
+    const held = `<Config>\n  <ApiKey>${'a'.repeat(32)}</ApiKey>\n  <Port>8989</Port>\n</Config>\n`;
+    expect(file.write?.(held, 'b'.repeat(32))).toBe(
+      held.replace('a'.repeat(32), 'b'.repeat(32)),
+    );
+    expect(
+      file.write?.('<Config>\n  <Port>8989</Port>\n</Config>\n', 'b'.repeat(32)),
+    ).toBe(
+      `<Config>\n  <ApiKey>${'b'.repeat(32)}</ApiKey>\n  <Port>8989</Port>\n</Config>\n`,
+    );
+    expect(file.write?.('<Settings />', 'b'.repeat(32))).toBeUndefined();
+    for (const id of ['radarr', 'prowlarr']) {
+      expect(textKeyFile(id, 'apiKey').write?.(held, 'b'.repeat(32))).toBe(
+        file.write?.(held, 'b'.repeat(32)),
+      );
+    }
+  });
+
+  it("puts the key back in qBittorrent's file, in place, under [Preferences], or in a new section", () => {
+    const file = textKeyFile('qbittorrent', 'apiKey');
+    expect(
+      file.write?.('[Preferences]\r\nWebUI\\APIKey=qbt_old\r\nA=1\r\n', 'qbt_new'),
+    ).toBe('[Preferences]\r\nWebUI\\APIKey=qbt_new\r\nA=1\r\n');
+    expect(
+      file.write?.('[LegalNotice]\nAccepted=true\n\n[Preferences]\nA=1\n', 'qbt_new'),
+    ).toBe('[LegalNotice]\nAccepted=true\n\n[Preferences]\nWebUI\\APIKey=qbt_new\nA=1\n');
+    expect(file.write?.('[LegalNotice]\nAccepted=true', 'qbt_new')).toBe(
+      '[LegalNotice]\nAccepted=true\n\n[Preferences]\nWebUI\\APIKey=qbt_new\n',
+    );
+    expect(file.write?.('', 'qbt_new')).toBe('[Preferences]\nWebUI\\APIKey=qbt_new\n');
+  });
+
+  it("puts Mediaplane's role back whole in Gluetun's file, after yours, which stay as they are", () => {
+    const file = textKeyFile('gluetun', 'controlApiKey');
+    const yours =
+      '# my roles\n[[roles]]\nname = "mine"\nauth = "apikey"\napikey = "yours"\n';
+    const ours = (key: string) =>
+      `[[roles]]\nname = "mediaplane"\nroutes = ["GET /v1/vpn/status", "GET /v1/publicip/ip"]\nauth = "apikey"\napikey = "${key}"\n`;
+    expect(file.write?.(yours, 'c'.repeat(32))).toBe(`${yours}\n${ours('c'.repeat(32))}`);
+    // In its place: a role of Mediaplane's with another key, or routes of another's.
+    const changed = `${ours('d'.repeat(32)).replace('GET /v1/publicip/ip', 'PUT /v1/vpn/status')}\n${yours}`;
+    expect(file.write?.(changed, 'c'.repeat(32))).toBe(
+      `${ours('c'.repeat(32))}\n${yours}`,
+    );
+    expect(file.write?.('', 'c'.repeat(32))).toBe(ours('c'.repeat(32)));
+    expect(file.read(file.write?.(yours, 'c'.repeat(32)) ?? '')).toBe('c'.repeat(32));
+  });
+
+  it('puts back none of the keys an app takes from its environment, or keeps in a database', () => {
+    expect('write' in textKeyFile('seerr', 'apiKey')).toBe(false);
+    expect(app('jellyfin').keyFiles?.apiKey).not.toHaveProperty('write');
+  });
+
   it('reads nothing from a file that is not there', async () => {
     const home = await tempDir('mediaplane-keys-');
     await writeFile(join(home, 'stack.yaml'), STACK);

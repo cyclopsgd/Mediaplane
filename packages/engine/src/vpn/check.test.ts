@@ -777,6 +777,14 @@ describe('vpnCheck', () => {
     }
   });
 
+  it('says a refused key is put back by apply, and what to do when the file holds it already', async () => {
+    const answers: Answers = { ...HEALTHY, status: [0, '\n401'] };
+    const { result } = await checkWith(await homeWith(), { answers });
+    expect(result.ok && result.checks.find((c) => c.id === 'control')?.hint).toBe(
+      '"mediaplane apply" puts the key state/secrets.json holds back in appdata/gluetun/auth/config.toml when the file holds another, and restarts Gluetun and qBittorrent; a file that holds it already was changed while Gluetun ran, which reads it as it starts: restart Gluetun, then qBittorrent. See Gluetun\'s README',
+    );
+  });
+
   it("does not read a keyed answer that curl couldn't finish, such as one over the cap", async () => {
     // curl exits 63 when the body is over --max-filesize, and still writes the status.
     const answers: Answers = {

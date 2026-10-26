@@ -44,7 +44,7 @@ const PLAN: PlanResult = {
     },
   ],
   containers: [],
-  secrets: { generate: [], recover: [] },
+  secrets: { generate: [], recover: [], restore: [] },
   unhealthy: [],
   wiring: [],
   drift: [],
@@ -163,7 +163,7 @@ describe('printPlan: drift', () => {
     );
   });
 
-  it('says an app refuses its own key, which those that hold it hold too, and what is left, and that apply puts back neither', () => {
+  it('says an app refuses its own key, which those that hold it hold too, and what is left, and what puts each right', () => {
     const term = capture();
     printPlan(
       {
@@ -189,7 +189,7 @@ describe('printPlan: drift', () => {
         '  ! qbittorrent: refuses the key Mediaplane holds for it (apiKey), as if it was changed in the app',
         "  ! sonarr.download_client.apiKey: holds qbittorrent's key, which qbittorrent refuses",
         '  ? prowlarr.application_radarr: still in the app, though the stack no longer wants it; apply leaves it',
-        "  apply doesn't give an app back its own key: put back the key Mediaplane holds, as https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md shows.",
+        "  apply puts the key Mediaplane holds back where an app keeps it in a file of its own, such as qBittorrent's, and restarts the app; for any other app, put it back as https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md shows.",
         "  apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it, or keep it as yours with mediaplane keep <app>.<resource>, which stops the report.",
         'No changes.',
         '',
@@ -315,6 +315,7 @@ describe('printPlan', () => {
         secrets: {
           generate: ['admin.password'],
           recover: ['qbittorrent.apiKey', 'sonarr.apiKey'],
+          restore: [],
         },
       },
       { json: false },
@@ -325,6 +326,29 @@ describe('printPlan', () => {
         "Secrets to recover from the apps' appdata: qbittorrent.apiKey, sonarr.apiKey",
         'Secrets to generate: admin.password',
         'Plan: 2 secrets to recover, 1 secret to generate.',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it("lists the keys it puts back in their apps' own files, which restart, and counts them", () => {
+    const term = capture();
+    printPlan(
+      {
+        ...PLAN,
+        files: [],
+        containers: [{ service: 'qbittorrent', action: 'restart' }],
+        secrets: { generate: [], recover: [], restore: ['qbittorrent.apiKey'] },
+      },
+      { json: false },
+      term.io,
+    );
+    expect(term.stdout()).toBe(
+      [
+        'Containers:',
+        '  > restart   qbittorrent',
+        "Keys to put back in their apps' own files, each app stopped first: qbittorrent.apiKey",
+        'Plan: 1 container to change, 1 key to put back.',
         '',
       ].join('\n'),
     );

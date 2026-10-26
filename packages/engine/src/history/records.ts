@@ -59,6 +59,8 @@ export const changeRecordSchema = z.strictObject({
       generate: z.array(z.string()),
       /** The keys recovered from the apps' appdata (spec §6.1). Added in Slice 10a. */
       recover: z.array(z.string()).optional(),
+      /** The keys put back in their app's own file (spec §6.3). Added in Slice 10a. */
+      restore: z.array(z.string()).optional(),
     }),
     /** What the plan said of each managed resource. Added in Slice 3b. */
     wiring: z

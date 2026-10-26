@@ -37,6 +37,7 @@ import { RuntimeError, type ContainerState, type Runtime } from '../runtime/type
 import { adminLogin, adminPasswordToGenerate } from '../secrets/admin';
 import { withGeneratedSecrets } from '../secrets/generate';
 import { REBUILD_RUNBOOK, recoverKeys, withRecoveredKeys } from '../secrets/recover';
+import { planKeyRestores, restorableKeyFiles } from '../secrets/restore';
 import { readSecretStore, type SecretStore } from '../secrets/store';
 import {
   secretsToGenerate,
@@ -89,10 +90,12 @@ export interface PlanResult {
   files: FileChange[];
   containers: ContainerChange[];
   /**
-   * Names ("sonarr.apiKey"), never values: those to generate, and those to recover from
-   * the apps' appdata, which state/secrets.json lacks (spec §6.1).
+   * Names ("sonarr.apiKey"), never values: those to generate; those to recover from the
+   * apps' appdata, which state/secrets.json lacks (spec §6.1); and those to put back at
+   * their source, in the app's own file, which holds another key or none (spec §6.3): the
+   * app restarts.
    */
-  secrets: { generate: string[]; recover: string[] };
+  secrets: { generate: string[]; recover: string[]; restore: string[] };
   /**
    * Running apps whose health check has not passed yet, as "sonarr (unhealthy)": apply
    * waits for them again, so they make the plan changed.
@@ -216,13 +219,19 @@ export async function planStack(
   // can be rendered. Their content is never shown or kept: apply renders them again
   // with the keys it saves.
   const preview = withGeneratedSecrets(stack, store).store;
+  // A key an app keeps in a file of its own that holds another, or none: put back there,
+  // the app stopped first (spec §6.3, "Re-apply restores the old key at the source").
+  const restores = await planKeyRestores(stack, preview);
   const prestart = await planPrestartFiles(
     home,
     await prestartFilesFor(stack, preview, options.env),
+    restorableKeyFiles(stack),
   );
-  if (hasErrors(prestart.diagnostics)) {
+  diagnostics.push(...restores.diagnostics);
+  if (hasErrors([...diagnostics, ...prestart.diagnostics])) {
     return failed([...diagnostics, ...prestart.diagnostics]);
   }
+  const restore = restores.restore;
   // Notes on what apply will do to appdata/ itself; they don't make the plan "changed".
   diagnostics.push(...(await planAppdata(home)));
   const files = [
@@ -262,6 +271,13 @@ export async function planStack(
   containers = containers.map((change) =>
     unpublished.has(change.service) && change.action !== 'create'
       ? { ...change, action: 'recreate' }
+      : change,
+  );
+  // An app whose key goes back in its file restarts: it reads the file as it starts.
+  const restarting = new Set(restore.map((key) => key.split('.')[0] ?? ''));
+  containers = containers.map((change) =>
+    restarting.has(change.service) && change.action === 'unchanged'
+      ? { ...change, action: 'restart' }
       : change,
   );
   try {
@@ -350,12 +366,13 @@ export async function planStack(
         containers.some((change) => change.action !== 'unchanged') ||
         generate.length > 0 ||
         recover.length > 0 ||
+        restore.length > 0 ||
         unhealthy.length > 0 ||
         wiring.some((change) => change.action !== 'unchanged') ||
         bootstrap.length > 0,
       files,
       containers,
-      secrets: { generate, recover },
+      secrets: { generate, recover, restore },
       unhealthy,
       wiring,
       drift,
@@ -374,7 +391,7 @@ function failed(diagnostics: Diagnostic[]): { result: PlanResult; context: undef
       changed: false,
       files: [],
       containers: [],
-      secrets: { generate: [], recover: [] },
+      secrets: { generate: [], recover: [], restore: [] },
       unhealthy: [],
       wiring: [],
       drift: [],

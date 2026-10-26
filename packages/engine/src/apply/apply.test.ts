@@ -1,5 +1,6 @@
 import {
   chmod,
+  link,
   mkdir,
   readdir,
   readFile,
@@ -124,6 +125,13 @@ const WITH_FILES: Catalog = fixtureCatalog.map((app) =>
   app.id === 'sonarr' ? { ...app, configFiles } : app,
 );
 
+/** A key in a file of the app's own, on a `key=` line, written back in its place. */
+const KEY_LINE = {
+  path: 'auth.toml',
+  read: (text: string) => /^key=(.*)$/m.exec(text)?.[1],
+  write: (text: string, key: string) => text.replace(/^key=.*$/m, () => `key=${key}`),
+};
+
 /** WITH_FILES, with Sonarr's key read back from its pre-start file (spec §6.1). */
 const WITH_KEYS: Catalog = WITH_FILES.map((app) =>
   app.id === 'sonarr'
@@ -194,6 +202,7 @@ describe('apply', () => {
     expect(result.plan.secrets).toEqual({
       generate: ['admin.password', 'gluetun.controlApiKey'],
       recover: ['sonarr.apiKey'],
+      restore: [],
     });
     expect(result.actions[0]).toEqual({
       step: 'keys',
@@ -208,6 +217,7 @@ describe('apply', () => {
     expect(record?.plan.secrets).toEqual({
       generate: ['admin.password', 'gluetun.controlApiKey'],
       recover: ['sonarr.apiKey'],
+      restore: [],
     });
   });
 
@@ -1285,6 +1295,66 @@ describe('apply: qBittorrent behind Gluetun', () => {
         hint: 'check that the qBittorrent image is present ("docker image ls"), then run vpn-check again',
       }),
     );
+  });
+
+  it("puts Gluetun's key back in its file while it is stopped, restarting qBittorrent too", async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    const catalog = fixtureCatalog.map((app) =>
+      app.id === 'gluetun' ? { ...app, keyFiles: { controlApiKey: KEY_LINE } } : app,
+    );
+    expect((await apply(options(home, docker, { catalog }))).outcome).toBe('success');
+    const file = join(home, 'appdata', 'gluetun', 'auth.toml');
+    await mkdir(join(file, '..'), { recursive: true });
+    await writeFile(file, `user=someone\nkey=${'9'.repeat(32)}\n`, { mode: 0o640 });
+    docker.calls.length = 0;
+    const result = await apply(options(home, docker, { catalog }));
+    expect(result.outcome).toBe('success');
+    expect(result.plan.secrets.restore).toEqual(['gluetun.controlApiKey']);
+    const stored = (await readSecretStore(home)).apps.gluetun?.controlApiKey ?? '';
+    expect(await readFile(file, 'utf8')).toBe(`user=someone\nkey=${stored}\n`);
+    expect(await modeOf(file)).toBe(0o640);
+    expect(docker.calls.indexOf('stop gluetun qbittorrent')).toBeGreaterThanOrEqual(0);
+    expect(docker.calls.indexOf('stop gluetun qbittorrent')).toBeLessThan(
+      docker.calls.indexOf('up'),
+    );
+    expect(result.actions.find((a) => a.step === 'start')?.detail).toBe(
+      "every app is running and healthy; restarted gluetun, qbittorrent; put gluetun.controlApiKey back in its app's file",
+    );
+    // Gluetun holds the key Mediaplane does: nothing is left to put back.
+    expect((await apply(options(home, docker, { catalog }))).outcome).toBe('no-changes');
+  });
+
+  it('starts every app again when a key it was to put back cannot be, then fails the step', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    const catalog = fixtureCatalog.map((app) =>
+      app.id === 'gluetun' ? { ...app, keyFiles: { controlApiKey: KEY_LINE } } : app,
+    );
+    expect((await apply(options(home, docker, { catalog }))).outcome).toBe('success');
+    const file = join(home, 'appdata', 'gluetun', 'auth.toml');
+    await mkdir(join(file, '..'), { recursive: true });
+    await writeFile(file, `key=${'9'.repeat(32)}\n`);
+    // Between the plan and the write, the file gets a second name: no longer safe to
+    // replace.
+    const linking: Runtime = {
+      ...docker,
+      stop: async (services, values) => {
+        await link(file, `${file}.other-name`);
+        return docker.stop(services, values);
+      },
+    };
+    docker.calls.length = 0;
+    const result = await apply(options(home, linking, { catalog }));
+    expect(result.outcome).toBe('failed');
+    expect(result.actions.find((a) => a.step === 'start')).toEqual({
+      step: 'start',
+      result: 'failed',
+      error:
+        'cannot put gluetun.controlApiKey back in appdata/gluetun/auth.toml: it has other names (hard links), which a rewrite would part from it',
+    });
+    expect(docker.calls).toContain('up');
+    expect(await readFile(file, 'utf8')).toBe(`key=${'9'.repeat(32)}\n`);
   });
 
   it('stops at a restart that fails, before up', async () => {

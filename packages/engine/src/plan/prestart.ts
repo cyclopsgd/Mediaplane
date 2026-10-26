@@ -52,11 +52,14 @@ async function find(path: string): Promise<Found> {
 /**
  * What apply would do with each pre-start file (spec §6.4): create it when it is absent,
  * and leave it alone when it exists. A file that exists without what Mediaplane seeds is
- * from an install made before Slice 3a, which apply would never fix: an error.
+ * from an install made before Slice 3a: apply puts its key in it where it can
+ * (`restorable`, its path relative to the home, which planKeyRestores looks after);
+ * any other is an error, which apply would never fix.
  */
 export async function planPrestartFiles(
   home: string,
   files: readonly PrestartFile[],
+  restorable: ReadonlySet<string> = new Set(),
 ): Promise<{ changes: FileChange[]; diagnostics: Diagnostic[] }> {
   const changes: FileChange[] = [];
   const diagnostics: Diagnostic[] = [];
@@ -75,7 +78,8 @@ export async function planPrestartFiles(
     if (
       found.exists &&
       found.text !== undefined &&
-      found.text.search(file.seeded) === -1
+      found.text.search(file.seeded) === -1 &&
+      !restorable.has(file.path)
     ) {
       diagnostics.push(notSeeded(file));
     }

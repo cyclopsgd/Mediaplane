@@ -4,18 +4,50 @@ import { defineApp, error, warning, type KeyFile } from '@mediaplane/engine';
 const MEDIAPLANE_ROLE = /^name = "mediaplane"$/m;
 
 /**
+ * Mediaplane's role in auth/config.toml, with `key`: the routes vpn-check reads, and no
+ * other (spec §11, Slice 3a).
+ */
+function mediaplaneRole(key: string): string {
+  return [
+    '[[roles]]',
+    'name = "mediaplane"',
+    'routes = ["GET /v1/vpn/status", "GET /v1/publicip/ip"]',
+    'auth = "apikey"',
+    `apikey = "${key}"`,
+    '',
+  ].join('\n');
+}
+
+/** auth/config.toml's roles, each from its [[roles]] line, after what comes before them. */
+const roles = (text: string) => text.split(/^(?=\[\[roles\]\][ \t]*$)/m);
+
+/**
  * Mediaplane's key to Gluetun's control server (spec §6.1, key recovery): the apikey of
  * Mediaplane's own role in auth/config.toml, which its pre-start file writes. Gluetun
- * reads the file when it starts, and never writes it.
+ * reads the file when it starts, and never writes it. Put back, Mediaplane's role is
+ * written whole, in its place or after yours, which stay as they are.
  */
 const controlKeyFile: KeyFile = {
   path: 'auth/config.toml',
   read: (text) =>
-    text
-      .split(/^\[\[roles\]\]\s*$/m)
+    roles(text)
       .filter((role) => MEDIAPLANE_ROLE.test(role))
-      .map((role) => /^apikey = "([^"]*)"\s*$/m.exec(role)?.[1])
+      .map((role) => /^apikey = "([^"]*)"[ \t]*$/m.exec(role)?.[1])
       .find((key) => key !== undefined),
+  write: (text, key) => {
+    const parts = roles(text);
+    const at = parts.findIndex((role) => MEDIAPLANE_ROLE.test(role));
+    if (at < 0) {
+      const end = text === '' || text.endsWith('\n') ? '' : '\n';
+      return `${text}${end}${text === '' ? '' : '\n'}${mediaplaneRole(key)}`;
+    }
+    // Its own lines run to its last that is neither blank nor a comment: the blank lines
+    // and comments after them, before the next role, stay.
+    const lines = (parts[at] ?? '').split('\n');
+    const last = lines.findLastIndex((line) => !/^\s*(#.*)?$/.test(line));
+    parts[at] = `${mediaplaneRole(key)}${lines.slice(last + 1).join('\n')}`;
+    return parts.join('');
+  },
 };
 
 export default defineApp({
@@ -80,14 +112,7 @@ export default defineApp({
   configFiles: (ctx) => [
     {
       path: 'auth/config.toml',
-      content: [
-        '[[roles]]',
-        'name = "mediaplane"',
-        'routes = ["GET /v1/vpn/status", "GET /v1/publicip/ip"]',
-        'auth = "apikey"',
-        `apikey = "${ctx.secret('controlApiKey')}"`,
-        '',
-      ].join('\n'),
+      content: mediaplaneRole(ctx.secret('controlApiKey')),
       seeded: MEDIAPLANE_ROLE,
     },
   ],
