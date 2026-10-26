@@ -231,13 +231,23 @@ export async function wire(options: WireOptions): Promise<string[]> {
   for (const app of order) {
     const ctx: WiringContext = { stack, app, admin, keys: appKeys };
     const appId = app.def.id;
+    // What the app's resources that the stack no longer wants were planned as: removed,
+    // or to be looked at once the app has started. Only those are removed, when there is a
+    // plan; one the plan showed as staying, or couldn't tell about, stays whatever has
+    // changed since.
+    const plannedLeft = (address: string) => {
+      const action = options.planned?.find(
+        (change) => change.resource === address,
+      )?.action;
+      return action === 'remove' || action === 'after-start';
+    };
     // What the stack wants, and what apply's own plan said it removes from the app: each
     // fails, or is skipped, with the app.
     const targets = [
       ...wiringTargets(ctx),
-      ...(options.planned ?? [])
-        .filter((change) => change.action === 'remove' && ownedBy(change.resource, appId))
-        .map((change) => change.resource),
+      ...leftOf(ctx, known)
+        .map(({ address }) => address)
+        .filter(plannedLeft),
     ];
     const why = options.held?.includes(appId)
       ? {
@@ -404,22 +414,21 @@ export async function wire(options: WireOptions): Promise<string[]> {
     for (const { spec, address, record } of leftOf(ctx, known)) {
       if (spec.remove === undefined) continue;
       let removed = false;
+      const planned = plannedLeft(address);
       try {
         const observed = await spec.observe(client.api, record);
         // The app answered, and doesn't hold it: nothing to remove, and its record goes
         // too, or a resource of yours that the app later gave its id and name would look
         // as Mediaplane made it. Only that answer: an error keeps the record.
         if (observed !== undefined) {
+          // Not one the plan listed: apply leaves it, as plan and drift said.
+          if (options.planned !== undefined && !planned) continue;
           const stays = await whyItStays(spec, client.api, observed, record);
           if (stays !== undefined) {
             // One apply leaves, as plan and drift say why. If the plan listed it for
             // removal, it has changed since: say so, redacted, and keep it and its
             // record.
-            if (
-              options.planned?.some(
-                (change) => change.resource === address && change.action === 'remove',
-              ) === true
-            ) {
+            if (planned) {
               options.record({
                 step: 'wire',
                 resource: address,

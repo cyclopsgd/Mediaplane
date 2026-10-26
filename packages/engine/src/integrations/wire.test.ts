@@ -1191,6 +1191,156 @@ describe('wire', () => {
     ]);
   });
 
+  it('removes only what the plan listed for removal, when it is given, and what is as made otherwise', async () => {
+    const known = {
+      ...RECORDED,
+      'sonarr.gone': made(7, 'gone'),
+      'sonarr.renamed': made(8, 'renamed'),
+    };
+    // Both are as made now, but the plan showed `renamed` as staying, or couldn't say.
+    for (const shown of [
+      [],
+      [{ resource: 'sonarr.renamed', action: 'unknown' as const, reason: 'no' }],
+    ]) {
+      const left = leftOver({ 7: 'gone', 8: 'renamed' });
+      const listed = await wireWith(
+        await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD }),
+        {
+          stack: left.stack,
+          known,
+          planned: [{ resource: 'sonarr.gone', action: 'remove' }, ...shown],
+        },
+      );
+      expect(await listed.run).toEqual(['sonarr.gone removed']);
+      expect(left.removed).toEqual([7]);
+      expect(Object.keys(await readResources(listed.home))).toEqual([
+        'sonarr.login',
+        'sonarr.renamed',
+      ]);
+    }
+    // No plan given: everything as made goes.
+    const all = leftOver({ 7: 'gone', 8: 'renamed' });
+    const unplanned = await wireWith(
+      await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD }),
+      { stack: all.stack, known },
+    );
+    expect(await unplanned.run).toEqual([
+      'sonarr.gone removed',
+      'sonarr.renamed removed',
+    ]);
+    expect(all.removed).toEqual([7, 8]);
+  });
+
+  it('removes what the plan listed to check after the start, and says when it now stays', async () => {
+    const holding = 'it holds 2 torrents';
+    const left = leftOver({ 7: 'gone', 8: 'renamed' }, undefined, (_api, observed) =>
+      Promise.resolve(observed.id === 8 ? holding : undefined),
+    );
+    const listed = await wireWith(
+      await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD }),
+      {
+        stack: left.stack,
+        known: {
+          ...RECORDED,
+          'sonarr.gone': made(7, 'gone'),
+          'sonarr.renamed': made(8, 'renamed'),
+        },
+        planned: [
+          { resource: 'sonarr.gone', action: 'after-start' },
+          { resource: 'sonarr.renamed', action: 'after-start' },
+        ],
+      },
+    );
+    expect(await listed.run).toEqual(['sonarr.gone removed']);
+    expect(listed.actions.slice(1)).toEqual([
+      { step: 'wire', resource: 'sonarr.gone', result: 'done', detail: 'removed' },
+      { step: 'wire', resource: 'sonarr.renamed', result: 'skipped', detail: holding },
+    ]);
+    expect(Object.keys(await readResources(listed.home))).toEqual([
+      'sonarr.login',
+      'sonarr.renamed',
+    ]);
+  });
+
+  it.each([
+    ['remove' as const, 'waiting' as const, "sonarr's first-run setup waits"],
+    ['after-start' as const, 'waiting' as const, "sonarr's first-run setup waits"],
+    [
+      'remove' as const,
+      'held' as const,
+      "sonarr's first-run setup is held: the app it signs in to doesn't have the admin password Mediaplane holds",
+    ],
+    ['after-start' as const, 'failed' as const, "sonarr's first-run setup failed"],
+  ])(
+    'skips a removal the plan listed (%s) with an app whose setup is %s, without asking it',
+    async (action, why, detail) => {
+      const left = leftOver({ 7: 'gone' });
+      const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+      const { run, actions, home } = await wireWith(sonarr, {
+        stack: left.stack,
+        known: { ...RECORDED, 'sonarr.gone': made(7, 'gone') },
+        planned: [{ resource: 'sonarr.gone', action }],
+        [why]: ['sonarr'],
+      });
+      // What waits or is held is skipped, not failed.
+      expect(await run).toEqual([]);
+      expect(
+        actions.map((a) => `${a.resource ?? ''} ${a.result} ${a.detail ?? ''}`),
+      ).toEqual([`sonarr.login skipped ${detail}`, `sonarr.gone skipped ${detail}`]);
+      expect(left.removed).toEqual([]);
+      expect(sonarr.app.requests).toEqual([]);
+      expect(Object.keys(await readResources(home))).toEqual([
+        'sonarr.gone',
+        'sonarr.login',
+      ]);
+    },
+  );
+
+  it("stops, keeping the record, on an error that isn't the app's, and when the record can't be saved after a removal", async () => {
+    const bug = new Error(`a bug in remove, near ${PASSWORD}`);
+    const known = { ...RECORDED, 'sonarr.gone': made(7, 'gone') };
+    const buggy = leftOver({ 7: 'gone' }, () => Promise.reject(bug));
+    const stopped = await wireWith(
+      await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD }),
+      { stack: buggy.stack, known },
+    );
+    const failure = await stopped.run.catch((thrown: unknown) => thrown);
+    expect(failure).toBeInstanceOf(WiringFailed);
+    expect((failure as WiringFailed).message).toBe('a bug in remove, near ***');
+    expect((failure as WiringFailed).cause).toBeUndefined();
+    expect(stopped.actions.at(-1)).toEqual({
+      step: 'wire',
+      resource: 'sonarr.gone',
+      result: 'failed',
+      error: 'a bug in remove, near ***',
+    });
+    expect(Object.keys(await readResources(stopped.home))).toEqual([
+      'sonarr.gone',
+      'sonarr.login',
+    ]);
+    // The app removes it, then a folder takes resources.json's place.
+    const home = await tempDir('mediaplane-wire-');
+    const path = join(home, RESOURCES_PATH);
+    await writeResources(home, known);
+    const left = leftOver({ 7: 'gone' }, async () => {
+      await rm(path);
+      await mkdir(join(path, 'in-the-way'), { recursive: true });
+    });
+    const unsaved = await wireWith(
+      await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD }),
+      { home, stack: left.stack },
+    );
+    const lost = await unsaved.run.catch((thrown: unknown) => thrown);
+    const said = `sonarr no longer holds it, but state/resources.json could not be saved: cannot write ${path} (EISDIR)`;
+    expect((lost as WiringFailed).message).toBe(said);
+    expect(unsaved.actions.at(-1)).toEqual({
+      step: 'wire',
+      resource: 'sonarr.gone',
+      result: 'failed',
+      error: said,
+    });
+  });
+
   it('fails a removal the app refuses, keeping its record, and each the plan named in an app it cannot reach', async () => {
     const refusal = new AppApiError('Sonarr at http://sonarr:8989 refused it', {
       kind: 'rejected',
