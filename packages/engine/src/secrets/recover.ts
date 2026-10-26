@@ -12,7 +12,7 @@ import { runbookUrl } from '../runbooks';
 import { codeOf } from '../util/error-code';
 import { isInside } from '../util/path';
 import { compare } from '../util/sort';
-import { APP_SECRET, type SecretStore } from './store';
+import { APP_SECRET, UNKEEPABLE_KEY, type SecretStore } from './store';
 
 /** Where a host is rebuilt from stack.yaml and appdata: what to do when a key isn't found. */
 export const REBUILD_RUNBOOK = runbookUrl('rebuilding-a-host');
@@ -283,7 +283,7 @@ function databaseFailure(cause: unknown): KeyFound {
 function noKey(found: KeyFound): string | undefined {
   if (found.found === 'unreadable') return found.why;
   if (found.found === 'key') {
-    return 'it holds the key in a form Mediaplane can\'t keep (only letters, digits and "_")';
+    return UNKEEPABLE_KEY;
   }
   return found.found === 'none' ? 'it holds none' : undefined;
 }

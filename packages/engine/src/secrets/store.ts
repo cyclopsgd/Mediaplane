@@ -14,6 +14,10 @@ import { compare, unique } from '../util/sort';
  */
 export const APP_SECRET = /^[A-Za-z0-9_]+$/;
 
+/** Why a key that isn't of APP_SECRET's form can't be kept: plan and keep say so. */
+export const UNKEEPABLE_KEY =
+  'it holds the key in a form Mediaplane can\'t keep (only letters, digits and "_")';
+
 const appSecret = z.string().regex(APP_SECRET);
 
 /** An app's id, as the catalog names it ("sonarr"): never shaped like a secret. */

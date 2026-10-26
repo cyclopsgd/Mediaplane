@@ -10,6 +10,7 @@ import { codeOf } from '../util/error-code';
 import { isInside } from '../util/path';
 import { compare } from '../util/sort';
 import { keyFilePath, readKeyFile, REBUILD_RUNBOOK } from './recover';
+import { splitKey } from './key-name';
 import type { SecretStore } from './store';
 
 /** A key file that says how to write its key back. */
@@ -186,8 +187,7 @@ async function restoreKey(
   store: SecretStore,
   key: string,
 ): Promise<string | undefined> {
-  // App ids hold no ".": what comes before the first is the app.
-  const [id = '', name = ''] = key.split(/\.(.*)/);
+  const { app: id, name } = splitKey(key);
   const app = stack.apps.find((candidate) => candidate.def.id === id);
   const file = writable(app?.def.keyFiles).find(([secret]) => secret === name)?.[1];
   const value = store.apps[id]?.[name];

@@ -36,7 +36,8 @@ import {
   REBUILD_RUNBOOK,
   withRecoveredKeys,
 } from './secrets/recover';
-import { APP_SECRET, writeSecretStore } from './secrets/store';
+import { splitKey } from './secrets/key-name';
+import { APP_SECRET, UNKEEPABLE_KEY, writeSecretStore } from './secrets/store';
 import { acquireLock, LockedError, type Lock } from './state/lock';
 import { writeFileAtomic } from './util/atomic';
 import { fileKind } from './util/fs';
@@ -78,16 +79,14 @@ interface KeyTarget {
 
 /** The app's own key `path` names (`<app>.<key>`, which a key file holds), if it names one. */
 function keyTarget(catalog: PlanOptions['catalog'], path: string): KeyTarget | undefined {
-  const [app = '', name = '', ...rest] = path.split('.');
+  const { app, name } = splitKey(path);
   const def = catalog.find((d) => d.id === app);
   // Among the app's own keys: `constructor` and the like are not.
   const file =
     def?.keyFiles !== undefined && Object.hasOwn(def.keyFiles, name)
       ? def.keyFiles[name]
       : undefined;
-  return def === undefined || file === undefined || rest.length > 0
-    ? undefined
-    : { def, name, file };
+  return def === undefined || file === undefined ? undefined : { def, name, file };
 }
 
 /**
@@ -387,7 +386,7 @@ async function keepKey(
           : found.value === held
             ? 'it holds the one Mediaplane holds, which the app refuses'
             : !APP_SECRET.test(found.value)
-              ? 'it holds the key in a form Mediaplane can\'t keep (only letters, digits and "_")'
+              ? UNKEEPABLE_KEY
               : another.length > 0
                 ? `it holds the key Mediaplane holds for ${another.join(', ')}`
                 : 'it holds a secret Mediaplane holds for another use';

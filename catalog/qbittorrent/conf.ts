@@ -1,5 +1,6 @@
 import { pbkdf2Sync } from 'node:crypto';
 import type { ConfigFileContext, KeyFile } from '@mediaplane/engine';
+import { appendSection } from '../_shared/text';
 
 /**
  * qBittorrent's WebUI\Password_PBKDF2 value (design §6.1): PBKDF2-HMAC-SHA512 with
@@ -76,7 +77,6 @@ export const qbittorrentKeyFile: KeyFile = {
         (_all, cr: string) => `[Preferences]${cr}\n${line}${cr}`,
       );
     }
-    const end = text === '' || text.endsWith('\n') ? '' : '\n';
-    return `${text}${end}${text === '' ? '' : '\n'}[Preferences]\n${line}\n`;
+    return appendSection(text, `[Preferences]\n${line}\n`);
   },
 };

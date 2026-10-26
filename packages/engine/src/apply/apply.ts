@@ -28,6 +28,7 @@ import {
 } from '../runtime/types';
 import { ADMIN_PASSWORD_PATH, passwordNotIn, withPasswordNotIn } from '../secrets/admin';
 import { withGeneratedSecrets, type RandomBytes } from '../secrets/generate';
+import { splitKey } from '../secrets/key-name';
 import { KeysNotRestored, restoreKeys } from '../secrets/restore';
 import { writeSecretStore } from '../secrets/store';
 import { givenKeys, secretValues, userSecrets } from '../secrets/values';
@@ -292,9 +293,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         ...shown.containers
           .filter((change) => change.action === 'restart')
           .map((change) => change.service),
-        ...restore
-          .map((key) => key.split('.')[0] ?? '')
-          .filter((app) => running.has(app)),
+        ...restore.map((key) => splitKey(key).app).filter((app) => running.has(app)),
       ]),
     ].sort(compare);
     if (restart.length > 0) succeeded(await runtime.stop(restart, values));

@@ -44,6 +44,7 @@ import {
 } from '../secrets/admin';
 import { withGeneratedSecrets } from '../secrets/generate';
 import { REBUILD_RUNBOOK, recoverKeys, withRecoveredKeys } from '../secrets/recover';
+import { splitKey } from '../secrets/key-name';
 import { planKeyRestores, restorableKeyFiles } from '../secrets/restore';
 import { readSecretStore, type SecretStore } from '../secrets/store';
 import {
@@ -349,7 +350,7 @@ export async function planStack(
       : change,
   );
   // An app whose key goes back in its file restarts: it reads the file as it starts.
-  const restarting = new Set(restore.map((key) => key.split('.')[0] ?? ''));
+  const restarting = new Set(restore.map((key) => splitKey(key).app));
   containers = containers.map((change) =>
     restarting.has(change.service) && change.action === 'unchanged'
       ? { ...change, action: 'restart' }

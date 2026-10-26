@@ -31,6 +31,7 @@ export * from './secrets/store';
 export * from './secrets/generate';
 export * from './secrets/values';
 export * from './secrets/recover';
+export * from './secrets/key-name';
 export * from './secrets/admin';
 export * from './http/client';
 export * from './integrations/address';

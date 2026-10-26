@@ -1,6 +1,7 @@
 import {
   NONE_NEEDED,
   overrideLine,
+  splitKey,
   unhealthyServices,
   WIRING_RUNBOOK,
   type ActionResult,
@@ -307,9 +308,9 @@ export function printKeep(result: KeepResult, options: { json: boolean }, io: Io
   }
   for (const diagnostic of result.diagnostics) io.stderr(formatDiagnostic(diagnostic));
   if (result.ok && result.holders !== undefined) {
-    const [app] = result.key.split('.');
+    const { app } = splitKey(result.key);
     io.stdout(
-      `Kept ${String(app)}'s own key (${result.key}) in state/secrets.json, where Mediaplane keeps its keys; stack.yaml is as it was.\n${
+      `Kept ${app}'s own key (${result.key}) in state/secrets.json, where Mediaplane keeps its keys; stack.yaml is as it was.\n${
         result.holders.length === 0
           ? 'No resource of the stack holds the old one.\n'
           : `Run apply to give it to ${result.holders.join(', ')}, which hold the old one.\n`

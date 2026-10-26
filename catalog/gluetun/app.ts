@@ -1,4 +1,5 @@
 import { defineApp, error, warning, type KeyFile } from '@mediaplane/engine';
+import { appendSection } from '../_shared/text';
 
 /** Mediaplane's own role in auth/config.toml: an apikey line alone could be yours. */
 const MEDIAPLANE_ROLE = /^name = "mediaplane"$/m;
@@ -38,8 +39,7 @@ const controlKeyFile: KeyFile = {
     const parts = roles(text);
     const at = parts.findIndex((role) => MEDIAPLANE_ROLE.test(role));
     if (at < 0) {
-      const end = text === '' || text.endsWith('\n') ? '' : '\n';
-      return `${text}${end}${text === '' ? '' : '\n'}${mediaplaneRole(key)}`;
+      return appendSection(text, mediaplaneRole(key));
     }
     // Its own lines run to its last that is neither blank nor a comment: the blank lines
     // and comments after them, before the next role, stay.
