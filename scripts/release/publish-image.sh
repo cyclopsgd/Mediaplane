@@ -26,6 +26,7 @@ esac
 [ "$dots" -eq 2 ] || fail "the version is <major>.<minor>.<patch>, not \"$version\""
 sources=
 for file in "$@"; do
+  [ -s "$file" ] || fail "no digest in $file, the file of an image pushed"
   sources="$sources $name@$(cat "$file")"
 done
 # build-image.sh's builder, where this machine has it, for its registry settings; else

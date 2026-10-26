@@ -22,10 +22,10 @@ images=$(cd "$root" && pnpm --silent exec tsx scripts/ci/catalog-images.ts "$arc
   exit 1
 }
 # One vulnerability database for every scan, and each scan's ignore file, in folders of
-# this run's own.
+# this run's own, removed on the way out even when the second can't be made.
 cache=$(mktemp -d)
+trap 'rm -rf "$cache" ${ignores:+"$ignores"}' EXIT
 ignores=$(mktemp -d)
-trap 'rm -rf "$cache" "$ignores"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 # Pulled with Docker's login, when there is one (CI logs in to Docker Hub when it can).

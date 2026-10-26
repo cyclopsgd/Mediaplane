@@ -102,6 +102,27 @@ describe('publish-image.sh', () => {
   });
 
   it.each([
+    ['missing', (file: string) => `${file}.missing`],
+    [
+      'empty',
+      (file: string) => {
+        writeFileSync(file, '');
+        return file;
+      },
+    ],
+  ])('refuses a pushed-digest file that is %s, running no docker', (_what, spoil) => {
+    const dir = tempDirSync('mp-publish-image-files-');
+    const amd64 = join(dir, 'amd64');
+    writeFileSync(amd64, `${AMD64}\n`);
+    const arm64 = spoil(join(dir, 'arm64'));
+    const result = run({ args: [NAME, '0.1.0', join(dir, 'published'), amd64, arm64] });
+    expect(result.code).toBe(1);
+    expect(result.err).toContain(`no digest in ${arm64}, the file of an image pushed`);
+    expect(result.calls).toEqual([]);
+    expect(existsSync(join(dir, 'published'))).toBe(false);
+  });
+
+  it.each([
     ['v0.1.0'],
     ['1'],
     ['1.2'],

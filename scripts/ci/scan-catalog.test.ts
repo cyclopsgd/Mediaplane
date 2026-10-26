@@ -30,6 +30,8 @@ interface Options {
   list?: string;
   /** The ignore-file command fails. */
   ignoreFails?: boolean;
+  /** mktemp makes its first folder, then fails. */
+  secondTempFails?: boolean;
 }
 
 const boxes: string[] = [];
@@ -107,6 +109,17 @@ esac
   writeFileSync(join(bin, 'sleep'), `#!/bin/sh\necho "sleep $*" >> '${log}'\n`, {
     mode: 0o755,
   });
+  if (options.secondTempFails === true) {
+    writeFileSync(
+      join(bin, 'mktemp'),
+      `#!/bin/sh
+[ -e '${join(top, 'made')}' ] && exit 1
+: > '${join(top, 'made')}'
+PATH='${process.env.PATH ?? ''}' exec mktemp "$@"
+`,
+      { mode: 0o755 },
+    );
+  }
   const result = spawnSync(SCRIPT, args, {
     encoding: 'utf8',
     env: {
@@ -231,6 +244,13 @@ describe('scripts/ci/scan-catalog.sh', () => {
     const result = run({ images: { [A]: ['ok'] }, ignoreFails: true });
     expect(result.code).not.toBe(0);
     expect(result.out).not.toContain(CLEAN('arm64'));
+    expect(result.runs(A)).toEqual([]);
+    expect(result.leftover).toEqual([]);
+  });
+
+  it("removes its first temporary folder when the second can't be made", () => {
+    const result = run({ images: { [A]: ['ok'] }, secondTempFails: true });
+    expect(result.code).not.toBe(0);
     expect(result.runs(A)).toEqual([]);
     expect(result.leftover).toEqual([]);
   });
