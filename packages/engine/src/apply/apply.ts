@@ -26,10 +26,10 @@ import {
   type ContainerState,
   type Runtime,
 } from '../runtime/types';
-import { ADMIN_PASSWORD_PATH, passwordNotIn, withPasswordNotIn } from '../secrets/admin';
+import { passwordNotIn, withPasswordNotIn } from '../secrets/admin';
 import { withGeneratedSecrets, type RandomBytes } from '../secrets/generate';
 import { restoreKeys } from '../secrets/restore';
-import { writeSecretStore, type SecretStore } from '../secrets/store';
+import { writeSecretStore } from '../secrets/store';
 import { givenKeys, secretValues, userSecrets } from '../secrets/values';
 import { acquireLock, LockedError, type Lock } from '../state/lock';
 import { writeFileAtomic } from '../util/atomic';
@@ -177,8 +177,6 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     if (!result.ok) throw new Error(await startFailure(runtime, result.error));
   };
 
-  /** The values of the secrets the keys step generates: no app holds one yet. */
-  let generated: string[] = [];
   await steps.run('keys', async () => {
     // The plan's store holds the keys it recovered from the apps' appdata: saved with the
     // ones generated now, before anything starts (spec §5 step 4, §6.1).
@@ -198,9 +196,6 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       await writeSecretStore(home, saved);
     }
     store = saved;
-    generated = result.generated
-      .map((name) => secretValue(saved, name))
-      .filter((value) => value !== '');
     const done = [
       ...(recover.length === 0 ? [] : [`recovered ${recover.join(', ')} from appdata`]),
       ...(result.generated.length === 0
@@ -370,7 +365,6 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         waiting,
         failed: unset,
         held: context.held,
-        fresh: generated,
         notIn: passwordNotIn(stack.config, store),
         // At once, as a key the bootstrap step saves: the app has the password now.
         passwordSet: async (app) => {
@@ -648,13 +642,6 @@ async function madePrivate(path: string): Promise<boolean> {
     if (codeOf(cause) === 'EPERM') return false;
     throw cause;
   }
-}
-
-/** The value `store` holds for a secret named as plan names it ("sonarr.apiKey"). */
-function secretValue(store: SecretStore, name: string): string {
-  if (name === ADMIN_PASSWORD_PATH) return store.shared?.adminPassword ?? '';
-  const dot = name.indexOf('.');
-  return store.apps[name.slice(0, dot)]?.[name.slice(dot + 1)] ?? '';
 }
 
 function succeeded(result: CommandResult, prefix = ''): void {

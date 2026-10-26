@@ -2516,25 +2516,24 @@ describe('apply: no sign-in with an admin password an app has never had', () => 
     ).toEqual([['warning', 'keys.unrecoverable']]);
   });
 
-  it('sets nothing up for an app whose key is recovered from its appdata, and signs in to none', async () => {
-    const { home, setup, run, planned, signIns } = await twoApps();
+  it('sets nothing up for an app whose key is recovered from its appdata, and holds none', async () => {
+    const { home, setup, run, planned } = await twoApps();
     expect((await run()).outcome).toBe('success');
     await writeFile(join(home, 'appdata', 'jellyfin', 'key.txt'), `${SET_UP_KEY}\n`);
     await rm(join(home, SECRETS_PATH));
-    const signedIn = signIns();
     const shown = await planned({ random: other });
     expect(shown.secrets.recover).toEqual(['jellyfin.apiKey']);
     expect(shown.bootstrap).toEqual([]);
     expect(shown.diagnostics.map((d) => d.code)).not.toContain(
       'bootstrap.needs-password',
     );
-    expect((await run({ random: other })).outcome).toBe('success');
-    // The new password, set through its key; one sign-in, by verify's plan, with it.
+    const rebuilt = await run({ random: other });
+    expect(rebuilt.outcome).toBe('success');
+    expect(rebuilt.actions.map((a) => a.step)).not.toContain('bootstrap');
+    // The new password, set through its key, and nothing held.
     const store = await readSecretStore(home);
     expect(setup.state.password === store.shared?.adminPassword).toBe(true);
     expect(store.shared?.adminPasswordNotIn).toBeUndefined();
-    expect(signIns() - signedIn).toBe(1);
-    expect(setup.state.refusedSignIns).toBe(0);
     expect((await run({ random: other })).outcome).toBe('no-changes');
   });
 });

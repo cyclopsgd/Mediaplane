@@ -78,11 +78,6 @@ export interface WireOptions {
    */
   held?: readonly string[];
   /**
-   * The values of the secrets apply generated in this run: no app holds one yet, so a
-   * resource holding one is set, never checked (ExamineOptions.fresh).
-   */
-  fresh?: readonly string[];
-  /**
    * The apps that have never had the admin password Mediaplane holds
    * (`shared.adminPasswordNotIn`): a resource of theirs that holds it is set, never
    * checked (ExamineOptions.lacks), and `passwordSet` is told once it is.
@@ -310,7 +305,6 @@ export async function wire(options: WireOptions): Promise<string[]> {
         result = await examine(spec, client.api, ctx, known[address], {
           refused: planned?.action === 'update' ? (planned.changes ?? []) : [],
           context,
-          ...(options.fresh === undefined ? {} : { fresh: options.fresh }),
           lacks,
         });
         if (result === undefined) continue;
