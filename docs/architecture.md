@@ -1,7 +1,7 @@
 # Architecture
 
 This page is a condensed version of the [M1 design](design/m1-engine-cli.md), §3 to §6,
-covering what is built so far (Slices 1 to 8). The design describes the whole of M1;
+covering what is built so far (Slices 1 to 9). The design describes the whole of M1;
 this page describes what exists.
 
 ## The idea
@@ -849,6 +849,46 @@ pass, down or leak
   The addresses were compared, and differed, when the check with the id `egress` has the
   status `ok`.
 
+## Releases and updates
+
+- **Versions.** release-please keeps a release pull request, with the next version and
+  `CHANGELOG.md`, from the Conventional Commits on `main`. Merging it tags the release.
+  [Releasing](releasing.md) has the whole process.
+- **The image.** From the first release, `ghcr.io/cyclopsgd/mediaplane:<version>` is
+  one index of two images,
+  amd64 and arm64, each built natively on its own runner, with an SBOM and build
+  provenance attached, and a signed attestation of its provenance beside it. Its times
+  come from the commit, so one commit builds one image. Each image is scanned by Trivy
+  before it is pushed, and the release checks that it pushed the image it scanned. CI
+  makes the same build on every pull request, and pushes nothing.
+- **Deploy files.** A release's `install.sh` and `mediaplane.compose.yaml` name its
+  image by digest. In the repository both leave it out, and a checkout builds its own.
+  `install.sh` refuses an image that isn't pinned, but for the one it builds.
+- **Updating** is `pull`, then `up -d`, on Mediaplane's own project with the next
+  release's files. Only Mediaplane's container is recreated:
+
+```text
+update
+ ├─ mediaplane-system
+ │  ├─ mediaplane: recreated
+ │  └─ socket-proxy: as it was
+ └─ mediaplane (your stack)
+    as it was: containers,
+    networks, volumes and
+    generated/
+```
+
+- **`stack.yaml`'s version.** This Mediaplane reads version 1. One that changes the format
+  will read an older file through a migration, in memory, with a warning, and
+  `mediaplane migrate` will rewrite the file, keeping its comments; a newer file is
+  refused. No migration exists yet, so `migrate` has nothing to do.
+- **The wiring network's settings never change in an update.** Compose would have to
+  make it anew, and through the socket proxy it can delete no network. A release that
+  had to change them would bring its own steps, in its notes.
+- **Every pin is kept current** by Renovate, once the Renovate app is installed (an
+  owner's step): the catalog's apps (each bump runs the full end-to-end suite and is
+  merged by hand), the images outside the catalog, npm packages and the Actions' commits.
+
 ## Security
 
 Controlling Docker is root on the host, so Mediaplane's security is the host's. The
@@ -858,5 +898,4 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
-- releases and safe updates (Slice 9);
 - recovery and automation (Slice 10), which completes M1.

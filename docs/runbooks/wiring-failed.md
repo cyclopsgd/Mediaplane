@@ -777,8 +777,10 @@ differ, and a `reason` when it is `unknown`.
      `docker network inspect mediaplane_wiring`. If it isn't the one `compose.yaml`
      makes, make it anew, as below.
 - **The wiring network must be made anew,** when its settings changed, or when
-  Mediaplane refused it (`wire.network`, above). When its settings changed, Compose has
-  to delete the network, and through the socket proxy it can't: `apply` then stops at
+  Mediaplane refused it (`wire.network`, above). No release of Mediaplane changes its
+  settings: one that had to would say so in its notes, with its own steps. When its
+  settings changed, Compose has to delete the network, and through the socket proxy it
+  can't: `apply` then stops at
   the containers step, with a message from Compose that names the network. The apps are
   on the network, so bring the stack down first (or take each container off it with
   `docker network disconnect`). On the host:

@@ -126,7 +126,18 @@ that needs a new one must add it there, to the proxy's allow-list, and to ADR 00
 ## Commits
 
 Use [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`,
-`docs:`, `test:`, `refactor:`, `chore:` and `ci:`. Release notes are generated from them.
+`docs:`, `test:`, `refactor:`, `chore:` and `ci:`. release-please makes the versions and
+`CHANGELOG.md` from them: before 1.0, a `fix:` raises the patch number, and a `feat:` or a
+breaking change (`feat!:`) the minor one. [Releasing](docs/releasing.md) has the rest.
+
+## Pins
+
+Every image is pinned by tag and digest, and every Action by commit SHA with its
+version in a comment; `scripts/supply-chain.test.ts` checks both. Renovate keeps them
+current (`renovate.json`). A pinned image goes in a file Renovate reads: a catalog
+`app.ts`, the `Dockerfile`, `deploy/mediaplane.compose.yaml`, a workflow, the pre-commit
+hook, a script in `scripts/ci/` or an end-to-end test. A bump of an app's pin changes its
+README's facts: run `pnpm docs:generate` on its branch.
 
 ## Never commit real secrets
 

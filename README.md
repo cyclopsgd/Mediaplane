@@ -1,7 +1,7 @@
 # Mediaplane
 
 [![CI](https://github.com/cyclopsgd/Mediaplane/actions/workflows/ci.yml/badge.svg)](https://github.com/cyclopsgd/Mediaplane/actions/workflows/ci.yml)
-[![Licence: GPL-3.0](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
+[![Licence: GPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue)](LICENSE)
 
 **Describe your self-hosted media stack in one file. Mediaplane deploys it as plain Docker
 Compose and wires the apps together for you.**
@@ -34,7 +34,12 @@ Compose and wires the apps together for you.**
 >   `mediaplane keep` keeps it as yours instead, in `stack.yaml`. Mediaplane runs in its
 >   own hardened container, behind a Docker socket proxy, and reaches the apps over a
 >   private network with no route out.
-> - **Next:** releases, and updating Mediaplane without touching the stack.
+> - **Releases:** from the first one, each release publishes Mediaplane's image for amd64
+>   and arm64, and deploy files that pin it by digest. Updating Mediaplane, or going
+>   back, recreates only its own container, never the stack. There has been no release
+>   yet.
+> - **Next:** rebuilding a host from `stack.yaml` and its appdata, and driving
+>   Mediaplane from automation.
 > - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
 >   your LAN (`network.bind: lan`) or keep them on this machine (`localhost`).
 >
@@ -84,7 +89,7 @@ Mediaplane does that part for you:
 | Guided install: `install.sh`, then `init` asks for everything, Plex sign-in too   | Done    |
 | Hardware transcoding for Plex or Jellyfin (`hardware_transcoding`)                | Done    |
 | Detect manual changes and offer Re-apply or "Keep mine" (`drift`, `keep`)         | Done    |
-| Releases, and updating Mediaplane without touching the stack                      | Planned |
+| Releases, and updating Mediaplane without touching the stack                      | Done    |
 | Rebuild a host, or deploy with automation such as Ansible                         | Planned |
 
 ## The stack
@@ -322,8 +327,9 @@ Sonarr       http://127.0.0.1:8989
 ## Run it in a container
 
 Mediaplane runs as its own container next to a Docker socket proxy, in a Compose
-project of its own. No image is published yet (that comes in Slice 9), so install it from
-a checkout, as your normal user:
+project of its own. From the first release, you install a release, whose image is
+pinned by digest (see [`deploy/README.md`](deploy/README.md)). There has been no release
+yet, so for now install it from a checkout, as your normal user:
 
 ```bash
 git clone https://github.com/cyclopsgd/Mediaplane.git
@@ -331,9 +337,10 @@ cd Mediaplane
 ./deploy/install.sh
 ```
 
-The installer checks Docker, builds the image, starts Mediaplane and installs the
-`mediaplane` command, then offers to run `mediaplane init`. That asks a few questions,
-including your own admin password if you'd rather type one, and with Plex signs you in.
+The installer checks Docker, builds the image (or, from a release, pulls it), starts
+Mediaplane and installs the `mediaplane` command, then offers to run `mediaplane init`.
+That asks a few questions, including your own admin password if you'd rather type one,
+and with Plex signs you in.
 [`deploy/README.md`](deploy/README.md) has the details, and the same steps by hand.
 
 ## Try it (from source)
@@ -580,17 +587,19 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
 - **Merged:** S1 (the pure core), S2a (`plan` against a real host), S2b (`apply`), S2c
   (packaging), S3a (the shared admin and pre-start files), S3d (the VPN's kill-switch
   test and `vpn-check`), S3b (the wiring framework), S3c (the download path), S4
-  (indexers), S5 (Jellyfin), S6 (requests), S7 (Plex) and S8 (drift). Between S7 and
+  (indexers), S5 (Jellyfin), S6 (requests), S7 (Plex), S8 (drift) and S9 (releases and
+  safe updates). Between S7 and
   S8, smaller changes added a guided install (`deploy/install.sh`, and `init` asking for
   your own admin password and signing you in to Plex) and hardware transcoding.
-- **Next:** S9 (releases and safe updates).
-- **After that:** S10 (recovery and automation), which completes M1.
+- **Next:** S10 (recovery and automation), which completes M1.
 
 ## Documentation
 
 - **[Running in a container](deploy/README.md):** install, update, and run without the
   socket proxy.
 - **[Architecture](docs/architecture.md):** how the pieces fit, as built so far.
+- **[Releasing](docs/releasing.md):** how a release is cut, what it publishes, and how to
+  check one.
 - **[`stack.yaml` reference](docs/reference/stack-yaml.md):** every field, generated from
   the schema, with its [JSON Schema](docs/reference/stack.schema.json).
 - **[CLI reference](docs/reference/cli.md):** every command, option and exit code,
@@ -627,4 +636,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). To report a security issue, see
 
 ## Licence
 
-[GPL-3.0](LICENSE)
+[GPL-3.0-or-later](LICENSE)

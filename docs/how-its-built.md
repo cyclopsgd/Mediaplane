@@ -110,6 +110,9 @@ end-to-end tests and the image scan on both amd64 and arm64. When it is green, t
 branch is merged to `main` as a fast-forward, so the reviewed commits are exactly the
 ones on `main`.
 
+A release is the same, for release-please's own pull request: once it is merged, the
+release workflow publishes the image and the deploy files ([Releasing](releasing.md)).
+
 ## What the maintainer decides
 
 The agents work through the slices on their own, but they stop and ask for:

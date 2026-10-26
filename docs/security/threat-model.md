@@ -506,25 +506,63 @@ What remains:
 
 Controls today:
 
-- Every image is pinned by digest: the apps, the proxy, and Node and the Docker CLI in
-  Mediaplane's image.
-- npm packages come from the lockfile, and GitHub Actions are pinned by commit.
-- CI runs two vulnerability scans that fail the build:
-  - Trivy scans Mediaplane's image on amd64 and arm64: its Alpine packages, the Docker
-    CLI's Go standard library and Compose's Go modules. It fails on a critical
-    vulnerability that has a fix.
+- Every image is pinned by digest: the apps, the proxy, Node and the Docker CLI in
+  Mediaplane's image, and the images CI and the tests run. A test fails when a pinned
+  image is written where Renovate doesn't look.
+- npm packages come from the lockfile, and GitHub Actions are pinned by commit, with
+  their version beside it. A test checks each.
+- Once the Renovate app is installed (an owner's step), Renovate opens a pull request
+  for every newer pin: an app's runs the full end-to-end suite, and none is merged
+  automatically.
+- CI's checks that fail the build, on every pull request and weekly:
+  - Trivy scans Mediaplane's image on amd64 and arm64, built as a release builds it:
+    its Alpine packages, the Docker CLI's Go standard library and Compose's Go modules.
+    It fails on a critical vulnerability that has a fix.
+  - Trivy scans every catalog image, on both architectures. A finding that only upstream
+    can fix passes while `scripts/ci/catalog-ignore.yaml` lists it, with the app it is in,
+    until the date beside it; after that date it fails again.
+  - Node's own security releases: a check fails while Node has published one for the
+    image's line that the image lacks. Neither scan sees Node, a binary in the base.
   - `pnpm audit` checks the CLI's production npm dependencies, which are bundled into one
     file where Trivy can't see them, and fails on a critical advisory.
+  - actionlint and shellcheck check the workflows and the shell scripts.
 - gitleaks scans the full history on every push to `main` and every pull request.
+- From the first release, each image is published with an SBOM and build provenance,
+  and a signed attestation of its provenance; the release's deploy files name it by
+  digest, and they and `SHA256SUMS` are attested too. A release publishes its image and
+  deploy files only for a commit CI passed.
 
 What remains:
 
-- Neither scan sees Node itself, which is not an Alpine package, nor the Docker CLI's own
-  code: they stay current only when their pinned images are bumped.
-- The audit needs the npm registry at CI time.
-- Nothing bumps pins or dependencies automatically yet (Renovate, Slice 9).
-- The catalog images are not scanned yet, and there is no SBOM or provenance yet. Both
-  arrive in Slice 9.
+- The scans see known vulnerabilities only, and the catalog's listed findings run until
+  upstream ships a fix and Renovate's bump of the pin is merged.
+- The audit and the Node check need the npm registry and nodejs.org at CI time.
+- A read-only Docker Hub token in the repository's secrets reaches every job that pulls
+  images on the repository's own branches. It can read public images only.
+
+### T18. The release workflow publishes something it shouldn't
+
+Controls today:
+
+- Only merging release-please's pull request cuts a release. Every other push to `main`,
+  every pull request, and every fork publishes nothing.
+- Each job's token may do only what that job does ([Releasing](../releasing.md) lists
+  them). The one job that installs npm packages has a read-only token and no secret.
+- No workflow runs a pull request's code with secrets: there is no `pull_request_target`,
+  and no secret reaches a script but through its environment.
+- A release publishes its image and deploy files only for a commit whose CI passed,
+  builds from its tag, and pushes the image Trivy scanned, checked by digest.
+
+What remains:
+
+- Whoever can push to `main`, or merge the release pull request, can publish a release.
+  Protecting `main` (an owner's step) narrows that.
+- The tag and the release page exist from the merge, before CI has passed: release-please
+  makes them. If CI then fails on that commit, nothing else is published, and the page
+  stays without files until it is deleted (`docs/releasing.md` gives the command).
+- `RELEASE_PLEASE_TOKEN`, when set, is a token of the owner's that may write this
+  repository's contents, issues and pull requests: the release-please job has it, and no
+  other.
 
 ### T8. The home is mounted at another path, so Docker mounts the wrong folders
 

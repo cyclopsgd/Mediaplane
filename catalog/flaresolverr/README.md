@@ -28,6 +28,10 @@ Prowlarr's indexers. Mediaplane runs the upstream image, unmodified, when you li
 
 - **It runs FlareSolverr** inside the stack only. Its port is never published.
 - **`LOG_LEVEL=info`.**
+- **A folder of its own at `/config`,** `appdata/flaresolverr`, owned by uid 1000, the
+  image's user. The image declares a volume there and keeps nothing in it; without the
+  folder, Docker makes an anonymous volume for each FlareSolverr container, left behind
+  when the container is removed.
 - **A health check of its own.** The image has none, so Mediaplane asks FlareSolverr's
   `/health` every 30 seconds, and `apply` waits until it answers. Prowlarr tests a new
   indexer proxy as it saves it, so FlareSolverr must answer before `apply` adds it.

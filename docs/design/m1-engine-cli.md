@@ -3,7 +3,7 @@
 - **Date:** 2026-10-08
 - **Status:** Approved (2026-10-08)
 - **Milestone:** M1 of 4 (Engine + CLI)
-- **Licence:** GPL-3.0
+- **Licence:** GPL-3.0-or-later (the owner's decision of 2026-10-17)
 
 ---
 
@@ -900,7 +900,7 @@ Documentation lives in the repo and is updated with the code.
   - `SECURITY.md`
   - `CONTRIBUTING.md`, including a step-by-step "add an app" guide
   - `CHANGELOG.md`
-  - `LICENSE` (GPL-3.0)
+  - `LICENSE` (GPL-3.0-or-later)
 
 ---
 
@@ -947,8 +947,9 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 ### Slice 2c: packaging (2026-10-09)
 
 - **Where the deployment lives.** It is `deploy/mediaplane.compose.yaml`,
-  started with `docker compose -f deploy/mediaplane.compose.yaml up -d`. Until
-  images are published (S9), it needs `MEDIAPLANE_IMAGE`, the image to run. It
+  started with `docker compose -f deploy/mediaplane.compose.yaml up -d`. A checkout's
+  copy needs `MEDIAPLANE_IMAGE`, the image to run; a release's names its own, pinned by
+  digest (Slice 9). It
   also needs `DOCKER_GID`, the group that owns the Docker socket.
 - **The host helper does more than addresses.** Inside the container,
   Mediaplane can see neither the host's ports, nor its folders outside the home,
@@ -968,11 +969,12 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 - **Trivy for Mediaplane's own image runs from S2c** (§7.2(7)), and so does
   `pnpm audit` of the CLI's production dependencies, which the image scan can't
   see because they are bundled. Neither sees Node itself. Scanning the catalog
-  images, the SBOM and provenance stay in S9.
+  images, the SBOM and provenance stay in S9 (built there, with a check of Node's
+  security releases).
 - **CI runs on arm64 from S2c** (§8.2), on GitHub's `ubuntu-24.04-arm` runners,
   which are free because the repo is public. The image is built, scanned and
   tested end to end natively on each architecture. A multi-arch manifest comes
-  with publishing, in S9.
+  with publishing, in S9 (one index of both, made by the release workflow).
 - **Generated references from S2c.** The `stack.yaml` reference, its JSON Schema at
   `docs/reference/stack.schema.json` (§4.2, §9) and the CLI reference are generated
   from code, and CI fails when they are stale. They move here from S9, by the owner's
@@ -1968,3 +1970,87 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   made when its app leaves the stack (§8.1(3) step 4); externally managed mode; giving
   Seerr a new Plex token, or another Jellyfin key: Slice 10. Drift on a schedule: M2.
 - **No new Docker API call:** drift and keep make the calls `plan` makes (§7.2(2)).
+
+### Slice 9: releases and safe updates (2026-10-25)
+
+- **The licence is GPL-3.0-or-later** (the owner's decision of 2026-10-17), in every
+  `package.json`'s SPDX `license` field and the image's label.
+- **Versions come from release-please** (§8.2): one Node package at the root, tagged
+  `v<version>`; it also bumps the CLI's `package.json` and `mediaplane --version`, at
+  its markers. Before 1.0 a breaking change raises the minor number. The first release's
+  changelog has every `feat:` and `fix:` since the repository began. `CHANGELOG.md` is
+  release-please's, and Prettier leaves it alone.
+- **Only a release publishes** (§8.2). The release workflow runs on a push to `main`;
+  only one that merges release-please's pull request cuts a release, and only in this
+  repository. release-please tags the commit and writes the release page at the merge;
+  the workflow then waits until CI's `All checks passed` has passed on the release's
+  commit, so the image and the deploy files are published only for a commit CI passed.
+  If CI fails there, the release page stays without them, and `docs/releasing.md` gives
+  the way back (`gh release delete v<version> --cleanup-tag`).
+- **The image** (§2.1, §7.2(7), §8.2). Each architecture is built natively on its own
+  runner, by `scripts/ci/build-image.sh`: BuildKit and its SBOM scanner pinned by digest,
+  an SBOM and provenance (`mode=max`, which holds no secret: the build is given none),
+  the commit's time as every time in it, so one commit builds one image (probed: two
+  builds, one from a cold builder, gave one digest). Trivy scans that image, as an OCI
+  layout, before anything is pushed; the push is of the same build, by digest with no
+  tag, and is checked to hold the image scanned. One index of both is then tagged
+  `ghcr.io/cyclopsgd/mediaplane:<version>` (lowercased from the repository's name), never
+  `latest`, with a signed provenance attestation beside it. A pull request makes the same
+  build on both architectures, and pushes nothing: the multi-arch build that §8.2 asks
+  of every pull request is the two native builds a release makes.
+- **A release's deploy files** (§4.4). `mediaplane-deploy-<version>.tar.gz` holds
+  `deploy/`, with `install.sh` and `mediaplane.compose.yaml` naming the release's image
+  by digest, the licence, and `SHA256SUMS` beside it; it is the same bytes for the same
+  commit, and attested. In the repository both files leave the image out: a checkout
+  builds its own.
+- **Release notes** add "Tested app versions" (§8.2): a list of each image, with its tag
+  and digest, rather than a table, so that it reads on a phone.
+- **`install.sh` installs a release** (§4.4). From a release's files it pulls the image by
+  digest, which Docker checks as it pulls, and the socket proxy's, before it recreates
+  anything, and builds nothing; from a checkout it builds `mediaplane:local`. It refuses
+  any other image not pinned by digest, and `mediaplane:local` where there is no
+  checkout. A release's image goes unnamed in `deploy/.env`, so the next release's file
+  names the next one.
+- **Updating** (§4.4) is `pull` then `up -d` on `mediaplane-system`, as §4.4 says, with the
+  next release's `mediaplane.compose.yaml`: its image is pinned, so the file is the update,
+  and `pull` with the old one changes nothing. `install.sh` does the same. It recreates
+  only Mediaplane's container: an end-to-end test checks every container of the stack
+  (its id, image, state, start time, restarts and mounts), its networks, and every file
+  in `generated/` and `state/`, and that Docker pulls only Mediaplane's image and the
+  proxy's, across an update, a `plan` (which pulls nothing), and going back.
+- **The wiring network's settings never change in an update** (§11, Slice 3b): Compose
+  would have to make it anew, and the socket proxy deletes no network. A release that
+  had to change them would bring its own steps in its notes.
+- **FlareSolverr gets `appdata/flaresolverr` at `/config`** (§4.3), owned by uid 1000, its
+  image's user (`runAs: fixed:1000`). Its image declares a volume there and keeps nothing
+  in it (probed). Compose carries an anonymous volume over to a recreated container, even
+  past a `tmpfs` there, and only a bind mount replaces it (probed), so the removed
+  container is what left one behind.
+- **`stack.yaml`'s version** (§4.2, §5 step 2, §5.2). This Mediaplane reads and writes
+  version 1, the only one so far. Load reads an older version through its migrations, in
+  memory, and warns (`config.old-version`), saying to run `migrate`; it refuses a newer
+  one (`config.newer-version`) and one no Mediaplane wrote (`config.unknown-version`).
+  Each migration says what it changes as data, and as edits of the text: `migrate`
+  applies the edits and the new version, and requires the result to read as the data
+  says, so comments, order, quoting, spacing and line ends stay (§3.3), as Keep mine
+  writes it (§11, Slice 8). `migrate` takes apply's lock, refuses what `keep` refuses, and
+  with `managed_by: external` writes nothing and gives the file as it should be, on
+  standard output and as `text` in `mediaplane.migrate/v1`. No migration exists yet, so
+  `migrate` has nothing to do; the machinery is tested with a made-up version 0.
+- **Renovate** (§7.2(7), §8.2) bumps each catalog pin, tag and digest, through a custom
+  manager, with a versioning rule for each linuxserver.io tag, and the images pinned
+  outside the catalog, npm packages and the Actions' commits. Nothing merges itself. The
+  hosted Renovate can't run `pnpm docs:generate`, so CI's docs check fails an app's bump
+  until it is run on the branch, as Renovate's pull request says.
+- **CI** (§7.2(7), §8.2) also, on every pull request that changes code and weekly: scans
+  every catalog image with Trivy on both architectures, failing on a critical finding
+  with a fix unless `scripts/ci/catalog-ignore.yaml` lists it, with the app it is in, and
+  its date has not passed (Mediaplane never patches an app's image, §1.4(1)); fails while
+  Node has published a security release of the image's line that the image lacks; and
+  runs the image's Docker CLI and Compose against Docker Engine 24, the oldest supported.
+  actionlint and shellcheck check the workflows and scripts, and a test checks that every
+  Action is pinned by commit, each job's token is read-only unless it says more, and no
+  workflow runs a pull request's code with secrets. With the secrets `DOCKERHUB_USERNAME`
+  and `DOCKERHUB_TOKEN`, the jobs that pull images log in to Docker Hub first.
+- **Node is 24.22.1**, a security release over 24.21.0, which the new check found.
+- **No new Docker API call:** the socket proxy's allow-list is unchanged (§7.2(2)).

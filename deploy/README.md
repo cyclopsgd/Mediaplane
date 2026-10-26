@@ -1,5 +1,8 @@
 # Running Mediaplane in its container
 
+In a release's deploy files, this guide's links lead into the repository: open them on
+GitHub, at github.com/cyclopsgd/Mediaplane, at the release's tag.
+
 Mediaplane runs as two containers in their own Compose project, `mediaplane-system`:
 
 - **`mediaplane`**: the CLI. It idles until you run a command, and has no web
@@ -28,8 +31,9 @@ never touch Mediaplane itself.
 - **Linux** on amd64 or arm64.
 - **Docker Engine 24 or newer**, rootful, with its socket at `/var/run/docker.sock`, and
   the Compose plugin 2.24 or newer. Rootless Docker is not supported. Mediaplane checks
-  for Engine 24. The container brings its own Docker CLI 29.8.1 and Compose 5.5.1, which
-  have been tested only with Docker Engine 28 and 29 so far.
+  for Engine 24. The container brings its own Docker CLI 29.8.1 and Compose 5.5.1. CI
+  runs the end-to-end tests on Docker Engine 28, and checks the calls Mediaplane makes
+  with that CLI and Compose against Engine 24, the oldest supported.
 - **No SELinux in enforcing mode.** Such hosts aren't supported yet: neither
   Mediaplane's bind mounts nor the apps' carry a `:z` label.
 - **A folder for the Mediaplane home,** on a local filesystem that supports hard links,
@@ -40,8 +44,38 @@ never touch Mediaplane itself.
 
 ## Install
 
-No image is published yet: releases arrive in Slice 9. So you install from a checkout,
-as your normal user, not root:
+There are two ways in, both as your normal user, not root:
+
+- **From a release,** from the first one: its deploy files name its image,
+  `ghcr.io/cyclopsgd/mediaplane:<version>`, pinned by its digest, and `install.sh` pulls
+  it. There has been no release yet.
+- **From a checkout,** which builds the image here. Until the first release, this is
+  the way.
+
+### From a release
+
+With the version you want (`0.1.0` is an example):
+
+```bash
+version=0.1.0
+base=https://github.com/cyclopsgd/Mediaplane/releases/download/v$version
+curl -fLO "$base/mediaplane-deploy-$version.tar.gz"
+curl -fLO "$base/SHA256SUMS"
+sha256sum --check SHA256SUMS
+tar -xzf "mediaplane-deploy-$version.tar.gz"
+./mediaplane/deploy/install.sh
+```
+
+- `sha256sum --check` checks the file against the release's own list. With the GitHub
+  CLI you can also check that this repository's release workflow made it:
+  `gh attestation verify mediaplane-deploy-$version.tar.gz --repo cyclopsgd/Mediaplane`.
+- `install.sh` pulls the image by its digest, and Docker checks everything it pulls
+  against it: what runs is the image the release workflow built and scanned.
+  [Releasing](../docs/releasing.md) shows how to check the image itself.
+- Keep the `mediaplane` folder: its `deploy/.env` holds your settings, and updating
+  unpacks the next release over it.
+
+### From a checkout
 
 ```bash
 git clone https://github.com/cyclopsgd/Mediaplane.git
@@ -49,13 +83,16 @@ cd Mediaplane
 ./deploy/install.sh
 ```
 
-`install.sh` does everything the next section does by hand:
+### What `install.sh` does
+
+It does everything [By hand](#by-hand) does:
 
 - checks Docker: Engine 24 or newer, Compose 2.24 or newer, rootful, its socket at
   `/var/run/docker.sock`;
 - creates the home, `/opt/mediaplane` or `MEDIAPLANE_HOME`, owned by you;
-- builds the image, and writes `deploy/.env` with your ids, the Docker socket's group and
-  your timezone;
+- from a release, pulls its image and the socket proxy's; from a checkout, builds the
+  image;
+- writes `deploy/.env` with your ids, the Docker socket's group and your timezone;
 - starts Mediaplane's container, and installs the `mediaplane` command in
   `/usr/local/bin`.
 
@@ -68,16 +105,24 @@ you only a home it has just created, never a folder that was already there. With
   an absolute path, without quotes, `$`, `#`, backslashes or spaces at either end. The
   installer writes it into `deploy/.env`, and later runs keep it from there: a
   different `MEDIAPLANE_HOME` is refused. To move the home, edit `deploy/.env`.
-- **Updating:** run it again after `git pull`. It rebuilds the image, keeps your
-  `deploy/.env` as it is, and never touches your stack.
-- **An image of your own:** set `MEDIAPLANE_IMAGE` for the first run and it builds
-  nothing. Later runs take the image from `deploy/.env`, so change it there.
+- **Updating:** run it again, from the next release's files or after `git pull` (see
+  [Updating](#updating)). It keeps your `deploy/.env` as it is, and never touches your
+  stack.
+- **An image of your own:** set `MEDIAPLANE_IMAGE` for the first run, pinned by digest
+  (`<name>:<tag>@sha256:<digest>`), and it pulls that and builds nothing. It refuses one
+  that isn't pinned, so that every run starts the image you checked;
+  `docker buildx imagetools inspect <name>:<tag>` shows the digest. Later runs take the
+  image from `deploy/.env`, so change it there. `mediaplane:local` is the one image it
+  takes unpinned: the one it builds from a checkout.
 - **If `mediaplane` then runs something else** in your shell, `type -a mediaplane` shows
   what, such as an old alias.
 
 ### By hand
 
-Build the image from a checkout:
+From a release, the image is named in its `mediaplane.compose.yaml`, so skip the build
+below, leave `MEDIAPLANE_IMAGE` out of `deploy/.env`, and run
+`docker compose -f deploy/mediaplane.compose.yaml pull` before `up -d`. From a checkout,
+build the image:
 
 ```bash
 git clone https://github.com/cyclopsgd/Mediaplane.git
@@ -294,8 +339,45 @@ host
 
 ## Updating
 
-Pull, then run the installer again. It rebuilds the image and recreates Mediaplane's
-container:
+Updating Mediaplane recreates Mediaplane's own container, and nothing else. It never
+restarts, recreates or pulls an app of your stack, and leaves the stack's networks, its
+volumes and `generated/` as they are: an end-to-end test checks each container's id,
+start time, restarts and mounts, every file in `generated/` and `state/`, and that Docker
+pulls only Mediaplane's image and the proxy's, across an update and back. Afterwards,
+`mediaplane plan` shows what the new version would change, if anything, and only `apply`
+changes it, when you run it.
+
+**From a release** (from the first one): unpack the next release's deploy files over the
+old ones, in the same folder, then run its installer. It keeps your `deploy/.env`, pulls
+the new image, then recreates Mediaplane's container:
+
+```bash
+version=0.2.0
+base=https://github.com/cyclopsgd/Mediaplane/releases/download/v$version
+curl -fLO "$base/mediaplane-deploy-$version.tar.gz"
+curl -fLO "$base/SHA256SUMS"
+sha256sum --check SHA256SUMS
+tar -xzf "mediaplane-deploy-$version.tar.gz"
+./mediaplane/deploy/install.sh
+```
+
+By hand, after unpacking, that is:
+
+```bash
+docker compose -f mediaplane/deploy/mediaplane.compose.yaml pull
+docker compose -f mediaplane/deploy/mediaplane.compose.yaml up -d
+```
+
+`pull` comes first, so a pull that fails leaves Mediaplane as it was. The file names its
+release's image by digest, so `pull` with the old file changes nothing: the next
+release's file is the update.
+
+**Going back to an earlier release** is the same, with that release's deploy files. It
+too leaves the stack as it is. One thing can stop it: an older Mediaplane refuses a
+`state/resources.json` that `drift` has written to (see the drift item below).
+
+**From a checkout:** pull, then run the installer again. It rebuilds the image and
+recreates Mediaplane's container:
 
 ```bash
 git pull
@@ -310,8 +392,10 @@ docker build --tag mediaplane:local .
 docker compose -f deploy/mediaplane.compose.yaml up -d
 ```
 
-Once images are published (Slice 9), `docker compose -f deploy/mediaplane.compose.yaml pull`
-replaces the build. Updating Mediaplane never restarts your stack.
+**From a checkout to a release:** copy the checkout's `deploy/.env` into the release's
+`mediaplane/deploy/`, take out its `MEDIAPLANE_IMAGE=mediaplane:local` line, and run the
+release's `install.sh`. The installer refuses to build `mediaplane:local` where there is
+no checkout, and says so.
 
 An update can bring a new version of Compose inside the image. Compose versions can
 compute a container's configuration hash differently
@@ -344,6 +428,17 @@ An update that brings Plex's wiring changes three things you may see:
 - Sonarr's and Radarr's connection to Jellyfin: a TLS setting or a URL base you set in
   it by hand now reads as moved, and the next `apply` puts back `jellyfin:8096` without
   either, so Jellyfin's key goes only to the stack's own address.
+
+An update that brings releases (Slice 9) changes two things you may see:
+
+- **FlareSolverr gets a folder of its own,** `appdata/flaresolverr`, mounted where its
+  image declares a volume. The next `plan` shows its container recreated once. The
+  empty volume Docker made for its old container stays: `docker volume ls --filter
+dangling=true` lists such volumes, and `docker volume rm <name>` removes one you have
+  checked is that one.
+- **`stack.yaml` has a version check.** A `version:` newer than this Mediaplane reads is
+  refused, with what to do. `mediaplane migrate` rewrites an older one; there is none
+  yet, since `stack.yaml` has only ever been version 1.
 
 An update that brings drift (Slice 8) changes what you may see:
 

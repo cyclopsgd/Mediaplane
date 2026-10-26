@@ -24,16 +24,16 @@ Detailed plans so far:
 - Slice 6: [`m1-s6-requests.md`](m1-s6-requests.md) (done).
 - Slice 7: [`m1-s7-plex.md`](m1-s7-plex.md) (done).
 - Slice 8: [`m1-s8-drift.md`](m1-s8-drift.md) (done).
+- Slice 9: [`m1-s9-releases.md`](m1-s9-releases.md) (done).
 
 Where M1 stands (the README shows the same):
 
-- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4, S5, S6, S7 and S8.
+- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4, S5, S6, S7, S8 and S9.
 - **Between S7 and S8 (2026-10-17), outside the slices** by the lighter route for small
   changes (test-first, one review, CI): `hardware_transcoding` for Plex and Jellyfin,
   `init` offering the Plex sign-in and asking for your own admin password, and
   `deploy/install.sh`.
-- **Next:** S9 (releases and safe updates).
-- **After that:** S10 (recovery and automation), which completes M1.
+- **Next:** S10 (recovery and automation), which completes M1.
   [After M1](#after-m1) has what comes next.
 
 ## Slices
@@ -207,7 +207,11 @@ repositories, and the repo is public, so from S2c (owner, 2026-10-09):
   the image and deploy it behind the socket proxy;
 - a push that changes only docs skips both jobs. The last job, `All checks passed`,
   reports either way, so it is the one check branch protection should require;
-- a multi-arch image manifest waits for publishing, in S9.
+- a multi-arch image manifest waits for publishing, in S9. **Done in S9:** the `image`
+  job builds each architecture as a release does (SBOM, provenance, an OCI layout) and
+  scans that; the release workflow pushes both and tags one index of them. The
+  `engine-floor` job checks the image's Docker CLI and Compose against Docker Engine 24,
+  and `catalog-images` scans the apps' images.
 
 Each slice that adds end-to-end tests still runs them locally on the aarch64 dev box
 before merging.
@@ -269,7 +273,8 @@ item, and extended one, and its final review an S8 item and four S9 items. Slice
 added an S9 item and changed one, and its final review an S8 item and an S9 item. Slice 7
 (2026-10-16) marked the S7 items done, and added five S8 items and three S9 items, and
 its conflict check an S9 item. Slice 8 (2026-10-25) settled each S8 item: built, decided,
-or moved with its reason, as each says. Each
+or moved with its reason, as each says. Slice 9 (2026-10-26) settled each S9 item: built,
+decided, or an owner's step, as each says. Each
 slice plan must address the items for that slice.
 
 **S2 (must land with `apply`):** all of these are in the S2a plan.
@@ -651,6 +656,10 @@ password, which are S3c's (and listed again below).
   remove them with `down -v` since S3a.)
   - **Moved to S9:** each recreate leaves one, and recreates come with updates. Mounting
     a folder there needs the image's user probed first.
+  - **Done in S9:** probed: the image runs as uid 1000 and keeps nothing in `/config`, and
+    Compose carries an anonymous volume over to a recreated container (so it is a removed
+    container that leaves one), even past a `tmpfs` there; only a bind mount replaces it.
+    So `appdata/flaresolverr` is mounted there, owned by uid 1000.
 - **Rotating the admin password.** There is no way to replace the generated password
   yet. Add one, which reaches every app through its API.
   - **Moved to S10 on 2026-10-25.**
@@ -658,6 +667,10 @@ password, which are S3c's (and listed again below).
   through the socket proxy it can't delete a network (S3b). The wiring failed runbook
   gives the steps by hand. Decide whether Mediaplane should do them.
   - **Moved to S9:** its settings change only with Mediaplane's own updates.
+  - **Decided in S9:** Mediaplane doesn't make it anew: through the socket proxy it can
+    delete no network, and no proxy permission is added. No release changes its settings
+    (the render test pins them); one that had to would bring its own steps in its notes.
+    The update end-to-end test shows an update leaving it as it is.
 - **The `partial` outcome.** Spec §5 step 12 names `success`, `partial` and `failed`.
   Apply records `failed` when part of the wiring failed (S3b). Decide whether drift's
   re-apply needs `partial`.
@@ -789,8 +802,11 @@ password, which are S3c's (and listed again below).
   registry rate limits, Node's vulnerabilities and the Docker version CI tests. S10
   takes the rest: the docs, the `--json` contract, the Plex job's items and the test
   gaps.
+  - **Settled in S9,** each as the item says below. `main`'s protection is the owner's
+    to set: the S9 plan gives the settings for light and strict, and recommends strict.
 - **Decided by the owner on 2026-10-17:**
-  - the licence is GPL-3.0-or-later;
+  - the licence is GPL-3.0-or-later (**done in S9:** every `package.json`'s `license`,
+    the image's label, the README and the spec);
   - no code of conduct, and no community-support material such as issue templates or
     CODEOWNERS: Mediaplane is one person's project, published so others can use it.
     Security reports keep GitHub's private reporting;
@@ -817,6 +833,8 @@ password, which are S3c's (and listed again below).
 - **Repo setup (owner):** enable GitHub private vulnerability reporting, which
   `SECURITY.md` relies on. Choose GPL-3.0-only or GPL-3.0-or-later and add the
   SPDX `license` field.
+  - **Done in S9:** the SPDX field (GPL-3.0-or-later). Private vulnerability reporting
+    stays an owner's step: the S9 plan gives the command.
 - **Docs:** make the `--json` contract explicit (pin its fields and document
   `mediaplane.plan/v1`). Drop the internal "Slice 1" wording from the README.
 - **`plan --help` names `docs/security/threat-model.md` by its repo path** (S4). Someone
@@ -824,7 +842,9 @@ password, which are S3c's (and listed again below).
 - **`credentials --json` has no `ok` field.** `init`, `plan`, `apply` and the error
   envelope all carry one, and the success output of `mediaplane.credentials/v1` doesn't.
   Align it in the `--json` pass: adding `ok: true` is additive within v1.
-- **Tests:** tighten the catalog tag test, and add Renovate. Let
+- **Tests:** tighten the catalog tag test, and add Renovate.
+  - **Renovate done in S9;** `scripts/supply-chain.test.ts` also checks that Renovate can
+    read each pinned tag. Tightening the catalog's own tag test stays S10's. Let
   `test/e2e/deploy.e2e.test.ts` deploy with `deployMediaplane()` from
   `test/e2e/helpers.ts` (S3d), as the VPN test does.
 - **Small test gaps from S3c and S4.** None hides a fault, and coverage holds without
@@ -867,22 +887,42 @@ password, which are S3c's (and listed again below).
 
   Every catalog pin bump must also run `pnpm docs:generate`, because each app
   README's facts block shows the pin.
+  - **Done in S9:** Renovate's custom managers find each of these, and each catalog pin
+    (tag and digest), with a versioning rule for each linuxserver.io tag (probed with
+    Renovate's own lookup); a test fails when a pinned image is written anywhere else.
+    The hosted Renovate can't run `pnpm docs:generate`, so CI's docs check fails the
+    bump until it is run on the branch, and Renovate's pull request says so.
 - **Node's own vulnerabilities.** Node comes with the image's `node` base as a
   binary, not an Alpine package, so neither Trivy nor `pnpm audit` sees it (S2c).
   It stays current only when Renovate bumps the `node` pin in the `Dockerfile`.
   Decide whether CI should also check Node's version against Node's security
   releases.
+  - **Decided in S9: yes.** `scripts/ci/node-security.ts` fails CI, on every pull request
+    and weekly, while Node's index lists a security release of the image's line newer
+    than the image's Node. It found one at once (24.22.1, over 24.21.0), so S9 bumps the
+    pin.
 - **The Docker version CI tests.** The runners' Docker moves with GitHub's images,
   so the supported floor, Docker Engine 24, is not tested in CI (S2c). Decide
   whether to test it.
+  - **Decided in S9:** the floor's risk is the API the image's own Docker CLI and Compose
+    speak, so CI's `engine-floor` job runs them against Docker Engine 24 in Docker, with
+    the calls Mediaplane makes (probed: they pass). The full end-to-end suite stays on
+    the runners' Docker, which would take twice as long to run again on 24.
 - **Publish the image,** and give `MEDIAPLANE_IMAGE` in
   `deploy/mediaplane.compose.yaml` a pinned default. Then the install guide can pull
   instead of build.
+  - **Done in S9,** from the first release: a release's own deploy files pin its image
+    by digest; the repository's leave it out, so a checkout builds. The first release is
+    the owner's.
 - **Registry rate limits in CI** (S6). S5's first arm64 run failed on
   `toomanyrequests` during `docker compose pull`, after apply's four tries: the runners
   pull every image afresh, anonymously. Pull with a read-only registry token kept as a
   secret (never given to fork PRs), or through a pull-through cache, for the e2e and
   image jobs. S6 adds no image: each e2e file pulls only what is missing.
+  - **Done in S9:** with the secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (the
+    owner's, read-only), the jobs that pull images log in to Docker Hub; without them, as
+    in a fork's pull request, they pull anonymously. GHCR's and lscr.io's pulls stay
+    anonymous, and apply's own pull retries stay.
 
 **The panel (not scheduled since 2026-10-25):**
 
