@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { STACK_SCHEMA_URL } from './json-schema';
 import { parseConfig } from './load';
-import { invokingUser, starterStack, type StarterAnswers } from './starter';
+import { invokingUser, STARTER_APPS, starterStack, type StarterAnswers } from './starter';
 
 const ANSWERS: StarterAnswers = {
   mediaServer: 'jellyfin',
@@ -24,6 +24,13 @@ function configOf(answers: StarterAnswers) {
 }
 
 describe('starterStack', () => {
+  it('lists its apps in STARTER_APPS, with or without a VPN', () => {
+    expect(Object.keys(configOf(ANSWERS).apps)).toEqual([...STARTER_APPS]);
+    expect(Object.keys(configOf({ ...ANSWERS, vpnProvider: undefined }).apps)).toEqual([
+      ...STARTER_APPS,
+    ]);
+  });
+
   it('writes a valid stack with the chosen media server, data folder and VPN', () => {
     const config = configOf(ANSWERS);
     expect(config).toMatchObject({

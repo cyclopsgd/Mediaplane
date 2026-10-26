@@ -110,6 +110,7 @@ export const fixtureCatalog: Catalog = [
       { name: 'web', container: 8080, hostEqualsContainer: { env: 'WEBUI_PORT' } },
       { name: 'peer', container: 6881, publish: false },
     ],
+    adminPasswordMinLength: 6,
     options: z.strictObject({ vpn: z.boolean().default(true) }),
     implies: (options) => (options.vpn ? ['gluetun'] : []),
     networkVia: (options) => (options.vpn ? 'gluetun' : undefined),

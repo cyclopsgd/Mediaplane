@@ -30,7 +30,7 @@ Each field shows its type, then `required` or its default, if it has one.
 - `security.login_on_lan` (boolean; default `true`): Ask for a login from your own network too. false lets Sonarr, Radarr and Prowlarr skip it for any local (private) address, and qBittorrent for addresses in the LAN subnet while the web UIs are on the LAN.
 - `admin` (object; default `{ username: admin }`): The shared admin login for the apps' web UIs: qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin use it. qBittorrent gets it before its first start, and Jellyfin in its first-run setup. Once the apps run, apply sets it in all five through their API, and again whenever it changes.
 - `admin.username` (string; default `admin`): The user name of the shared admin login: 3 to 32 letters, digits, ".", "_" or "-".
-- `admin.password` (secret reference): The admin password, as a secret reference, at least 12 characters long. Left out, Mediaplane generates one; "mediaplane credentials" shows it.
+- `admin.password` (secret reference): The admin password, as a secret reference. 12 characters or more is advised: a shorter one only warns, unless an app in the stack takes no fewer (plan says which). Left out, Mediaplane generates one; "mediaplane credentials" shows it.
 - `media_server` (`jellyfin` or `plex`; required): The media server, jellyfin or plex. It runs whether or not it is listed under apps.
 - `plex` (object): Plex settings, needed when media_server is plex.
 - `plex.token` (secret reference; required): Your Plex token, as a secret reference: "mediaplane plex-login" saves it. Mediaplane claims Plex with it, as yours, and it is the key Mediaplane and the other apps reach Plex with.

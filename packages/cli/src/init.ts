@@ -1,7 +1,9 @@
 import { chmod, mkdir } from 'node:fs/promises';
 import { isAbsolute, join, normalize, resolve } from 'node:path';
+import { catalog } from '@mediaplane/catalog';
 import {
-  ADMIN_PASSWORD_MIN_LENGTH,
+  ADMIN_PASSWORD_ADVISED_LENGTH,
+  adminPasswordFloor,
   inSubnet,
   invokingUser,
   parseConfig,
@@ -12,6 +14,7 @@ import {
   type Diagnostic,
   type HostFacts,
   type StarterAnswers,
+  STARTER_APPS,
 } from '@mediaplane/engine';
 import { dataSteps, exists, homeProblem, type DataFolder } from './folders';
 import { printDiagnostics, printError } from './output';
@@ -121,7 +124,7 @@ export async function init(
     ...(answers.adminPasswordFile === undefined || savedPassword || adminPasswordFound
       ? []
       : [
-          `Put your admin password, at least 12 characters, in ${join(home, answers.adminPasswordFile)}.`,
+          `Put your admin password, ${String(ADMIN_PASSWORD_ADVISED_LENGTH)} characters or more advised, in ${join(home, answers.adminPasswordFile)}.`,
         ]),
     ...dataSteps(answers.dataPath, data, answers.user),
     'Run "mediaplane plan" to check everything, then "mediaplane apply".',
@@ -357,7 +360,12 @@ async function gatherAnswers(
           adminPasswordFound = true;
         } else {
           adminPassword =
-            askSecret === undefined ? undefined : await askPassword(askSecret, io);
+            askSecret === undefined
+              ? undefined
+              : await askPassword(ask, askSecret, io, [
+                  mediaServer ?? 'jellyfin',
+                  ...STARTER_APPS,
+                ]);
           if (adminPassword !== undefined) {
             adminPasswordFile = DEFAULT_PASSWORD_FILE;
           } else {
@@ -408,10 +416,18 @@ async function gatherAnswers(
 
 /**
  * Your own admin password, typed twice with nothing shown, or undefined on Enter (put it in
- * a file yourself). Too short, or two that differ, asks again; it is never printed.
+ * a file yourself). One shorter than an app of the stack takes asks again, naming the app.
+ * One shorter than 12 characters is allowed after a warning and a yes. A mismatch asks
+ * again. It is never printed.
  */
-async function askPassword(askSecret: Ask, io: Io): Promise<string | undefined> {
+async function askPassword(
+  ask: Ask,
+  askSecret: Ask,
+  io: Io,
+  appIds: readonly string[],
+): Promise<string | undefined> {
   explain(io, NOTES.ownPassword);
+  const floor = adminPasswordFloor(appIds, catalog);
   for (;;) {
     const first = await askSecret('Your admin password (Enter to use a file instead): ');
     if (first === '') return undefined;
@@ -421,9 +437,17 @@ async function askPassword(askSecret: Ask, io: Io): Promise<string | undefined> 
       io.stderr('That starts or ends with a space, which the apps would never see.\n');
       continue;
     }
-    if (first.length < ADMIN_PASSWORD_MIN_LENGTH) {
-      io.stderr(`That has fewer than ${String(ADMIN_PASSWORD_MIN_LENGTH)} characters.\n`);
+    if (floor !== undefined && first.length < floor.min) {
+      io.stderr(
+        `${floor.name} takes a password of at least ${String(floor.min)} characters.\n`,
+      );
       continue;
+    }
+    if (first.length < ADMIN_PASSWORD_ADVISED_LENGTH) {
+      io.stderr(
+        `Shorter than ${String(ADMIN_PASSWORD_ADVISED_LENGTH)} characters: fine on a home network, weak if an app is reachable from the internet.\n`,
+      );
+      if (!/^y/i.test((await ask('Use it anyway? [y/N] ')).trim())) continue;
     }
     if ((await askSecret('Type it again: ')) === first) return first;
     io.stderr("Those don't match. Type your password again.\n");
@@ -477,12 +501,12 @@ export const NOTES = {
     'any browser, and it saves your Plex token for apply.',
   ],
   ownPassword: [
-    'Your password: at least 12 characters, typed twice; nothing',
-    'shows. Saved for you only in secrets/admin-password.',
+    'Your password: 12 characters or more advised, typed twice;',
+    'nothing shows. Saved for you only in secrets/admin-password.',
   ],
   passwordFile: [
-    'Your password file: at least 12 characters. Put it there',
-    'before you run plan.',
+    'Your password file: 12 characters or more advised. Put it',
+    'there before you run plan.',
   ],
 } as const satisfies Record<string, readonly string[]>;
 

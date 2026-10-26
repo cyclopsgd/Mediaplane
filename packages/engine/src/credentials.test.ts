@@ -223,17 +223,28 @@ describe('credentials', () => {
     });
   });
 
-  it('reports your password file when it is missing or too short', async () => {
+  it("reports your password file when it is missing or shorter than an app's minimum", async () => {
     const home = await homeWith({ stack: YOURS, stored: false });
     expect(await loginFor(home)).toMatchObject({
       ok: false,
       diagnostics: [{ code: 'secret.missing', path: 'admin.password' }],
     });
     await mkdir(join(home, 'secrets'));
-    await writeFile(join(home, 'secrets', 'admin-password'), 'fake-short\n');
+    await writeFile(join(home, 'secrets', 'admin-password'), 'fake\n');
     expect(await loginFor(home)).toMatchObject({
       ok: false,
       diagnostics: [{ code: 'admin.password-too-short' }],
+    });
+  });
+
+  it('shows the login of a password shorter than 12 characters: that only warns', async () => {
+    const home = await homeWith({ stack: YOURS, stored: false });
+    await mkdir(join(home, 'secrets'));
+    await writeFile(join(home, 'secrets', 'admin-password'), 'fake-short\n');
+    expect(await loginFor(home)).toMatchObject({
+      ok: true,
+      password: 'fake-short',
+      source: { kind: 'yours' },
     });
   });
 

@@ -236,7 +236,8 @@ describe('mediaplane credentials', () => {
   );
 
   it('never puts a password in an error', async () => {
-    const short = await ownHome('fake-short');
+    // Below qBittorrent's own minimum: a password merely shorter than 12 only warns.
+    const short = await ownHome('fk-1');
     const missing = await makeHome({ stored: false });
     const unknown = await makeHome();
     for (const home of [short, missing]) {
@@ -245,7 +246,7 @@ describe('mediaplane credentials', () => {
         expect(await run(['credentials', '--home', home, ...flags], term.io, deps)).toBe(
           1,
         );
-        expect(term.stdout() + term.stderr()).not.toMatch(/fake-short|fake-own/);
+        expect(term.stdout() + term.stderr()).not.toMatch(/fk-1|fake-own/);
       }
     }
     for (const flags of [[], ['--json', '--reveal']]) {

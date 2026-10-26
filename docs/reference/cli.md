@@ -231,7 +231,7 @@ mediaplane init [options]
 | `--lan-subnet <cidr>`          | your LAN with --bind lan, e.g. 192.168.1.0/24 (default: detected when plan runs)                                          |
 | `--no-login-on-lan`            | don't ask for a login from your own network                                                                               |
 | `--admin-user <name>`          | the admin user name for the apps (default admin)                                                                          |
-| `--admin-password-file <path>` | a file inside the home holding your own admin password, at least 12 characters (default: Mediaplane generates one)        |
+| `--admin-password-file <path>` | a file inside the home holding your own admin password, 12 characters or more advised (default: Mediaplane generates one) |
 | `--timezone <zone>`            | timezone, e.g. Europe/London (default: this machine's timezone)                                                           |
 | `--json`                       | print machine-readable JSON                                                                                               |
 

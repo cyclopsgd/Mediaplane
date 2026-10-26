@@ -270,6 +270,12 @@ export interface AppDefinition<Options = Record<string, unknown>> {
    * key a pre-start file writes, and the keys it makes or takes from its environment.
    */
   keyFiles?: Readonly<Record<string, KeyFile>>;
+  /**
+   * The fewest characters it takes in the shared admin password, when that is more than
+   * one (probed on its pinned image): a shorter password is refused at plan, naming the
+   * app. Left out, it takes any password that is not empty.
+   */
+  adminPasswordMinLength?: number;
   credentials: CredentialStep[];
   /** 'image' uses the image's own HEALTHCHECK. 'none' has no health check. */
   health: HealthCheck | 'image' | 'none';

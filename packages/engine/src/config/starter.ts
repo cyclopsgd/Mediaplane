@@ -21,6 +21,15 @@ export interface StarterAnswers {
   adminPasswordFile: string | undefined;
 }
 
+/** The apps the starter lists, in its order (the media server is not one of them). */
+export const STARTER_APPS = [
+  'sonarr',
+  'radarr',
+  'prowlarr',
+  'qbittorrent',
+  'seerr',
+] as const;
+
 /** A YAML scalar for any user-supplied string: JSON strings are valid YAML. */
 const scalar = (value: string) => JSON.stringify(value);
 

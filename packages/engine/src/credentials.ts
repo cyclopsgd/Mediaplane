@@ -65,8 +65,12 @@ export async function credentials(
   if (!loaded.ok) return { ok: false, diagnostics: loaded.diagnostics };
   const { config } = loaded;
   // Only the admin password matters here: a missing VPN key doesn't hide the login.
-  const problems = (await checkSecretRefs(config, home, options.env)).filter(
-    (diagnostic) => diagnostic.path === ADMIN_PASSWORD_PATH,
+  // A short password only warns, and its login is shown all the same.
+  const problems = (
+    await checkSecretRefs(config, home, options.env, options.catalog)
+  ).filter(
+    (diagnostic) =>
+      diagnostic.path === ADMIN_PASSWORD_PATH && diagnostic.severity === 'error',
   );
   if (problems.length > 0) return { ok: false, diagnostics: problems };
   const store = await readSecretStore(home);

@@ -316,6 +316,42 @@ describe('plan', () => {
     });
   });
 
+  describe('with an admin password of your own', () => {
+    const YOURS = STACK.replace(
+      'apps:',
+      'admin: { password: { env: FAKE_ADMIN_PASSWORD } }\napps:',
+    );
+    const planWith = async (password: string) =>
+      planFor(await makeHome({ stack: YOURS }), {
+        env: { FAKE_ADMIN_PASSWORD: password },
+      });
+
+    it('plans on with a warning when it is shorter than 12 characters', async () => {
+      const result = await planWith('fake-short1');
+      expect(result.ok).toBe(true);
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({
+          severity: 'warning',
+          code: 'admin.password-short',
+          path: 'admin.password',
+        }),
+      ]);
+      expect(JSON.stringify(result)).not.toContain('fake-short1');
+    });
+
+    it("fails when it is shorter than an app's own minimum", async () => {
+      const result = await planWith('fake');
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({
+          severity: 'error',
+          code: 'admin.password-too-short',
+          message: 'qbittorrent takes a password of at least 6 characters',
+        }),
+      ]);
+    });
+  });
+
   describe('with a key changed at its source', () => {
     const runtime = () =>
       fakeRuntime({ hashes: { ok: true, hashes: HASHES }, containers: running(HASHES) });

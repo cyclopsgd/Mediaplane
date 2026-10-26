@@ -403,6 +403,17 @@ apps:
     expect(own.map(([id]) => id)).toContain('qbittorrent');
   });
 
+  it('knows the fewest characters each app takes in the admin password, as probed', () => {
+    // Probed on the pinned images: qBittorrent's preferences refuse fewer than 6
+    // characters (400). Jellyfin, Sonarr, Radarr and Prowlarr take one. Mediaplane sets no
+    // password in Seerr (it signs in through Jellyfin) or Plex.
+    expect(
+      catalog
+        .filter((app) => app.adminPasswordMinLength !== undefined)
+        .map((app) => [app.id, app.adminPasswordMinLength]),
+    ).toEqual([['qbittorrent', 6]]);
+  });
+
   it('gives an integration to the apps Mediaplane wires so far', () => {
     expect(
       catalog.filter((app) => app.integration !== undefined).map((app) => app.id),

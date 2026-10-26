@@ -18,6 +18,10 @@ export default defineApp({
   runAs: 'puid-env',
   provides: ['download-client:torrent'],
   requires: [],
+  // Its preferences refuse a shorter web_ui_password (400, "at least 6 characters"; probed).
+  // The hash in its pre-start file takes any, but the password is changed through the
+  // preferences from then on.
+  adminPasswordMinLength: 6,
   secrets: { apiKey: { generate: 'qbt' } },
   keyFiles: { apiKey: qbittorrentKeyFile },
   credentials: [],
