@@ -111,7 +111,7 @@ export async function inspectBootstrap(
     });
   }
   const kept = await withoutSignInsToCome(stack, changes, toCome);
-  const through = heldThrough(stack, kept.changes, kept.held, toCome);
+  const through = await heldThrough(stack, kept.changes, kept.held, toCome);
   return {
     changes: through.changes,
     held: [...kept.held, ...through.held],
@@ -128,26 +128,27 @@ export async function inspectBootstrap(
  * isn't done): then the setup makes the admin, with that password. Each held app's
  * resources are skipped. A warning names it, unless `explained` does; under `rotate`, an
  * app that still has the password Mediaplane holds is an error, which stops the plan:
- * rotating would leave it with a password Mediaplane no longer holds. Reads only.
+ * rotating would leave it with a password Mediaplane no longer holds. `refused` names the
+ * apps that refuse the key the store holds for them: a key named Mediaplane made in one is
+ * then kept with `mediaplane keep`, as plan recovers only the keys the store lacks. Reads
+ * only.
  */
 export async function withoutSignInsToCome(
   stack: ResolvedStack,
   changes: readonly BootstrapChange[],
   toCome: PasswordsToCome,
+  refused: readonly string[] = [],
 ): Promise<HeldSetups> {
   const kept: BootstrapChange[] = [];
   const held: BootstrapChange[] = [];
   const diagnostics: Diagnostic[] = [];
   for (const change of changes) {
     const app = stack.apps.find((a) => a.def.id === change.app);
-    const secret = app?.def.bootstrap?.secret;
     const listed = toCome.notIn?.includes(change.app) === true;
-    const lacks = listed || toCome.toGenerate !== undefined;
     const signsIn =
       app !== undefined &&
-      lacks &&
-      secret !== undefined &&
-      secret === app.def.api?.key.secret &&
+      lacksPassword(change.app, toCome) &&
+      signsInForKey(app) &&
       (!change.unpublished || (await appSetupDone(stack.home, app)) !== false);
     if (app === undefined || !signsIn) {
       kept.push(change);
@@ -157,10 +158,27 @@ export async function withoutSignInsToCome(
     if (!listed && toCome.toGenerate === 'rotate') {
       diagnostics.push(rotateBlocked(app));
     } else if (toCome.explained?.includes(change.app) !== true) {
-      diagnostics.push(needsPassword(app));
+      diagnostics.push(needsPassword(app, refused.includes(change.app)));
     }
   }
   return { changes: kept, held, diagnostics };
+}
+
+/**
+ * Whether `app`'s setup signs in as the shared admin to find the key it made: its secret
+ * is its API's key (Jellyfin's).
+ */
+export function signsInForKey(app: ResolvedApp): boolean {
+  const secret = app.def.bootstrap?.secret;
+  return secret !== undefined && secret === app.def.api?.key.secret;
+}
+
+/**
+ * Whether `app` lacks the admin password apply signs in with when its setup runs: listed
+ * as never having had the stored one, or one apply generates in this run.
+ */
+function lacksPassword(app: string, toCome: PasswordsToCome): boolean {
+  return toCome.notIn?.includes(app) === true || toCome.toGenerate !== undefined;
 }
 
 /** What a filter of setups kept, held back, and said. */
@@ -171,17 +189,22 @@ export interface HeldSetups {
 }
 
 /**
- * `changes` without the setups that go through an app whose own is held (`held`): one
- * that comes after it (`integration.after`), as Seerr signs in through Jellyfin. Held too,
- * as it would have started (an open one still without its ports), with a diagnostic of
- * the held app's level that names both. Pure.
+ * `changes` without the setups that go through an app that is held (`held`), or that
+ * lacks the admin password when they would sign in through it (`toCome`): Jellyfin with
+ * its key, which the wire step sets the password in only after the bootstrap step, unless
+ * its own setup, open, makes the admin with it first (one of `changes`). Through it means
+ * after it (`integration.after`), as Seerr signs in through Jellyfin. A setup whose own
+ * appdata says it is done signs in through nothing (Seerr's, set up, asks Seerr alone, with
+ * its key), so it is kept. One held is held as it would have started (an open one still
+ * without its ports), with a diagnostic that names both: of the held app's level, or a
+ * warning for one that lacks the password. Reads only.
  */
-export function heldThrough(
+export async function heldThrough(
   stack: ResolvedStack,
   changes: readonly BootstrapChange[],
   held: readonly BootstrapChange[],
   toCome: PasswordsToCome,
-): HeldSetups {
+): Promise<HeldSetups> {
   /** The level of each held app's diagnostic: an error only for a rotation it stops. */
   const levels = new Map(
     held.map((h) => [
@@ -191,6 +214,18 @@ export function heldThrough(
         : ('warning' as const),
     ]),
   );
+  /** The apps a setup signs in through that lack the password then, and aren't held. */
+  const lacking = new Set(
+    stack.apps
+      .filter(
+        (app) =>
+          signsInForKey(app) &&
+          lacksPassword(app.def.id, toCome) &&
+          !levels.has(app.def.id) &&
+          !changes.some((change) => change.app === app.def.id),
+      )
+      .map((app) => app.def.id),
+  );
   let kept = [...changes];
   const more: BootstrapChange[] = [];
   const diagnostics: Diagnostic[] = [];
@@ -198,19 +233,30 @@ export function heldThrough(
     found = false;
     for (const change of kept) {
       const app = stack.apps.find((a) => a.def.id === change.app);
-      const through = (app?.def.integration?.after ?? []).find((id) => levels.has(id));
+      const through = (app?.def.integration?.after ?? []).find(
+        (id) => levels.has(id) || lacking.has(id),
+      );
       if (app === undefined || through === undefined) continue;
+      if ((await appSetupDone(stack.home, app)) === true) continue;
       const level = levels.get(through) ?? 'warning';
       const name = stack.apps.find((a) => a.def.id === through)?.def.name ?? through;
       const make = level === 'error' ? error : warning;
       diagnostics.push(
-        make(
-          NEEDS_PASSWORD,
-          `${app.def.name}'s first-run setup signs in through ${name}, whose own is held: it is held too, and waits on ${name}'s admin password`,
-          {
-            hint: `once ${name} has the admin password Mediaplane gives the apps, apply sets ${app.def.name} up; see ${REBUILD_RUNBOOK}`,
-          },
-        ),
+        levels.has(through)
+          ? make(
+              NEEDS_PASSWORD,
+              `${app.def.name}'s first-run setup signs in through ${name}, whose own is held: it is held too, and waits on ${name}'s admin password`,
+              {
+                hint: `once ${name} has the admin password Mediaplane gives the apps, apply sets ${app.def.name} up; see ${REBUILD_RUNBOOK}`,
+              },
+            )
+          : warning(
+              NEEDS_PASSWORD,
+              `${app.def.name}'s first-run setup signs in through ${name}, which doesn't have the admin password Mediaplane gives the apps yet: it is held, and waits until apply has set it in ${name} through ${name}'s key`,
+              {
+                hint: `once ${name} has it, the next apply sets ${app.def.name} up; see ${REBUILD_RUNBOOK}`,
+              },
+            ),
       );
       levels.set(change.app, level);
       more.push(change);
@@ -225,14 +271,21 @@ export function heldThrough(
 /** The code of what plan says of a setup held back by withoutSignInsToCome. */
 export const NEEDS_PASSWORD = 'bootstrap.needs-password';
 
-/** The warning for an app whose setup would sign in with a password it never had. */
-function needsPassword(app: ResolvedApp): Diagnostic {
+/**
+ * The warning for an app whose setup would sign in with a password it never had. One that
+ * refuses the key the store holds (`refused`) has a key named Mediaplane kept with
+ * `mediaplane keep`: plan recovers only a key the store lacks.
+ */
+function needsPassword(app: ResolvedApp, refused: boolean): Diagnostic {
   const name = app.def.name;
+  const key = `${app.def.id}.${app.def.api?.key.secret ?? ''}`;
   return warning(
     NEEDS_PASSWORD,
     `${name} takes no key Mediaplane holds, and only its first-run setup can find one, by signing in as the shared admin; but ${name} has never had the admin password Mediaplane gives the apps, so apply doesn't sign in to it, and leaves it unwired`,
     {
-      hint: `set admin.password to a file holding the password ${name}'s admin has, or make an API key named Mediaplane in ${name}, then run apply again; see ${REBUILD_RUNBOOK}`,
+      hint: refused
+        ? `set admin.password to a file holding the password ${name}'s admin has; or make an API key named Mediaplane in ${name}, then run "mediaplane keep ${key}", which keeps it; then run apply again. See ${REBUILD_RUNBOOK}`
+        : `set admin.password to a file holding the password ${name}'s admin has, or make an API key named Mediaplane in ${name}, then run apply again; see ${REBUILD_RUNBOOK}`,
     },
   );
 }
@@ -264,9 +317,8 @@ export async function setupsToMakeKeys(
 ): Promise<BootstrapChange[]> {
   const changes: BootstrapChange[] = [];
   for (const app of stack.apps) {
-    const setup = app.def.bootstrap;
     const id = app.def.id;
-    if (setup?.secret === undefined || setup.secret !== app.def.api?.key.secret) continue;
+    if (!signsInForKey(app)) continue;
     if (!refusing.includes(id) || listed.some((change) => change.app === id)) continue;
     if ((await appSetupDone(stack.home, app)) === true) {
       changes.push({ app: id, unpublished: false });

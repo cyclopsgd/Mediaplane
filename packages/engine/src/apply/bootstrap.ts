@@ -245,18 +245,28 @@ export async function bootstrapApps(options: BootstrapOptions): Promise<Bootstra
             open: true,
           };
     const secret = app.def.bootstrap?.secret;
-    if (result.key !== undefined && secret !== undefined) {
-      store = withSecret(store, app.def.id, secret, result.key);
-      // Its setup signed in as the shared admin, or made it: the app has the password, so
-      // it is no longer one that never had it (shared.adminPasswordNotIn).
+    const unsaved = store;
+    // Its setup signed in as the shared admin, or made it: the app has the password, so it
+    // is no longer one that never had it (shared.adminPasswordNotIn). A wizard that was
+    // open, and is done now, made the admin with it, though what came after failed: nobody
+    // else can reach an app started unpublished.
+    const gave =
+      result.key !== undefined ||
+      (change?.unpublished === true && (await appSetupDone(options.home, app)) === true);
+    const listed = store.shared?.adminPasswordNotIn ?? [];
+    if (gave && listed.includes(app.def.id)) {
       store = withPasswordNotIn(
         store,
-        (store.shared?.adminPasswordNotIn ?? []).filter((id) => id !== app.def.id),
+        listed.filter((id) => id !== app.def.id),
       );
-      // At once: a key the app made, and Mediaplane lost, would need making again.
-      await writeSecretStore(options.home, store);
+    }
+    if (result.key !== undefined && secret !== undefined) {
+      store = withSecret(store, app.def.id, secret, result.key);
       saved.push(`${app.def.id}.${secret}`);
     }
+    // At once: a key the app made, and Mediaplane lost, would need making again; and an
+    // app left listed would never be signed in to.
+    if (store !== unsaved) await writeSecretStore(options.home, store);
     if (
       secret === undefined &&
       result.failure === undefined &&

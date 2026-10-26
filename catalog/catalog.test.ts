@@ -379,6 +379,30 @@ apps:
     }
   });
 
+  it('gives an admin of its own to every app that can hold the shared admin password, which sets it there', () => {
+    // An app named in shared.adminPasswordNotIn leaves it once its own admin is set
+    // through its key: each app that a setup signs in to as the shared admin, or that a
+    // pre-start file gives the password, has that way out.
+    const own = catalog.flatMap((app) =>
+      (app.integration?.resources ?? [])
+        .filter((resource) => resource.ownAdmin === true)
+        .map((resource) => [app.id, resource.name, resource.secrets] as const),
+    );
+    expect(own).toEqual(
+      ['jellyfin', 'prowlarr', 'qbittorrent', 'radarr', 'sonarr'].map(
+        (id) => [id, 'admin', ['password']] as const,
+      ),
+    );
+    const signsIn = catalog.filter(
+      (app) =>
+        app.bootstrap?.secret !== undefined &&
+        app.bootstrap.secret === app.api?.key.secret,
+    );
+    expect(signsIn.map((app) => app.id)).toEqual(['jellyfin']);
+    for (const app of signsIn) expect(own.map(([id]) => id)).toContain(app.id);
+    expect(own.map(([id]) => id)).toContain('qbittorrent');
+  });
+
   it('gives an integration to the apps Mediaplane wires so far', () => {
     expect(
       catalog.filter((app) => app.integration !== undefined).map((app) => app.id),

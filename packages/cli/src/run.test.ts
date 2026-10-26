@@ -1445,9 +1445,9 @@ describe('mediaplane apply: Seerr in the stack', () => {
     }
   });
 
-  it("waits for Jellyfin's admin, wiring the rest, when Jellyfin refuses Seerr's sign-in, then sets Seerr up", async () => {
+  it("holds Seerr's sign-in until the wire step has set Jellyfin's admin, wiring the rest, then sets Seerr up", async () => {
     // Jellyfin was set up before, its key kept, and its admin's password is another: the
-    // shared admin is refused until the wire step sets it.
+    // password is generated now, and Jellyfin has it only once the wire step sets it.
     const home = await seerrHome();
     const key = '6'.repeat(32);
     await mkdir(join(home, 'state'), { recursive: true });
@@ -1474,13 +1474,17 @@ describe('mediaplane apply: Seerr in the stack', () => {
       1,
     );
     expect(waited.stdout()).toContain(
-      "  skipped wiring seerr.media_server: seerr's first-run setup waits\n",
+      "  skipped wiring seerr.media_server: seerr's first-run setup is held: the app it signs in to has never had the admin password\n",
     );
     expect(waited.stdout()).toContain(
       '  done    wiring jellyfin.admin: updated password\n',
     );
     expect(waited.stderr()).toContain(
-      "warning: Seerr at http://seerr:5055 (127.0.0.1) can't sign in through Jellyfin yet: Jellyfin refused the shared admin's password (POST /api/v1/auth/jellyfin)\n",
+      "warning: Seerr's first-run setup signs in through Jellyfin, which doesn't have the admin password Mediaplane gives the apps yet: it is held, and waits until apply has set it in Jellyfin through Jellyfin's key\n",
+    );
+    // Never signed in through Jellyfin with a password it didn't have.
+    expect(apis.app.requests.filter((r) => r.path === '/api/v1/auth/jellyfin')).toEqual(
+      [],
     );
     expect(waited.stderr()).toContain('seerr (first-run setup)');
     expect(apis.apps.get('seerr')?.seerr.users).toEqual([]);
@@ -1488,6 +1492,9 @@ describe('mediaplane apply: Seerr in the stack', () => {
     const then = capture();
     expect(await run(['apply', '--home', home, '--yes'], then.io, deps(docker))).toBe(0);
     expect(apis.apps.get('seerr')?.seerr.users).toEqual(['admin']);
+    expect(
+      apis.app.requests.filter((r) => r.path === '/api/v1/auth/jellyfin'),
+    ).not.toEqual([]);
   });
 });
 

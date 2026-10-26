@@ -257,6 +257,25 @@ describe('setupsToMakeKeys', () => {
     await writeFile(join(stack.home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
     expect(await setupsToMakeKeys(resolved.stack, ['sonarr'], [])).toEqual([]);
   });
+
+  it("leaves one whose setup makes a secret that isn't its API's key", async () => {
+    // Its key is still good: what the setup made is something else, which no refusal of
+    // the key says is gone.
+    const catalog = SET_UP_CATALOG.map((def) =>
+      def.id === 'jellyfin'
+        ? {
+            ...def,
+            secrets: { ...def.secrets, token: { createdBy: 'app' as const } },
+            bootstrap: { ...FAKE_SETUP, secret: 'token' },
+          }
+        : def,
+    );
+    const home = await tempDir('mediaplane-bootstrap-');
+    const resolved = resolveStack(fixtureConfig(STACK), catalog, FIXTURE_HOST, home);
+    if (resolved.stack === undefined) throw new Error('the stack did not resolve');
+    await setupFile(resolved.stack, 'done\n');
+    expect(await setupsToMakeKeys(resolved.stack, ['jellyfin'], [])).toEqual([]);
+  });
 });
 
 describe('inspectBootstrap: with an admin password the app has never had', () => {
@@ -391,6 +410,19 @@ describe('withoutSignInsToCome', () => {
       diagnostics: [expect.objectContaining({ severity: 'warning' })],
     });
   });
+
+  it('says to keep a key named Mediaplane when the app refuses the one Mediaplane holds', async () => {
+    // A new key in the app isn't recovered while the store holds one: keep reads it.
+    const stack = await stackIn();
+    await setupFile(stack, 'done\n');
+    const remade = await setupsToMakeKeys(stack, ['jellyfin'], []);
+    const held = await withoutSignInsToCome(stack, remade, { notIn: ['jellyfin'] }, [
+      'jellyfin',
+    ]);
+    expect(held.diagnostics.map((d) => d.hint)).toEqual([
+      `set admin.password to a file holding the password jellyfin's admin has; or make an API key named Mediaplane in jellyfin, then run "mediaplane keep jellyfin.apiKey", which keeps it; then run apply again. See ${REBUILD_RUNBOOK}`,
+    ]);
+  });
 });
 
 describe('inspectBootstrap: a setup that signs in through one held', () => {
@@ -431,4 +463,84 @@ describe('inspectBootstrap: a setup that signs in through one held', () => {
       { app: 'sonarr', unpublished: true },
     ]);
   });
+
+  it('sets up one whose own appdata says its setup is done: it signs in through nothing', async () => {
+    const stack = await signInStack();
+    await setupFile(stack, 'done\n');
+    await signedIn(stack, 'yes\n');
+    const held = await inspectBootstrap(stack, emptySecretStore(), {
+      toGenerate: 'generate',
+    });
+    // Its record went with the store: checked again, unpublished, with its own key.
+    expect(held.changes).toEqual([{ app: 'sonarr', unpublished: true }]);
+    expect(held.held).toEqual([{ app: 'jellyfin', unpublished: false }]);
+    expect(held.diagnostics.map((d) => d.message)).toEqual([
+      expect.stringContaining('jellyfin has never had the admin password') as string,
+    ]);
+    // One whose file can't be read may still be open: held.
+    await rm(join(stack.home, 'appdata', 'sonarr', 'signed-in.txt'));
+    await mkdir(join(stack.home, 'appdata', 'sonarr', 'signed-in.txt'));
+    const unknown = await inspectBootstrap(stack, emptySecretStore(), {
+      toGenerate: 'generate',
+    });
+    expect(unknown.held.map((h) => h.app)).toEqual(['jellyfin', 'sonarr']);
+  });
+
+  it("holds an open one that would sign in through an app that won't have the password yet, though that app isn't held", async () => {
+    const stack = await signInStack();
+    await setupFile(stack, 'done\n');
+    // Jellyfin's key is stored, so nothing in it is set up, but until the wire step sets
+    // the password in it through its key, it hasn't the one Sonarr would sign in with.
+    for (const toCome of [
+      { notIn: ['jellyfin'] },
+      { toGenerate: 'generate' as const },
+      { toGenerate: 'rotate' as const },
+    ]) {
+      expect(await inspectBootstrap(stack, KEYED, toCome)).toEqual({
+        changes: [],
+        held: [{ app: 'sonarr', unpublished: true }],
+        diagnostics: [
+          {
+            severity: 'warning',
+            code: 'bootstrap.needs-password',
+            message:
+              "sonarr's first-run setup signs in through jellyfin, which doesn't have the admin password Mediaplane gives the apps yet: it is held, and waits until apply has set it in jellyfin through jellyfin's key",
+            hint: `once jellyfin has it, the next apply sets sonarr up; see ${REBUILD_RUNBOOK}`,
+          },
+        ],
+      });
+    }
+    // Jellyfin's wizard open: its setup makes the admin with the password first.
+    await rm(join(stack.home, 'appdata', 'jellyfin', 'setup.txt'));
+    expect(
+      await inspectBootstrap(stack, emptySecretStore(), { toGenerate: 'generate' }),
+    ).toEqual({
+      changes: [
+        { app: 'jellyfin', unpublished: true },
+        { app: 'sonarr', unpublished: true },
+      ],
+      held: [],
+      diagnostics: [],
+    });
+  });
 });
+
+/** The stack, resolved with Jellyfin's fake setup and Sonarr's sign-in setup after it. */
+async function signInStack(): Promise<ResolvedStack> {
+  const home = await tempDir('mediaplane-bootstrap-');
+  const resolved = resolveStack(
+    fixtureConfig(STACK),
+    SIGN_IN_CATALOG,
+    FIXTURE_HOST,
+    home,
+  );
+  if (resolved.stack === undefined) throw new Error('the stack did not resolve');
+  return resolved.stack;
+}
+
+/** Sonarr's signed-in.txt, saying `text`. */
+async function signedIn(stack: ResolvedStack, text: string): Promise<void> {
+  const folder = join(stack.home, 'appdata', 'sonarr');
+  await mkdir(folder, { recursive: true });
+  await writeFile(join(folder, 'signed-in.txt'), text);
+}

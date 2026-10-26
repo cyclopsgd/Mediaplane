@@ -81,6 +81,7 @@ const admin: ResourceSpec = {
   fields: ['username'],
   locked: { username: SHARED_LOGIN },
   secrets: ['password'],
+  ownAdmin: true,
   desired: ({ admin: login }) => ({
     name: 'admin',
     fields: { username: login.username },

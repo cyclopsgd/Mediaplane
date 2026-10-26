@@ -19,6 +19,7 @@ import { prestartFilesFor } from '../render/prestart';
 import { composeToYaml } from '../render/yaml';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { checkOverrides } from '../integrations/overrides';
+import type { WiringContext } from '../integrations/types';
 import { readState, type ResourcesState } from '../integrations/resources';
 import {
   joinFailure,
@@ -26,6 +27,7 @@ import {
   planWiring,
   resourcesInvalid,
   settled,
+  wantedResources,
   wiringOrder,
   type Drift,
   type SecretCheck,
@@ -57,6 +59,7 @@ import {
   inspectBootstrap,
   setupsToMakeKeys,
   heldThrough,
+  signsInForKey,
   withoutSignInsToCome,
   type BootstrapChange,
   type PasswordsToCome,
@@ -155,23 +158,18 @@ export interface PlanContext {
   current: ContainerState[];
   /**
    * The apps whose first-run setup is held, since it would sign in with an admin password
-   * an app has never had, or through one so held (`bootstrap.needs-password`): not set
-   * up, and skipped by the wire step.
+   * an app has never had, or through an app so held, or that won't have it yet then
+   * (`bootstrap.needs-password`): not set up, and skipped by the wire step.
    */
   held: string[];
   /** Of `held`, those whose setup is open, or can't be told: started without their ports. */
   heldUnpublished: string[];
   /**
-   * Of `held`, those whose own sign-in would have used the password: apply's keys step
-   * saves them as `shared.adminPasswordNotIn`, with the password it generates.
+   * The apps that hold the shared admin password (passwordHolders): when apply generates
+   * one, its keys step saves them all as `shared.adminPasswordNotIn`, with the password,
+   * and each leaves the list as the run gives it the password.
    */
-  heldForPassword: string[];
-  /**
-   * When apply generates the admin password: the apps it reaches before the wire step, by
-   * a setup that makes the admin with it, or a pre-start file apply creates. The wire step
-   * signs in to no other app with it until it has set it there through the app's key.
-   */
-  passwordGivenTo?: string[];
+  passwordHolders: string[];
 }
 
 /** Everything apply would do, without doing it. Writes nothing. */
@@ -244,6 +242,9 @@ export async function planStack(
   // A secret to rotate is one to generate anew: the store, as plan and apply see it, has
   // none. Apply saves the new one in its keys step.
   const stored: SecretStore = rotating.password ? withoutPassword(read) : read;
+  // A rotation replaces a password the store holds: without one, as after a lost store,
+  // it is one to generate, as any other.
+  const rotated = rotating.password && read.shared?.adminPassword !== undefined;
   // The keys the store lacks that the apps still keep in their appdata (spec §6.1, key
   // recovery): found before anything is generated, so a lost store never locks Mediaplane
   // out of an app. From here on, the store holds them, as apply's keys step saves them.
@@ -255,7 +256,7 @@ export async function planStack(
   if (hasErrors(diagnostics)) return failed(diagnostics);
   const store = withRecoveredKeys(stored, recovery.recovered);
   const recover = recovery.recovered.map(({ app, name }) => `${app}.${name}`);
-  if (newPassword && !rotating.password && recover.length > 0) {
+  if (newPassword && !rotated && recover.length > 0) {
     // The apps hold keys Mediaplane gave them, so it generated a password for them too,
     // which went with the store: no app keeps it but as a hash.
     diagnostics.push(
@@ -328,7 +329,7 @@ export async function planStack(
   // with a warning that names the app: the rest of the stack is still planned and wired.
   // Under --rotate, one whose app has the password Mediaplane holds stops the plan.
   const toCome: PasswordsToCome = {
-    ...(newPassword ? { toGenerate: rotating.password ? 'rotate' : 'generate' } : {}),
+    ...(newPassword ? { toGenerate: rotated ? 'rotate' : 'generate' } : {}),
     notIn,
     explained: recovery.unfound,
   };
@@ -442,9 +443,10 @@ export async function planStack(
         stack,
         await setupsToMakeKeys(stack, refusing, bootstrap),
         toCome,
+        refusing,
       );
       // A setup that goes through an app held now is held too (Seerr through Jellyfin).
-      const through = heldThrough(stack, bootstrap, remade.held, toCome);
+      const through = await heldThrough(stack, bootstrap, remade.held, toCome);
       bootstrap = [...through.changes, ...remade.changes];
       held.push(...remade.held, ...through.held);
       diagnostics.push(...remade.diagnostics, ...through.diagnostics);
@@ -486,37 +488,27 @@ export async function planStack(
       current,
       held: held.map((h) => h.app),
       heldUnpublished: held.filter((h) => h.unpublished).map((h) => h.app),
-      heldForPassword: held.filter((h) => signsInForKey(stack, h.app)).map((h) => h.app),
-      ...(newPassword
-        ? { passwordGivenTo: passwordGivenTo(bootstrap, prestart.changes) }
-        : {}),
+      passwordHolders: passwordHolders(stack, { admin, keys }),
     },
   };
 }
 
-/** Whether `app`'s setup signs in as the shared admin to find the key it made. */
-function signsInForKey(stack: ResolvedStack, app: string): boolean {
-  const def = stack.apps.find((a) => a.def.id === app)?.def;
-  const secret = def?.bootstrap?.secret;
-  return secret !== undefined && secret === def?.api?.key.secret;
-}
-
 /**
- * The apps a generated admin password reaches before the wire step: one whose setup
- * starts unpublished, which makes the admin with it, and one apply creates a pre-start
- * file for ("appdata/<app>/..."), which holds it.
+ * The apps that hold the shared admin password Mediaplane gives them: each with an admin
+ * of its own (`ownAdmin`), which sets it there through the app's key, and each whose setup
+ * signs in with it (signsInForKey). Names only.
  */
-function passwordGivenTo(
-  bootstrap: readonly BootstrapChange[],
-  prestart: readonly FileChange[],
+function passwordHolders(
+  stack: ResolvedStack,
+  login: Pick<WiringContext, 'admin' | 'keys'>,
 ): string[] {
-  const created = prestart
-    .filter((file) => file.status === 'create' && file.path.startsWith('appdata/'))
-    .map((file) => file.path.split('/')[1] ?? '');
-  return [
-    ...new Set([...bootstrap.filter((b) => b.unpublished).map((b) => b.app), ...created]),
-  ]
-    .filter((app) => app !== '')
+  return stack.apps
+    .filter(
+      (app) =>
+        signsInForKey(app) ||
+        wantedResources({ stack, app, ...login }).some((spec) => spec.ownAdmin === true),
+    )
+    .map((app) => app.def.id)
     .sort(compare);
 }
 

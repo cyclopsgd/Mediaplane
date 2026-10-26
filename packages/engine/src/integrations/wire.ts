@@ -78,18 +78,14 @@ export interface WireOptions {
    */
   held?: readonly string[];
   /**
-   * When apply generated the admin password in this run: the apps it reached before this
-   * step (PlanContext.passwordGivenTo). Any other app hasn't had it yet: a resource of its
-   * own that holds it is set through the app's key, never checked, as for `notIn`.
-   */
-  givenTo?: readonly string[];
-  /**
    * The apps that have never had the admin password Mediaplane holds
-   * (`shared.adminPasswordNotIn`): a resource of theirs that holds it is set, never
-   * checked (ExamineOptions.lacks), and `passwordSet` is told once it is.
+   * (`shared.adminPasswordNotIn`), as the steps before this one left it: in a run that
+   * generated the password, each app it hasn't reached yet. A resource of theirs that holds
+   * it is set, never checked (ExamineOptions.lacks), and `passwordSet` is told once the
+   * app's own admin (`ownAdmin`) is.
    */
   notIn?: readonly string[];
-  /** Told of each app of `notIn` once a resource of its own is given the admin password. */
+  /** Told of each app of `notIn` once its own admin is given the admin password. */
   passwordSet?: (app: string) => Promise<void>;
   /** What the run finds in the apps' answers (FoundSecrets); the step's own, by default. */
   found?: FoundSecrets;
@@ -253,9 +249,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
       continue;
     }
     /** The admin password, for an app that has never had it: set, never checked. */
-    const listed = options.notIn?.includes(appId) === true;
-    const notGiven = options.givenTo !== undefined && !options.givenTo.includes(appId);
-    const lacks = listed || notGiven ? [admin.password] : [];
+    const lacks = options.notIn?.includes(appId) === true ? [admin.password] : [];
     const client = reached.get(app.def.id);
     if (client === undefined) {
       for (const target of targets)
@@ -377,14 +371,12 @@ export async function wire(options: WireOptions): Promise<string[]> {
           : DONE[result.action];
       done.push(`${address} ${what}`);
       options.record({ step: 'wire', resource: address, result: 'done', detail: what });
-      // The app has the admin password now: it is no longer one that never had it.
-      if (
-        lacks.length > 0 &&
-        Object.values(result.desired.secrets).includes(admin.password)
-      ) {
+      // Its own admin has the admin password now: it is no longer one that never had it.
+      // Only its own: another resource may hold the password as another app's login.
+      if (lacks.length > 0 && spec.ownAdmin === true) {
         lacks.length = 0;
         try {
-          if (listed) await options.passwordSet?.(appId);
+          await options.passwordSet?.(appId);
         } catch (cause) {
           throw stop([], cause, 'state/secrets.json could not be saved: ');
         }

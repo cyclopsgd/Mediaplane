@@ -80,6 +80,8 @@ export default defineApp({
       path: QBITTORRENT_CONF,
       content: qbittorrentConf(ctx),
       seeded: /^WebUI\\APIKey=.+$/m,
+      // WebUI\Password_PBKDF2: qBittorrent's admin has the password once it starts.
+      givesAdminPassword: true,
     },
   ],
   login: 'shared',

@@ -26,7 +26,7 @@ import {
   type ContainerState,
   type Runtime,
 } from '../runtime/types';
-import { passwordNotIn, withPasswordNotIn } from '../secrets/admin';
+import { ADMIN_PASSWORD_PATH, passwordNotIn, withPasswordNotIn } from '../secrets/admin';
 import { withGeneratedSecrets, type RandomBytes } from '../secrets/generate';
 import { restoreKeys } from '../secrets/restore';
 import { writeSecretStore } from '../secrets/store';
@@ -177,16 +177,30 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     if (!result.ok) throw new Error(await startFailure(runtime, result.error));
   };
 
+  /**
+   * The apps that have the admin password now, out of shared.adminPasswordNotIn, which is
+   * written at once: a run that stops later leaves listed exactly the apps it didn't give
+   * the password to, and no later run signs in to them with it.
+   */
+  const passwordGiven = async (apps: readonly string[]) => {
+    const listed = passwordNotIn(stack.config, store);
+    const left = listed.filter((app) => !apps.includes(app));
+    if (left.length === listed.length) return;
+    store = withPasswordNotIn(store, left);
+    await writeSecretStore(home, store);
+  };
+
   await steps.run('keys', async () => {
     // The plan's store holds the keys it recovered from the apps' appdata: saved with the
     // ones generated now, before anything starts (spec §5 step 4, §6.1).
     const result = withGeneratedSecrets(stack, store, options.random);
-    // With the password, in the same write: the apps the plan held back, which never had
-    // it. None when the password is yours: it isn't Mediaplane's to track.
-    const notIn = [
-      ...passwordNotIn(stack.config, result.store),
-      ...context.heldForPassword,
-    ];
+    // With a password generated now (after a lost store, or --rotate), in the same write:
+    // every app that holds it, none of which has it yet; each leaves the list as this run
+    // gives it the password (passwordGiven). None when the password is yours: it isn't
+    // Mediaplane's to track.
+    const notIn = result.generated.includes(ADMIN_PASSWORD_PATH)
+      ? context.passwordHolders
+      : passwordNotIn(stack.config, result.store);
     const saved = withPasswordNotIn(
       result.store,
       stack.config.admin.password === undefined ? notIn : [],
@@ -207,6 +221,8 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     ];
     return done.length === 0 ? NONE_NEEDED : done.join('; ');
   });
+  /** The apps a pre-start file written now gives the admin password, once they start. */
+  let givenByFile: string[] = [];
   await steps.run('files', async () => {
     values = await secretValues(stack, store, options.env);
     const written = await writeGenerated(
@@ -216,10 +232,11 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     );
     await ensureAppdataDirs(stack);
     // Before any app starts, and only where the app has no file of its own (spec §6.4).
-    const created = await writePrestartFiles(
-      home,
-      await prestartFilesFor(stack, store, options.env, options.random),
-    );
+    const prestart = await prestartFilesFor(stack, store, options.env, options.random);
+    const created = await writePrestartFiles(home, prestart);
+    givenByFile = prestart
+      .filter((file) => file.givesAdminPassword === true && created.includes(file.path))
+      .map((file) => file.app);
     const done = [
       ...(written.length === 0 ? [] : [`wrote ${written.join(' and ')}`]),
       ...(created.length === 0 ? [] : [`created ${created.join(', ')}`]),
@@ -294,6 +311,8 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       ...context.heldUnpublished,
     ];
     await up(unpublished);
+    // Started with the file that holds it, each has the password now.
+    await passwordGiven(givenByFile);
     if (unrestored !== undefined) throw unrestored;
     const [its, it] = unpublished.length === 1 ? ['its', 'it'] : ['their', 'them'];
     return [
@@ -373,16 +392,11 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         waiting,
         failed: unset,
         held: context.held,
-        ...(context.passwordGivenTo === undefined
-          ? {}
-          : { givenTo: context.passwordGivenTo }),
+        // What the keys, start and bootstrap steps left listed: the apps not given the
+        // password yet, whose admin is set through their key, never checked with it.
         notIn: passwordNotIn(stack.config, store),
         // At once, as a key the bootstrap step saves: the app has the password now.
-        passwordSet: async (app) => {
-          const left = passwordNotIn(stack.config, store).filter((id) => id !== app);
-          store = withPasswordNotIn(store, left);
-          await writeSecretStore(home, store);
-        },
+        passwordSet: (app) => passwordGiven([app]),
         found,
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });

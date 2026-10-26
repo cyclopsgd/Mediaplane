@@ -87,6 +87,7 @@ export function servarrAdmin(version: 'v1' | 'v3'): ResourceSpec {
     fields: ['username'],
     locked: { username: SHARED_LOGIN },
     secrets: ['password'],
+    ownAdmin: true,
     desired: ({ admin }) => ({
       name: 'admin',
       fields: { username: admin.username },

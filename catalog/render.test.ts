@@ -449,6 +449,19 @@ describe('pre-start files', () => {
     );
   });
 
+  it("says which file gives its app the shared admin password: qBittorrent's alone, as a hash", () => {
+    const files = prestartFiles(SPEC_EXAMPLE);
+    expect(files.filter((file) => file.givesAdminPassword).map((f) => f.path)).toEqual([
+      'appdata/qbittorrent/qBittorrent/qBittorrent.conf',
+    ]);
+    for (const file of files) {
+      expect(file.content).not.toContain('fake-admin-password');
+      expect(/Password/.test(file.content), file.path).toBe(
+        file.givesAdminPassword === true,
+      );
+    }
+  });
+
   it('knows its own files, and not a config.xml Sonarr wrote without one', () => {
     const files = prestartFiles(SPEC_EXAMPLE);
     for (const file of files) expect(file.seeded.test(file.content)).toBe(true);

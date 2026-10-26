@@ -106,6 +106,13 @@ export interface ResourceSpec {
   /** The secrets it holds, by name: applied and checked with verify, never compared. */
   secrets: readonly string[];
   /**
+   * Whether it is the app's own login as the shared admin, whose `password` is the shared
+   * admin password (`<app>.admin`): once apply has made it, or updated it, the app has
+   * that password (`shared.adminPasswordNotIn` no longer names the app). A resource that
+   * holds the password as another app's login is not.
+   */
+  ownAdmin?: boolean;
+  /**
    * At most how often `mediaplane drift` checks its secrets, in ms, when they last passed:
    * a check that leaves a mark in the app each time, such as Jellyfin's sign-in, in its
    * activity log. Plan and apply check every time.

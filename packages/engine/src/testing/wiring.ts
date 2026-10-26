@@ -77,6 +77,7 @@ export const FAKE_LOGIN: ResourceSpec = {
   name: 'login',
   fields: ['user'],
   secrets: ['password'],
+  ownAdmin: true,
   desired: ({ admin }) => ({
     name: 'login',
     fields: { user: admin.username },

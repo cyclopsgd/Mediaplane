@@ -32,6 +32,7 @@ const admin: ResourceSpec = {
   fields: ['username'],
   locked: { username: SHARED_LOGIN },
   secrets: ['password'],
+  ownAdmin: true,
   checkEvery: CHECK_ADMIN_EVERY,
   desired: ({ admin: login }) => ({
     name: 'admin',

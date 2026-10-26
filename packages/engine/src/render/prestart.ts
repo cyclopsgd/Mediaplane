@@ -17,6 +17,8 @@ export interface PrestartFile {
   path: string;
   content: string;
   seeded: RegExp;
+  /** Whether it gives the app the shared admin password (ConfigFile.givesAdminPassword). */
+  givesAdminPassword?: boolean;
 }
 
 /** Every enabled app's pre-start files (spec §6.4), from the catalog's pure renderers. */
@@ -49,6 +51,7 @@ export function renderPrestartFiles(
       path: pathInside(folder, def.id, file.path),
       content: file.content,
       seeded: file.seeded,
+      ...(file.givesAdminPassword === true ? { givesAdminPassword: true } : {}),
     }));
   });
 }

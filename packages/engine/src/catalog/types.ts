@@ -88,6 +88,13 @@ export interface ConfigFile {
    * before Mediaplane seeded the app, and plan reports it.
    */
   seeded: RegExp;
+  /**
+   * Whether it holds the shared admin password (as a hash), which the app takes as its
+   * admin's when it starts: qBittorrent's conf. Once apply has written it and started the
+   * app, the app has that password (`shared.adminPasswordNotIn` no longer names it). The
+   * app's own admin resource (`ownAdmin`) must set it otherwise.
+   */
+  givesAdminPassword?: boolean;
 }
 
 /**

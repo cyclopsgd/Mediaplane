@@ -66,6 +66,7 @@ export const FAKE_ADMIN: ResourceSpec = {
   name: 'admin',
   fields: ['user'],
   secrets: ['password'],
+  ownAdmin: true,
   desired: ({ admin }) => ({
     name: 'admin',
     fields: { user: admin.username },
