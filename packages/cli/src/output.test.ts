@@ -190,7 +190,7 @@ describe('printPlan: drift', () => {
         '  ! qbittorrent: refuses the key Mediaplane holds for it (apiKey), as if it was changed in the app',
         "  ! sonarr.download_client.apiKey: holds qbittorrent's key, which qbittorrent refuses",
         '  ? prowlarr.application_radarr: still in the app, though the stack no longer wants it; apply leaves it',
-        "  apply puts the key Mediaplane holds back where an app keeps it in a file of its own, such as qBittorrent's, and restarts the app; for any other app, put it back as https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md shows. mediaplane keep <app>.<key> keeps the app's own key instead.",
+        "  apply puts the key Mediaplane holds back where an app keeps it in a file of its own, such as qBittorrent's, and restarts the app, and has an app that made its own key, such as Jellyfin, make another; for any other app, put it back as https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md shows. mediaplane keep <app>.<key> keeps the app's own key instead.",
         "  apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it, or keep it as yours with mediaplane keep <app>.<resource>, which stops the report.",
         'No changes.',
         '',

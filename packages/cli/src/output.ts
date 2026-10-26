@@ -105,7 +105,7 @@ export function driftAdvice(drift: readonly Drift[]): string[] {
       : []),
     ...(has('key')
       ? [
-          `apply puts the key Mediaplane holds back where an app keeps it in a file of its own, such as qBittorrent's, and restarts the app; for any other app, put it back as ${WIRING_RUNBOOK} shows. mediaplane keep <app>.<key> keeps the app's own key instead`,
+          `apply puts the key Mediaplane holds back where an app keeps it in a file of its own, such as qBittorrent's, and restarts the app, and has an app that made its own key, such as Jellyfin, make another; for any other app, put it back as ${WIRING_RUNBOOK} shows. mediaplane keep <app>.<key> keeps the app's own key instead`,
         ]
       : []),
     ...(has('left')
