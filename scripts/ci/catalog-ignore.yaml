@@ -1,0 +1,79 @@
+# The critical vulnerabilities with a fix that CI found in the catalog's pinned images,
+# which only their upstream can fix, with the date by which each is looked at again
+# (scripts/ci/scan-catalog.sh). Mediaplane never patches an app's image (spec §1.4):
+# a fix arrives as Renovate's bump of the pin, once upstream ships it, and its entry
+# goes then. An entry past its date no longer counts, so CI fails until the pin is
+# bumped or the entry is renewed with a new date and the reason. Found on 2026-10-25.
+vulnerabilities:
+  - id: CVE-2026-106195
+    statement: Chromium in FlareSolverr v3.5.2
+    expired_at: 2026-11-24
+  - id: CVE-2026-106237
+    statement: Chromium in FlareSolverr v3.5.2
+    expired_at: 2026-11-24
+  - id: CVE-2026-106445
+    statement: handlebars in Seerr v3.5.0
+    expired_at: 2026-11-24
+  - id: CVE-2026-106446
+    statement: handlebars in Seerr v3.5.0
+    expired_at: 2026-11-24
+  - id: CVE-2026-13221
+    statement: perl-base in FlareSolverr v3.5.2
+    expired_at: 2026-11-24
+  - id: CVE-2026-33937
+    statement: handlebars in Seerr v3.5.0
+    expired_at: 2026-11-24
+  - id: CVE-2026-42496
+    statement: perl-base in FlareSolverr v3.5.2
+    expired_at: 2026-11-24
+  - id: CVE-2026-59873
+    statement: tar in Seerr v3.5.0
+    expired_at: 2026-11-24
+  - id: CVE-2026-70188
+    statement: ASP.NET Core runtime in Prowlarr 2.6.5.5623-ls163 and Radarr 6.4.4.10685-ls319
+    expired_at: 2026-11-24
+  - id: CVE-2026-75604
+    statement: next in Seerr v3.5.0
+    expired_at: 2026-11-24
+  - id: CVE-2026-8376
+    statement: perl-base in FlareSolverr v3.5.2
+    expired_at: 2026-11-24
+  - id: CVE-2026-87500
+    statement: Chromium in FlareSolverr v3.5.2
+    expired_at: 2026-11-24
+  - id: CVE-2026-87512
+    statement: Chromium in FlareSolverr v3.5.2
+    expired_at: 2026-11-24
+  - id: CVE-2026-87534
+    statement: Chromium in FlareSolverr v3.5.2
+    expired_at: 2026-11-24
+  - id: CVE-2026-87544
+    statement: Chromium in FlareSolverr v3.5.2
+    expired_at: 2026-11-24
+  - id: CVE-2026-87621
+    statement: Chromium in FlareSolverr v3.5.2
+    expired_at: 2026-11-24
+  - id: CVE-2026-87654
+    statement: Chromium in FlareSolverr v3.5.2
+    expired_at: 2026-11-24
+  - id: CVE-2026-88092
+    statement: ASP.NET Core runtime in Prowlarr 2.6.5.5623-ls163 and Radarr 6.4.4.10685-ls319
+    expired_at: 2026-11-24
+  - id: CVE-2026-90711
+    statement: proxy-addr in Seerr v3.5.0
+    expired_at: 2026-11-24
+  - id: GHSA-2464-fhr4-w9xw
+    statement: next in Seerr v3.5.0
+    expired_at: 2026-11-24
+  - id: GHSA-2xp9-vwfh-vxw4
+    statement: next in Seerr v3.5.0
+    expired_at: 2026-11-24
+  - id: GHSA-673q-mjm6-r5xr
+    statement: next in Seerr v3.5.0
+    expired_at: 2026-11-24
+  - id: GHSA-6q48-6c7w-9gw2
+    statement: certifi in Byparr 3.0.4 and FlareSolverr v3.5.2
+    expired_at: 2026-11-24
+  - id: GHSA-vcvr-r3jv-pc5j
+    statement: next in Seerr v3.5.0
+    expired_at: 2026-11-24

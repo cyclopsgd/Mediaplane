@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly too, so that a vulnerability found in an image, Node or a catalog app since
+  # the last push still fails a run that someone sees.
+  schedule:
+    - cron: '41 4 * * 1'
 
 permissions:
   contents: read
@@ -45,10 +49,15 @@ jobs:
       # can't see them, so they are audited here. This needs the npm registry.
       - name: Audit the CLI's production dependencies (fails on a critical advisory)
         run: pnpm audit --prod --audit-level critical
+      # Node is a binary in the image's base, which neither Trivy nor pnpm audit sees. This
+      # needs nodejs.org.
+      - name: Does the image's Node have every security release of its line?
+        run: pnpm exec tsx scripts/ci/node-security.ts
 
-  # Decides whether the end-to-end and image jobs, which pull images, are needed. The
-  # decision is made inside the workflow, rather than with an `on:` path filter, so the
-  # workflow still runs on a docs-only push and `gate` (the last job) still reports.
+  # Decides whether the jobs that pull images (end-to-end, image, catalog images, the
+  # Engine floor) are needed. The decision is made inside the workflow, rather than with
+  # an `on:` path filter, so the workflow still runs on a docs-only push and `gate` (the
+  # last job) still reports.
   changes:
     name: Detect code changes
     runs-on: ubuntu-24.04
@@ -67,7 +76,7 @@ jobs:
         run: |
           # No usable base (a new branch, or a force-push past fetched history): run it all.
           if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-            echo "No usable base commit, so the end-to-end and image jobs run."
+            echo "No usable base commit, so every job that pulls images runs."
             echo "code=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -76,7 +85,7 @@ jobs:
           if grep -q -v -E '(\.md$|^docs/|^LICENSE$|^$)' <<<"$changed"; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Only docs changed, so the end-to-end and image jobs are skipped."
+            echo "Only docs changed, so the jobs that pull images are skipped."
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -110,6 +119,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/docker-hub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          token: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -128,7 +141,7 @@ jobs:
         run: df -h /
 
   image:
-    name: Image (${{ matrix.arch }}, Trivy)
+    name: Image (${{ matrix.arch }}, as a release builds it, Trivy)
     needs: changes
     if: needs.changes.outputs.code == 'true'
     strategy:
@@ -145,24 +158,68 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Native on each runner: no emulation. A multi-arch manifest comes with publishing (S9).
-      # The image scanned here and the one the e2e tests build are two builds of the same
-      # Dockerfile. They are the same image only because every input of the Dockerfile is
-      # pinned; an unpinned layer would let them differ.
-      - name: Build the image
-        run: docker build --tag mediaplane:ci .
-      # The tarball goes in its own folder, and only that folder is mounted, read-only.
+      - uses: ./.github/actions/docker-hub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          token: ${{ secrets.DOCKERHUB_TOKEN }}
+      # Native on each runner: no emulation. This is the build the release workflow pushes,
+      # with its SBOM and provenance, so every pull request proves it on both
+      # architectures; it pushes nothing. The e2e tests build the same Dockerfile, whose
+      # every input is pinned.
+      - name: Build the image as a release does
+        run: scripts/ci/build-image.sh "${{ matrix.arch }}" "$RUNNER_TEMP/image"
       - name: Scan it with Trivy (fails on critical vulnerabilities that have a fix)
-        run: |
-          scan="$(mktemp -d -p "$RUNNER_TEMP")"
-          docker save mediaplane:ci --output "$scan/mediaplane.tar"
-          docker run --rm --volume "$scan:/scan:ro" \
-            aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
-            image --input /scan/mediaplane.tar --scanners vuln --severity CRITICAL \
-            --ignore-unfixed --exit-code 1 --no-progress
+        run: scripts/ci/scan-image.sh "${{ matrix.arch }}" "$RUNNER_TEMP/image/oci"
       - name: Disk space at the end
         if: always()
         run: df -h /
+
+  # The apps' images, as the catalog pins them, from their registries: both architectures
+  # from one runner. Only upstream can fix what Trivy finds there, so a finding listed in
+  # scripts/ci/catalog-ignore.yaml passes until its date.
+  catalog-images:
+    name: Catalog images (Trivy)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/docker-hub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          token: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Scan the amd64 images
+        run: scripts/ci/scan-catalog.sh amd64
+      - name: Scan the arm64 images
+        if: ${{ !cancelled() }}
+        run: scripts/ci/scan-catalog.sh arm64
+
+  # The image's Docker CLI and Compose against Docker Engine 24, the oldest Mediaplane
+  # supports. The other jobs run the runners' own Docker.
+  engine-floor:
+    name: Docker Engine 24 (the floor)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/docker-hub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          token: ${{ secrets.DOCKERHUB_TOKEN }}
+      - run: scripts/ci/engine-floor.sh
 
   secrets:
     name: Secret scan (gitleaks, full history)
@@ -185,7 +242,7 @@ jobs:
   # always reports. `always()`, not `!cancelled()`: a cancelled run must not pass.
   gate:
     name: All checks passed
-    needs: [check, changes, e2e, image, secrets]
+    needs: [check, changes, e2e, image, catalog-images, engine-floor, secrets]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -198,13 +255,16 @@ jobs:
           CODE: ${{ needs.changes.outputs.code }}
           E2E: ${{ needs.e2e.result }}
           IMAGE: ${{ needs.image.result }}
+          CATALOG: ${{ needs.catalog-images.result }}
+          FLOOR: ${{ needs.engine-floor.result }}
           SECRETS: ${{ needs.secrets.result }}
         run: |
-          printf '%-8s %s\n' check "$CHECK" changes "$CHANGES" e2e "$E2E" \
-            image "$IMAGE" secrets "$SECRETS"
+          printf '%-14s %s\n' check "$CHECK" changes "$CHANGES" e2e "$E2E" \
+            image "$IMAGE" catalog-images "$CATALOG" engine-floor "$FLOOR" \
+            secrets "$SECRETS"
           echo "code changed: ${CODE:-unknown}"
           status=0
-          for result in "$CHECK" "$CHANGES" "$E2E" "$IMAGE" "$SECRETS"; do
+          for result in "$CHECK" "$CHANGES" "$E2E" "$IMAGE" "$CATALOG" "$FLOOR" "$SECRETS"; do
             case "$result" in
               failure | cancelled) status=1 ;;
             esac
@@ -214,7 +274,8 @@ jobs:
           fi
           # Skipped is a pass only when the docs-only check said to skip them.
           if [ "$CODE" = "true" ]; then
-            for job in e2e:"$E2E" image:"$IMAGE"; do
+            for job in e2e:"$E2E" image:"$IMAGE" catalog-images:"$CATALOG" \
+              engine-floor:"$FLOOR"; do
               if [ "${job#*:}" != "success" ]; then
                 echo "${job%%:*} should have run, but its result is ${job#*:}."
                 status=1

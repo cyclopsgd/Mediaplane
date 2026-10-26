@@ -12,6 +12,14 @@ const WORKFLOWS = readdirSync(join(ROOT, '.github/workflows'))
   .sort()
   .map((name) => `.github/workflows/${name}`);
 
+/** The repository's own composite actions, which workflows run as `./.github/actions/…`. */
+const ACTIONS = readdirSync(join(ROOT, '.github/actions'))
+  .sort()
+  .map((name) => `.github/actions/${name}/action.yml`);
+
+/** `${{ … }}` text a script must never hold: a secret, or what anyone can write. */
+const PASTED = /\$\{\{[^}]*\b(?:secrets|github\.event|github\.head_ref|inputs)\b/;
+
 interface Step {
   uses?: string;
   run?: string;
@@ -131,15 +139,23 @@ describe('the workflows (spec §7.2(7))', () => {
         for (const step of job.steps ?? []) {
           // A script gets a secret, or text anyone can write, through env: never pasted
           // into its source, where a quote in it would run as code.
-          expect(step.run ?? '').not.toMatch(
-            /\$\{\{[^}]*\b(?:secrets|github\.event|github\.head_ref|inputs)\b/,
-          );
+          expect(step.run ?? '').not.toMatch(PASTED);
           if (step.uses?.startsWith('actions/checkout@') === true) {
             expect(step.with?.['persist-credentials']).toBe(false);
           }
         }
       }
       expect(read(path)).not.toContain('secrets.GITHUB_TOKEN');
+    },
+  );
+
+  it.each(ACTIONS)(
+    '%s, a composite action, keeps secrets and inputs out of its scripts',
+    (path) => {
+      const { runs } = parse(read(path)) as { runs: { steps: Step[] } };
+      expect(runs.steps.length).toBeGreaterThan(0);
+      // Its inputs reach a script through env, as a workflow's secrets do.
+      for (const step of runs.steps) expect(step.run ?? '').not.toMatch(PASTED);
     },
   );
 });
@@ -224,9 +240,17 @@ describe('Renovate (spec §8.2)', () => {
       [...read(path).matchAll(new RegExp(pinnedManager.matchStrings[0] ?? '', 'g'))].map(
         (match) => match.groups?.depName,
       );
-    expect(found('.github/workflows/ci.yml')).toEqual(
-      expect.arrayContaining(['aquasec/trivy', 'ghcr.io/gitleaks/gitleaks']),
-    );
+    expect(found('.github/workflows/ci.yml')).toEqual([
+      'rhysd/actionlint',
+      'ghcr.io/gitleaks/gitleaks',
+    ]);
+    expect(found('scripts/ci/scan-image.sh')).toEqual(['aquasec/trivy']);
+    expect(found('scripts/ci/scan-catalog.sh')).toEqual(['aquasec/trivy']);
+    expect(found('scripts/ci/build-image.sh')).toEqual([
+      'moby/buildkit',
+      'docker/buildkit-syft-scanner',
+    ]);
+    expect(found('scripts/ci/engine-floor.sh')).toEqual(['docker', 'busybox']);
     expect(found('.githooks/pre-commit')).toEqual(['ghcr.io/gitleaks/gitleaks']);
     expect(found('test/e2e/helpers.ts')).toContain('busybox');
     expect(found('test/e2e/wireguard.ts')).toEqual(['lscr.io/linuxserver/wireguard']);
