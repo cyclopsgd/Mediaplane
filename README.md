@@ -625,6 +625,9 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
   key or a change, Jellyfin's or Seerr's first-run setup failed or waits, an arr can't
   reach qBittorrent or Jellyfin, Seerr can't reach an arr, Prowlarr can't make its proxy,
   or Mediaplane can't reach an app.
+- **[Runbook: rebuilding a host](docs/runbooks/rebuilding-a-host.md):** a new host or a
+  lost `state/`: what to keep, what Mediaplane recovers from the apps' appdata, a key
+  changed in an app, and the admin password.
 - **[Runbook: drift reported](docs/runbooks/drift-reported.md):** something Mediaplane
   manages was changed in an app: put it back with `apply`, or keep it with
   `mediaplane keep`.

@@ -2125,12 +2125,40 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     of the app, which still holds the old one. A file whose real path leads out of the
     app's appdata folder is never read: an app that owns its folder could otherwise hand
     Mediaplane another app's key. Jellyfin's, which its setup can find by signing in, is
-    a warning, and only while the admin password is to be generated too.
+    a warning, and only while the admin password is to be generated too: the setup would
+    sign in with a password Jellyfin has never had, so apply leaves Jellyfin unwired, as
+    the held setup below says, and the warning says so once, not twice.
 - **The admin password can't be recovered:** the apps keep only a hash of it. When the
   one Mediaplane generated went with the store, while the apps still hold their keys,
   `plan` warns (`secrets.admin-password-lost`), and apply generates another and sets it
   in each app through the app's key (§6.1: "plan reports it"). A password of your own
   (`admin.password: { file: … }`) is kept.
+  - **A setup that would sign in with a password its app never had is held**
+    (`bootstrap.needs-password`). An app that takes no key Mediaplane holds, and whose
+    key only its first-run setup can find, by signing in as the shared admin, is held
+    when it has never had the admin password Mediaplane holds: today, Jellyfin, when its
+    database can't give its key. After a lost store it is a warning: apply doesn't sign
+    in to the app (a sign-in that could only fail leaves a mark in it, decision 15), its
+    setup is held, its resources are skipped as ones that wait, and, when its appdata
+    doesn't say its setup is done, it starts without its ports; `apply` then exits 1,
+    through verify. Under `--rotate admin.password` it is an
+    error for an app that has the password Mediaplane holds, so `plan` stops and nothing
+    is generated or saved: rotating would leave the app with a password Mediaplane no
+    longer holds. Run `apply` without `--rotate` first. An app listed in
+    `shared.adminPasswordNotIn` (below) has had neither, and stays a warning. A setup that signs in through a held
+    app (Seerr, through Jellyfin) is held too, with the same level.
+  - **`shared.adminPasswordNotIn`,** in `state/secrets.json`, lists those apps, by id and
+    nothing else, never a secret. It holds the apps held in the run that generated the
+    password, saved in the same write; while an app is listed, every later plan holds it
+    the same way. An app leaves the list when its admin update goes through its key, or
+    when its setup signs in. Two ways out, which the runbook states: make an API key
+    named `Mediaplane` in the app (Jellyfin's dashboard, API keys), which the next plan
+    recovers from its database, and apply sets the password through it; or set
+    `admin.password` to a file holding the password the app's admin has, which clears the
+    whole list. Then run `apply` again.
+  - **A new password signs in to an app only once that app has it:** it got it in this
+    run, or its setup made the admin with it. Until then its resources are set through
+    the app's key.
 - **Name-based re-adoption** (§6.3) is Slice 3b's `adopt`, for every kind of resource
   (probed): after a rebuild, each is found by the name Mediaplane gave it, and recorded,
   with the same id in its app. Seerr's and Plex's `setUp` record goes with the store, so
@@ -2142,7 +2170,9 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     as `restart`. The start step stops the app, writes the key into the file, as Keep
     mine writes `stack.yaml` (no link, no other names, the file's own user and group, its
     mode kept), and `up` starts it, whatever the write did; a failed write then fails the
-    step. A guest of an app that restarts restarts too (Gluetun's qBittorrent).
+    step. A guest of an app that restarts restarts too (Gluetun's qBittorrent). This is
+    the one exception to §6.4's "the API is the only write path": a key put back in the
+    app's own file, while the app is stopped.
     qBittorrent's web UI rotates its key into its file (probed), so this puts it back
     there. Sonarr, Radarr, Prowlarr and Seerr take their key from their environment at
     every start, and their web UIs can't change it then (probed: Seerr's regenerate gives
@@ -2152,8 +2182,9 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     `config.xml` without `ApiKey` (the arrs don't write their environment's key into it,
     probed), a `qBittorrent.conf` without `WebUI\APIKey`, or a Gluetun file without
     Mediaplane's role (written whole, after your own roles) gets the key, and the app
-    restarts. `<app>.not-seeded` remains for a file Mediaplane can't write so
-    (`keys.restore`).
+    restarts. A file Mediaplane can't write so is `keys.restore`: an error when the file
+    holds no key, a warning when it holds another. `<app>.not-seeded` remains only for a
+    pre-start file whose app has no writable key file.
   - **Keep mine reads the new key:** `mediaplane keep <app>.<key>` takes the key the
     app's own file holds, once `plan` finds the app refusing Mediaplane's and the app
     takes that one, into `state/secrets.json`, and names each resource that holds the old

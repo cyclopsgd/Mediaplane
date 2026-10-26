@@ -423,6 +423,28 @@ say so, if whoever cut it added that ([Releasing](../docs/releasing.md) says how
 for yourself, `docker run --rm <image> docker compose version` on the old and the new
 image shows each one's Compose.
 
+An update that brings Slice 10a (recovery) changes three things you may see:
+
+- **A key file from before Slice 3a, or edited by hand, restarts its app.** A Sonarr,
+  Radarr or Prowlarr `config.xml` without `ApiKey`, a `qBittorrent.conf` without
+  `WebUI\APIKey`, a Gluetun `auth/config.toml` without Mediaplane's role, or a key file
+  that holds another key than Mediaplane's, used to stop `plan` (`<app>.not-seeded`). Now
+  `plan` lists the key under `Keys to put back in their apps' own files`, and the next
+  `apply` stops the app, writes the key there, and starts it once more. Gluetun's
+  restart restarts qBittorrent too. A file Mediaplane can't write is `keys.restore`; the
+  [rebuilding a host runbook](../docs/runbooks/rebuilding-a-host.md) says what to do.
+- **A Jellyfin key deleted in its dashboard is made again.** `plan` lists Jellyfin's
+  first-run setup again, published, and the next `apply` signs in as the shared admin and
+  makes a new key named `Mediaplane`. Before, you edited `state/secrets.json` by hand.
+- **Going back to an older image after an `apply` of this version** can't read its
+  history records: each carries `recover` and `restore` lists that an older version's
+  schema refuses, so `mediaplane history` and `status` list them as unreadable. The
+  records stay where they are, and this version reads them again. Nothing else reads
+  them. `state/resources.json` reads as before. So does `state/secrets.json`, unless it
+  has a `shared.adminPasswordNotIn` list (apps' ids only), which `apply` writes only while
+  an app waits for the admin password after a lost `state/`: an older version refuses the
+  file then, and the list has to come out of it, keeping the file valid JSON.
+
 An update that brings Seerr's wiring treats a Seerr you set up by hand before it as one
 Mediaplane has no record of. The next `apply` recreates it once, unpublished, and checks
 it with its key, never the password. If its admin (its first user) is the Jellyfin login
