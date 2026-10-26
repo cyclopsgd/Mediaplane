@@ -333,8 +333,20 @@ export function printKeep(result: KeepResult, options: { json: boolean }, io: Io
     );
     return;
   }
+  const resource = result.value === 'unmanaged' && result.key.split('.').length === 2;
+  if (result.written === false) {
+    // managed_by: external: the line is yours to add, where stack.yaml is kept.
+    io.stdout(
+      `Add this line under overrides: in stack.yaml, where it is kept:\n  ${result.line ?? overrideLine(result.key, result.value, true)}\n${
+        resource
+          ? 'Mediaplane has forgotten that it made it, so apply never removes it. Until stack.yaml holds the line, apply makes it again if the stack still wants it.\n'
+          : 'Until stack.yaml holds it, apply puts back what it applied, and drift reports it.\n'
+      }`,
+    );
+    return;
+  }
   io.stdout(
-    result.value === 'unmanaged' && result.key.split('.').length === 2
+    resource
       ? `Wrote ${result.key}: unmanaged under overrides: in stack.yaml. Mediaplane no longer manages it, and apply doesn't make it again.\n`
       : `Wrote ${overrideLine(result.key, result.value)} under overrides: in stack.yaml. apply now leaves it as the app holds it, and drift no longer reports it.\n`,
   );

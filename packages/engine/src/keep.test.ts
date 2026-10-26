@@ -102,6 +102,8 @@ describe('keep', () => {
       ok: true,
       key: 'sonarr.login.user',
       value: 'someone',
+      line: 'sonarr.login.user: someone',
+      written: true,
       diagnostics: [],
     });
     expect(await readFile(join(dir, 'stack.yaml'), 'utf8')).toBe(
@@ -297,25 +299,23 @@ describe('keep', () => {
     const line =
       'add this line under overrides: in stack.yaml yourself: sonarr.login.user: someone';
     const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
-    // Owned by automation.
-    const external = await home(`${STACK}managed_by: external\n`);
-    const result = await keep(options(external, sonarr, 'sonarr.login.user'));
-    expect(result.diagnostics[0]).toMatchObject({
-      code: 'keep.external',
-      hint: `${line}, where it is kept, such as your playbook`,
-    });
     // A link to the file, which a rewrite would replace.
     const linked = await home();
     await rename(join(linked, 'stack.yaml'), join(linked, 'real.yaml'));
     await symlink(join(linked, 'real.yaml'), join(linked, 'stack.yaml'));
-    expect(
-      (await keep(options(linked, sonarr, 'sonarr.login.user'))).diagnostics[0],
-    ).toMatchObject({
+    const refused = await keep(options(linked, sonarr, 'sonarr.login.user'));
+    expect(refused.diagnostics[0]).toMatchObject({
       code: 'keep.stack-file',
       message: expect.stringMatching(
         /^Mediaplane won't write stack.yaml: it is a link/,
       ) as string,
       hint: line,
+    });
+    // The line is a field of its own too, for a script.
+    expect(refused).toMatchObject({
+      ok: false,
+      line: 'sonarr.login.user: someone',
+      written: false,
     });
     // A file it can't add the line to without changing more of it.
     const flow = await home(
@@ -329,6 +329,77 @@ describe('keep', () => {
         "Mediaplane won't write stack.yaml: its top level is not a YAML block of keys, one per line",
       hint: line,
     });
+  });
+
+  it('gives the line to add, writing no stack.yaml, when automation owns it: a field stays unrecorded until stack.yaml holds it', async () => {
+    const external = `${STACK}managed_by: external\n`;
+    const dir = await home(external);
+    const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+    const kept = await keep(options(dir, sonarr, 'sonarr.login.user'));
+    expect(kept).toEqual({
+      ok: true,
+      key: 'sonarr.login.user',
+      value: 'someone',
+      line: 'sonarr.login.user: someone',
+      written: false,
+      diagnostics: [
+        expect.objectContaining({
+          severity: 'warning',
+          code: 'keep.external',
+          hint: 'add this line under overrides: in stack.yaml where it is kept, such as your playbook: sonarr.login.user: someone',
+        }),
+      ],
+    });
+    expect(await readFile(join(dir, 'stack.yaml'), 'utf8')).toBe(external);
+    // Not recorded: until stack.yaml holds the line, apply puts back what it applied.
+    expect((await readResources(dir))['sonarr.login']).toEqual(RECORD);
+    // The playbook adds the line: apply then only adopts what the app holds.
+    await writeFile(
+      join(dir, 'stack.yaml'),
+      `${external}overrides:\n  ${kept.line ?? ''}\n`,
+    );
+    const after = await plan({ ...options(dir, sonarr, ''), drift: { now: () => AT } });
+    expect(after.wiring).toEqual([{ resource: 'sonarr.login', action: 'adopt' }]);
+    expect(after.drift).toEqual([]);
+  });
+
+  it('forgets a resource left in the app when automation owns stack.yaml, so apply never removes it', async () => {
+    const gone: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'gone',
+      desired: () => undefined,
+      remove: () => Promise.reject(new Error('never removed')),
+    };
+    const catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr'
+        ? { ...def, integration: { after: [], resources: [FAKE_LOGIN, gone] } }
+        : def,
+    );
+    const external = `${STACK}managed_by: external\n`;
+    const dir = await home(external);
+    await writeResources(dir, {
+      'sonarr.login': RECORD,
+      'sonarr.gone': { ...RECORD, name: 'gone' },
+    });
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const kept = await keep(options(dir, sonarr, 'sonarr.gone', { catalog }));
+    expect(kept).toMatchObject({
+      ok: true,
+      value: 'unmanaged',
+      line: 'sonarr.gone: unmanaged',
+      written: false,
+    });
+    expect(await readFile(join(dir, 'stack.yaml'), 'utf8')).toBe(external);
+    expect(Object.keys(await readResources(dir))).toEqual(['sonarr.login']);
+    // Nothing left for apply to remove, nor for drift to report, before the line lands.
+    const after = await plan({
+      ...options(dir, sonarr, '', { catalog }),
+      drift: { now: () => AT },
+    });
+    expect([after.wiring, after.drift]).toEqual([
+      [{ resource: 'sonarr.login', action: 'unchanged' }],
+      [],
+    ]);
   });
 
   it('gives the line to add when stack.yaml has other names, or the write itself fails', async () => {

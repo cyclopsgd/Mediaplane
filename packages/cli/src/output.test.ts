@@ -628,6 +628,39 @@ describe('printKeep', () => {
       diagnostics: [],
     });
   });
+
+  it('gives the line to add, on standard output and in JSON, when stack.yaml is managed outside Mediaplane', () => {
+    const kept = {
+      ok: true,
+      key: 'sonarr.download_client.category',
+      value: 'television',
+      line: 'sonarr.download_client.category: television',
+      written: false,
+      diagnostics: [],
+    };
+    const term = capture();
+    printKeep(kept, { json: false }, term.io);
+    expect(term.stdout()).toBe(
+      'Add this line under overrides: in stack.yaml, where it is kept:\n  sonarr.download_client.category: television\nUntil stack.yaml holds it, apply puts back what it applied, and drift reports it.\n',
+    );
+    const left = capture();
+    printKeep(
+      {
+        ...kept,
+        key: 'prowlarr.application_radarr',
+        value: 'unmanaged',
+        line: 'prowlarr.application_radarr: unmanaged',
+      },
+      { json: false },
+      left.io,
+    );
+    expect(left.stdout()).toBe(
+      'Add this line under overrides: in stack.yaml, where it is kept:\n  prowlarr.application_radarr: unmanaged\nMediaplane has forgotten that it made it, so apply never removes it. Until stack.yaml holds the line, apply makes it again if the stack still wants it.\n',
+    );
+    const json = capture();
+    printKeep(kept, { json: true }, json.io);
+    expect(JSON.parse(json.stdout())).toEqual({ schema: 'mediaplane.keep/v1', ...kept });
+  });
 });
 
 describe('printMigrate', () => {

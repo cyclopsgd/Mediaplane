@@ -84,6 +84,7 @@ mediaplane keep [options] <path>
 Exit codes:
 
 - 0: stack.yaml keeps what the app holds, or stops managing what was deleted
+- 0: or, with managed_by: external, the line to add to stack.yaml is given
 - 0: or state/secrets.json keeps an app's own key, which the app takes
 - 1: nothing was kept: it hasn't drifted, can't be kept, or an error
 

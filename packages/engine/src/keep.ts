@@ -67,6 +67,19 @@ export interface KeepResult {
    * given the kept one by the next apply. Added in Slice 10a.
    */
   holders?: string[];
+  /**
+   * The line under `overrides:` in stack.yaml that keeps it, as keep writes it
+   * (`sonarr.download_client.category: television`): written, or for you to add. Given
+   * whenever keep got as far as the line, so also when it couldn't write it. Added in
+   * Slice 10b.
+   */
+  line?: string;
+  /**
+   * Whether keep wrote `line` into stack.yaml: false when stack.yaml is managed outside
+   * Mediaplane (managed_by: external), where you add it, or when it couldn't. Added in
+   * Slice 10b.
+   */
+  written?: boolean;
   diagnostics: Diagnostic[];
 }
 
@@ -99,8 +112,9 @@ function keyTarget(catalog: PlanOptions['catalog'], path: string): KeyTarget | u
  * own address on the stack; what only the app can say (Seerr's profile) is what was
  * applied. It writes stack.yaml by adding one line, keeping the rest as it is, its mode
  * and its group (not an ACL), and never a secret, and then records the value as applied
- * in state/resources.json, so that drift is clear and apply has nothing to do for it. It
- * runs under apply's lock.
+ * in state/resources.json, so that drift is clear and apply has nothing to do for it.
+ * With managed_by: external it writes no stack.yaml, and gives the line to add
+ * (keptOutside). It runs under apply's lock.
  */
 export async function keep(options: KeepOptions): Promise<KeepResult> {
   const home = resolve(options.home);
@@ -225,25 +239,24 @@ export async function keep(options: KeepOptions): Promise<KeepResult> {
       ]);
     }
     // Quoted where `overrides: { … }` would need it, and right under a block one too.
-    const byHand = `add this line under overrides: in stack.yaml yourself: ${overrideLine(key, value, true)}`;
+    const line = overrideLine(key, value, true);
+    const byHand = `add this line under overrides: in stack.yaml yourself: ${line}`;
     const external = () =>
-      refused([
-        error(
-          'keep.external',
-          `stack.yaml is managed outside Mediaplane (managed_by: external), so Mediaplane doesn't write it`,
-          { hint: `${byHand}, where it is kept, such as your playbook` },
-        ),
-      ]);
-    if (context.stack.config.managed_by === 'external') return external();
-    const cannot = (why: string) =>
-      refused([error('keep.stack-file', why, { hint: byHand })]);
+      keptOutside(home, address, { key, value, line, field }, result.diagnostics);
+    // Awaited here: the lock is released only once it is done.
+    if (context.stack.config.managed_by === 'external') return await external();
+    const cannot = (why: string): KeepResult => ({
+      ...refused([error('keep.stack-file', why, { hint: byHand })]),
+      line,
+      written: false,
+    });
     // Read once, through one handle, as it is checked: the file written is the one read.
     const read = await readStackFile(stackPath);
     if (!read.ok) return cannot(`Mediaplane won't write stack.yaml: ${read.reason}`);
     const { file } = read;
     // What the file says now, which may have changed since the plan read it.
     const current = parseConfig(file.text);
-    if (current.ok && current.config.managed_by === 'external') return external();
+    if (current.ok && current.config.managed_by === 'external') return await external();
     if (current.ok && current.config.overrides[address] === UNMANAGED) {
       return refused([
         error(
@@ -287,10 +300,57 @@ export async function keep(options: KeepOptions): Promise<KeepResult> {
         ),
       );
     }
-    return { ok: true, key, value, diagnostics };
+    return { ok: true, key, value, line, written: true, diagnostics };
   } finally {
     await lock.release();
   }
+}
+
+/**
+ * Keep mine where stack.yaml is managed outside Mediaplane (spec §4.2, managed_by:
+ * external): it writes no stack.yaml, and gives the line to add (`line`, `written:
+ * false`), with a warning that says so; you add it where the file is kept, such as your
+ * playbook. It records nothing as applied, as stack.yaml doesn't hold it yet: apply puts
+ * back what the app holds until it does. A resource kept as `unmanaged` is forgotten
+ * though (its record in state/resources.json), so that apply never removes it, nor drift
+ * reports it, while the line is on its way: Mediaplane only removes what its record says
+ * it made.
+ */
+async function keptOutside(
+  home: string,
+  address: string,
+  kept: { key: string; value: Scalar; line: string; field: string | undefined },
+  planned: readonly Diagnostic[],
+): Promise<KeepResult> {
+  const { key, value, line, field } = kept;
+  const diagnostics = [
+    ...planned,
+    warning(
+      'keep.external',
+      `stack.yaml is managed outside Mediaplane (managed_by: external), so Mediaplane didn't write it`,
+      {
+        hint: `add this line under overrides: in stack.yaml where it is kept, such as your playbook: ${line}`,
+      },
+    ),
+  ];
+  if (field === undefined) {
+    try {
+      const known = await readResources(home);
+      if (Object.hasOwn(known, address)) {
+        Reflect.deleteProperty(known, address);
+        await writeResources(home, known);
+      }
+    } catch (cause) {
+      diagnostics.push(
+        warning(
+          'keep.record',
+          `state/resources.json could not be updated to forget ${address}: ${cause instanceof Error ? cause.message : String(cause)}`,
+          { hint: 'add the line, then run apply: Mediaplane then stops managing it' },
+        ),
+      );
+    }
+  }
+  return { ok: true, key, value, line, written: false, diagnostics };
 }
 
 /**
