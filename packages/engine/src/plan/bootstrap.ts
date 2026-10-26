@@ -252,7 +252,7 @@ export async function heldThrough(
             )
           : warning(
               NEEDS_PASSWORD,
-              `${app.def.name}'s first-run setup signs in through ${name}, which doesn't have the admin password Mediaplane gives the apps yet: it is held, and waits until apply has set it in ${name} through ${name}'s key`,
+              `${app.def.name}'s first-run setup signs in through ${name}, which doesn't have the admin password Mediaplane gives the apps yet: it is held, and waits until ${name} has it`,
               {
                 hint: `once ${name} has it, the next apply sets ${app.def.name} up; see ${REBUILD_RUNBOOK}`,
               },

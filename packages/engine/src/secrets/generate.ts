@@ -61,13 +61,9 @@ export function withGeneratedSecrets(
     generated.push(`${app}.${name}`);
   }
   return {
-    store: {
-      version: 1,
-      apps,
-      ...(shared === undefined ? {} : { shared }),
-      // The apps whose setup Mediaplane knows to be its own, kept as they were.
-      ...(store.setUp === undefined ? {} : { setUp: store.setUp }),
-    },
+    // Everything else as it was: the apps whose setup Mediaplane knows to be its own, and
+    // a later release's fields, which this one doesn't know.
+    store: { ...store, apps, ...(shared === undefined ? {} : { shared }) },
     generated,
   };
 }

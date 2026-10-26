@@ -54,7 +54,13 @@ import {
 } from '../testing/fixtures';
 import type { WiringSeams } from '../integrations/wiring';
 import { FAKE_LOGIN, fakeSonarr, WIRED_CATALOG } from '../testing/wiring';
-import { apply, unhealthyServices, type ApplyOptions, type StepEvent } from './apply';
+import {
+  apply,
+  NONE_NEEDED,
+  unhealthyServices,
+  type ApplyOptions,
+  type StepEvent,
+} from './apply';
 import { BootstrapFailed } from './bootstrap';
 import { tempDir } from '../testing/temp';
 
@@ -227,6 +233,54 @@ describe('apply', () => {
       generate: ['admin.password', 'gluetun.controlApiKey'],
       recover: ['sonarr.apiKey'],
     });
+  });
+
+  it("keeps a later release's fields in state/secrets.json through an apply that writes it", async () => {
+    const later = { laterTop: 7, shared: { laterShared: { nested: ['fake-later'] } } };
+    const fieldsIn = async (home: string) => {
+      const saved = JSON.parse(await readFile(join(home, SECRETS_PATH), 'utf8')) as {
+        laterTop?: unknown;
+        shared?: { laterShared?: unknown };
+      };
+      return { laterTop: saved.laterTop, laterShared: saved.shared?.laterShared };
+    };
+    const kept = { laterTop: 7, laterShared: { nested: ['fake-later'] } };
+    // An apply that generates the apps' keys.
+    const home = await makeHome();
+    await mkdir(join(home, 'state'), { recursive: true });
+    await writeFile(
+      join(home, SECRETS_PATH),
+      JSON.stringify({
+        version: 1,
+        apps: {},
+        shared: { adminPassword: 'fake-admin-password', ...later.shared },
+        laterTop: later.laterTop,
+      }),
+    );
+    const first = await apply(options(home, fakeDocker(home)));
+    expect(first.actions[0]?.detail).toContain('generated');
+    expect(await fieldsIn(home)).toEqual(kept);
+    // One that generates nothing, and only takes an app off the list once it has the
+    // password.
+    const sonarr = await fakeSonarr();
+    const wired = await makeHome();
+    const docker = fakeDocker(wired, { addresses: sonarr.addresses });
+    const run = () =>
+      apply(options(wired, docker, { catalog: WIRED_CATALOG, wiring: sonarr.seams }));
+    expect((await run()).outcome).toBe('success');
+    const store = await readSecretStore(wired);
+    await writeFile(
+      join(wired, SECRETS_PATH),
+      JSON.stringify({
+        ...store,
+        shared: { ...store.shared, adminPasswordNotIn: ['sonarr'], ...later.shared },
+        laterTop: later.laterTop,
+      }),
+    );
+    const cleared = await run();
+    expect(cleared.actions[0]?.detail).toBe(NONE_NEEDED);
+    expect((await readSecretStore(wired)).shared?.adminPasswordNotIn).toBeUndefined();
+    expect(await fieldsIn(wired)).toEqual(kept);
   });
 
   it('generates keys, writes files, pulls, starts, verifies and records', async () => {
@@ -2210,6 +2264,16 @@ describe('apply: first-run setup before the ports are published', () => {
       'jellyfin unpublished, setup done',
       'jellyfin unpublished, setup done',
     ]);
+    // Done, but not by Mediaplane's setup: the app hasn't the password it generated, so
+    // it stays listed, and the next plan holds its sign-in rather than send one.
+    expect((await readSecretStore(home)).shared?.adminPasswordNotIn).toEqual([
+      'jellyfin',
+    ]);
+    const refused = setup.state.refusedSignIns;
+    const next = await plan(options(home, claiming, extra));
+    expect(next.bootstrap).toEqual([]);
+    expect(next.diagnostics.map((d) => d.code)).toContain('bootstrap.needs-password');
+    expect(setup.state.refusedSignIns).toBe(refused);
   });
 
   it("keeps unpublished, and says not to start afresh, a set-up app whose appdata Mediaplane can't read", async () => {
@@ -2446,7 +2510,7 @@ describe('apply: no sign-in with an admin password an app has never had', () => 
     resource: 'jellyfin.admin',
     result: 'skipped',
     detail:
-      "jellyfin's first-run setup is held: the app it signs in to has never had the admin password",
+      "jellyfin's first-run setup is held: the app it signs in to doesn't have the admin password Mediaplane holds",
   };
 
   /** FAKE_SETUP's Jellyfin and a fake Sonarr, each on its own fake server. */
@@ -2982,7 +3046,7 @@ describe('apply: a setup that signs in through an app that is held', () => {
       resource: 'sonarr',
       result: 'skipped',
       detail:
-        "sonarr's first-run setup is held: the app it signs in to has never had the admin password",
+        "sonarr's first-run setup is held: the app it signs in to doesn't have the admin password Mediaplane holds",
     });
     // Its setup open, it never has its ports; only Jellyfin is listed as lacking it.
     expect(docker.calls.slice(calls).filter((c) => c.startsWith('up'))).toEqual([
@@ -3057,7 +3121,7 @@ describe('apply: a setup that signs in through an app that is held', () => {
       expect.objectContaining({
         code: 'bootstrap.needs-password',
         message:
-          "sonarr's first-run setup signs in through jellyfin, which doesn't have the admin password Mediaplane gives the apps yet: it is held, and waits until apply has set it in jellyfin through jellyfin's key",
+          "sonarr's first-run setup signs in through jellyfin, which doesn't have the admin password Mediaplane gives the apps yet: it is held, and waits until jellyfin has it",
       }),
     );
     // No sign-in through Jellyfin before the wire step set its password.

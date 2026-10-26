@@ -504,7 +504,7 @@ describe('inspectBootstrap: a setup that signs in through one held', () => {
             severity: 'warning',
             code: 'bootstrap.needs-password',
             message:
-              "sonarr's first-run setup signs in through jellyfin, which doesn't have the admin password Mediaplane gives the apps yet: it is held, and waits until apply has set it in jellyfin through jellyfin's key",
+              "sonarr's first-run setup signs in through jellyfin, which doesn't have the admin password Mediaplane gives the apps yet: it is held, and waits until jellyfin has it",
             hint: `once jellyfin has it, the next apply sets sonarr up; see ${REBUILD_RUNBOOK}`,
           },
         ],

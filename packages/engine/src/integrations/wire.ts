@@ -231,7 +231,8 @@ export async function wire(options: WireOptions): Promise<string[]> {
     const why = options.held?.includes(appId)
       ? {
           list: held,
-          detail: 'is held: the app it signs in to has never had the admin password',
+          detail:
+            "is held: the app it signs in to doesn't have the admin password Mediaplane holds",
         }
       : options.waiting?.includes(appId)
         ? { list: waited, detail: 'waits' }

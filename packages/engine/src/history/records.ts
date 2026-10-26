@@ -107,12 +107,12 @@ const recordShape = (object: typeof z.strictObject) =>
 export const changeRecordSchema = recordShape(z.strictObject);
 
 /**
- * What listRecords and readRecord read: a later release's record too, whose fields this one
- * doesn't know, at any level, are left as they are and never acted on. A known field of
- * another type, or another schema, is still refused. Typed as the strict one: the fields
- * it doesn't know are never read.
+ * What listRecords and readRecord read: a later release's record too. The fields this one
+ * doesn't know, at any level, stay in the file, and are left out of what is read, so they
+ * are never acted on nor printed (`history --json` prints `mediaplane.change/v1`'s fields
+ * only). A known field of another type, or another schema, is still refused.
  */
-const readableRecordSchema = recordShape(z.looseObject);
+const readableRecordSchema = recordShape(z.object);
 
 export type ChangeRecord = z.infer<typeof changeRecordSchema>;
 export type ActionResult = z.infer<ReturnType<typeof actionShape>>;

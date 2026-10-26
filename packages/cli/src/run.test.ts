@@ -1112,6 +1112,39 @@ describe('mediaplane apply', () => {
     });
   });
 
+  it("prints only the change record's own fields: a later release's stay in the file", async () => {
+    const home = await makeHome();
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(fakeDocker(home))),
+    ).toBe(0);
+    const [name = ''] = await readdir(join(home, 'state', 'history'));
+    const path = join(home, 'state', 'history', name);
+    const record = JSON.parse(await readFile(path, 'utf8')) as {
+      plan: { files: Record<string, unknown>[] };
+    };
+    const secretLike = 'f'.repeat(40);
+    const later = {
+      ...record,
+      laterTop: secretLike,
+      plan: {
+        ...record.plan,
+        files: record.plan.files.map((file) => ({ ...file, content: secretLike })),
+      },
+    };
+    await writeFile(path, JSON.stringify(later));
+    const shown = capture();
+    expect(
+      await run(
+        ['history', name.replace(/\.json$/, ''), '--home', home, '--json'],
+        shown.io,
+        deps(fakeDocker(home)),
+      ),
+    ).toBe(0);
+    expect(shown.stdout()).not.toContain(secretLike);
+    expect(JSON.parse(shown.stdout())).toEqual(record);
+    expect(await readFile(path, 'utf8')).toContain(secretLike);
+  });
+
   it('still reports a failed step when the record could not be saved either', async () => {
     const home = await makeHome();
     await mkdir(join(home, 'state'));
@@ -1474,13 +1507,13 @@ describe('mediaplane apply: Seerr in the stack', () => {
       1,
     );
     expect(waited.stdout()).toContain(
-      "  skipped wiring seerr.media_server: seerr's first-run setup is held: the app it signs in to has never had the admin password\n",
+      "  skipped wiring seerr.media_server: seerr's first-run setup is held: the app it signs in to doesn't have the admin password Mediaplane holds\n",
     );
     expect(waited.stdout()).toContain(
       '  done    wiring jellyfin.admin: updated password\n',
     );
     expect(waited.stderr()).toContain(
-      "warning: Seerr's first-run setup signs in through Jellyfin, which doesn't have the admin password Mediaplane gives the apps yet: it is held, and waits until apply has set it in Jellyfin through Jellyfin's key\n",
+      "warning: Seerr's first-run setup signs in through Jellyfin, which doesn't have the admin password Mediaplane gives the apps yet: it is held, and waits until Jellyfin has it\n",
     );
     // Never signed in through Jellyfin with a password it didn't have.
     expect(apis.app.requests.filter((r) => r.path === '/api/v1/auth/jellyfin')).toEqual(

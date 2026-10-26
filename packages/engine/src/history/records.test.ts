@@ -96,6 +96,10 @@ describe('history records', () => {
     await writeFile(join(home, HISTORY_DIR, `${id}.json`), JSON.stringify(later));
     expect((await listRecords(home)).unreadable).toEqual([]);
     expect((await readRecord(home, id))?.plan.secrets.generate).toEqual([]);
+    // Read as this release knows a record: what it doesn't know stays in the file only.
+    const read = JSON.stringify(await readRecord(home, id));
+    expect(read).not.toMatch(/later/);
+    expect((await listRecords(home)).records[0]).toEqual(await readRecord(home, id));
     // Still refused: a known field of the wrong type.
     await writeFile(
       join(home, HISTORY_DIR, `${id}.json`),

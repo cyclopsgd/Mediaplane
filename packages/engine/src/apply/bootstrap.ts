@@ -11,7 +11,7 @@ import {
   type ReachedApp,
   type WiringSeams,
 } from '../integrations/wiring';
-import { appSetupDone, type BootstrapChange } from '../plan/bootstrap';
+import { appSetupDone, signsInForKey, type BootstrapChange } from '../plan/bootstrap';
 import { NO_PLEX_TV, type PlexTv } from '../plextv/client';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { RuntimeError, type Runtime } from '../runtime/types';
@@ -248,11 +248,16 @@ export async function bootstrapApps(options: BootstrapOptions): Promise<Bootstra
     const unsaved = store;
     // Its setup signed in as the shared admin, or made it: the app has the password, so it
     // is no longer one that never had it (shared.adminPasswordNotIn). A wizard that was
-    // open, and is done now, made the admin with it, though what came after failed: nobody
-    // else can reach an app started unpublished.
+    // open, and is done now, made the admin with it, though what came after failed; but
+    // only for a setup that makes the shared admin (signsInForKey), and never one someone
+    // else finished meanwhile (`claimed`), whose admin isn't Mediaplane's.
     const gave =
       result.key !== undefined ||
-      (change?.unpublished === true && (await appSetupDone(options.home, app)) === true);
+      (change?.unpublished === true &&
+        result.claimed !== true &&
+        result.waiting === undefined &&
+        signsInForKey(app) &&
+        (await appSetupDone(options.home, app)) === true);
     const listed = store.shared?.adminPasswordNotIn ?? [];
     if (gave && listed.includes(app.def.id)) {
       store = withPasswordNotIn(
@@ -343,6 +348,8 @@ interface SetUpResult {
   waiting?: string;
   /** Whether the app must stay unpublished: it still looks open, or was claimed. */
   open: boolean;
+  /** Whether someone else finished its setup: what it holds isn't Mediaplane's. */
+  claimed?: true;
 }
 
 /**
@@ -420,6 +427,7 @@ async function setUp(
         return {
           failure: await claimed(app, cause.message, false, started),
           open: true,
+          claimed: true,
         };
       }
       return { waiting: cause.message, open: true };
@@ -430,6 +438,7 @@ async function setUp(
       return {
         failure: await claimed(app, cause.message, cause.unsure, started),
         open: true,
+        claimed: true,
       };
     }
     // A setup that makes no key can't show the app is Mediaplane's but by succeeding:
