@@ -6,7 +6,13 @@ import { emptySecretStore, type SecretStore } from '../secrets/store';
 import { FAKE_SETUP, SET_UP_CATALOG, SIGN_IN_CATALOG } from '../testing/bootstrap';
 import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
 import { tempDir } from '../testing/temp';
-import { inspectBootstrap, planBootstrap, setupsToMakeKeys } from './bootstrap';
+import { REBUILD_RUNBOOK } from '../secrets/recover';
+import {
+  inspectBootstrap,
+  planBootstrap,
+  setupsToMakeKeys,
+  withoutSignInsToCome,
+} from './bootstrap';
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -250,5 +256,71 @@ describe('setupsToMakeKeys', () => {
     await mkdir(join(stack.home, 'appdata', 'sonarr'), { recursive: true });
     await writeFile(join(stack.home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
     expect(await setupsToMakeKeys(resolved.stack, ['sonarr'], [])).toEqual([]);
+  });
+});
+
+describe('inspectBootstrap: with an admin password apply is yet to generate', () => {
+  it('holds back a setup that would only sign in with it, naming the app, with the runbook', async () => {
+    const stack = await stackIn();
+    await setupFile(stack, 'done\n');
+    const generated = await inspectBootstrap(stack, emptySecretStore(), 'generate');
+    expect(generated.changes).toEqual([]);
+    expect(generated.held).toEqual(['jellyfin']);
+    expect(generated.diagnostics).toEqual([
+      {
+        severity: 'error',
+        code: 'bootstrap.needs-password',
+        message:
+          "jellyfin takes no key Mediaplane holds, and only its first-run setup can find one, signing in as the shared admin; but the admin password is one apply is yet to generate, which jellyfin has never had. Apply doesn't sign in to jellyfin, and leaves it unwired",
+        hint: `set admin.password to a file holding the password jellyfin's admin has, then run apply again, which finds its key; the runbook has the other ways: ${REBUILD_RUNBOOK}`,
+      },
+    ]);
+    const rotated = await inspectBootstrap(stack, emptySecretStore(), 'rotate');
+    expect(rotated.changes).toEqual([]);
+    expect(rotated.held).toEqual(['jellyfin']);
+    expect(rotated.diagnostics).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        code: 'bootstrap.needs-password',
+        hint: `run apply without --rotate first, which finds jellyfin's key with the admin password it has, then rotate it; see ${REBUILD_RUNBOOK}`,
+      }),
+    ]);
+  });
+
+  it('still sets up, unpublished, an app whose setup is open, which makes the admin', async () => {
+    const stack = await stackIn();
+    expect(await inspectBootstrap(stack, emptySecretStore(), 'generate')).toEqual({
+      changes: [{ app: 'jellyfin', unpublished: true }],
+      held: [],
+      diagnostics: [],
+    });
+    await setupFile(stack, 'done\n');
+    // Its key stored, it has nothing to set up, nor to hold back.
+    expect(await inspectBootstrap(stack, KEYED, 'generate')).toEqual({
+      changes: [],
+      held: [],
+      diagnostics: [],
+    });
+  });
+});
+
+describe('withoutSignInsToCome', () => {
+  it("holds back setupsToMakeKeys' setups, which only sign in, only with a password to generate", async () => {
+    const stack = await stackIn();
+    await setupFile(stack, 'done\n');
+    const remade = await setupsToMakeKeys(stack, ['jellyfin'], []);
+    expect(withoutSignInsToCome(stack, remade, undefined)).toEqual({
+      changes: remade,
+      held: [],
+      diagnostics: [],
+    });
+    expect(withoutSignInsToCome(stack, remade, 'rotate')).toEqual({
+      changes: [],
+      held: ['jellyfin'],
+      diagnostics: [expect.objectContaining({ code: 'bootstrap.needs-password' })],
+    });
+    // An unpublished setup makes the admin, or signs in through another app: kept.
+    const open = [{ app: 'jellyfin', unpublished: true }];
+    expect(withoutSignInsToCome(stack, open, 'generate').changes).toEqual(open);
   });
 });

@@ -51,7 +51,14 @@ import {
   userSecrets,
 } from '../secrets/values';
 import { planAppdata } from './appdata';
-import { inspectBootstrap, setupsToMakeKeys, type BootstrapChange } from './bootstrap';
+import {
+  inspectBootstrap,
+  NEEDS_PASSWORD,
+  setupsToMakeKeys,
+  withoutSignInsToCome,
+  type BootstrapChange,
+  type PasswordToGenerate,
+} from './bootstrap';
 import { notYetHealthy, otherHomes, ownPorts, type ContainerChange } from './containers';
 import { diffFiles, type FileChange } from './files';
 import { predictContainers, type PredictResult } from './predict';
@@ -97,7 +104,10 @@ export interface PlanOptions {
 export const ROTATABLE: readonly string[] = [ADMIN_PASSWORD_PATH];
 
 export interface PlanResult {
-  /** False when any diagnostic is an error; files and containers are then empty. */
+  /**
+   * False when an error stopped the plan; files and containers are then empty. The one
+   * error that stops no plan is `bootstrap.needs-password`: it leaves one app unwired.
+   */
   ok: boolean;
   changed: boolean;
   files: FileChange[];
@@ -144,6 +154,12 @@ export interface PlanContext {
   /** Every secret an app's answer could repeat: plan's own list (knownSecrets). */
   secrets: string[];
   current: ContainerState[];
+  /**
+   * The apps whose first-run setup would only sign in with an admin password apply is yet
+   * to generate, which they never had: not set up, and skipped by the wire step, as an
+   * app whose setup waits (`bootstrap.needs-password`).
+   */
+  held: string[];
 }
 
 /** Everything apply would do, without doing it. Writes nothing. */
@@ -294,12 +310,22 @@ export async function planStack(
     ]);
   }
   let containers = predicted.changes;
+  // A setup that would only sign in with a password apply is yet to generate is held back,
+  // with an error that names its app: the rest of the stack is still planned and wired.
+  const toGenerate: PasswordToGenerate | undefined = !newPassword
+    ? undefined
+    : rotating.password
+      ? 'rotate'
+      : 'generate';
+  const setups = await inspectBootstrap(stack, store, toGenerate);
+  /** The errors for the setups held back, which stop no plan: said with the result. */
+  const heldBack = setups.diagnostics.filter((d) => d.code === NEEDS_PASSWORD);
+  diagnostics.push(...setups.diagnostics.filter((d) => d.code !== NEEDS_PASSWORD));
+  if (hasErrors(diagnostics)) return failed([...diagnostics, ...heldBack]);
+  let bootstrap = setups.changes;
+  const held = [...setups.held];
   // An app whose setup is open starts again without its ports, whatever it runs now: up
   // recreates it, and again once it is set up.
-  const setups = await inspectBootstrap(stack, store);
-  diagnostics.push(...setups.diagnostics);
-  if (hasErrors(diagnostics)) return failed(diagnostics);
-  let bootstrap = setups.changes;
   const unpublished = new Set(bootstrap.filter((b) => b.unpublished).map((b) => b.app));
   containers = containers.map((change) =>
     unpublished.has(change.service) && change.action !== 'create'
@@ -356,6 +382,8 @@ export async function planStack(
         ? containers.filter((c) => c.action !== 'unchanged').map((c) => c.service)
         : []),
       ...bootstrap.map((b) => b.app),
+      // Held back, it has no key it takes: apply's wire step skips it.
+      ...held,
     ]);
     // The join is plan's one change to Docker, and only an app that is settled is asked:
     // with none, every resource is checked after the start, and nothing joins.
@@ -388,11 +416,19 @@ export async function planStack(
       ({ drift, checks } = planned);
       wiring = planned.changes;
       diagnostics.push(...planned.diagnostics);
-      // An app that refuses the key its setup made has the setup run again, signed in.
+      // An app that refuses the key its setup made has the setup run again, signed in:
+      // never with a password apply is yet to generate.
       const refusing = drift
         .filter((d) => d.kind === 'key' && d.source === undefined)
         .map((d) => d.resource);
-      bootstrap = [...bootstrap, ...(await setupsToMakeKeys(stack, refusing, bootstrap))];
+      const remade = withoutSignInsToCome(
+        stack,
+        await setupsToMakeKeys(stack, refusing, bootstrap),
+        toGenerate,
+      );
+      bootstrap = [...bootstrap, ...remade.changes];
+      held.push(...remade.held);
+      heldBack.push(...remade.diagnostics);
     } catch (cause) {
       if (!(cause instanceof RuntimeError)) throw cause;
       return failed([...diagnostics, dockerUnavailable(cause, options.env)]);
@@ -418,9 +454,9 @@ export async function planStack(
       drift,
       checks,
       bootstrap,
-      diagnostics,
+      diagnostics: [...diagnostics, ...heldBack],
     },
-    context: { stack, compose, store, stored, secrets, current },
+    context: { stack, compose, store, stored, secrets, current, held },
   };
 }
 

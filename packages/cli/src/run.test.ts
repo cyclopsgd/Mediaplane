@@ -417,6 +417,25 @@ describe('mediaplane plan', () => {
       await run(['plan', '--home', home, '--rotate', 'admin.password'], term.io, deps()),
     ).toBe(2);
     expect(term.stdout()).toContain('Secrets to generate: admin.password,');
+    // plan refuses it too, by its code.
+    const unknown = capture();
+    expect(
+      await run(
+        ['plan', '--home', home, '--rotate', 'sonarr.apiKey', '--json'],
+        unknown.io,
+        deps(),
+      ),
+    ).toBe(1);
+    expect(JSON.parse(unknown.stdout())).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          severity: 'error',
+          code: 'rotate.unknown',
+          message: "Mediaplane doesn't rotate sonarr.apiKey: it rotates admin.password",
+        },
+      ],
+    });
     const refused = capture();
     expect(
       await run(

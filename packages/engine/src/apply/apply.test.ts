@@ -29,7 +29,7 @@ import {
 } from '../paths';
 import { WiringRefused } from '../runtime/docker';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
-import { readSecretStore, writeSecretStore } from '../secrets/store';
+import { readSecretStore, writeSecretStore, type SecretStore } from '../secrets/store';
 import {
   fakeSetUpApp,
   SET_UP_CATALOG,
@@ -44,7 +44,13 @@ import {
   probeOutput,
   type FakeRuntimeOptions,
 } from '../testing/fakes';
-import { FIXTURE_HOST, fixtureApp, fixtureCatalog } from '../testing/fixtures';
+import {
+  FIXTURE_API,
+  FIXTURE_HOST,
+  fixtureApp,
+  fixtureCatalog,
+} from '../testing/fixtures';
+import type { WiringSeams } from '../integrations/wiring';
 import { FAKE_LOGIN, fakeSonarr, WIRED_CATALOG } from '../testing/wiring';
 import { apply, unhealthyServices, type ApplyOptions, type StepEvent } from './apply';
 import { BootstrapFailed } from './bootstrap';
@@ -1779,6 +1785,12 @@ describe('apply: what a failed wiring says to do', () => {
 });
 
 describe('apply: first-run setup before the ports are published', () => {
+  /** A store with the admin password alone: apply generates the keys, not it. */
+  const WITH_PASSWORD: SecretStore = {
+    version: 1,
+    apps: {},
+    shared: { adminPassword: 'fake-admin-password' },
+  };
   /**
    * The fake setup's stack, and a Docker that notes, at each up, which apps it starts
    * without their ports and whether the setup is done then.
@@ -2117,6 +2129,8 @@ describe('apply: first-run setup before the ports are published', () => {
     await mkdir(join(home, 'appdata', 'jellyfin'), { recursive: true });
     await writeFile(join(home, 'appdata', 'jellyfin', 'setup.txt'), 'done\n');
     Object.assign(setup.state, { done: true, admin: 'someone-else', key: SET_UP_KEY });
+    // An admin password apply has, not one to generate: its setup signs in with it.
+    await writeSecretStore(home, WITH_PASSWORD);
     const result = await run();
     expect(result.outcome).toBe('failed');
     expect(result.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: false }]);
@@ -2155,6 +2169,8 @@ describe('apply: first-run setup before the ports are published', () => {
     await mkdir(join(home, 'appdata', 'jellyfin'), { recursive: true });
     await writeFile(join(home, 'appdata', 'jellyfin', 'setup.txt'), 'done\n');
     setup.state.staysOpen = true;
+    // An admin password apply has, not one to generate: its setup signs in with it.
+    await writeSecretStore(home, WITH_PASSWORD);
     const result = await run();
     expect(result.outcome).toBe('failed');
     expect(result.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: false }]);
@@ -2241,6 +2257,146 @@ describe('apply: first-run setup before the ports are published', () => {
     // Only the start step's up: no publishing one.
     expect(ups).toEqual(['jellyfin unpublished, setup open']);
     expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
+  });
+});
+
+describe('apply: no sign-in with an admin password apply is yet to generate', () => {
+  /** SET_UP_CATALOG, with Sonarr's FAKE_LOGIN, to be wired past Jellyfin. */
+  const BOTH: Catalog = SET_UP_CATALOG.map((def) =>
+    def.id === 'sonarr'
+      ? { ...def, api: FIXTURE_API, integration: { after: [], resources: [FAKE_LOGIN] } }
+      : def,
+  );
+  /** Another random source: what apply generates anew differs from the first apply's. */
+  const other = (size: number) => Buffer.alloc(size, 0xcd);
+  const REBUILD = runbookUrl('rebuilding-a-host');
+
+  /** FAKE_SETUP's Jellyfin and a fake Sonarr, each on its own fake server. */
+  async function twoApps(catalog: Catalog = BOTH) {
+    const home = await makeHome();
+    const setup = await fakeSetUpApp(home);
+    const sonarr = await fakeSonarr();
+    const docker = fakeDocker(home, {
+      addresses: { ...setup.addresses, ...sonarr.addresses },
+    });
+    const wiring: WiringSeams = {
+      endpoint: (app) => ({
+        host: '127.0.0.1',
+        port: app.def.id === 'jellyfin' ? setup.app.port : sonarr.app.port,
+      }),
+      retry: { deadlineMs: 0 },
+    };
+    const run = (more: Partial<ApplyOptions> = {}) =>
+      apply(options(home, docker, { catalog, wiring, ...more }));
+    const planned = (more: Partial<ApplyOptions> = {}) =>
+      plan(options(home, docker, { catalog, wiring, ...more }));
+    const signIns = () => setup.app.requests.filter((r) => r.path === '/signin').length;
+    return { home, setup, sonarr, run, planned, signIns };
+  }
+
+  it('signs in to no app whose key went with the store, skips it with an error, and wires the rest', async () => {
+    const { home, sonarr, run, planned, signIns } = await twoApps();
+    expect((await run()).outcome).toBe('success');
+    const signedIn = signIns();
+    await rm(join(home, SECRETS_PATH));
+    const shown = await planned({ random: other });
+    expect(shown.ok).toBe(true);
+    expect(shown.secrets.generate).toContain('admin.password');
+    // Jellyfin's setup is done: only a sign-in, with a password it never had, is left.
+    expect(shown.bootstrap).toEqual([]);
+    expect(shown.diagnostics.filter((d) => d.severity === 'error')).toEqual([
+      expect.objectContaining({
+        code: 'bootstrap.needs-password',
+        message: expect.stringContaining("doesn't sign in to jellyfin") as string,
+        hint: expect.stringContaining(REBUILD) as string,
+      }),
+    ]);
+    expect(shown.wiring).toContainEqual({ resource: 'jellyfin', action: 'after-start' });
+    const result = await run({ random: other });
+    expect(signIns()).toBe(signedIn);
+    expect(result.actions.find((a) => a.resource === 'jellyfin')).toMatchObject({
+      step: 'wire',
+      result: 'skipped',
+      detail: "jellyfin's first-run setup waits",
+    });
+    expect(result.actions.find((a) => a.resource === 'sonarr.login')).toMatchObject({
+      result: 'done',
+      detail: 'updated password',
+    });
+    const password = (await readSecretStore(home)).shared?.adminPassword ?? '';
+    expect(sonarr.state.password === password, 'Sonarr has the new password').toBe(true);
+    // Jellyfin is left as it is: verify says so. Never a password in what apply says.
+    expect(result.outcome).toBe('failed');
+    expect(result.actions.at(-1)).toMatchObject({ step: 'verify', result: 'failed' });
+    expect(JSON.stringify(result)).not.toContain(password);
+  });
+
+  it('signs in with a rotated password to no app that refuses its key, and wires the rest', async () => {
+    const { setup, sonarr, run, planned, signIns } = await twoApps();
+    expect((await run()).outcome).toBe('success');
+    // Jellyfin's key deleted by hand, and another made: it refuses the stored one.
+    setup.state.key = '7'.repeat(32);
+    const signedIn = signIns();
+    // Without --rotate, its setup signs in to make the key again, with the password it has.
+    expect((await planned()).bootstrap).toEqual([
+      { app: 'jellyfin', unpublished: false },
+    ]);
+    const shown = await planned({ rotate: ['admin.password'] });
+    expect(shown.ok).toBe(true);
+    expect(shown.bootstrap).toEqual([]);
+    expect(shown.drift).toContainEqual({
+      resource: 'jellyfin',
+      kind: 'key',
+      secret: 'apiKey',
+    });
+    expect(shown.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: 'error',
+        code: 'bootstrap.needs-password',
+        hint: expect.stringContaining('without --rotate') as string,
+      }),
+    );
+    const rotated = await run({ random: other, rotate: ['admin.password'] });
+    expect(signIns()).toBe(signedIn);
+    expect(rotated.actions.find((a) => a.resource === 'jellyfin')).toMatchObject({
+      step: 'wire',
+      result: 'skipped',
+    });
+    expect(rotated.actions.find((a) => a.resource === 'sonarr.login')).toMatchObject({
+      result: 'done',
+      detail: 'updated password',
+    });
+    expect(sonarr.state.password !== '', 'Sonarr has a password').toBe(true);
+  });
+
+  it('sets nothing up for an app whose key is recovered from its appdata, and signs in to none', async () => {
+    const catalog = BOTH.map((def) =>
+      def.id === 'jellyfin'
+        ? {
+            ...def,
+            keyFiles: {
+              apiKey: {
+                path: 'key.txt',
+                read: (text: string) => /^(\w+)$/m.exec(text)?.[1],
+              },
+            },
+          }
+        : def,
+    );
+    const { home, run, planned, signIns } = await twoApps(catalog);
+    expect((await run()).outcome).toBe('success');
+    await writeFile(join(home, 'appdata', 'jellyfin', 'key.txt'), `${SET_UP_KEY}\n`);
+    await rm(join(home, SECRETS_PATH));
+    const signedIn = signIns();
+    const shown = await planned({ random: other });
+    expect(shown.secrets.recover).toEqual(['jellyfin.apiKey']);
+    expect(shown.bootstrap).toEqual([]);
+    expect(shown.diagnostics.map((d) => d.code)).not.toContain(
+      'bootstrap.needs-password',
+    );
+    expect((await run({ random: other })).outcome).toBe('success');
+    expect(signIns()).toBe(signedIn);
+    expect((await run({ random: other })).outcome).toBe('no-changes');
   });
 });
 

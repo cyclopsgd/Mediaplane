@@ -293,8 +293,11 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
           ]),
     ].join('; ');
   });
-  /** The apps whose first-run setup waits: the wire step skips their resources. */
-  let waiting: string[] = [];
+  /**
+   * The apps whose first-run setup waits: the wire step skips their resources. One held
+   * back by the plan waits for a password it has: plan's error said so.
+   */
+  let waiting: string[] = [...context.held];
   /**
    * The apps whose first-run setup failed: the step fails, but the wire step still runs,
    * skipping their resources and what requires them (spec §5.1).
@@ -320,7 +323,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });
       store = set.store;
-      waiting = set.waiting.map((w) => w.app);
+      waiting = [...context.held, ...set.waiting.map((w) => w.app)];
       unset = set.failed.map((f) => f.app);
       const failure = setupFailure(set);
       if (failure !== undefined) throw failure;

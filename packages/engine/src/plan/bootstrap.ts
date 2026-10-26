@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { error, warning, type Diagnostic } from '../diagnostics';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
+import { REBUILD_RUNBOOK } from '../secrets/recover';
 import type { SecretStore } from '../secrets/store';
 import { readIfExists } from '../util/fs';
 
@@ -18,8 +19,19 @@ export interface BootstrapChange {
 /** What the plan found of first-run setups: the apps to set up, and what to tell the user. */
 export interface BootstrapPlan {
   changes: BootstrapChange[];
+  /**
+   * The apps whose setup would only sign in with an admin password apply is yet to
+   * generate (withoutSignInsToCome): not set up, and their resources skipped.
+   */
+  held: string[];
   diagnostics: Diagnostic[];
 }
+
+/**
+ * Why the admin password is one apply is yet to generate: state/secrets.json has none, as
+ * after a lost store (`generate`), or `--rotate admin.password` (`rotate`).
+ */
+export type PasswordToGenerate = 'generate' | 'rotate';
 
 /**
  * Each app with a first-run setup (`bootstrap`) that apply will finish: one whose key the
@@ -33,11 +45,13 @@ export interface BootstrapPlan {
  * or before Mediaplane knew, starts unpublished, and its setup checks it is Mediaplane's.
  * An app with a setup that runs inside another app's network is an error: that app
  * publishes its ports, and `ports: !reset []` on the app's own service can't unpublish
- * them. Reads only; writes nothing.
+ * them. With an admin password apply is yet to generate (`toGenerate`), a setup that
+ * would only sign in is held back (withoutSignInsToCome). Reads only; writes nothing.
  */
 export async function inspectBootstrap(
   stack: ResolvedStack,
   store: SecretStore,
+  toGenerate?: PasswordToGenerate,
 ): Promise<BootstrapPlan> {
   const changes: BootstrapChange[] = [];
   const diagnostics: Diagnostic[] = [];
@@ -85,7 +99,61 @@ export async function inspectBootstrap(
       unpublished: setup.secret === undefined || done !== true,
     });
   }
-  return { changes, diagnostics };
+  const kept = withoutSignInsToCome(stack, changes, toGenerate);
+  return {
+    changes: kept.changes,
+    held: kept.held,
+    diagnostics: [...diagnostics, ...kept.diagnostics],
+  };
+}
+
+/**
+ * `changes` without the setups that would only sign in, as the shared admin, to find the
+ * key the setup made (published, its secret the app's API key), when the admin password
+ * is one apply is yet to generate (`toGenerate`): the app has never had it, so the
+ * sign-in could only fail, leaving a mark in the app (decision 15). Each such app is
+ * `held`, with an error naming it: its resources are skipped. A setup that starts its app
+ * unpublished makes the admin, or signs in through another app, and is kept. Pure.
+ */
+export function withoutSignInsToCome(
+  stack: ResolvedStack,
+  changes: readonly BootstrapChange[],
+  toGenerate: PasswordToGenerate | undefined,
+): { changes: BootstrapChange[]; held: string[]; diagnostics: Diagnostic[] } {
+  const kept: BootstrapChange[] = [];
+  const held: string[] = [];
+  const diagnostics: Diagnostic[] = [];
+  for (const change of changes) {
+    const app = stack.apps.find((a) => a.def.id === change.app);
+    const secret = app?.def.bootstrap?.secret;
+    const signsInOnly =
+      !change.unpublished && secret !== undefined && secret === app?.def.api?.key.secret;
+    if (toGenerate === undefined || app === undefined || !signsInOnly) {
+      kept.push(change);
+      continue;
+    }
+    held.push(change.app);
+    diagnostics.push(needsPassword(app, toGenerate));
+  }
+  return { changes: kept, held, diagnostics };
+}
+
+/** The code of the error for a setup held back by withoutSignInsToCome. */
+export const NEEDS_PASSWORD = 'bootstrap.needs-password';
+
+/** The error for an app whose setup would sign in with a password it never had. */
+function needsPassword(app: ResolvedApp, toGenerate: PasswordToGenerate): Diagnostic {
+  const name = app.def.name;
+  return error(
+    NEEDS_PASSWORD,
+    `${name} takes no key Mediaplane holds, and only its first-run setup can find one, signing in as the shared admin; but the admin password is one apply is yet to generate, which ${name} has never had. Apply doesn't sign in to ${name}, and leaves it unwired`,
+    {
+      hint:
+        toGenerate === 'rotate'
+          ? `run apply without --rotate first, which finds ${name}'s key with the admin password it has, then rotate it; see ${REBUILD_RUNBOOK}`
+          : `set admin.password to a file holding the password ${name}'s admin has, then run apply again, which finds its key; the runbook has the other ways: ${REBUILD_RUNBOOK}`,
+    },
+  );
 }
 
 /**
