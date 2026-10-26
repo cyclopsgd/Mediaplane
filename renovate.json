@@ -24,7 +24,7 @@
       "customType": "regex",
       "description": "Images pinned by tag and digest in the workflows, the pre-commit hook, the CI scripts and the end-to-end tests",
       "managerFilePatterns": [
-        "/^\\.github/workflows/[^/]+\\.yml$/",
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/",
         "/^\\.githooks/pre-commit$/",
         "/^scripts/ci/[^/]+\\.sh$/",
         "/^test/e2e/[^/]+\\.ts$/"

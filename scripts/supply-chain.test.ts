@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import { describe, expect, it } from 'vitest';
@@ -8,15 +9,20 @@ import { ROOT } from './root';
 
 const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
 
+/** Every workflow GitHub runs: a `.yml` or a `.yaml` file in `.github/workflows`. */
 const WORKFLOWS = readdirSync(join(ROOT, '.github/workflows'))
-  .filter((name) => name.endsWith('.yml'))
+  .filter((name) => /\.ya?ml$/.test(name))
   .sort()
   .map((name) => `.github/workflows/${name}`);
 
 /** The repository's own composite actions, which workflows run as `./.github/actions/…`. */
 const ACTIONS = readdirSync(join(ROOT, '.github/actions'))
   .sort()
-  .map((name) => `.github/actions/${name}/action.yml`);
+  .flatMap((name) =>
+    ['action.yml', 'action.yaml']
+      .map((file) => `.github/actions/${name}/${file}`)
+      .filter((path) => existsSync(join(ROOT, path))),
+  );
 
 /** `${{ … }}` text a script must never hold: a secret, or what anyone can write. */
 const PASTED = /\$\{\{[^}]*\b(?:secrets|github\.event|github\.head_ref|inputs)\b/;
@@ -31,15 +37,30 @@ interface Job {
   steps?: Step[];
 }
 interface Workflow {
-  on: Record<string, unknown>;
+  on: unknown;
   permissions?: unknown;
   jobs: Record<string, Job>;
 }
 const workflow = (path: string): Workflow => parse(read(path)) as Workflow;
 
+/** The events a workflow runs on, from each form `on:` takes: one name, a list or a map. */
+function triggers(on: unknown): string[] {
+  if (typeof on === 'string') return [on];
+  if (Array.isArray(on)) return on.map(String);
+  return typeof on === 'object' && on !== null ? Object.keys(on) : [];
+}
+
+/** A `uses:` line: an Action pinned by commit SHA, with its version, or one of ours. */
+const PINNED_ACTION =
+  /uses: (?:\.\/\S+|[\w.-]+\/[\w.-]+(?:\/[\w./-]+)?@[0-9a-f]{40} # v\d+(?:\.\d+){0,2})$/;
+const usesLines = (path: string): string[] =>
+  read(path)
+    .split('\n')
+    .filter((line) => /^\s*(?:-\s+)?uses:/.test(line));
+
 /**
- * The jobs that ask for more than the workflow's read-only token, with exactly what they
- * ask for. Every other job inherits the workflow's `permissions`.
+ * Every job that sets its own permissions, with exactly what it sets. Every other job
+ * inherits the workflow's `permissions`.
  */
 const JOB_PERMISSIONS: Record<string, Record<string, unknown>> = {
   '.github/workflows/ci.yml': { gate: {} },
@@ -83,34 +104,33 @@ const manager = (index: number): RegexManager => {
 const catalogManager = manager(0);
 const pinnedManager = manager(1);
 
-/** Every file in the repository but those that aren't its own, with its path. */
-function repoFiles(dir = ''): string[] {
-  const skip = new Set([
-    '.git',
-    'node_modules',
-    'dist',
-    'coverage',
-    '.claude',
-    '.superpowers',
-  ]);
-  return readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((entry) => {
-    const path = dir === '' ? entry.name : `${dir}/${entry.name}`;
-    if (skip.has(entry.name)) return [];
-    return entry.isDirectory() ? repoFiles(path) : [path];
-  });
+/**
+ * Every file git tracks, with its path: what CI checks out, whatever else lies in this
+ * checkout. A tracked file deleted here, and not yet committed, is left out.
+ */
+function repoFiles(): string[] {
+  return execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' })
+    .split('\0')
+    .filter((path) => path !== '' && existsSync(join(ROOT, path)));
 }
 
 describe('the workflows (spec §7.2(7))', () => {
   it.each(WORKFLOWS)('%s pins every Action by commit SHA, with its version', (path) => {
-    const uses = read(path)
-      .split('\n')
-      .filter((line) => /^\s*(?:-\s+)?uses:/.test(line));
+    const uses = usesLines(path);
     expect(uses.length).toBeGreaterThan(0);
-    for (const line of uses) {
-      expect(line).toMatch(
-        /uses: (?:\.\/\S+|[\w.-]+\/[\w.-]+(?:\/[\w./-]+)?@[0-9a-f]{40} # v\d+(?:\.\d+){0,2})$/,
-      );
-    }
+    for (const line of uses) expect(line).toMatch(PINNED_ACTION);
+  });
+
+  it.each(ACTIONS)('%s, a composite action, pins every Action it uses too', (path) => {
+    for (const line of usesLines(path)) expect(line).toMatch(PINNED_ACTION);
+  });
+
+  it.each([
+    ['one name', 'pull_request_target', ['pull_request_target']],
+    ['a list', ['push', 'pull_request_target'], ['push', 'pull_request_target']],
+    ['a map', { push: null, pull_request_target: {} }, ['push', 'pull_request_target']],
+  ])('reads the events of `on:` written as %s', (_form, on, events) => {
+    expect(triggers(on)).toEqual(events);
   });
 
   it.each(WORKFLOWS)(
@@ -128,9 +148,10 @@ describe('the workflows (spec §7.2(7))', () => {
   );
 
   it.each(WORKFLOWS)("%s never runs a pull request's code with secrets", (path) => {
-    const { on } = workflow(path);
+    const events = triggers(workflow(path).on);
+    expect(events.length).toBeGreaterThan(0);
     for (const trigger of ['pull_request_target', 'workflow_run', 'issue_comment']) {
-      expect(Object.keys(on)).not.toContain(trigger);
+      expect(events).not.toContain(trigger);
     }
   });
 
@@ -189,9 +210,10 @@ describe('every image is pinned by digest (spec §7.2(7))', () => {
       /^Dockerfile$/,
     ];
     // The catalog's pins are the catalog manager's; the app READMEs and the golden files
-    // show them, and docs:generate and the tests rewrite those.
+    // show them, and docs:generate and the tests rewrite those. A plan is the record of
+    // what was built, its pins as they were then.
     const shown = (path: string) =>
-      path.startsWith('docs/') ||
+      path.startsWith('docs/plans/') ||
       /^catalog\/[^/]+\/README\.md$/.test(path) ||
       path.includes('/__golden__/');
     const pinned = repoFiles().filter(
