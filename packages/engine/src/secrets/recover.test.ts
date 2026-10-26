@@ -1,7 +1,8 @@
+import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, readdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Catalog, KeyFile } from '../catalog/types';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
@@ -98,31 +99,86 @@ describe('readKeyFile', () => {
     expect(await readKeyFile(home, 'radarr', CONFIG)).toEqual({ found: 'absent' });
   });
 
-  it('never reads through a link that leads out of the app folder', async () => {
+  it('never reads a link at the key file itself, whether it leads out of the folder or stays in', async () => {
     const home = await homeWith('radarr', 'config.xml', `<ApiKey>${KEY}</ApiKey>`);
     await mkdir(join(home, 'appdata', 'sonarr'));
     await symlink(
       join(home, 'appdata', 'radarr', 'config.xml'),
       join(home, 'appdata', 'sonarr', 'config.xml'),
     );
-    expect(await readKeyFile(home, 'sonarr', CONFIG)).toEqual({
-      found: 'unreadable',
-      why: 'it leads outside appdata/sonarr',
-    });
+    const refused = { found: 'unreadable', why: 'it is a link, which is never followed' };
+    expect(await readKeyFile(home, 'sonarr', CONFIG)).toEqual(refused);
+    // Nor one that stays inside the app's folder.
+    await writeFile(
+      join(home, 'appdata', 'radarr', 'old.xml'),
+      `<ApiKey>${KEY}</ApiKey>`,
+    );
+    await symlink('old.xml', join(home, 'appdata', 'radarr', 'new.xml'));
+    expect(await readKeyFile(home, 'radarr', { ...CONFIG, path: 'new.xml' })).toEqual(
+      refused,
+    );
     // A link to nothing exists, and can't be read.
     await symlink(join(home, 'nowhere'), join(home, 'appdata', 'radarr', 'other.xml'));
-    expect(
-      await readKeyFile(home, 'radarr', { ...CONFIG, path: 'other.xml' }),
-    ).toMatchObject({ found: 'unreadable' });
+    expect(await readKeyFile(home, 'radarr', { ...CONFIG, path: 'other.xml' })).toEqual(
+      refused,
+    );
   });
 
-  it('reads through a link that stays inside the app folder', async () => {
-    const home = await homeWith('sonarr', 'old.xml', `<ApiKey>${KEY}</ApiKey>`);
-    await symlink('old.xml', join(home, 'appdata', 'sonarr', 'config.xml'));
-    expect(await readKeyFile(home, 'sonarr', CONFIG)).toEqual({
-      found: 'key',
-      value: KEY,
+  it('never reads a key file in a folder that is linked out of the app folder', async () => {
+    const home = await homeWith('radarr', 'config.xml', `<ApiKey>${KEY}</ApiKey>`);
+    await mkdir(join(home, 'appdata', 'sonarr'));
+    await symlink(
+      join(home, 'appdata', 'radarr'),
+      join(home, 'appdata', 'sonarr', 'linked'),
+    );
+    const read = vi.fn(() => KEY);
+    expect(
+      await readKeyFile(home, 'sonarr', { path: 'linked/config.xml', read }),
+    ).toEqual({ found: 'unreadable', why: 'it leads outside appdata/sonarr' });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("refuses a named pipe, or a folder, for a key file, never waiting on a pipe's writer", async () => {
+    const home = await tempDir('mediaplane-recover-');
+    await mkdir(join(home, 'appdata', 'sonarr'), { recursive: true });
+    execFileSync('mkfifo', [join(home, 'appdata', 'sonarr', 'config.xml')]);
+    const refused = { found: 'unreadable', why: 'it is not a regular file' };
+    expect(await readKeyFile(home, 'sonarr', CONFIG)).toEqual(refused);
+    // A database that is a pipe is not opened either.
+    await mkdir(join(home, 'appdata', 'jellyfin', 'data'), { recursive: true });
+    execFileSync('mkfifo', [join(home, 'appdata', 'jellyfin', 'data', 'app.db')]);
+    expect(await readKeyFile(home, 'jellyfin', DATABASE)).toEqual(refused);
+    await mkdir(join(home, 'appdata', 'radarr', 'config.xml'), { recursive: true });
+    expect(await readKeyFile(home, 'radarr', CONFIG)).toEqual(refused);
+  });
+
+  it('refuses a database that is a link, whatever it leads to', async () => {
+    const home = await homeWithDatabase([
+      { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:09:30.4' },
+    ]);
+    const folder = join(home, 'appdata', 'jellyfin', 'data');
+    await symlink(join(folder, 'app.db'), join(folder, 'link.db'));
+    expect(
+      await readKeyFile(home, 'jellyfin', { ...DATABASE, path: 'data/link.db' }),
+    ).toEqual({
+      found: 'unreadable',
+      why: 'it is a link, which is never followed',
     });
+  });
+
+  it('says a file whose content its reader refuses is unreadable, never "holds none"', async () => {
+    const home = await homeWith('sonarr', 'config.xml', 'secret-looking text');
+    const found = await readKeyFile(home, 'sonarr', {
+      path: 'config.xml',
+      read: () => {
+        throw new Error('bad: secret-looking text');
+      },
+    });
+    expect(found).toEqual({
+      found: 'unreadable',
+      why: "its content isn't in a form Mediaplane understands",
+    });
+    expect(JSON.stringify(found)).not.toContain('secret-looking');
   });
 
   it.skipIf(process.getuid?.() === 0)(
@@ -201,6 +257,20 @@ describe('readKeyFile', () => {
     }
   });
 
+  it('says a database without the ApiKeys table is unreadable, not "holds none"', async () => {
+    const home = await tempDir('mediaplane-recover-');
+    await mkdir(join(home, 'appdata', 'jellyfin', 'data'), { recursive: true });
+    const db = new DatabaseSync(join(home, 'appdata', 'jellyfin', 'data', 'app.db'));
+    db.exec('CREATE TABLE Other (Id INTEGER PRIMARY KEY)');
+    db.close();
+    expect(await readKeyFile(home, 'jellyfin', DATABASE)).toMatchObject({
+      found: 'unreadable',
+      why: expect.stringMatching(
+        /^it could not be read as a database \(.*ApiKeys/,
+      ) as string,
+    });
+  });
+
   it('says a database it can ask nothing of, or whose key is not text, is unreadable', async () => {
     const home = await homeWith('jellyfin', 'data/app.db', 'not a database');
     expect(await readKeyFile(home, 'jellyfin', DATABASE)).toMatchObject({
@@ -274,7 +344,65 @@ describe('recoverKeys', () => {
     expect(JSON.stringify(diagnostics)).not.toContain('not "a" key');
   });
 
-  it('fails on a key it would generate in a file it cannot read: a new one would lock it out', async () => {
+  it('words the failure by where the app takes its key from, and never says the key', async () => {
+    const home = await homeWith('sonarr', 'config.xml', '<ApiKey>not "a" key</ApiKey>');
+    // An app that takes no key from its environment: a new key would lock Mediaplane out.
+    const kept = fixtureCatalog.map((app) =>
+      app.id === 'sonarr'
+        ? { ...app, credentials: [], keyFiles: { apiKey: CONFIG } }
+        : app,
+    );
+    const result = resolveStack(fixtureConfig(STACK), kept, FIXTURE_HOST, home);
+    if (result.stack === undefined) throw new Error('the stack did not resolve');
+    const own = await recoverKeys(result.stack, emptySecretStore(), false);
+    expect(own.diagnostics.map((d) => d.message)).toEqual([
+      expect.stringMatching(
+        /A new key would lock Mediaplane out of sonarr, which still holds the old one$/,
+      ),
+    ]);
+    // One it takes from its environment (the arrs, Seerr): the old key is still held by
+    // the resources that use it.
+    const env = await recoverKeys(stackIn(home), emptySecretStore(), false);
+    expect(env.diagnostics.map((d) => d.message)).toEqual([
+      expect.stringMatching(
+        /The old key is still held by the resources that use it; a new key would break them$/,
+      ),
+    ]);
+    expect(JSON.stringify([own, env])).not.toContain('not \\"a\\" key');
+  });
+
+  it("stops on a key file whose content its reader can't understand, rather than generate a key", async () => {
+    const home = await homeWith('sonarr', 'config.xml', 'half a file');
+    const strict = fixtureCatalog.map((app) =>
+      app.id === 'sonarr'
+        ? {
+            ...app,
+            keyFiles: {
+              apiKey: {
+                path: 'config.xml',
+                read: () => {
+                  throw new Error('not understood');
+                },
+              },
+            },
+          }
+        : app,
+    );
+    const result = resolveStack(fixtureConfig(STACK), strict, FIXTURE_HOST, home);
+    if (result.stack === undefined) throw new Error('the stack did not resolve');
+    const { diagnostics } = await recoverKeys(result.stack, emptySecretStore(), false);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        code: 'keys.unrecoverable',
+        message: expect.stringContaining(
+          "can't give it: its content isn't in a form Mediaplane understands",
+        ) as string,
+      }),
+    ]);
+  });
+
+  it('fails on a key it would generate in a file it cannot read: a new one would not match the old', async () => {
     const home = await homeWith('sonarr', 'config.xml', `<ApiKey>${KEY}</ApiKey>`);
     await mkdir(join(home, 'appdata', 'radarr'));
     await symlink(
@@ -296,7 +424,7 @@ describe('recoverKeys', () => {
     expect(diagnostics.map((d) => [d.severity, d.message])).toEqual([
       [
         'error',
-        "state/secrets.json has no sonarr.apiKey, and appdata/sonarr/linked/config.xml, where sonarr keeps it, can't give it: it leads outside appdata/sonarr. A new key would lock Mediaplane out of sonarr, which still holds the old one",
+        "state/secrets.json has no sonarr.apiKey, and appdata/sonarr/linked/config.xml, where sonarr keeps it, can't give it: it leads outside appdata/sonarr. The old key is still held by the resources that use it; a new key would break them",
       ],
     ]);
   });

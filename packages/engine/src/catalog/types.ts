@@ -101,7 +101,11 @@ export type KeyFile =
   | {
       /** Relative to the app's appdata folder, such as "config.xml". */
       path: string;
-      /** The key the file's text holds, or undefined when it holds none. Pure. */
+      /**
+       * The key the file's text holds, or undefined when it holds none. Pure. Throws on
+       * text it can't understand (not the form the app writes): the file is then
+       * unreadable, which stops `plan`, rather than holding none.
+       */
       read(text: string): string | undefined;
     }
   | {

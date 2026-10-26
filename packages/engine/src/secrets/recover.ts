@@ -1,4 +1,5 @@
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open, realpath, stat } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
@@ -65,10 +66,35 @@ function because(cause: unknown): string {
   return code === undefined ? 'it could not be read' : `it could not be read (${code})`;
 }
 
+/** What a key file that is a link, a pipe or a folder gives: nothing, said. */
+const LINK: KeyFound = {
+  found: 'unreadable',
+  why: 'it is a link, which is never followed',
+};
+const NOT_A_FILE: KeyFound = { found: 'unreadable', why: 'it is not a regular file' };
+const CHANGED: KeyFound = {
+  found: 'unreadable',
+  why: 'it changed while it was being read',
+};
+
+/** A key file that is not there, or can't be reached, by its code alone. */
+function missing(cause: unknown): KeyFound {
+  const code = codeOf(cause);
+  if (code === 'ENOENT' || code === 'ENOTDIR') return { found: 'absent' };
+  if (code === 'ELOOP') return LINK;
+  return { found: 'unreadable', why: because(cause) };
+}
+
+/** Whether the real path `real` is in the app's appdata folder (its real path). */
+async function insideFolder(real: string, folder: string): Promise<boolean> {
+  return isInside(real, await realpath(folder));
+}
+
 /**
- * What `file`, in `app`'s appdata folder in the home, holds. A file whose real path leads
- * out of the app's folder is never read: an app that owns its folder could otherwise have
- * Mediaplane take another app's key, or another file, as its own. Never throws.
+ * What `file`, in `app`'s appdata folder in the home, holds. Never read: a link at the
+ * file itself, a pipe, a folder, or a file whose real path leads out of the app's folder,
+ * which an app that owns its folder could otherwise use to have Mediaplane take another
+ * app's key, or another file, as its own. Never throws.
  */
 export async function readKeyFile(
   home: string,
@@ -77,46 +103,99 @@ export async function readKeyFile(
 ): Promise<KeyFound> {
   const folder = join(home, APPDATA_DIR, app);
   const path = join(home, keyFilePath(app, file));
+  const outside: KeyFound = {
+    found: 'unreadable',
+    why: `it leads outside ${posix.join(APPDATA_DIR, app)}`,
+  };
+  return 'read' in file
+    ? readTextKey(path, folder, outside, file)
+    : readDatabaseKey(path, folder, outside, file.sqlite);
+}
+
+/**
+ * A text key file, opened once and read through that handle: the same file is checked and
+ * read. Opened without following a link at the file and without waiting (a named pipe in
+ * its place is refused, never waited on).
+ */
+async function readTextKey(
+  path: string,
+  folder: string,
+  outside: KeyFound,
+  file: Extract<KeyFile, { read: unknown }>,
+): Promise<KeyFound> {
+  let handle;
   try {
-    await lstat(path);
+    handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
   } catch (cause) {
-    const code = codeOf(cause);
-    if (code === 'ENOENT' || code === 'ENOTDIR') return { found: 'absent' };
-    return { found: 'unreadable', why: because(cause) };
+    return missing(cause);
   }
-  let real: string;
   try {
-    real = await realpath(path);
-    if (!isInside(real, await realpath(folder))) {
+    if (!(await handle.stat()).isFile()) return NOT_A_FILE;
+    // Where the open handle leads, whatever the folders on the way were linked to.
+    const real = await realpath(`/proc/self/fd/${String(handle.fd)}`);
+    if (!(await insideFolder(real, folder))) return outside;
+    const text = await handle.readFile('utf8');
+    let value;
+    try {
+      value = file.read(text);
+    } catch {
+      // Never the reader's message: it may hold the file's text.
       return {
         found: 'unreadable',
-        why: `it leads outside ${posix.join(APPDATA_DIR, app)}`,
+        why: "its content isn't in a form Mediaplane understands",
       };
     }
-  } catch (cause) {
-    return { found: 'unreadable', why: because(cause) };
-  }
-  if ('read' in file) {
-    let text: string;
-    try {
-      text = await readFile(real, 'utf8');
-    } catch (cause) {
-      return { found: 'unreadable', why: because(cause) };
-    }
-    const value = file.read(text);
     return value === undefined || value === ''
       ? { found: 'none' }
       : { found: 'key', value };
+  } catch (cause) {
+    return { found: 'unreadable', why: because(cause) };
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * A SQLite database: a regular file (checked by its path before it is opened, as SQLite
+ * opens by path), and the same file, still in the app's folder, once it is open.
+ */
+async function readDatabaseKey(
+  path: string,
+  folder: string,
+  outside: KeyFound,
+  sqlite: { query: string; column: string },
+): Promise<KeyFound> {
+  let before;
+  try {
+    before = await lstat(path);
+  } catch (cause) {
+    return missing(cause);
+  }
+  if (before.isSymbolicLink()) return LINK;
+  if (!before.isFile()) return NOT_A_FILE;
+  let real;
+  try {
+    real = await realpath(path);
+    if (!(await insideFolder(real, folder))) return outside;
+  } catch (cause) {
+    return { found: 'unreadable', why: because(cause) };
   }
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(await databaseAt(real), { readOnly: true });
-    const row = db.prepare(file.sqlite.query).get();
-    const value = row?.[file.sqlite.column];
+    // Swapped for another file, or moved out of the folder, since the checks?
+    const after = await stat(path);
+    if (after.dev !== before.dev || after.ino !== before.ino) return CHANGED;
+    if (!(await insideFolder(await realpath(path), folder))) return outside;
+    const row = db.prepare(sqlite.query).get();
+    const value = row?.[sqlite.column];
     if (row === undefined) return { found: 'none' };
     return typeof value === 'string' && value !== ''
       ? { found: 'key', value }
-      : { found: 'unreadable', why: `its ${file.sqlite.column} isn't text` };
+      : { found: 'unreadable', why: `its ${sqlite.column} isn't text` };
   } catch (cause) {
     // SQLite's own message names what failed (a table, a lock), never a value.
     const said = cause instanceof Error ? cause.message : String(cause);
@@ -171,6 +250,15 @@ export async function recoverKeys(
       const made = 'createdBy' in source;
       if (why === undefined || (made ? !newPassword : found.found === 'none')) continue;
       const where = keyFilePath(id, file);
+      // An app that takes its key from its environment takes a new one at its next start;
+      // what holds the old one then is the resources that use it. One that keeps it only
+      // in its file is locked against Mediaplane's new key.
+      const fromEnvironment = app.def.credentials.some(
+        (step) => step.step === 'env' && step.secret === name,
+      );
+      const consequence = fromEnvironment
+        ? 'The old key is still held by the resources that use it; a new key would break them'
+        : `A new key would lock Mediaplane out of ${appName}, which still holds the old one`;
       const lacks = `state/secrets.json has no ${id}.${name}, and ${where}, where ${appName} keeps it, can't give it: ${why}`;
       diagnostics.push(
         made
@@ -181,13 +269,9 @@ export async function recoverKeys(
                 hint: `set admin.password to a file holding the password ${appName}'s admin has, then run plan again; the runbook has the other ways: ${REBUILD_RUNBOOK}`,
               },
             )
-          : error(
-              'keys.unrecoverable',
-              `${lacks}. A new key would lock Mediaplane out of ${appName}, which still holds the old one`,
-              {
-                hint: `make ${where} readable by the user Mediaplane runs as (MEDIAPLANE_UID in its container), or move appdata/${id} aside to start ${appName} afresh, then run plan again; see ${REBUILD_RUNBOOK}`,
-              },
-            ),
+          : error('keys.unrecoverable', `${lacks}. ${consequence}`, {
+              hint: `make ${where} readable by the user Mediaplane runs as (MEDIAPLANE_UID in its container), or move appdata/${id} aside to start ${appName} afresh, then run plan again; see ${REBUILD_RUNBOOK}`,
+            }),
       );
     }
   }

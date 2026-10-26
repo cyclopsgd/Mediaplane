@@ -4,7 +4,7 @@ import { seerrBootstrap } from './bootstrap';
 import integration from './integration';
 
 const settingsFile = z.looseObject({
-  main: z.looseObject({ apiKey: z.string() }).optional(),
+  main: z.looseObject({ apiKey: z.string().optional() }).optional(),
 });
 
 /**
@@ -14,13 +14,9 @@ const settingsFile = z.looseObject({
  */
 const keyFile: KeyFile = {
   path: 'settings.json',
-  read: (text) => {
-    try {
-      return settingsFile.safeParse(JSON.parse(text)).data?.main?.apiKey;
-    } catch {
-      return undefined;
-    }
-  },
+  // Throws on a file that isn't JSON, or whose main.apiKey isn't text: readKeyFile says
+  // it can't be read (fail closed), rather than that it holds no key.
+  read: (text) => settingsFile.parse(JSON.parse(text)).main?.apiKey,
 };
 
 export default defineApp({

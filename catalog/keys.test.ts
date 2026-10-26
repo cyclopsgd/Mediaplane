@@ -121,13 +121,29 @@ describe("the apps' key files (spec §6.1, key recovery)", () => {
     expect(file.read(yours)).toBeUndefined();
   });
 
-  it("reads Seerr's from main.apiKey in its settings.json, and none from one that isn't JSON", () => {
+  it("reads Seerr's from main.apiKey in its settings.json, and fails on one it can't understand", () => {
     const file = textKeyFile('seerr', 'apiKey');
     expect(
       file.read(JSON.stringify({ main: { apiKey: 'c'.repeat(32), other: 1 } })),
     ).toBe('c'.repeat(32));
     expect(file.read(JSON.stringify({ main: {} }))).toBeUndefined();
-    expect(file.read('{ half')).toBeUndefined();
+    expect(file.read(JSON.stringify({}))).toBeUndefined();
+    // Not JSON, not an object, or a key that isn't text: the file can't be read, which
+    // readKeyFile says (fail closed), rather than "it holds none".
+    expect(() => file.read('{ half')).toThrow();
+    expect(() => file.read('[]')).toThrow();
+    expect(() => file.read(JSON.stringify({ main: { apiKey: 7 } }))).toThrow();
+    expect(() => file.read(JSON.stringify({ main: 'x' }))).toThrow();
+  });
+
+  it("says Seerr's settings.json it can't understand is unreadable, never without a key", async () => {
+    const home = await tempDir('mediaplane-keys-');
+    await mkdir(join(home, 'appdata', 'seerr'), { recursive: true });
+    await writeFile(join(home, 'appdata', 'seerr', 'settings.json'), '{ half');
+    expect(await readKeyFile(home, 'seerr', textKeyFile('seerr', 'apiKey'))).toEqual({
+      found: 'unreadable',
+      why: "its content isn't in a form Mediaplane understands",
+    });
   });
 
   it("reads Jellyfin's from its database: the newest key named Mediaplane, as its setup does", async () => {
