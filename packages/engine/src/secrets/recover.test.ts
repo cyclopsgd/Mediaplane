@@ -11,9 +11,8 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { join } from 'node:path';
-import type * as Sqlite from 'node:sqlite';
 import { DatabaseSync } from 'node:sqlite';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Catalog, KeyFile } from '../catalog/types';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
 import { FAKE_SETUP } from '../testing/bootstrap';
@@ -21,32 +20,6 @@ import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures
 import { tempDir } from '../testing/temp';
 import { KEY_FILE_LIMIT, readKeyFile, recoverKeys, withRecoveredKeys } from './recover';
 import { emptySecretStore, type SecretStore } from './store';
-
-/**
- * What runs as SQLite opens a database, once: `before`, between Mediaplane's own open and
- * SQLite's, as another process swapping the file would; `after`, once SQLite has it.
- */
-const sqliteOpen: { before?: () => void; after?: () => void } = vi.hoisted(() => ({}));
-
-vi.mock('node:sqlite', async (importOriginal) => {
-  const actual = await importOriginal<typeof Sqlite>();
-  class Hooked extends actual.DatabaseSync {
-    constructor(...args: ConstructorParameters<typeof actual.DatabaseSync>) {
-      const { before, after } = sqliteOpen;
-      delete sqliteOpen.before;
-      before?.();
-      super(...args);
-      delete sqliteOpen.after;
-      after?.();
-    }
-  }
-  return { ...actual, DatabaseSync: Hooked };
-});
-
-afterEach(() => {
-  delete sqliteOpen.before;
-  delete sqliteOpen.after;
-});
 
 const KEY = 'a'.repeat(32);
 
@@ -318,15 +291,95 @@ describe('readKeyFile', () => {
       { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:09:30.4' },
     ]);
     const db = join(home, 'appdata', 'jellyfin', 'data', 'app.db');
-    // A pipe in its place would hang SQLite's open, which doesn't wait without a writer.
-    sqliteOpen.before = () => {
+    // As its reading process starts, after Mediaplane's own open: a pipe in its place
+    // would hang SQLite's open, which doesn't wait without a writer.
+    const started = () => {
       renameSync(db, `${db}.aside`);
       execFileSync('mkfifo', [db]);
     };
-    expect(await readKeyFile(home, 'jellyfin', DATABASE)).toEqual({
+    expect(await readKeyFile(home, 'jellyfin', DATABASE, { started })).toEqual({
       found: 'unreadable',
       why: 'it changed while it was being read',
     });
+  });
+
+  it('takes nothing from a read of a pipe put in place of the log once checked: SQLite refuses it', async () => {
+    const home = await homeWithDatabase([]);
+    const folder = join(home, 'appdata', 'jellyfin', 'data');
+    const app = new DatabaseSync(join(folder, 'app.db'));
+    try {
+      // In use, with its log and index beside it, as Jellyfin keeps it.
+      app.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0');
+      app
+        .prepare('INSERT INTO ApiKeys (DateCreated, Name, AccessToken) VALUES (?, ?, ?)')
+        .run('2026-10-26 06:09:30.4', 'Mediaplane', KEY);
+      const wal = join(folder, 'app.db-wal');
+      // After Mediaplane looked at the log, before SQLite opens it (threat model, T4).
+      const started = () => {
+        renameSync(wal, `${wal}.aside`);
+        execFileSync('mkfifo', [wal]);
+      };
+      expect(await readKeyFile(home, 'jellyfin', DATABASE, { started })).toEqual({
+        found: 'unreadable',
+        why: 'it could not be read as a database (disk I/O error)',
+      });
+    } finally {
+      app.close();
+    }
+  });
+
+  it('stops a read that never answers, as one hung on a pipe would, and takes nothing from it', async () => {
+    const home = await homeWithDatabase([
+      { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:09:30.4' },
+    ]);
+    const before = Date.now();
+    expect(
+      await readKeyFile(home, 'jellyfin', DATABASE, {
+        program: 'setInterval(() => {}, 1000)',
+        deadlineMs: 1_000,
+      }),
+    ).toEqual({
+      found: 'unreadable',
+      why: 'it was not read within 1 seconds, so its read was stopped',
+    });
+    expect(Date.now() - before).toBeLessThan(5_000);
+  });
+
+  it('takes nothing from a read that gives no answer it understands, or too long a one', async () => {
+    const home = await homeWithDatabase([
+      { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:09:30.4' },
+    ]);
+    const read = (program: string) =>
+      readKeyFile(home, 'jellyfin', DATABASE, { program, deadlineMs: 5_000 });
+    expect(await read('process.stdout.write("not JSON")')).toEqual({
+      found: 'unreadable',
+      why: 'its read gave no answer Mediaplane understands',
+    });
+    expect(await read('process.exit(3)')).toEqual({
+      found: 'unreadable',
+      why: 'its read gave no answer Mediaplane understands',
+    });
+    expect(
+      await read(`process.stdout.write(JSON.stringify({ ok: true, more: 1 }))`),
+    ).toEqual({
+      found: 'unreadable',
+      why: 'its read gave no answer Mediaplane understands',
+    });
+    expect(await read(`process.stdout.write('x'.repeat(70000))`)).toEqual({
+      found: 'unreadable',
+      why: 'its read gave more than one row would',
+    });
+  });
+
+  it('reads in a process with no environment of its own, and the key goes nowhere but its answer', async () => {
+    const home = await homeWithDatabase([
+      { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:09:30.4' },
+    ]);
+    // A program that answers with what its environment holds, as a key.
+    const program = `process.stdout.write(JSON.stringify({ ok: true, row: { value: Object.keys(process.env).join(',') || 'none' } }))`;
+    expect(
+      await readKeyFile(home, 'jellyfin', DATABASE, { program, deadlineMs: 5_000 }),
+    ).toEqual({ found: 'key', value: 'none' });
   });
 
   it('says a database that went, or left the folder, once open is unreadable, with no path', async () => {
@@ -334,10 +387,10 @@ describe('readKeyFile', () => {
       { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:09:30.4' },
     ]);
     const db = join(home, 'appdata', 'jellyfin', 'data', 'app.db');
-    sqliteOpen.after = () => {
+    const answered = () => {
       unlinkSync(db);
     };
-    expect(await readKeyFile(home, 'jellyfin', DATABASE)).toEqual({
+    expect(await readKeyFile(home, 'jellyfin', DATABASE, { answered })).toEqual({
       found: 'unreadable',
       why: 'it could not be read (ENOENT)',
     });
@@ -346,11 +399,11 @@ describe('readKeyFile', () => {
       { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:09:30.4' },
     ]);
     const at = join(moved, 'appdata', 'jellyfin', 'data', 'app.db');
-    sqliteOpen.after = () => {
+    const away = () => {
       renameSync(at, join(moved, 'outside.db'));
       linkSync(join(moved, 'outside.db'), at);
     };
-    expect(await readKeyFile(moved, 'jellyfin', DATABASE)).toEqual({
+    expect(await readKeyFile(moved, 'jellyfin', DATABASE, { answered: away })).toEqual({
       found: 'unreadable',
       why: 'it leads outside appdata/jellyfin',
     });

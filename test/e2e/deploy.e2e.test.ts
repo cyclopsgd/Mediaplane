@@ -364,7 +364,8 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     // Slice 10a, from the image: with every key out of the store, plan recovers each from
     // the apps' appdata, as Mediaplane's user: Sonarr's config.xml, qBittorrent's
     // qBittorrent.conf, Seerr's settings.json, which uid 1000 owns, and Jellyfin's
-    // database, read through node:sqlite in the image's bundle. So it lists no setup:
+    // database, read through node:sqlite by a Node process of its own, which the image's
+    // CLI starts with a deadline (Slice 10b). So it lists no setup:
     // Jellyfin's key is found, and its system.xml says its wizard is done; Seerr's
     // settings.json says it is set up, and the store still records that it is
     // Mediaplane's. The store is put back whatever plan did.

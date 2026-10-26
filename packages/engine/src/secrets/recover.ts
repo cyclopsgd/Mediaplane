@@ -1,7 +1,6 @@
 import { constants } from 'node:fs';
 import { lstat, open, realpath, type FileHandle } from 'node:fs/promises';
 import { join, posix } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import type { KeyFile } from '../catalog/types';
 import { error, warning, type Diagnostic } from '../diagnostics';
@@ -12,6 +11,7 @@ import { runbookUrl } from '../runbooks';
 import { codeOf } from '../util/error-code';
 import { isInside } from '../util/path';
 import { compare } from '../util/sort';
+import { queryDatabase, type DatabaseSeams } from './database';
 import { APP_SECRET, UNKEEPABLE_KEY, type SecretStore } from './store';
 
 /** Where a host is rebuilt from stack.yaml and appdata: what to do when a key isn't found. */
@@ -57,25 +57,28 @@ async function besideIt(path: string): Promise<'none' | 'file' | 'other'> {
 }
 
 /**
- * How SQLite opens the database Mediaplane holds open as `fd`, at `path`, without writing
- * anything beside it; undefined when its write-ahead log or its index (-wal, -shm) is not a
- * regular file, which is never opened. One in use has both beside it, which a read-only
- * open reads, as the app's own readers do, making nothing. One closed cleanly has neither,
- * and all it holds is in the file: a read-only open would make both, as Mediaplane's user,
- * in the app's folder (probed), so it is opened immutable, which makes nothing.
+ * How SQLite, in the process that reads it (queryDatabase), opens the database Mediaplane
+ * holds open, at `path`, without writing anything beside it; undefined when its write-ahead
+ * log or its index (-wal, -shm) is not a regular file, which is never opened. One in use
+ * has both beside it, which a read-only open reads, as the app's own readers do, making
+ * nothing. One closed cleanly has neither, and all it holds is in the file: a read-only
+ * open would make both, as Mediaplane's user, in the app's folder (probed), so it is
+ * opened immutable, which makes nothing.
  *
- * SQLite is given the open file (/proc/self/fd/<fd>), not the path: it opens the file by
- * the name that link has as it opens it, so a file put at the path after Mediaplane
- * checked it, a pipe included, is never what it opens (probed). What is left: another file
- * put at that very name between SQLite's look at the link and its own open, or the file
- * unlinked and one named "<name> (deleted)" put beside it, in that instant.
- * readDatabaseKey checks again once SQLite has it.
+ * SQLite is given the open file, which that process is handed as its fd 3
+ * (/proc/self/fd/3), not the path: it opens the file by the name that link has as it opens
+ * it, so a file put at the path after Mediaplane checked it, a pipe included, is never
+ * what it opens (probed). What is left: another file put at that very name between
+ * SQLite's look at the link and its own open, or the file unlinked and one named "<name>
+ * (deleted)" put beside it, in that instant, or a pipe at the -wal after the check, which
+ * would hang the open: the process is then stopped at its deadline. readDatabaseKey checks
+ * again once it has answered.
  */
-async function databaseAt(path: string, fd: number): Promise<URL | undefined> {
+async function databaseAt(path: string): Promise<URL | undefined> {
   const log = await besideIt(`${path}-wal`);
   const index = await besideIt(`${path}-shm`);
   if (log === 'other' || index === 'other') return undefined;
-  const url = pathToFileURL(`/proc/self/fd/${String(fd)}`);
+  const url = pathToFileURL('/proc/self/fd/3');
   url.searchParams.set('mode', 'ro');
   if (log === 'none' || index === 'none') url.searchParams.set('immutable', '1');
   return url;
@@ -120,12 +123,14 @@ async function insideFolder(real: string, folder: string): Promise<boolean> {
  * What `file`, in `app`'s appdata folder in the home, holds. Never read: a link at the
  * file itself, a pipe, a folder, or a file whose real path leads out of the app's folder,
  * which an app that owns its folder could otherwise use to have Mediaplane take another
- * app's key, or another file, as its own. Never throws.
+ * app's key, or another file, as its own. A database is read in a process of its own,
+ * with a deadline (queryDatabase); `seams` are for tests. Never throws.
  */
 export async function readKeyFile(
   home: string,
   app: string,
   file: KeyFile,
+  seams: DatabaseSeams = {},
 ): Promise<KeyFound> {
   const folder = join(home, APPDATA_DIR, app);
   const path = join(home, keyFilePath(app, file));
@@ -135,7 +140,7 @@ export async function readKeyFile(
   };
   return 'read' in file
     ? readTextKey(path, folder, outside, file)
-    : readDatabaseKey(path, folder, outside, file.sqlite);
+    : readDatabaseKey(path, folder, outside, file.sqlite, seams);
 }
 
 /**
@@ -211,15 +216,16 @@ async function readUpTo(handle: FileHandle, limit: number): Promise<string | und
 
 /**
  * A SQLite database: opened by Mediaplane, as a text key file is, checked to be a regular
- * file in the app's folder, and given to SQLite open (databaseAt), so that SQLite reads
- * the file checked. Once SQLite has it, the path must still be that file, and its name
- * still in the folder.
+ * file in the app's folder, and handed open to the process that reads it (databaseAt,
+ * queryDatabase), so that SQLite reads the file checked. Once it has answered, the path
+ * must still be that file, and its name still in the folder, or what it read is dropped.
  */
 async function readDatabaseKey(
   path: string,
   folder: string,
   outside: KeyFound,
   sqlite: { query: string; column: string },
+  seams: DatabaseSeams,
 ): Promise<KeyFound> {
   let handle;
   try {
@@ -232,51 +238,24 @@ async function readDatabaseKey(
     if (!opened.isFile()) return NOT_A_FILE;
     const fd = `/proc/self/fd/${String(handle.fd)}`;
     if (!(await insideFolder(await realpath(fd), folder))) return outside;
-    const at = await databaseAt(path, handle.fd);
+    const at = await databaseAt(path);
     if (at === undefined) return BESIDE;
-    let db: DatabaseSync;
-    try {
-      db = new DatabaseSync(at, { readOnly: true });
-    } catch (cause) {
-      return databaseFailure(cause);
-    }
-    try {
-      // Swapped for another file, or moved out of the folder, since it was checked?
-      const now = await lstat(path);
-      if (now.dev !== opened.dev || now.ino !== opened.ino) return CHANGED;
-      if (!(await insideFolder(await realpath(fd), folder))) return outside;
-      let row;
-      try {
-        row = db.prepare(sqlite.query).get();
-      } catch (cause) {
-        return databaseFailure(cause);
-      }
-      const value = row?.[sqlite.column];
-      if (row === undefined) return { found: 'none' };
-      return typeof value === 'string' && value !== ''
-        ? { found: 'key', value }
-        : { found: 'unreadable', why: `its ${sqlite.column} isn't text` };
-    } finally {
-      db.close();
-    }
+    const read = await queryDatabase(handle.fd, at, sqlite, seams);
+    // Swapped for another file, or moved out of the folder, since it was checked?
+    const now = await lstat(path);
+    if (now.dev !== opened.dev || now.ino !== opened.ino) return CHANGED;
+    if (!(await insideFolder(await realpath(fd), folder))) return outside;
+    if (read.found === 'failed') return { found: 'unreadable', why: read.why };
+    if (read.found === 'none') return { found: 'none' };
+    return typeof read.value === 'string' && read.value !== ''
+      ? { found: 'key', value: read.value }
+      : { found: 'unreadable', why: `its ${sqlite.column} isn't text` };
   } catch (cause) {
     // The file's own errors, by their code alone: never Node's message, with its path.
     return { found: 'unreadable', why: because(cause) };
   } finally {
     await handle.close().catch(() => undefined);
   }
-}
-
-/**
- * Why SQLite couldn't read a database: its own message, which names what failed (a table,
- * a lock), never a value; any other error by its code alone.
- */
-function databaseFailure(cause: unknown): KeyFound {
-  if (codeOf(cause) !== 'ERR_SQLITE_ERROR') {
-    return { found: 'unreadable', why: because(cause) };
-  }
-  const said = cause instanceof Error ? cause.message : String(cause);
-  return { found: 'unreadable', why: `it could not be read as a database (${said})` };
 }
 
 /** Why a key file found gave no key Mediaplane can keep; undefined for none at all. */
