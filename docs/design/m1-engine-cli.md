@@ -1015,8 +1015,20 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   counts as seeded, because there is no way to tell. Slice 10 automates the fix, with
   the rest of "restore the key at the source" (§6.3; moved from Slice 8 on 2026-10-25).
 - **The shared admin (§6.1).** `admin.username` is 3 to 32 letters, digits, `.`, `_`
-  or `-`. A password of your own must be at least 12 characters
-  (`admin.password-too-short`). Otherwise Mediaplane generates 24 base62 characters,
+  or `-`. A password of your own is advised to have 12 characters or more
+  (`ADMIN_PASSWORD_ADVISED_LENGTH`): a shorter one is a warning, `admin.password-short`,
+  which never shows the password or its length, and `plan` stays `ok`. Many installs
+  are reached only from their own network, so a basic password is the owner's to
+  choose (decided 2026-10-26). The shortest refused is what an app in the stack takes:
+  the catalog fact `adminPasswordMinLength`, checked only for the apps in the stack
+  (the media server and each app not disabled), and an error,
+  `admin.password-too-short`, naming the app ("qBittorrent takes a password of at least
+  6 characters"). Probed on the pinned images (2026-10-26): qBittorrent's preferences
+  refuse fewer than 6 characters (400), the hash in its pre-start file takes any, and
+  the preferences set the password from then on, so its minimum is 6; Sonarr, Radarr,
+  Prowlarr and Jellyfin (wizard and password update alike) took 1 character; Mediaplane
+  sets no password in Seerr, which signs in through Jellyfin, nor in Plex. The empty
+  password is still `secret.missing`. Otherwise Mediaplane generates 24 base62 characters,
   keeps them in `state/secrets.json` as `shared.adminPassword`, and `plan` lists
   `admin.password` among the secrets to generate. It is generated for every stack that
   doesn't set `admin.password`, even before an app uses it. In Slice 3a only
@@ -1237,9 +1249,15 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     two before each question says what it is for, and with a VPN provider it takes the
     WireGuard private key on a hidden prompt, checks its shape, and writes it to
     `secrets/wg.key` (0600), never over an existing one. Asked not to generate the admin
-    password, it takes yours the same way, typed twice, at least 12 characters with no
-    space at either end, into `secrets/admin-password` (0600); Enter asks for a file of
-    yours instead, and one already there is used as it is.
+    password, it takes yours the same way, typed twice, with no space at either end, into
+    `secrets/admin-password` (0600); Enter asks for a file of yours instead, and one
+    already there is used as it is. A password shorter than an app of the starter stack
+    takes (qBittorrent: 6 characters) is refused, naming the app, and asked again. One
+    shorter than 12 prints "Shorter than 12 characters: fine on a home network, weak if
+    an app is reachable from the internet." and asks "Use it anyway? [y/N]": no asks for
+    the password again, yes goes on to "Type it again". Without a terminal, init never
+    sees the password (the file is yours, read by `plan`), so it only says "12 characters
+    or more advised" in its next steps, and `plan` warns.
 
 ### Slice 3c: the download path (2026-10-11)
 
@@ -2190,7 +2208,8 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     type, or another version, is still refused. A change record names `recover` and
     `restore` only when they hold any. So going back one release never stops at a state
     file: the older release doesn't act on what it doesn't know (one that doesn't know
-    `adminPasswordNotIn` signs in once to a listed Jellyfin, which refuses it).
+    `adminPasswordNotIn` signs in to a listed Jellyfin on each `apply`, `plan` and
+    `drift`, until a later release has set it, and Jellyfin refuses it).
 - **Name-based re-adoption** (§6.3) is Slice 3b's `adopt`, for every kind of resource
   (probed): after a rebuild, each is found by the name Mediaplane gave it, and recorded,
   with the same id in its app. Seerr's and Plex's `setUp` record goes with the store, so

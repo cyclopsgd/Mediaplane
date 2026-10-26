@@ -128,6 +128,11 @@ relies on, with the docs that complete M1).
     recovered, every resource adopted by name, a new admin password set through the keys,
     and a second `apply` with no changes; qBittorrent's key changed in its web UI, put
     back by `apply`, then kept by `keep`.
+  - Also (2026-10-26, the owner's request, light route): a short admin password of your
+    own is allowed with warnings. Below 12 characters `plan` warns
+    (`admin.password-short`) and stays ok, and `init` warns and asks "Use it anyway?";
+    only an app's own minimum is an error (`adminPasswordMinLength`, a catalog fact:
+    qBittorrent 6, probed; Sonarr, Radarr, Prowlarr and Jellyfin take 1 character).
 - **S10b: automation.**
   - Delivers: removing what Mediaplane made when its app leaves the stack (§8.1(3) step
     4); a new Plex token for the arrs, and Seerr signed in again with it, a Plex

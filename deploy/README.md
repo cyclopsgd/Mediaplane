@@ -252,10 +252,14 @@ files are written: there it only skips the sign-in. Without a terminal it asks n
 - **The admin login.** `init` asks for its user name (`--admin-user`), and whether
   Mediaplane should generate its password. Answer `n` and, on a terminal, it asks you to
   type your own twice, with nothing shown, and saves it in `secrets/admin-password`,
-  readable by you only. It needs at least 12 characters, with no space at either end.
+  readable by you only. It advises 12 characters or more, and allows a shorter one after
+  a warning and a yes, because a stack reached only from your own network may not need
+  more; it refuses one shorter than an app takes (qBittorrent: 6 characters), naming the
+  app. `plan` warns of one shorter than 12 the same way. There is no space at either end.
   Enter instead asks for a file in the home that you fill yourself, and a file already at
   `secrets/admin-password` is used as it is. Without a terminal, pass
-  `--admin-password-file secrets/admin-password`. After `apply`, `mediaplane credentials` shows the login and each app's address. It shows a
+  `--admin-password-file secrets/admin-password`. After `apply`,
+  `mediaplane credentials` shows the login and each app's address. It shows a
   password of your own only with `--reveal`, and its `--json` output leaves out either
   unless you add `--reveal`. qBittorrent, Sonarr, Radarr, Prowlarr and Jellyfin use it,
   and Seerr through Jellyfin. qBittorrent gets it before its first start, Jellyfin in its
@@ -438,9 +442,9 @@ An update that brings Slice 10a (recovery) changes three things you may see:
   `plan` (`<app>.not-seeded`); a key file that holds another key than Mediaplane's was
   left as it was. Now `plan` lists the key under
   `Keys to put back in their apps' own files`, and the next `apply` stops the app, writes
-  the key there, and starts it once more. Gluetun's restart restarts qBittorrent too. A file Mediaplane can't write is
-  `keys.restore`; the [rebuilding a host runbook](../docs/runbooks/rebuilding-a-host.md)
-  says what to do.
+  the key there, and starts it once more. Gluetun's restart restarts qBittorrent too. A
+  file Mediaplane can't write is `keys.restore`; the
+  [rebuilding a host runbook](../docs/runbooks/rebuilding-a-host.md) says what to do.
 - **A Jellyfin key deleted in its dashboard is made again.** `plan` lists Jellyfin's
   first-run setup again, published, and the next `apply` signs in as the shared admin and
   makes a new key named `Mediaplane`. Before, you edited `state/secrets.json` by hand.

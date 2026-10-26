@@ -99,6 +99,12 @@ unmodified, and by default puts it behind Gluetun's VPN.
   shared admin login (change `admin.username` in `stack.yaml`), and the whitelist is a
   security setting (set `security.login_on_lan`). Drift still reports a change to
   either, and `apply` puts it back.
+- **Its password's length.** qBittorrent's preferences refuse a password shorter than 6
+  characters (400, "at least 6 characters"; probed on the pinned image), and `apply` sets
+  the password through them whenever it differs. So `plan` fails with
+  `admin.password-too-short`, naming qBittorrent, for a shorter `admin.password` of your
+  own. The hash in its pre-start file would take any, but a later change could not. From
+  6 to 11 characters, `plan` only warns (`admin.password-short`).
 - **Its password, changed in qBittorrent,** is checked by signing in, once per `plan`.
   Once drift has found it refused, neither drift nor `plan` signs in again until `apply`
   sets it, which spares Mediaplane the ban below.
