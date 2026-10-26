@@ -74,9 +74,15 @@ export interface WireOptions {
   failed?: readonly string[];
   /**
    * Apps whose first-run setup the plan held back, since it would sign in with an admin
-   * password they have never had (`bootstrap.needs-password`): skipped as one that waits.
+   * password an app has never had (`bootstrap.needs-password`): skipped as one that waits.
    */
   held?: readonly string[];
+  /**
+   * When apply generated the admin password in this run: the apps it reached before this
+   * step (PlanContext.passwordGivenTo). Any other app hasn't had it yet: a resource of its
+   * own that holds it is set through the app's key, never checked, as for `notIn`.
+   */
+  givenTo?: readonly string[];
   /**
    * The apps that have never had the admin password Mediaplane holds
    * (`shared.adminPasswordNotIn`): a resource of theirs that holds it is set, never
@@ -224,7 +230,10 @@ export async function wire(options: WireOptions): Promise<string[]> {
     const targets = wiringTargets(ctx);
     const appId = app.def.id;
     const why = options.held?.includes(appId)
-      ? { list: held, detail: `is held: it needs the admin password ${appId} has` }
+      ? {
+          list: held,
+          detail: 'is held: the app it signs in to has never had the admin password',
+        }
       : options.waiting?.includes(appId)
         ? { list: waited, detail: 'waits' }
         : options.failed?.includes(appId)
@@ -244,7 +253,9 @@ export async function wire(options: WireOptions): Promise<string[]> {
       continue;
     }
     /** The admin password, for an app that has never had it: set, never checked. */
-    const lacks = options.notIn?.includes(appId) === true ? [admin.password] : [];
+    const listed = options.notIn?.includes(appId) === true;
+    const notGiven = options.givenTo !== undefined && !options.givenTo.includes(appId);
+    const lacks = listed || notGiven ? [admin.password] : [];
     const client = reached.get(app.def.id);
     if (client === undefined) {
       for (const target of targets)
@@ -370,7 +381,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
       ) {
         lacks.length = 0;
         try {
-          await options.passwordSet?.(appId);
+          if (listed) await options.passwordSet?.(appId);
         } catch (cause) {
           throw stop([], cause, 'state/secrets.json could not be saved: ');
         }

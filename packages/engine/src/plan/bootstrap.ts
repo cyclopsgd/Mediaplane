@@ -20,10 +20,11 @@ export interface BootstrapChange {
 export interface BootstrapPlan {
   changes: BootstrapChange[];
   /**
-   * The apps whose setup would sign in with an admin password they have never had
-   * (withoutSignInsToCome): not set up, and their resources skipped.
+   * The setups held back, as they would have started (withoutSignInsToCome, heldThrough):
+   * not run, their resources skipped, and an app whose setup is open, or can't be told,
+   * still started without its ports.
    */
-  held: string[];
+  held: BootstrapChange[];
   diagnostics: Diagnostic[];
 }
 
@@ -110,10 +111,11 @@ export async function inspectBootstrap(
     });
   }
   const kept = await withoutSignInsToCome(stack, changes, toCome);
+  const through = heldThrough(stack, kept.changes, kept.held, toCome);
   return {
-    changes: kept.changes,
-    held: kept.held,
-    diagnostics: [...diagnostics, ...kept.diagnostics],
+    changes: through.changes,
+    held: [...kept.held, ...through.held],
+    diagnostics: [...diagnostics, ...kept.diagnostics, ...through.diagnostics],
   };
 }
 
@@ -132,9 +134,9 @@ export async function withoutSignInsToCome(
   stack: ResolvedStack,
   changes: readonly BootstrapChange[],
   toCome: PasswordsToCome,
-): Promise<{ changes: BootstrapChange[]; held: string[]; diagnostics: Diagnostic[] }> {
+): Promise<HeldSetups> {
   const kept: BootstrapChange[] = [];
-  const held: string[] = [];
+  const held: BootstrapChange[] = [];
   const diagnostics: Diagnostic[] = [];
   for (const change of changes) {
     const app = stack.apps.find((a) => a.def.id === change.app);
@@ -151,7 +153,7 @@ export async function withoutSignInsToCome(
       kept.push(change);
       continue;
     }
-    held.push(change.app);
+    held.push(change);
     if (!listed && toCome.toGenerate === 'rotate') {
       diagnostics.push(rotateBlocked(app));
     } else if (toCome.explained?.includes(change.app) !== true) {
@@ -159,6 +161,65 @@ export async function withoutSignInsToCome(
     }
   }
   return { changes: kept, held, diagnostics };
+}
+
+/** What a filter of setups kept, held back, and said. */
+export interface HeldSetups {
+  changes: BootstrapChange[];
+  held: BootstrapChange[];
+  diagnostics: Diagnostic[];
+}
+
+/**
+ * `changes` without the setups that go through an app whose own is held (`held`): one
+ * that comes after it (`integration.after`), as Seerr signs in through Jellyfin. Held too,
+ * as it would have started (an open one still without its ports), with a diagnostic of
+ * the held app's level that names both. Pure.
+ */
+export function heldThrough(
+  stack: ResolvedStack,
+  changes: readonly BootstrapChange[],
+  held: readonly BootstrapChange[],
+  toCome: PasswordsToCome,
+): HeldSetups {
+  /** The level of each held app's diagnostic: an error only for a rotation it stops. */
+  const levels = new Map(
+    held.map((h) => [
+      h.app,
+      toCome.toGenerate === 'rotate' && toCome.notIn?.includes(h.app) !== true
+        ? ('error' as const)
+        : ('warning' as const),
+    ]),
+  );
+  let kept = [...changes];
+  const more: BootstrapChange[] = [];
+  const diagnostics: Diagnostic[] = [];
+  for (let found = true; found;) {
+    found = false;
+    for (const change of kept) {
+      const app = stack.apps.find((a) => a.def.id === change.app);
+      const through = (app?.def.integration?.after ?? []).find((id) => levels.has(id));
+      if (app === undefined || through === undefined) continue;
+      const level = levels.get(through) ?? 'warning';
+      const name = stack.apps.find((a) => a.def.id === through)?.def.name ?? through;
+      const make = level === 'error' ? error : warning;
+      diagnostics.push(
+        make(
+          NEEDS_PASSWORD,
+          `${app.def.name}'s first-run setup signs in through ${name}, whose own is held: it is held too, and waits on ${name}'s admin password`,
+          {
+            hint: `once ${name} has the admin password Mediaplane gives the apps, apply sets ${app.def.name} up; see ${REBUILD_RUNBOOK}`,
+          },
+        ),
+      );
+      levels.set(change.app, level);
+      more.push(change);
+      kept = kept.filter((c) => c !== change);
+      found = true;
+      break;
+    }
+  }
+  return { changes: kept, held: more, diagnostics };
 }
 
 /** The code of what plan says of a setup held back by withoutSignInsToCome. */

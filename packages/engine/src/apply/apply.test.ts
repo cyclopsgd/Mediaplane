@@ -2304,7 +2304,7 @@ describe('apply: no sign-in with an admin password an app has never had', () => 
     resource: 'jellyfin.admin',
     result: 'skipped',
     detail:
-      "jellyfin's first-run setup is held: it needs the admin password jellyfin has",
+      "jellyfin's first-run setup is held: the app it signs in to has never had the admin password",
   };
 
   /** FAKE_SETUP's Jellyfin and a fake Sonarr, each on its own fake server. */
@@ -2322,12 +2322,17 @@ describe('apply: no sign-in with an admin password an app has never had', () => 
       }),
       retry: { deadlineMs: 0 },
     };
+    /** What Docker apply and plan use from now on: `docker`, unless a test wraps it. */
+    let runtime: Runtime = docker;
+    const useRuntime = (next: Runtime) => {
+      runtime = next;
+    };
     const run = (more: Partial<ApplyOptions> = {}) =>
-      apply(options(home, docker, { catalog, wiring, ...more }));
+      apply(options(home, runtime, { catalog, wiring, ...more }));
     const planned = (more: Partial<ApplyOptions> = {}) =>
-      plan(options(home, docker, { catalog, wiring, ...more }));
+      plan(options(home, runtime, { catalog, wiring, ...more }));
     const signIns = () => setup.app.requests.filter((r) => r.path === '/signin').length;
-    return { home, setup, sonarr, run, planned, signIns };
+    return { home, setup, sonarr, docker, useRuntime, run, planned, signIns };
   }
 
   /** A stack applied once, then its store lost, and applied again: Jellyfin held. */
@@ -2534,7 +2539,120 @@ describe('apply: no sign-in with an admin password an app has never had', () => 
     const store = await readSecretStore(home);
     expect(setup.state.password === store.shared?.adminPassword).toBe(true);
     expect(store.shared?.adminPasswordNotIn).toBeUndefined();
+    // Set through the apps' keys before any sign-in with it: none they refuse.
+    expect(setup.state.refusedSignIns).toBe(0);
+    expect(rebuilt.actions.find((a) => a.resource === 'jellyfin.admin')).toMatchObject({
+      result: 'done',
+      detail: 'updated password',
+    });
     expect((await run({ random: other })).outcome).toBe('no-changes');
+  });
+
+  it('signs in to no recreated app with the new password before its key has set it there', async () => {
+    const { home, setup, sonarr, docker, useRuntime, run } = await twoApps();
+    expect((await run()).outcome).toBe('success');
+    await writeFile(join(home, 'appdata', 'jellyfin', 'key.txt'), `${SET_UP_KEY}\n`);
+    await rm(join(home, SECRETS_PATH));
+    // Stopped: the plan asks it nothing, and the wire step asks it once up starts it.
+    useRuntime(stoppedUntilUp(docker, 'jellyfin'));
+    const logins = () =>
+      sonarr.app.requests
+        .filter((r) => r.path === '/login')
+        .map((r) => new URLSearchParams(r.body).get('password'));
+    const before = logins().length;
+    const rebuilt = await run({ random: other });
+    expect(rebuilt.plan.wiring).toContainEqual({
+      resource: 'jellyfin.admin',
+      action: 'after-start',
+    });
+    expect(rebuilt.outcome).toBe('success');
+    expect(setup.state.refusedSignIns).toBe(0);
+    const password = (await readSecretStore(home)).shared?.adminPassword ?? '';
+    // Sonarr is asked with the new password only once it has it: by verify's plan.
+    expect(
+      logins()
+        .slice(before)
+        .every((sent) => sent === password),
+    ).toBe(true);
+  });
+
+  it('starts a held app whose setup file it cannot read without its ports', async () => {
+    const { home, docker, run } = await twoApps();
+    expect((await run()).outcome).toBe('success');
+    await rm(join(home, SECRETS_PATH));
+    await rm(join(home, 'appdata', 'jellyfin', 'setup.txt'));
+    await mkdir(join(home, 'appdata', 'jellyfin', 'setup.txt'));
+    const calls = docker.calls.length;
+    const held = await run({ random: other });
+    expect(held.plan.bootstrap).toEqual([]);
+    expect(held.plan.containers.find((c) => c.service === 'jellyfin')?.action).toBe(
+      'recreate',
+    );
+    expect(docker.calls.slice(calls).filter((c) => c.startsWith('up'))).toEqual([
+      'up unpublished jellyfin',
+    ]);
+  });
+});
+
+describe('apply: a setup that signs in through an app that is held', () => {
+  /** SIGN_IN_CATALOG, with Jellyfin's key in appdata/jellyfin/key.txt (none written). */
+  const CATALOG: Catalog = SIGN_IN_CATALOG.map((def) =>
+    def.id === 'jellyfin'
+      ? {
+          ...def,
+          keyFiles: {
+            apiKey: {
+              path: 'key.txt',
+              read: (text: string) => /^(\w+)$/m.exec(text)?.[1],
+            },
+          },
+        }
+      : def,
+  );
+  const other = (size: number) => Buffer.alloc(size, 0xcd);
+
+  it('holds it too, starting it without its ports, and sends Jellyfin no sign-in from it', async () => {
+    const home = await makeHome();
+    const setup = await fakeSetUpApp(home);
+    const docker = fakeDocker(home, { addresses: setup.addresses });
+    const run = (more: Partial<ApplyOptions> = {}) =>
+      apply(options(home, docker, { catalog: CATALOG, wiring: setup.seams, ...more }));
+    expect((await run()).outcome).toBe('success');
+    // The store lost, and Sonarr's sign-in setup open again (its appdata emptied).
+    await rm(join(home, SECRETS_PATH));
+    await rm(join(home, 'appdata', 'sonarr', 'signed-in.txt'));
+    Object.assign(setup.signIn, { done: false, owner: undefined });
+    const signedInBefore = setup.signIn.signedIn.length;
+    const shown = await plan(
+      options(home, docker, { catalog: CATALOG, wiring: setup.seams, random: other }),
+    );
+    expect(shown.ok).toBe(true);
+    expect(shown.bootstrap).toEqual([]);
+    expect(shown.diagnostics).toContainEqual({
+      severity: 'warning',
+      code: 'bootstrap.needs-password',
+      message:
+        "sonarr's first-run setup signs in through jellyfin, whose own is held: it is held too, and waits on jellyfin's admin password",
+      hint: `once jellyfin has the admin password Mediaplane gives the apps, apply sets sonarr up; see ${runbookUrl('rebuilding-a-host')}`,
+    });
+    const calls = docker.calls.length;
+    const result = await run({ random: other });
+    expect(setup.signIn.signedIn.length).toBe(signedInBefore);
+    expect(setup.state.refusedSignIns).toBe(0);
+    expect(result.actions.find((a) => a.resource === 'sonarr')).toEqual({
+      step: 'wire',
+      resource: 'sonarr',
+      result: 'skipped',
+      detail:
+        "sonarr's first-run setup is held: the app it signs in to has never had the admin password",
+    });
+    // Its setup open, it never has its ports; only Jellyfin is listed as lacking it.
+    expect(docker.calls.slice(calls).filter((c) => c.startsWith('up'))).toEqual([
+      'up unpublished sonarr',
+    ]);
+    expect((await readSecretStore(home)).shared?.adminPasswordNotIn).toEqual([
+      'jellyfin',
+    ]);
   });
 });
 

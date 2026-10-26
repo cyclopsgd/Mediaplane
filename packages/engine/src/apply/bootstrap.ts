@@ -42,6 +42,11 @@ export interface BootstrapOptions {
    * other apps the plan started unpublished with theirs. Throws when that fails.
    */
   publish: (unpublished: readonly string[]) => Promise<void>;
+  /**
+   * Apps the plan held back whose setup is open, or can't be told (PlanContext
+   * .heldUnpublished): kept without their ports in the publishing up.
+   */
+  keepUnpublished?: readonly string[];
   /** What the run finds in the apps' answers (FoundSecrets); the step's own, by default. */
   found?: FoundSecrets;
   seams?: WiringSeams;
@@ -300,7 +305,7 @@ export async function bootstrapApps(options: BootstrapOptions): Promise<Bootstra
       if (!(cause instanceof RuntimeError)) throw cause;
       throw new BootstrapFailed(cause.message, LEAVE_HINT);
     }
-    await options.publish(stillOpen);
+    await options.publish([...stillOpen, ...(options.keepUnpublished ?? [])]);
   }
   const waits = waiting.map((w) => `${w.app} waits: ${w.reason}`);
   const finished = apps.filter((app) => !unfinished.includes(app)).map((a) => a.def.id);

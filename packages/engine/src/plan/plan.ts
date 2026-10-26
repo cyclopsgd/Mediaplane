@@ -51,10 +51,12 @@ import {
   stackKeys,
   userSecrets,
 } from '../secrets/values';
+import { compare } from '../util/sort';
 import { planAppdata } from './appdata';
 import {
   inspectBootstrap,
   setupsToMakeKeys,
+  heldThrough,
   withoutSignInsToCome,
   type BootstrapChange,
   type PasswordsToCome,
@@ -152,11 +154,24 @@ export interface PlanContext {
   secrets: string[];
   current: ContainerState[];
   /**
-   * The apps whose first-run setup would sign in with an admin password they have never
-   * had: not set up, and skipped by the wire step (`bootstrap.needs-password`). Apply's
-   * keys step saves them as `shared.adminPasswordNotIn`, with the password it generates.
+   * The apps whose first-run setup is held, since it would sign in with an admin password
+   * an app has never had, or through one so held (`bootstrap.needs-password`): not set
+   * up, and skipped by the wire step.
    */
   held: string[];
+  /** Of `held`, those whose setup is open, or can't be told: started without their ports. */
+  heldUnpublished: string[];
+  /**
+   * Of `held`, those whose own sign-in would have used the password: apply's keys step
+   * saves them as `shared.adminPasswordNotIn`, with the password it generates.
+   */
+  heldForPassword: string[];
+  /**
+   * When apply generates the admin password: the apps it reaches before the wire step, by
+   * a setup that makes the admin with it, or a pre-start file apply creates. The wire step
+   * signs in to no other app with it until it has set it there through the app's key.
+   */
+  passwordGivenTo?: string[];
 }
 
 /** Everything apply would do, without doing it. Writes nothing. */
@@ -323,8 +338,10 @@ export async function planStack(
   let bootstrap = setups.changes;
   const held = [...setups.held];
   // An app whose setup is open starts again without its ports, whatever it runs now: up
-  // recreates it, and again once it is set up.
-  const unpublished = new Set(bootstrap.filter((b) => b.unpublished).map((b) => b.app));
+  // recreates it, and again once it is set up. So does one held, as it would have started.
+  const unpublished = new Set(
+    [...bootstrap, ...held].filter((b) => b.unpublished).map((b) => b.app),
+  );
   containers = containers.map((change) =>
     unpublished.has(change.service) && change.action !== 'create'
       ? { ...change, action: 'recreate' }
@@ -381,7 +398,7 @@ export async function planStack(
         : []),
       ...bootstrap.map((b) => b.app),
       // Held back, it has no key it takes: apply's wire step skips it.
-      ...held,
+      ...held.map((h) => h.app),
     ]);
     // The join is plan's one change to Docker, and only an app that is settled is asked:
     // with none, every resource is checked after the start, and nothing joins.
@@ -426,9 +443,11 @@ export async function planStack(
         await setupsToMakeKeys(stack, refusing, bootstrap),
         toCome,
       );
-      bootstrap = [...bootstrap, ...remade.changes];
-      held.push(...remade.held);
-      diagnostics.push(...remade.diagnostics);
+      // A setup that goes through an app held now is held too (Seerr through Jellyfin).
+      const through = heldThrough(stack, bootstrap, remade.held, toCome);
+      bootstrap = [...through.changes, ...remade.changes];
+      held.push(...remade.held, ...through.held);
+      diagnostics.push(...remade.diagnostics, ...through.diagnostics);
     } catch (cause) {
       if (!(cause instanceof RuntimeError)) throw cause;
       return failed([...diagnostics, dockerUnavailable(cause, options.env)]);
@@ -458,8 +477,47 @@ export async function planStack(
       bootstrap,
       diagnostics,
     },
-    context: { stack, compose, store, stored, secrets, current, held },
+    context: {
+      stack,
+      compose,
+      store,
+      stored,
+      secrets,
+      current,
+      held: held.map((h) => h.app),
+      heldUnpublished: held.filter((h) => h.unpublished).map((h) => h.app),
+      heldForPassword: held.filter((h) => signsInForKey(stack, h.app)).map((h) => h.app),
+      ...(newPassword
+        ? { passwordGivenTo: passwordGivenTo(bootstrap, prestart.changes) }
+        : {}),
+    },
   };
+}
+
+/** Whether `app`'s setup signs in as the shared admin to find the key it made. */
+function signsInForKey(stack: ResolvedStack, app: string): boolean {
+  const def = stack.apps.find((a) => a.def.id === app)?.def;
+  const secret = def?.bootstrap?.secret;
+  return secret !== undefined && secret === def?.api?.key.secret;
+}
+
+/**
+ * The apps a generated admin password reaches before the wire step: one whose setup
+ * starts unpublished, which makes the admin with it, and one apply creates a pre-start
+ * file for ("appdata/<app>/..."), which holds it.
+ */
+function passwordGivenTo(
+  bootstrap: readonly BootstrapChange[],
+  prestart: readonly FileChange[],
+): string[] {
+  const created = prestart
+    .filter((file) => file.status === 'create' && file.path.startsWith('appdata/'))
+    .map((file) => file.path.split('/')[1] ?? '');
+  return [
+    ...new Set([...bootstrap.filter((b) => b.unpublished).map((b) => b.app), ...created]),
+  ]
+    .filter((app) => app !== '')
+    .sort(compare);
 }
 
 /** `store` without the admin password it holds, and only that: one to generate anew. */

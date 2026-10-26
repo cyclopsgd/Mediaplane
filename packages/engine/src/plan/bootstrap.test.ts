@@ -273,7 +273,11 @@ describe('inspectBootstrap: with an admin password the app has never had', () =>
     await setupFile(stack, 'done\n');
     expect(
       await inspectBootstrap(stack, emptySecretStore(), { toGenerate: 'generate' }),
-    ).toEqual({ changes: [], held: ['jellyfin'], diagnostics: [HELD] });
+    ).toEqual({
+      changes: [],
+      held: [{ app: 'jellyfin', unpublished: false }],
+      diagnostics: [HELD],
+    });
   });
 
   it('holds back one listed as never having had the stored password, on every run', async () => {
@@ -281,14 +285,22 @@ describe('inspectBootstrap: with an admin password the app has never had', () =>
     await setupFile(stack, 'done\n');
     expect(
       await inspectBootstrap(stack, emptySecretStore(), { notIn: ['jellyfin'] }),
-    ).toEqual({ changes: [], held: ['jellyfin'], diagnostics: [HELD] });
+    ).toEqual({
+      changes: [],
+      held: [{ app: 'jellyfin', unpublished: false }],
+      diagnostics: [HELD],
+    });
     // Rotating doesn't change that: it has had neither.
     expect(
       await inspectBootstrap(stack, emptySecretStore(), {
         toGenerate: 'rotate',
         notIn: ['jellyfin'],
       }),
-    ).toEqual({ changes: [], held: ['jellyfin'], diagnostics: [HELD] });
+    ).toEqual({
+      changes: [],
+      held: [{ app: 'jellyfin', unpublished: false }],
+      diagnostics: [HELD],
+    });
   });
 
   it('refuses to rotate while one that has the password can only be signed in to', async () => {
@@ -298,7 +310,7 @@ describe('inspectBootstrap: with an admin password the app has never had', () =>
       toGenerate: 'rotate',
     });
     expect(rotated.changes).toEqual([]);
-    expect(rotated.held).toEqual(['jellyfin']);
+    expect(rotated.held).toEqual([{ app: 'jellyfin', unpublished: false }]);
     expect(rotated.diagnostics).toEqual([
       {
         severity: 'error',
@@ -317,7 +329,7 @@ describe('inspectBootstrap: with an admin password the app has never had', () =>
       toGenerate: 'generate',
     });
     expect(held.changes).toEqual([]);
-    expect(held.held).toEqual(['jellyfin']);
+    expect(held.held).toEqual([{ app: 'jellyfin', unpublished: true }]);
     expect(held.diagnostics.map((d) => d.code)).toEqual(['bootstrap.needs-password']);
   });
 
@@ -350,7 +362,11 @@ describe('inspectBootstrap: with an admin password the app has never had', () =>
         toGenerate: 'generate',
         explained: ['jellyfin'],
       }),
-    ).toEqual({ changes: [], held: ['jellyfin'], diagnostics: [] });
+    ).toEqual({
+      changes: [],
+      held: [{ app: 'jellyfin', unpublished: false }],
+      diagnostics: [],
+    });
   });
 });
 
@@ -366,13 +382,53 @@ describe('withoutSignInsToCome', () => {
     });
     expect(await withoutSignInsToCome(stack, remade, { toGenerate: 'rotate' })).toEqual({
       changes: [],
-      held: ['jellyfin'],
+      held: [{ app: 'jellyfin', unpublished: false }],
       diagnostics: [expect.objectContaining({ severity: 'error' })],
     });
     expect(await withoutSignInsToCome(stack, remade, { notIn: ['jellyfin'] })).toEqual({
       changes: [],
-      held: ['jellyfin'],
+      held: [{ app: 'jellyfin', unpublished: false }],
       diagnostics: [expect.objectContaining({ severity: 'warning' })],
     });
+  });
+});
+
+describe('inspectBootstrap: a setup that signs in through one held', () => {
+  it('holds it too, as it starts, saying it waits on the held app', async () => {
+    const home = await tempDir('mediaplane-bootstrap-');
+    const resolved = resolveStack(
+      fixtureConfig(STACK),
+      SIGN_IN_CATALOG,
+      FIXTURE_HOST,
+      home,
+    );
+    if (resolved.stack === undefined) throw new Error('the stack did not resolve');
+    const stack = resolved.stack;
+    await setupFile(stack, 'done\n');
+    // Sonarr's sign-in setup is open: it would sign in through Jellyfin.
+    const held = await inspectBootstrap(stack, emptySecretStore(), {
+      toGenerate: 'generate',
+    });
+    expect(held.changes).toEqual([]);
+    expect(held.held).toEqual([
+      { app: 'jellyfin', unpublished: false },
+      { app: 'sonarr', unpublished: true },
+    ]);
+    expect(held.diagnostics.map((d) => [d.severity, d.code, d.message])).toEqual([
+      [
+        'warning',
+        'bootstrap.needs-password',
+        expect.stringContaining('jellyfin has never had the admin password') as string,
+      ],
+      [
+        'warning',
+        'bootstrap.needs-password',
+        "sonarr's first-run setup signs in through jellyfin, whose own is held: it is held too, and waits on jellyfin's admin password",
+      ],
+    ]);
+    // Without Jellyfin held, it is set up as before.
+    expect((await inspectBootstrap(stack, KEYED)).changes).toEqual([
+      { app: 'sonarr', unpublished: true },
+    ]);
   });
 });

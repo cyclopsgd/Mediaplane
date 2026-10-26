@@ -183,7 +183,10 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     const result = withGeneratedSecrets(stack, store, options.random);
     // With the password, in the same write: the apps the plan held back, which never had
     // it. None when the password is yours: it isn't Mediaplane's to track.
-    const notIn = [...passwordNotIn(stack.config, result.store), ...context.held];
+    const notIn = [
+      ...passwordNotIn(stack.config, result.store),
+      ...context.heldForPassword,
+    ];
     const saved = withPasswordNotIn(
       result.store,
       stack.config.admin.password === undefined ? notIn : [],
@@ -285,7 +288,11 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     }
     // An app whose first-run setup is open to anyone starts with no published port: the
     // bootstrap step publishes it once it is set up (spec §6.4).
-    const unpublished = shown.bootstrap.filter((b) => b.unpublished).map((b) => b.app);
+    const unpublished = [
+      ...shown.bootstrap.filter((b) => b.unpublished).map((b) => b.app),
+      // A held setup that is open, or can't be told, is never published either.
+      ...context.heldUnpublished,
+    ];
     await up(unpublished);
     if (unrestored !== undefined) throw unrestored;
     const [its, it] = unpublished.length === 1 ? ['its', 'it'] : ['their', 'them'];
@@ -326,6 +333,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         runtime,
         pending: shown.bootstrap,
         publish: up,
+        keepUnpublished: context.heldUnpublished,
         project: options.project ?? PROJECT_NAME,
         found,
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
@@ -365,6 +373,9 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         waiting,
         failed: unset,
         held: context.held,
+        ...(context.passwordGivenTo === undefined
+          ? {}
+          : { givenTo: context.passwordGivenTo }),
         notIn: passwordNotIn(stack.config, store),
         // At once, as a key the bootstrap step saves: the app has the password now.
         passwordSet: async (app) => {
