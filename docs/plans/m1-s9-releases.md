@@ -1229,7 +1229,7 @@ image=rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341f
 docker run --rm -v "$PWD:/repo:ro" -w /repo "$image" -color
 git ls-files -z -- '*.sh' | xargs -0 docker run --rm -v "$PWD:/repo:ro" -w /repo \
   --entrypoint shellcheck "$image" deploy/mediaplane .githooks/pre-commit
-npx --yes renovate@44.149.3 renovate-config-validator --strict
+npx --yes --package renovate@44.149.3 renovate-config-validator --strict
 ```
 
 Expected: actionlint and shellcheck print nothing and exit 0; the validator prints
