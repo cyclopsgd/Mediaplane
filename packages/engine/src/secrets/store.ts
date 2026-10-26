@@ -12,7 +12,9 @@ import { compare, unique } from '../util/sort';
  * a key an app creates itself (Jellyfin's is 32 hex characters): writeSecretStore
  * refuses to save one that doesn't.
  */
-const appSecret = z.string().regex(/^[A-Za-z0-9_]+$/);
+export const APP_SECRET = /^[A-Za-z0-9_]+$/;
+
+const appSecret = z.string().regex(APP_SECRET);
 
 const storeSchema = z.strictObject({
   version: z.literal(1),

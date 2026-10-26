@@ -3,7 +3,7 @@ import type { Catalog } from '../catalog/types';
 import { loadConfigFile } from '../config/load';
 import type { Migration } from '../config/migrations';
 import { checkSecretRefs } from '../config/secrets';
-import { error, hasErrors, type Diagnostic } from '../diagnostics';
+import { error, hasErrors, warning, type Diagnostic } from '../diagnostics';
 import type { HostFacts } from '../host/facts';
 import {
   dockerUnavailable,
@@ -34,8 +34,9 @@ import {
 } from '../integrations/wiring';
 import { dockerAccessWarnings } from '../runtime/docker';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
-import { adminLogin } from '../secrets/admin';
+import { adminLogin, adminPasswordToGenerate } from '../secrets/admin';
 import { withGeneratedSecrets } from '../secrets/generate';
+import { REBUILD_RUNBOOK, recoverKeys, withRecoveredKeys } from '../secrets/recover';
 import { readSecretStore, type SecretStore } from '../secrets/store';
 import {
   secretsToGenerate,
@@ -87,8 +88,11 @@ export interface PlanResult {
   changed: boolean;
   files: FileChange[];
   containers: ContainerChange[];
-  /** Names ("sonarr.apiKey"), never values. */
-  secrets: { generate: string[] };
+  /**
+   * Names ("sonarr.apiKey"), never values: those to generate, and those to recover from
+   * the apps' appdata, which state/secrets.json lacks (spec §6.1).
+   */
+  secrets: { generate: string[]; recover: string[] };
   /**
    * Running apps whose health check has not passed yet, as "sonarr (unhealthy)": apply
    * waits for them again, so they make the plan changed.
@@ -110,8 +114,9 @@ export interface PlanResult {
 
 /**
  * What apply builds on after a successful plan, so it never works it out differently.
- * `store` holds the generated secrets in plain text: never log, print or serialise a
- * PlanContext.
+ * `store` holds the generated secrets in plain text, with the keys recovered from the
+ * apps' appdata (`secrets.recover`), which apply's keys step saves: never log, print or
+ * serialise a PlanContext.
  */
 export interface PlanContext {
   stack: ResolvedStack;
@@ -183,7 +188,29 @@ export async function planStack(
   if (hasErrors(diagnostics)) return failed(diagnostics);
 
   const compose = renderCompose(stack);
-  const store = await readSecretStore(home);
+  const stored = await readSecretStore(home);
+  // The keys the store lacks that the apps still keep in their appdata (spec §6.1, key
+  // recovery): found before anything is generated, so a lost store never locks Mediaplane
+  // out of an app. From here on, the store holds them, as apply's keys step saves them.
+  const newPassword = adminPasswordToGenerate(stack.config, stored);
+  const recovery = await recoverKeys(stack, stored, newPassword);
+  diagnostics.push(...recovery.diagnostics);
+  if (hasErrors(diagnostics)) return failed(diagnostics);
+  const store = withRecoveredKeys(stored, recovery.recovered);
+  const recover = recovery.recovered.map(({ app, name }) => `${app}.${name}`);
+  if (newPassword && recover.length > 0) {
+    // The apps hold keys Mediaplane gave them, so it generated a password for them too,
+    // which went with the store: no app keeps it but as a hash.
+    diagnostics.push(
+      warning(
+        'secrets.admin-password-lost',
+        "the admin password Mediaplane generated went with state/secrets.json, though the apps still hold the keys it gave them: apply generates a new one, and sets it in each app through the app's key",
+        {
+          hint: `"mediaplane credentials" shows it once apply has run; to keep the old one, set admin.password to a file that holds it. See ${REBUILD_RUNBOOK}`,
+        },
+      ),
+    );
+  }
   const values = await secretValues(stack, store, options.env);
   // The secrets a first apply would generate, in memory only, so the pre-start files
   // can be rendered. Their content is never shown or kept: apply renders them again
@@ -322,12 +349,13 @@ export async function planStack(
         files.some((file) => file.status !== 'unchanged') ||
         containers.some((change) => change.action !== 'unchanged') ||
         generate.length > 0 ||
+        recover.length > 0 ||
         unhealthy.length > 0 ||
         wiring.some((change) => change.action !== 'unchanged') ||
         bootstrap.length > 0,
       files,
       containers,
-      secrets: { generate },
+      secrets: { generate, recover },
       unhealthy,
       wiring,
       drift,
@@ -346,7 +374,7 @@ function failed(diagnostics: Diagnostic[]): { result: PlanResult; context: undef
       changed: false,
       files: [],
       containers: [],
-      secrets: { generate: [] },
+      secrets: { generate: [], recover: [] },
       unhealthy: [],
       wiring: [],
       drift: [],

@@ -1,5 +1,5 @@
 import { pbkdf2Sync } from 'node:crypto';
-import type { ConfigFileContext } from '@mediaplane/engine';
+import type { ConfigFileContext, KeyFile } from '@mediaplane/engine';
 
 /**
  * qBittorrent's WebUI\Password_PBKDF2 value (design §6.1): PBKDF2-HMAC-SHA512 with
@@ -52,3 +52,16 @@ export function qbittorrentConf<Options>(ctx: ConfigFileContext<Options>): strin
     '',
   ].join('\n');
 }
+
+/** qBittorrent's file, in its appdata folder: its settings, its login and its key. */
+export const QBITTORRENT_CONF = 'qBittorrent/qBittorrent.conf';
+
+/**
+ * qBittorrent's key in its file (spec §6.1, key recovery): `WebUI\APIKey`, which
+ * qbittorrentConf writes, and qBittorrent's web UI writes anew when it rotates the key
+ * (probed). The file is its only source: qBittorrent takes no key from its environment.
+ */
+export const qbittorrentKeyFile: KeyFile = {
+  path: QBITTORRENT_CONF,
+  read: (text) => /^WebUI\\APIKey=(.*?)\r?$/m.exec(text)?.[1],
+};

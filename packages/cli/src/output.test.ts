@@ -44,7 +44,7 @@ const PLAN: PlanResult = {
     },
   ],
   containers: [],
-  secrets: { generate: [] },
+  secrets: { generate: [], recover: [] },
   unhealthy: [],
   wiring: [],
   drift: [],
@@ -306,6 +306,30 @@ describe('printDrift', () => {
 });
 
 describe('printPlan', () => {
+  it("lists the keys it recovers from the apps' appdata before those it generates, and counts them", () => {
+    const term = capture();
+    printPlan(
+      {
+        ...PLAN,
+        files: [],
+        secrets: {
+          generate: ['admin.password'],
+          recover: ['qbittorrent.apiKey', 'sonarr.apiKey'],
+        },
+      },
+      { json: false },
+      term.io,
+    );
+    expect(term.stdout()).toBe(
+      [
+        "Secrets to recover from the apps' appdata: qbittorrent.apiKey, sonarr.apiKey",
+        'Secrets to generate: admin.password',
+        'Plan: 2 secrets to recover, 1 secret to generate.',
+        '',
+      ].join('\n'),
+    );
+  });
+
   it('shows a guest apply restarts, with the hosts it starts', () => {
     const term = capture();
     const containers: PlanResult['containers'] = [
@@ -507,7 +531,7 @@ describe('the wire step, as apply shows it', () => {
       plan: {
         files: [],
         containers: [],
-        secrets: { generate: [] },
+        secrets: { generate: [], recover: ['sonarr.apiKey'] },
         wiring: [
           { resource: 'sonarr.admin', action: 'after-start' },
           { resource: 'radarr.admin', action: 'unchanged' },
@@ -516,6 +540,9 @@ describe('the wire step, as apply shows it', () => {
       actions: ACTIONS,
     };
     printRecord(record, { json: false }, term.io);
+    expect(term.stdout()).toContain(
+      '  secrets recovered from appdata: sonarr.apiKey\n  > after start',
+    );
     // The same line as plan's.
     expect(term.stdout()).toContain('  > after start sonarr.admin\nSteps:\n');
     expect(term.stdout()).toContain('  done    wiring sonarr.admin: created\n');

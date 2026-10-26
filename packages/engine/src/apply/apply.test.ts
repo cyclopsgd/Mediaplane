@@ -124,6 +124,21 @@ const WITH_FILES: Catalog = fixtureCatalog.map((app) =>
   app.id === 'sonarr' ? { ...app, configFiles } : app,
 );
 
+/** WITH_FILES, with Sonarr's key read back from its pre-start file (spec §6.1). */
+const WITH_KEYS: Catalog = WITH_FILES.map((app) =>
+  app.id === 'sonarr'
+    ? {
+        ...app,
+        keyFiles: {
+          apiKey: {
+            path: 'config/app.ini',
+            read: (text) => /^key=(.*)$/m.exec(text)?.[1],
+          },
+        },
+      }
+    : app,
+);
+
 async function makeHome(stack = STACK): Promise<string> {
   const home = await tempDir('mediaplane-apply-');
   await writeFile(join(home, 'stack.yaml'), stack);
@@ -168,6 +183,34 @@ function stoppedUntilUp(docker: Runtime, service: string): Runtime {
 }
 
 describe('apply', () => {
+  it("saves the keys it recovers from the apps' appdata with those it generates, and writes no file over them", async () => {
+    const home = await makeHome();
+    const key = 'f'.repeat(32);
+    const file = join(home, 'appdata', 'sonarr', 'config', 'app.ini');
+    await mkdir(join(file, '..'), { recursive: true });
+    await writeFile(file, `key=${key}\nuser=someone\n`);
+    const result = await apply(options(home, fakeDocker(home), { catalog: WITH_KEYS }));
+    expect(result.outcome).toBe('success');
+    expect(result.plan.secrets).toEqual({
+      generate: ['admin.password', 'gluetun.controlApiKey'],
+      recover: ['sonarr.apiKey'],
+    });
+    expect(result.actions[0]).toEqual({
+      step: 'keys',
+      result: 'done',
+      detail:
+        'recovered sonarr.apiKey from appdata; generated admin.password, gluetun.controlApiKey',
+    });
+    expect((await readSecretStore(home)).apps.sonarr).toEqual({ apiKey: key });
+    expect(await readFile(file, 'utf8')).toBe(`key=${key}\nuser=someone\n`);
+    expect(await readFile(join(home, ENV_PATH), 'utf8')).toContain(key);
+    const [record] = (await listRecords(home)).records;
+    expect(record?.plan.secrets).toEqual({
+      generate: ['admin.password', 'gluetun.controlApiKey'],
+      recover: ['sonarr.apiKey'],
+    });
+  });
+
   it('generates keys, writes files, pulls, starts, verifies and records', async () => {
     const home = await makeHome();
     const docker = fakeDocker(home);

@@ -9,6 +9,7 @@ import {
   type ConfigFileContext,
   type DesiredResource,
   type Integration,
+  type KeyFile,
   type ResourceSpec,
 } from '@mediaplane/engine';
 import { z } from 'zod';
@@ -156,3 +157,15 @@ export function servarrConfigFiles(ctx: ConfigFileContext): ConfigFile[] {
     },
   ];
 }
+
+/**
+ * Where Sonarr, Radarr and Prowlarr keep their key (spec §6.1, key recovery): config.xml's
+ * ApiKey, which servarrConfigFiles writes. Each also takes it from its environment at
+ * every start, which wins over the file's.
+ */
+export const servarrKeyFiles: Readonly<Record<string, KeyFile>> = {
+  apiKey: {
+    path: 'config.xml',
+    read: (text) => /<ApiKey>([^<]*)<\/ApiKey>/.exec(text)?.[1],
+  },
+};

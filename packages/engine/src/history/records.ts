@@ -55,7 +55,11 @@ export const changeRecordSchema = z.strictObject({
         action: z.enum(['create', 'recreate', 'start', 'restart', 'remove', 'unchanged']),
       }),
     ),
-    secrets: z.strictObject({ generate: z.array(z.string()) }),
+    secrets: z.strictObject({
+      generate: z.array(z.string()),
+      /** The keys recovered from the apps' appdata (spec §6.1). Added in Slice 10a. */
+      recover: z.array(z.string()).optional(),
+    }),
     /** What the plan said of each managed resource. Added in Slice 3b. */
     wiring: z
       .array(

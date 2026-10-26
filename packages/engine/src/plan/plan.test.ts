@@ -1,4 +1,4 @@
-import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppDefinition, Catalog } from '../catalog/types';
@@ -45,6 +45,19 @@ const configFiles: AppDefinition['configFiles'] = (ctx) => [
 ];
 const WITH_FILES: Catalog = fixtureCatalog.map((app) =>
   app.id === 'sonarr' ? { ...app, configFiles } : app,
+);
+
+/** WITH_FILES, with Sonarr's key read back from its pre-start file (spec §6.1). */
+const WITH_KEYS: Catalog = fixtureCatalog.map((app) =>
+  app.id === 'sonarr'
+    ? {
+        ...app,
+        configFiles,
+        keyFiles: {
+          apiKey: { path: 'config.ini', read: (text) => /^key=(.*)$/m.exec(text)?.[1] },
+        },
+      }
+    : app,
 );
 
 async function makeHome({
@@ -270,6 +283,62 @@ describe('plan', () => {
     );
     expect(result.secrets).toEqual({
       generate: ['admin.password', 'gluetun.controlApiKey', 'sonarr.apiKey'],
+      recover: [],
+    });
+  });
+
+  describe('with state/secrets.json lost, and the apps still holding their keys', () => {
+    /** A current home, its store gone, Sonarr's file holding the key it had. */
+    async function lostStore(runtime: Runtime, key = '0'.repeat(32)): Promise<string> {
+      const home = await makeCurrentHome(runtime);
+      await rm(join(home, SECRETS_PATH));
+      await mkdir(join(home, 'appdata'), { mode: 0o700 });
+      await mkdir(join(home, 'appdata', 'sonarr'));
+      await writeFile(join(home, 'appdata', 'sonarr', 'config.ini'), `key=${key}\n`);
+      return home;
+    }
+
+    it("recovers each key from its app's appdata, so nothing else changes, and says the admin password is lost", async () => {
+      const runtime = fakeRuntime({
+        hashes: { ok: true, hashes: HASHES },
+        containers: running(HASHES),
+      });
+      const home = await lostStore(runtime);
+      const result = await planFor(home, { runtime, catalog: WITH_KEYS });
+      expect(result).toMatchObject({ ok: true, changed: true });
+      expect(result.secrets).toEqual({
+        generate: ['admin.password', 'gluetun.controlApiKey'],
+        recover: ['sonarr.apiKey'],
+      });
+      // .env holds the key Sonarr has: Sonarr isn't recreated with another.
+      expect(result.files.map((f) => [f.path, f.status])).toEqual([
+        [COMPOSE_PATH, 'unchanged'],
+        [ENV_PATH, 'unchanged'],
+        ['appdata/sonarr/config.ini', 'unchanged'],
+      ]);
+      expect(result.containers.every((c) => c.action === 'unchanged')).toBe(true);
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({
+          severity: 'warning',
+          code: 'secrets.admin-password-lost',
+        }),
+      ]);
+      // Never the key (the files' content holds the fake image digests' zeros).
+      expect(JSON.stringify({ ...result, files: [] })).not.toContain('0'.repeat(32));
+      expect(await readdir(join(home, 'state'))).toEqual([]);
+    });
+
+    it('fails, rather than generate a key that would lock it out, when it cannot keep the one held', async () => {
+      const runtime = fakeRuntime({
+        hashes: { ok: true, hashes: HASHES },
+        containers: running(HASHES),
+      });
+      const home = await lostStore(runtime, 'not "a" key');
+      const result = await planFor(home, { runtime, catalog: WITH_KEYS });
+      expect(result).toMatchObject({ ok: false, changed: false, files: [] });
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({ severity: 'error', code: 'keys.unrecoverable' }),
+      );
     });
   });
 

@@ -90,6 +90,30 @@ export interface ConfigFile {
   seeded: RegExp;
 }
 
+/**
+ * Where an app keeps one of its keys in its appdata folder (spec §6.1, key recovery): a
+ * key Mediaplane gave it, or one it made. When state/secrets.json lacks the key, plan and
+ * apply read it from here before generating anything, so a lost store never locks
+ * Mediaplane out of an app that still holds its key. Read only, never written, and never
+ * through a link that leads out of the app's appdata folder.
+ */
+export type KeyFile =
+  | {
+      /** Relative to the app's appdata folder, such as "config.xml". */
+      path: string;
+      /** The key the file's text holds, or undefined when it holds none. Pure. */
+      read(text: string): string | undefined;
+    }
+  | {
+      /** Relative to the app's appdata folder: a SQLite database the app keeps. */
+      path: string;
+      /**
+       * Opened read-only, which the app's own writes don't notice: `query` gives at most
+       * one row, whose `column` is the key (Jellyfin's newest key named Mediaplane).
+       */
+      sqlite: { query: string; column: string };
+    };
+
 /** What a pre-start file renderer sees. It holds secrets: never log or print it. */
 export interface ConfigFileContext<
   Options = Record<string, unknown>,
@@ -223,6 +247,11 @@ export interface AppDefinition<Options = Record<string, unknown>> {
   /** Capabilities that no other enabled app may also provide. */
   exclusive?: string[];
   secrets: Record<string, SecretSource>;
+  /**
+   * Where it keeps its keys in its appdata folder, by the secret's name (KeyFile): each
+   * key a pre-start file writes, and the keys it makes or takes from its environment.
+   */
+  keyFiles?: Readonly<Record<string, KeyFile>>;
   credentials: CredentialStep[];
   /** 'image' uses the image's own HEALTHCHECK. 'none' has no health check. */
   health: HealthCheck | 'image' | 'none';

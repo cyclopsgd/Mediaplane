@@ -171,12 +171,21 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
   };
 
   await steps.run('keys', async () => {
+    // The plan's store holds the keys it recovered from the apps' appdata: saved with the
+    // ones generated now, before anything starts (spec §5 step 4, §6.1).
     const result = withGeneratedSecrets(stack, store, options.random);
-    if (result.generated.length > 0) await writeSecretStore(home, result.store);
+    const { recover } = shown.secrets;
+    if (result.generated.length > 0 || recover.length > 0) {
+      await writeSecretStore(home, result.store);
+    }
     store = result.store;
-    return result.generated.length === 0
-      ? NONE_NEEDED
-      : `generated ${result.generated.join(', ')}`;
+    const done = [
+      ...(recover.length === 0 ? [] : [`recovered ${recover.join(', ')} from appdata`]),
+      ...(result.generated.length === 0
+        ? []
+        : [`generated ${result.generated.join(', ')}`]),
+    ];
+    return done.length === 0 ? NONE_NEEDED : done.join('; ');
   });
   await steps.run('files', async () => {
     values = await secretValues(stack, store, options.env);
@@ -569,6 +578,7 @@ function remaining(result: PlanResult): string {
       .filter((c) => c.action !== 'unchanged')
       .map((c) => `${c.service} (${c.action})`),
     ...result.secrets.generate,
+    ...result.secrets.recover,
     ...result.unhealthy,
     ...result.bootstrap.map((b) => `${b.app} (first-run setup)`),
     // An unknown one says why: its reason names the app and what failed, redacted.
@@ -602,7 +612,7 @@ function emptyPlan(): PlanResult {
     changed: false,
     files: [],
     containers: [],
-    secrets: { generate: [] },
+    secrets: { generate: [], recover: [] },
     unhealthy: [],
     wiring: [],
     drift: [],

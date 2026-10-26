@@ -1,4 +1,22 @@
-import { defineApp, error, warning } from '@mediaplane/engine';
+import { defineApp, error, warning, type KeyFile } from '@mediaplane/engine';
+
+/** Mediaplane's own role in auth/config.toml: an apikey line alone could be yours. */
+const MEDIAPLANE_ROLE = /^name = "mediaplane"$/m;
+
+/**
+ * Mediaplane's key to Gluetun's control server (spec §6.1, key recovery): the apikey of
+ * Mediaplane's own role in auth/config.toml, which its pre-start file writes. Gluetun
+ * reads the file when it starts, and never writes it.
+ */
+const controlKeyFile: KeyFile = {
+  path: 'auth/config.toml',
+  read: (text) =>
+    text
+      .split(/^\[\[roles\]\]\s*$/m)
+      .filter((role) => MEDIAPLANE_ROLE.test(role))
+      .map((role) => /^apikey = "([^"]*)"\s*$/m.exec(role)?.[1])
+      .find((key) => key !== undefined),
+};
 
 export default defineApp({
   id: 'gluetun',
@@ -21,6 +39,7 @@ export default defineApp({
     controlApiKey: { generate: 'hex32' },
     wireguardKey: { userProvided: 'vpn.private_key' },
   },
+  keyFiles: { controlApiKey: controlKeyFile },
   credentials: [{ step: 'env', var: 'WIREGUARD_PRIVATE_KEY', secret: 'wireguardKey' }],
   health: 'image',
   env: (ctx) => ({
@@ -69,8 +88,7 @@ export default defineApp({
         `apikey = "${ctx.secret('controlApiKey')}"`,
         '',
       ].join('\n'),
-      // Mediaplane's own role: an apikey line alone could be a role of your own.
-      seeded: /^name = "mediaplane"$/m,
+      seeded: MEDIAPLANE_ROLE,
     },
   ],
   experimental: false,

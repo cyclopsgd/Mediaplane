@@ -1,6 +1,6 @@
 import { defineApp, warning } from '@mediaplane/engine';
 import { z } from 'zod';
-import { qbittorrentConf } from './conf';
+import { QBITTORRENT_CONF, qbittorrentConf, qbittorrentKeyFile } from './conf';
 import integration from './integration';
 
 export default defineApp({
@@ -19,6 +19,7 @@ export default defineApp({
   provides: ['download-client:torrent'],
   requires: [],
   secrets: { apiKey: { generate: 'qbt' } },
+  keyFiles: { apiKey: qbittorrentKeyFile },
   credentials: [],
   health: {
     test: ['CMD-SHELL', 'curl -fsS "http://localhost:$${WEBUI_PORT}/" > /dev/null'],
@@ -76,7 +77,7 @@ export default defineApp({
   // The shared login and the key, before the image's default can set a temporary password.
   configFiles: (ctx) => [
     {
-      path: 'qBittorrent/qBittorrent.conf',
+      path: QBITTORRENT_CONF,
       content: qbittorrentConf(ctx),
       seeded: /^WebUI\\APIKey=.+$/m,
     },

@@ -1,7 +1,27 @@
-import { defineApp } from '@mediaplane/engine';
+import { defineApp, type KeyFile } from '@mediaplane/engine';
 import { z } from 'zod';
 import { seerrBootstrap } from './bootstrap';
 import integration from './integration';
+
+const settingsFile = z.looseObject({
+  main: z.looseObject({ apiKey: z.string() }).optional(),
+});
+
+/**
+ * Seerr's key in its settings.json (spec §6.1, key recovery): `main.apiKey`, which Seerr
+ * writes from API_KEY at its first start. It takes API_KEY again at every start, and its
+ * web UI can't make another key while API_KEY is set (probed).
+ */
+const keyFile: KeyFile = {
+  path: 'settings.json',
+  read: (text) => {
+    try {
+      return settingsFile.safeParse(JSON.parse(text)).data?.main?.apiKey;
+    } catch {
+      return undefined;
+    }
+  },
+};
 
 export default defineApp({
   id: 'seerr',
@@ -22,6 +42,7 @@ export default defineApp({
     { capability: 'pvr', min: 1 },
   ],
   secrets: { apiKey: { generate: 'hex32' } },
+  keyFiles: { apiKey: keyFile },
   credentials: [
     { step: 'env', var: 'API_KEY', secret: 'apiKey' },
     { step: 'bootstrap-api', action: 'first-sign-in' },

@@ -1,7 +1,7 @@
 import { defineApp } from '@mediaplane/engine';
 import { z } from 'zod';
 import { gpuExtras, hardwareTranscoding } from '../_shared/hardware-transcoding';
-import { jellyfinBootstrap } from './bootstrap';
+import { jellyfinBootstrap, KEY_NAME } from './bootstrap';
 import integration from './integration';
 
 export default defineApp({
@@ -21,6 +21,18 @@ export default defineApp({
   requires: [],
   exclusive: ['media-server'],
   secrets: { apiKey: { createdBy: 'app' } },
+  // The newest key named Mediaplane, as its setup takes it from Jellyfin's list (spec
+  // §6.1, key recovery), in Jellyfin's database: WAL mode, so reading it read-only stops
+  // none of Jellyfin's writes, and sees each as soon as it is made (probed).
+  keyFiles: {
+    apiKey: {
+      path: 'data/data/jellyfin.db',
+      sqlite: {
+        query: `SELECT AccessToken FROM ApiKeys WHERE Name = '${KEY_NAME}' ORDER BY DateCreated DESC, Id ASC LIMIT 1`,
+        column: 'AccessToken',
+      },
+    },
+  },
   credentials: [
     { step: 'bootstrap-api', action: 'startup-wizard' },
     { step: 'bootstrap-api', action: 'create-api-key' },

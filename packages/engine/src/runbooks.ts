@@ -6,7 +6,12 @@ export const RUNBOOKS_URL =
   'https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks';
 
 /** The runbooks (docs/runbooks/<name>.md). */
-export type Runbook = 'app-wont-start' | 'drift-reported' | 'vpn-down' | 'wiring-failed';
+export type Runbook =
+  | 'app-wont-start'
+  | 'drift-reported'
+  | 'rebuilding-a-host'
+  | 'vpn-down'
+  | 'wiring-failed';
 
 /** A runbook's address on GitHub. */
 export function runbookUrl(name: Runbook): string {

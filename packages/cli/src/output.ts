@@ -179,7 +179,10 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
       );
     }
   }
-  const generate = result.secrets.generate;
+  const { generate, recover } = result.secrets;
+  if (recover.length > 0) {
+    io.stdout(`Secrets to recover from the apps' appdata: ${recover.join(', ')}\n`);
+  }
   if (generate.length > 0) io.stdout(`Secrets to generate: ${generate.join(', ')}\n`);
   const unhealthy = result.unhealthy;
   if (unhealthy.length > 0) io.stdout(`Not healthy yet: ${unhealthy.join(', ')}\n`);
@@ -209,6 +212,7 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
   const parts = [
     count(files.length, 'file', 'to write'),
     count(containers.length, 'container', 'to change'),
+    count(recover.length, 'secret', 'to recover'),
     count(generate.length, 'secret', 'to generate'),
     count(unhealthy.length, 'app', 'to wait for'),
     count(result.bootstrap.length, 'app', 'to set up'),
@@ -630,6 +634,10 @@ export function printRecord(
   io.stdout(`  stack    sha256:${record.stackSha256}\n`);
   for (const change of record.plan.containers.filter((c) => c.action !== 'unchanged')) {
     io.stdout(`  ${MARKS[change.action]} ${change.action.padEnd(9)} ${change.service}\n`);
+  }
+  const recovered = record.plan.secrets.recover ?? [];
+  if (recovered.length > 0) {
+    io.stdout(`  secrets recovered from appdata: ${recovered.join(', ')}\n`);
   }
   if (record.plan.secrets.generate.length > 0) {
     io.stdout(`  secrets generated: ${record.plan.secrets.generate.join(', ')}\n`);
