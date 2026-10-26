@@ -119,7 +119,7 @@ export function driftAdvice(drift: readonly Drift[]): string[] {
       : []),
     ...(drift.some((d) => d.kind === 'left' && d.stays !== undefined)
       ? [
-          "what apply leaves, as said above, is yours to remove in the app if you don't want it; or keep it with mediaplane keep <app>.<resource>, which stops the report",
+          'what apply leaves is for you to remove in the app, if you want it gone; or keep it as yours with mediaplane keep <app>.<resource>, which stops the report',
         ]
       : []),
   ];

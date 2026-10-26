@@ -199,7 +199,7 @@ describe('printPlan: drift', () => {
         '  ? qbittorrent.category_movies: still in the app, though the stack no longer wants it; apply leaves it: it holds 2 torrents',
         "  apply puts the key Mediaplane holds back where an app keeps it in a file of its own, such as qBittorrent's, and restarts the app, and has an app that made its own key, such as Jellyfin, make another; for any other app, put it back as https://github.com/cyclopsgd/Mediaplane/blob/main/docs/runbooks/wiring-failed.md shows. mediaplane keep <app>.<key> keeps the app's own key instead.",
         '  apply removes what Mediaplane made that the stack no longer wants; to keep one as yours instead, run mediaplane keep <app>.<resource> first, which also stops the report.',
-        "  what apply leaves, as said above, is yours to remove in the app if you don't want it; or keep it with mediaplane keep <app>.<resource>, which stops the report.",
+        '  what apply leaves is for you to remove in the app, if you want it gone; or keep it as yours with mediaplane keep <app>.<resource>, which stops the report.',
         'Wiring:',
         '  - remove      prowlarr.application_radarr',
         'Plan: 1 resource to remove.',
