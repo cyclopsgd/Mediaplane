@@ -329,7 +329,9 @@ export function printKeep(result: KeepResult, options: { json: boolean }, io: Io
   }
   if (!result.ok || result.value === undefined) {
     io.stderr(
-      '\nNothing was kept; stack.yaml and state/secrets.json are as they were.\n',
+      result.diagnostics.some((d) => d.code === 'keep.record' && d.severity === 'error')
+        ? '\nNothing was kept: Mediaplane still counts it as its own, so run keep again before the next apply.\n'
+        : '\nNothing was kept; stack.yaml and state/secrets.json are as they were.\n',
     );
     return;
   }
@@ -339,7 +341,7 @@ export function printKeep(result: KeepResult, options: { json: boolean }, io: Io
     io.stdout(
       `Add this line under overrides: in stack.yaml, where it is kept:\n  ${result.line ?? overrideLine(result.key, result.value, true)}\n${
         resource
-          ? 'Mediaplane has forgotten that it made it, so apply never removes it. Until stack.yaml holds the line, apply makes it again if the stack still wants it.\n'
+          ? 'Mediaplane has forgotten that it made it, so apply never removes it. Until stack.yaml holds the line, apply makes it again if the stack still wants it, and leaves it in the app if the stack no longer does.\n'
           : 'Until stack.yaml holds it, apply puts back what it applied, and drift reports it.\n'
       }`,
     );

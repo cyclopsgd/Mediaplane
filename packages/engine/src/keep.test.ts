@@ -402,6 +402,59 @@ describe('keep', () => {
     ]);
   });
 
+  it('fails closed when it cannot forget a resource left in the app, as automation owns stack.yaml: the record stays, so keep must be run again', async () => {
+    const gone: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'gone',
+      desired: () => undefined,
+      remove: () => Promise.reject(new Error('never removed')),
+    };
+    const catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'sonarr'
+        ? { ...def, integration: { after: [], resources: [FAKE_LOGIN, gone] } }
+        : def,
+    );
+    const external = `${STACK}managed_by: external\n`;
+    const dir = await home(external);
+    await writeResources(dir, {
+      'sonarr.login': RECORD,
+      'sonarr.gone': { ...RECORD, name: 'gone' },
+    });
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    // Plan has read the records by the time keep forgets one: make them unreadable then.
+    const runtime = runtimeFor(sonarr.addresses);
+    const breaking: Runtime = {
+      ...runtime,
+      wiringAddresses: async (ids) => {
+        await writeFile(join(dir, RESOURCES_PATH), '{ not json');
+        return runtime.wiringAddresses(ids);
+      },
+    };
+    const kept = await keep(
+      options(dir, sonarr, 'sonarr.gone', { catalog, runtime: breaking }),
+    );
+    expect(kept).toMatchObject({
+      ok: false,
+      key: 'sonarr.gone',
+      value: 'unmanaged',
+      line: 'sonarr.gone: unmanaged',
+      written: false,
+    });
+    expect(kept.diagnostics.map((d) => [d.severity, d.code])).toEqual([
+      ['warning', 'keep.external'],
+      ['error', 'keep.record'],
+    ]);
+    expect(kept.diagnostics[1]).toMatchObject({
+      message: expect.stringContaining(
+        'state/resources.json could not be updated to forget sonarr.gone',
+      ) as string,
+      hint: expect.stringContaining('run keep again') as string,
+    });
+    expect(kept.diagnostics[1]?.hint).toContain('sonarr.gone: unmanaged');
+    expect(await readFile(join(dir, 'stack.yaml'), 'utf8')).toBe(external);
+    expect(JSON.stringify(kept)).not.toMatch(new RegExp(`${KEY}|${PASSWORD}`));
+  });
+
   it('gives the line to add when stack.yaml has other names, or the write itself fails', async () => {
     const line =
       'add this line under overrides: in stack.yaml yourself: sonarr.login.user: someone';
@@ -469,6 +522,11 @@ describe('keep', () => {
       options(dir, sonarr, 'sonarr.login.user', { runtime: handing }),
     );
     expect(codes(result)).toEqual(['keep.external']);
+    expect(result).toMatchObject({
+      ok: true,
+      line: 'sonarr.login.user: someone',
+      written: false,
+    });
     expect(await readFile(join(dir, 'stack.yaml'), 'utf8')).toBe(
       `${STACK}managed_by: external\n`,
     );

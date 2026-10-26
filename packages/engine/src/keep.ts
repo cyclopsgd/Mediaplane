@@ -314,7 +314,8 @@ export async function keep(options: KeepOptions): Promise<KeepResult> {
  * back what the app holds until it does. A resource kept as `unmanaged` is forgotten
  * though (its record in state/resources.json), so that apply never removes it, nor drift
  * reports it, while the line is on its way: Mediaplane only removes what its record says
- * it made.
+ * it made. If the record can't be forgotten, keep fails (`ok: false`, still giving the
+ * line), as the next apply would remove what is yours.
  */
 async function keptOutside(
   home: string,
@@ -341,13 +342,24 @@ async function keptOutside(
         await writeResources(home, known);
       }
     } catch (cause) {
-      diagnostics.push(
-        warning(
-          'keep.record',
-          `state/resources.json could not be updated to forget ${address}: ${cause instanceof Error ? cause.message : String(cause)}`,
-          { hint: 'add the line, then run apply: Mediaplane then stops managing it' },
-        ),
-      );
+      // Fail closed: the record stays, so the next apply would remove what is yours.
+      return {
+        ok: false,
+        key,
+        value,
+        line,
+        written: false,
+        diagnostics: [
+          ...diagnostics,
+          error(
+            'keep.record',
+            `state/resources.json could not be updated to forget ${address}: ${cause instanceof Error ? cause.message : String(cause)}`,
+            {
+              hint: `Mediaplane still counts it as its own, and the next apply would remove it: run keep again once state/resources.json can be written, before apply, then add this line under overrides: in stack.yaml where it is kept: ${line}`,
+            },
+          ),
+        ],
+      };
     }
   }
   return { ok: true, key, value, line, written: false, diagnostics };

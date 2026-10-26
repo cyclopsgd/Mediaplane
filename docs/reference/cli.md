@@ -66,7 +66,7 @@ Exit codes:
 
 ## `mediaplane keep`
 
-Keep mine: take what an app holds now, changed outside Mediaplane, as what you want, written as an override in stack.yaml, keeping the rest of the file as it is; or, for a resource deleted outside Mediaplane, stop managing it; or, for an app's own key changed in the app, take the key its own file holds, once the app takes it, into state/secrets.json, which the next apply gives to every resource that holds the old one.
+Keep mine: take what an app holds now, changed outside Mediaplane, as what you want, written as an override in stack.yaml, keeping the rest of the file as it is; or, for a resource deleted outside Mediaplane, stop managing it; or, for an app's own key changed in the app, take the key its own file holds, once the app takes it, into state/secrets.json, which the next apply gives to every resource that holds the old one; with managed_by: external, stack.yaml is not written, and the line to add is given instead.
 
 ```text
 mediaplane keep [options] <path>

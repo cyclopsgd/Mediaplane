@@ -655,11 +655,74 @@ describe('printKeep', () => {
       left.io,
     );
     expect(left.stdout()).toBe(
-      'Add this line under overrides: in stack.yaml, where it is kept:\n  prowlarr.application_radarr: unmanaged\nMediaplane has forgotten that it made it, so apply never removes it. Until stack.yaml holds the line, apply makes it again if the stack still wants it.\n',
+      'Add this line under overrides: in stack.yaml, where it is kept:\n  prowlarr.application_radarr: unmanaged\nMediaplane has forgotten that it made it, so apply never removes it. Until stack.yaml holds the line, apply makes it again if the stack still wants it, and leaves it in the app if the stack no longer does.\n',
     );
     const json = capture();
     printKeep(kept, { json: true }, json.io);
     expect(JSON.parse(json.stdout())).toEqual({ schema: 'mediaplane.keep/v1', ...kept });
+  });
+
+  it('works out the line to add when a result gives none', () => {
+    const term = capture();
+    printKeep(
+      {
+        ok: true,
+        key: 'sonarr.download_client.category',
+        value: 'television',
+        written: false,
+        diagnostics: [],
+      },
+      { json: false },
+      term.io,
+    );
+    expect(term.stdout()).toContain('\n  sonarr.download_client.category: television\n');
+  });
+
+  it('never says a record was forgotten when it could not be: the line is still given, as an error, and nothing was kept', () => {
+    const failed = {
+      ok: false,
+      key: 'prowlarr.application_radarr',
+      value: 'unmanaged',
+      line: 'prowlarr.application_radarr: unmanaged',
+      written: false,
+      diagnostics: [
+        {
+          severity: 'error' as const,
+          code: 'keep.record',
+          message:
+            'state/resources.json could not be updated to forget prowlarr.application_radarr: cannot write it (EACCES)',
+          hint: 'Mediaplane still counts it as its own, and the next apply would remove it: run keep again once state/resources.json can be written, before apply, then add this line under overrides: in stack.yaml where it is kept: prowlarr.application_radarr: unmanaged',
+        },
+      ],
+    };
+    const out: string[] = [];
+    const err: string[] = [];
+    printKeep(
+      failed,
+      { json: false },
+      {
+        stdout: (text) => void out.push(text),
+        stderr: (text) => void err.push(text),
+        env: {},
+      },
+    );
+    expect(out.join('')).toBe('');
+    const shown = err.join('');
+    expect(shown).toContain(
+      'error: state/resources.json could not be updated to forget prowlarr.application_radarr',
+    );
+    expect(shown).toContain('prowlarr.application_radarr: unmanaged');
+    expect(shown).toContain(
+      '\nNothing was kept: Mediaplane still counts it as its own, so run keep again before the next apply.\n',
+    );
+    expect(shown).not.toContain('forgotten');
+    const json = capture();
+    printKeep(failed, { json: true }, json.io);
+    expect(JSON.parse(json.stdout())).toEqual({
+      schema: 'mediaplane.keep/v1',
+      ...failed,
+    });
+    expect(json.stdout()).not.toContain('forgotten');
   });
 });
 
