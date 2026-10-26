@@ -831,6 +831,29 @@ describe("keep: an app's own key, changed at its source", () => {
     expect(sonarr.app.requests).toEqual([]);
   });
 
+  it('keeps no key that is another secret Mediaplane holds: the admin password, say', async () => {
+    const dir = await refusedHome(NEW);
+    await writeFile(
+      join(dir, 'state', 'secrets.json'),
+      JSON.stringify({
+        version: 1,
+        apps: { sonarr: { apiKey: KEY } },
+        shared: { adminPassword: NEW },
+      }),
+    );
+    const sonarr = await fakeSonarr({ key: NEW, user: 'admin', password: NEW });
+    const result = await keep(options(dir, sonarr, 'sonarr.apiKey', { catalog: KEYED }));
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'keep.no-key',
+        message: `Mediaplane can't keep sonarr's own key: appdata/sonarr/config.xml can't give it: it holds a secret Mediaplane holds for another use`,
+      }),
+    ]);
+    expect((await readSecretStore(dir)).apps.sonarr).toEqual({ apiKey: KEY });
+    expect(JSON.stringify(result)).not.toContain(NEW);
+    expect(sonarr.app.requests.filter((r) => r.path !== '/ping')).toEqual([]);
+  });
+
   it("keeps no key of an app that is not on the network when it is asked with the file's", async () => {
     const dir = await refusedHome(NEW);
     const sonarr = await fakeSonarr({ key: NEW, user: 'admin', password: PASSWORD });

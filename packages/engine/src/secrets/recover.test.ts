@@ -1,14 +1,52 @@
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdir, readdir, symlink, writeFile } from 'node:fs/promises';
+import { linkSync, renameSync, unlinkSync } from 'node:fs';
+import {
+  chmod,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  truncate,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
+import type * as Sqlite from 'node:sqlite';
 import { DatabaseSync } from 'node:sqlite';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Catalog, KeyFile } from '../catalog/types';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
+import { FAKE_SETUP } from '../testing/bootstrap';
 import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
 import { tempDir } from '../testing/temp';
-import { readKeyFile, recoverKeys, withRecoveredKeys } from './recover';
+import { KEY_FILE_LIMIT, readKeyFile, recoverKeys, withRecoveredKeys } from './recover';
 import { emptySecretStore, type SecretStore } from './store';
+
+/**
+ * What runs as SQLite opens a database, once: `before`, between Mediaplane's own open and
+ * SQLite's, as another process swapping the file would; `after`, once SQLite has it.
+ */
+const sqliteOpen: { before?: () => void; after?: () => void } = vi.hoisted(() => ({}));
+
+vi.mock('node:sqlite', async (importOriginal) => {
+  const actual = await importOriginal<typeof Sqlite>();
+  class Hooked extends actual.DatabaseSync {
+    constructor(...args: ConstructorParameters<typeof actual.DatabaseSync>) {
+      const { before, after } = sqliteOpen;
+      delete sqliteOpen.before;
+      before?.();
+      super(...args);
+      delete sqliteOpen.after;
+      after?.();
+    }
+  }
+  return { ...actual, DatabaseSync: Hooked };
+});
+
+afterEach(() => {
+  delete sqliteOpen.before;
+  delete sqliteOpen.after;
+});
 
 const KEY = 'a'.repeat(32);
 
@@ -62,6 +100,9 @@ async function homeWith(app: string, path: string, text: string): Promise<string
   await writeFile(join(home, 'appdata', app, path), text);
   return home;
 }
+
+/** `path` removed, if anything stands there. */
+const rmIfThere = (path: string) => rm(path, { force: true });
 
 /** A database like Jellyfin's, with the keys `rows` gives, at appdata/jellyfin/data/app.db. */
 async function homeWithDatabase(
@@ -166,6 +207,21 @@ describe('readKeyFile', () => {
     });
   });
 
+  it('reads a key file of at most 1 MiB, and says a larger one is unreadable', async () => {
+    const home = await homeWith('sonarr', 'config.xml', `<ApiKey>${KEY}</ApiKey>`);
+    const path = join(home, 'appdata', 'sonarr', 'config.xml');
+    await truncate(path, KEY_FILE_LIMIT);
+    expect(await readKeyFile(home, 'sonarr', CONFIG)).toEqual({
+      found: 'key',
+      value: KEY,
+    });
+    await truncate(path, KEY_FILE_LIMIT + 1);
+    expect(await readKeyFile(home, 'sonarr', CONFIG)).toEqual({
+      found: 'unreadable',
+      why: 'it is larger than 1 MiB',
+    });
+  });
+
   it('says a file whose content its reader refuses is unreadable, never "holds none"', async () => {
     const home = await homeWith('sonarr', 'config.xml', 'secret-looking text');
     const found = await readKeyFile(home, 'sonarr', {
@@ -254,6 +310,80 @@ describe('readKeyFile', () => {
       expect((await readdir(folder)).sort()).toEqual(files);
     } finally {
       app.close();
+    }
+  });
+
+  it('reads the database it opened and checked, never one put in its place before SQLite opens it, a pipe included', async () => {
+    const home = await homeWithDatabase([
+      { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:09:30.4' },
+    ]);
+    const db = join(home, 'appdata', 'jellyfin', 'data', 'app.db');
+    // A pipe in its place would hang SQLite's open, which doesn't wait without a writer.
+    sqliteOpen.before = () => {
+      renameSync(db, `${db}.aside`);
+      execFileSync('mkfifo', [db]);
+    };
+    expect(await readKeyFile(home, 'jellyfin', DATABASE)).toEqual({
+      found: 'unreadable',
+      why: 'it changed while it was being read',
+    });
+  });
+
+  it('says a database that went, or left the folder, once open is unreadable, with no path', async () => {
+    const home = await homeWithDatabase([
+      { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:09:30.4' },
+    ]);
+    const db = join(home, 'appdata', 'jellyfin', 'data', 'app.db');
+    sqliteOpen.after = () => {
+      unlinkSync(db);
+    };
+    expect(await readKeyFile(home, 'jellyfin', DATABASE)).toEqual({
+      found: 'unreadable',
+      why: 'it could not be read (ENOENT)',
+    });
+    // Moved out of the app's folder, and linked back in by another name of the same file.
+    const moved = await homeWithDatabase([
+      { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:09:30.4' },
+    ]);
+    const at = join(moved, 'appdata', 'jellyfin', 'data', 'app.db');
+    sqliteOpen.after = () => {
+      renameSync(at, join(moved, 'outside.db'));
+      linkSync(join(moved, 'outside.db'), at);
+    };
+    expect(await readKeyFile(moved, 'jellyfin', DATABASE)).toEqual({
+      found: 'unreadable',
+      why: 'it leads outside appdata/jellyfin',
+    });
+  });
+
+  it('never opens a database whose log or index is a link, and leaves what it leads to as it was', async () => {
+    const home = await homeWithDatabase([
+      { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:09:30.4' },
+    ]);
+    const folder = join(home, 'appdata', 'jellyfin', 'data');
+    const wal = new DatabaseSync(join(folder, 'app.db'));
+    wal.exec('PRAGMA journal_mode=WAL');
+    wal.close();
+    // Files of Mediaplane's own user, outside the app's folder.
+    const outside = join(home, 'state-like.json');
+    await writeFile(outside, '{"fake":"kept as it is"}\n');
+    for (const [log, index] of [
+      ['link', 'link'],
+      ['link', 'file'],
+      ['file', 'link'],
+    ] as const) {
+      for (const [suffix, kind] of [
+        ['-wal', log],
+        ['-shm', index],
+      ] as const) {
+        await rmIfThere(join(folder, `app.db${suffix}`));
+        if (kind === 'link') await symlink(outside, join(folder, `app.db${suffix}`));
+        else await writeFile(join(folder, `app.db${suffix}`), '');
+      }
+      expect(await readKeyFile(home, 'jellyfin', DATABASE)).toMatchObject({
+        found: 'unreadable',
+      });
+      expect(await readFile(outside, 'utf8')).toBe('{"fake":"kept as it is"}\n');
     }
   });
 
@@ -458,6 +588,66 @@ describe('recoverKeys', () => {
         true,
       ),
     ).toEqual({ recovered: [], unfound: [], diagnostics: [] });
+  });
+
+  it('says nothing of a key the app made while its appdata says its wizard is open: its setup makes the admin, and finds the key', async () => {
+    const home = await homeWithDatabase([]);
+    const setUp = CATALOG.map((app) =>
+      app.id === 'jellyfin' ? { ...app, bootstrap: FAKE_SETUP } : app,
+    );
+    const result = resolveStack(fixtureConfig(STACK), setUp, FIXTURE_HOST, home);
+    if (result.stack === undefined) throw new Error('the stack did not resolve');
+    await writeFile(join(home, 'appdata', 'jellyfin', 'setup.txt'), 'open\n');
+    expect(await recoverKeys(result.stack, emptySecretStore(), true)).toEqual({
+      recovered: [],
+      unfound: [],
+      diagnostics: [],
+    });
+    // Done, or a file it can't read: its setup only signs in, which can't be done.
+    await writeFile(join(home, 'appdata', 'jellyfin', 'setup.txt'), 'done\n');
+    expect(
+      (await recoverKeys(result.stack, emptySecretStore(), true)).diagnostics.map(
+        (d) => d.code,
+      ),
+    ).toEqual(['keys.unrecoverable']);
+  });
+
+  it("refuses a key that is another app's, stored or recovered, as keep does", async () => {
+    // An app can hold another's key (Prowlarr holds the arrs'), but never as its own.
+    const home = await homeWithDatabase([
+      { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:00:00' },
+    ]);
+    await mkdir(join(home, 'appdata', 'sonarr'));
+    await writeFile(
+      join(home, 'appdata', 'sonarr', 'config.xml'),
+      `<ApiKey>${KEY}</ApiKey>`,
+    );
+    const both = await recoverKeys(stackIn(home), emptySecretStore(), false);
+    expect(both.recovered).toEqual([]);
+    expect(both.diagnostics.map((d) => [d.severity, d.code, d.message])).toEqual([
+      [
+        'error',
+        'keys.unrecoverable',
+        "state/secrets.json has no jellyfin.apiKey, and appdata/jellyfin/data/app.db, where jellyfin keeps it, can't give it: it holds the key Mediaplane holds for sonarr.apiKey",
+      ],
+      [
+        'error',
+        'keys.unrecoverable',
+        "state/secrets.json has no sonarr.apiKey, and appdata/sonarr/config.xml, where sonarr keeps it, can't give it: it holds the key Mediaplane holds for jellyfin.apiKey",
+      ],
+    ]);
+    expect(JSON.stringify(both)).not.toContain(KEY);
+    // One the store holds for another app.
+    const stored: SecretStore = { version: 1, apps: { radarr: { apiKey: KEY } } };
+    const once = await recoverKeys(stackIn(home), stored, false);
+    expect(once.diagnostics.map((d) => d.message)).toEqual([
+      expect.stringMatching(
+        /jellyfin\.apiKey.*for radarr\.apiKey, sonarr\.apiKey$/,
+      ) as string,
+      expect.stringMatching(
+        /sonarr\.apiKey.*for jellyfin\.apiKey, radarr\.apiKey$/,
+      ) as string,
+    ]);
   });
 });
 

@@ -366,11 +366,18 @@ async function keepKey(
           ),
         )
       : [];
+  // Nor is any other secret plan knows: the admin password, a key you give, a value of
+  // .env. This app's own key, as the store holds it, is said apart.
+  const otherSecret =
+    found.found === 'key' &&
+    found.value !== held &&
+    context.secrets.includes(found.value);
   if (
     found.found !== 'key' ||
     !APP_SECRET.test(found.value) ||
     found.value === held ||
-    another.length > 0
+    another.length > 0 ||
+    otherSecret
   ) {
     const why =
       found.found === 'unreadable'
@@ -381,7 +388,9 @@ async function keepKey(
             ? 'it holds the one Mediaplane holds, which the app refuses'
             : !APP_SECRET.test(found.value)
               ? 'it holds the key in a form Mediaplane can\'t keep (only letters, digits and "_")'
-              : `it holds the key Mediaplane holds for ${another.join(', ')}`;
+              : another.length > 0
+                ? `it holds the key Mediaplane holds for ${another.join(', ')}`
+                : 'it holds a secret Mediaplane holds for another use';
     return refusedWith(
       'keep.no-key',
       `Mediaplane can't keep ${def.name}'s own key: ${where} can't give it: ${why}`,
