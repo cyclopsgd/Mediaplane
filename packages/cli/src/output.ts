@@ -50,6 +50,7 @@ const WIRING_MARKS: Record<WiringAction, string> = {
   adopt: '=',
   'after-start': '>',
   unknown: '?',
+  remove: '-',
   unchanged: ' ',
 };
 
@@ -86,15 +87,17 @@ export function driftLine(drift: Drift): string {
         ? `  ! ${drift.resource}: refuses the key Mediaplane holds for it (${drift.secret ?? ''}), as if it was changed in the app${drift.since === undefined ? '' : ` (found at ${drift.since}; not sent again until apply checks it)`}`
         : `  ! ${drift.resource}.${drift.secret ?? ''}: holds ${drift.source}'s key, which ${drift.source} refuses`;
     case 'left':
-      return `  ? ${drift.resource}: still in the app, though the stack no longer wants it; apply leaves it`;
+      return drift.stays === undefined
+        ? `  - ${drift.resource}: still in the app, though the stack no longer wants it; apply removes it`
+        : `  ? ${drift.resource}: still in the app, though the stack no longer wants it; apply leaves it: ${drift.stays}`;
   }
 }
 
 /**
  * What puts right the drift found, one line for each kind of it there is: apply puts back
  * a field, a resource or a secret changed in an app, and an app's own key where the app
- * keeps it in a file of its own; it removes nothing the stack no longer wants, so it is
- * never said to.
+ * keeps it in a file of its own; and it removes what Mediaplane made that the stack no
+ * longer wants, but for what it says it leaves (`stays`).
  */
 export function driftAdvice(drift: readonly Drift[]): string[] {
   const has = (...kinds: Drift['kind'][]) => drift.some((d) => kinds.includes(d.kind));
@@ -109,9 +112,14 @@ export function driftAdvice(drift: readonly Drift[]): string[] {
           `apply puts the key Mediaplane holds back where an app keeps it in a file of its own, such as qBittorrent's, and restarts the app, and has an app that made its own key, such as Jellyfin, make another; for any other app, put it back as ${WIRING_RUNBOOK} shows. mediaplane keep <app>.<key> keeps the app's own key instead`,
         ]
       : []),
-    ...(has('left')
+    ...(drift.some((d) => d.kind === 'left' && d.stays === undefined)
       ? [
-          "apply doesn't remove what Mediaplane made that the stack no longer wants: remove it in the app if you don't want it, or keep it as yours with mediaplane keep <app>.<resource>, which stops the report",
+          'apply removes what Mediaplane made that the stack no longer wants; to keep one as yours instead, run mediaplane keep <app>.<resource> first, which also stops the report',
+        ]
+      : []),
+    ...(drift.some((d) => d.kind === 'left' && d.stays !== undefined)
+      ? [
+          "what apply leaves, as said above, is yours to remove in the app if you don't want it; or keep it with mediaplane keep <app>.<resource>, which stops the report",
         ]
       : []),
   ];
@@ -225,6 +233,7 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
     count(unhealthy.length, 'app', 'to wait for'),
     count(result.bootstrap.length, 'app', 'to set up'),
     count(tally('create', 'update', 'adopt'), 'resource', 'to wire'),
+    count(tally('remove'), 'resource', 'to remove'),
     count(tally('after-start'), 'wiring check', 'after the start'),
     count(tally('unknown'), 'wiring check', 'that could not be made'),
   ].filter((part): part is string => part !== undefined);

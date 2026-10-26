@@ -74,7 +74,10 @@ const recordShape = (object: typeof z.strictObject) =>
         /** The keys put back in their app's own file (spec §6.3). Added in Slice 10a. */
         restore: z.array(z.string()).optional(),
       }),
-      /** What the plan said of each managed resource. Added in Slice 3b. */
+      /**
+       * What the plan said of each managed resource. Added in Slice 3b; `remove` in Slice
+       * 10b, which an older release lists among the records it can't read.
+       */
       wiring: z
         .array(
           object({
@@ -86,6 +89,7 @@ const recordShape = (object: typeof z.strictObject) =>
               'unchanged',
               'after-start',
               'unknown',
+              'remove',
             ]),
             changes: z.array(z.string()).optional(),
             reason: z.string().optional(),

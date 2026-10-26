@@ -83,6 +83,26 @@ function sonarrWith(resources: ResourceSpec[], ...overrides: string[]) {
   );
 }
 
+/**
+ * Sonarr's resource "gone", which the stack no longer wants and apply would remove: held
+ * as `held`, or not at all; with why it can't be removed, when `cannot` says. Plan never
+ * removes it.
+ */
+function leftBehind(
+  held: { id: number; name: string } | undefined,
+  cannot?: string,
+): ResourceSpec {
+  return {
+    ...FAKE_LOGIN,
+    name: 'gone',
+    desired: () => undefined,
+    observe: () =>
+      Promise.resolve(held === undefined ? undefined : { ...held, fields: {} }),
+    ...(cannot === undefined ? {} : { cannotRemove: () => Promise.resolve(cannot) }),
+    remove: () => Promise.reject(new Error('plan never removes')),
+  };
+}
+
 describe('planWiring', () => {
   it('would create a resource the app has none of, and changes nothing itself', async () => {
     const sonarr = await fakeSonarr({ key: KEY });
@@ -1676,7 +1696,14 @@ describe('planWiring: what drift adds (spec §6.3)', () => {
         },
       }),
     );
-    expect(planned.drift).toEqual([{ resource: 'sonarr.gone', kind: 'left' }]);
+    // FAKE_LOGIN has no remove: apply leaves it, saying why.
+    expect(planned.drift).toEqual([
+      {
+        resource: 'sonarr.gone',
+        kind: 'left',
+        stays: "Mediaplane doesn't remove this kind of resource",
+      },
+    ]);
     // One the app can't say about is never said to be gone: it couldn't be looked at.
     const said =
       "Mediaplane made sonarr.failing, which the stack no longer wants, and couldn't tell whether sonarr still holds it: no";
@@ -1691,6 +1718,79 @@ describe('planWiring: what drift adds (spec §6.3)', () => {
         message: said,
       }),
     ]);
+  });
+
+  it('plans to remove what Mediaplane made that the stack no longer wants, only while the app holds it as made', async () => {
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const made = { ...(RECORDED['sonarr.login'] as KnownResource), id: 7, name: 'gone' };
+    const planOf = (spec: ResourceSpec) =>
+      planWiring(
+        options(sonarr, {
+          stack: sonarrWith([FAKE_LOGIN, spec]),
+          known: { ...RECORDED, 'sonarr.gone': made },
+        }),
+      );
+    const asMade = await planOf(leftBehind({ id: 7, name: 'gone' }));
+    expect(asMade.changes).toEqual([
+      { resource: 'sonarr.login', action: 'unchanged' },
+      { resource: 'sonarr.gone', action: 'remove' },
+    ]);
+    expect(asMade.drift).toEqual([{ resource: 'sonarr.gone', kind: 'left' }]);
+    // Renamed in the app, or another of the name: maybe yours, so it stays, saying why.
+    const notAsMade =
+      "it is no longer as Mediaplane made it (its name or its id in the app has changed), so it may be yours: Mediaplane doesn't remove it";
+    for (const held of [
+      { id: 7, name: 'mine' },
+      { id: 8, name: 'gone' },
+    ]) {
+      const kept = await planOf(leftBehind(held));
+      expect(kept.changes).toEqual([{ resource: 'sonarr.login', action: 'unchanged' }]);
+      expect(kept.drift).toEqual([
+        { resource: 'sonarr.gone', kind: 'left', stays: notAsMade },
+      ]);
+    }
+    // One whose app holds what is yours in it stays too, as the resource says, redacted.
+    const yours = await planOf(
+      leftBehind({ id: 7, name: 'gone' }, `it holds 2 torrents, ${PASSWORD}`),
+    );
+    expect(yours.changes).toEqual([{ resource: 'sonarr.login', action: 'unchanged' }]);
+    expect(yours.drift).toEqual([
+      { resource: 'sonarr.gone', kind: 'left', stays: 'it holds 2 torrents, ***' },
+    ]);
+    // One the app can't say about is never removed: a check that couldn't be made.
+    const unsure = await planOf({
+      ...leftBehind({ id: 7, name: 'gone' }),
+      cannotRemove: () => Promise.reject(new AppApiError('no', { kind: 'server' })),
+    });
+    expect(unsure.changes).toEqual([
+      { resource: 'sonarr.login', action: 'unchanged' },
+      {
+        resource: 'sonarr.gone',
+        action: 'unknown',
+        reason:
+          "Mediaplane made sonarr.gone, which the stack no longer wants, and couldn't tell whether sonarr still holds it: no",
+      },
+    ]);
+    expect(unsure.drift).toEqual([]);
+  });
+
+  it('says what apply may remove once an app that is not settled has started, and only that', async () => {
+    const sonarr = await fakeSonarr({ key: KEY });
+    const record = (name: string) =>
+      ({ ...(RECORDED['sonarr.login'] as KnownResource), id: 7, name }) as KnownResource;
+    const kept: ResourceSpec = { ...FAKE_LOGIN, name: 'kept', desired: () => undefined };
+    const planned = await planWiring(
+      options(sonarr, {
+        stack: sonarrWith([FAKE_LOGIN, leftBehind(undefined), kept]),
+        changing: new Set(['sonarr']),
+        known: { 'sonarr.gone': record('gone'), 'sonarr.kept': record('kept') },
+      }),
+    );
+    expect(planned.changes).toEqual([
+      { resource: 'sonarr.login', action: 'after-start' },
+      { resource: 'sonarr.gone', action: 'after-start' },
+    ]);
+    expect(sonarr.app.requests).toEqual([]);
   });
 
   it('sends an app no key it was found refusing, until apply checks it, nor checks what holds it', async () => {

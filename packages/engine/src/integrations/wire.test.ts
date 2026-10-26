@@ -1078,4 +1078,112 @@ describe('wire', () => {
     ]);
     expect(sonarr.state).toMatchObject({ user: 'admin', password: PASSWORD });
   });
+
+  it('removes what Mediaplane made that the stack no longer wants, while still as made, and forgets its record', async () => {
+    const left = leftOver({ 7: 'gone', 8: 'mine' });
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const { run, home, actions } = await wireWith(sonarr, {
+      stack: left.stack,
+      known: {
+        ...RECORDED,
+        'sonarr.gone': made(7, 'gone'),
+        // Renamed in the app since: maybe yours, so it stays.
+        'sonarr.renamed': made(8, 'renamed'),
+        // Gone from the app already: nothing to remove.
+        'sonarr.vanished': made(9, 'vanished'),
+      },
+    });
+    expect(await run).toEqual(['sonarr.gone removed']);
+    expect(left.removed).toEqual([7]);
+    expect(actions).toEqual([
+      { step: 'wire', resource: 'sonarr.login', result: 'done', detail: 'unchanged' },
+      { step: 'wire', resource: 'sonarr.gone', result: 'done', detail: 'removed' },
+    ]);
+    expect(Object.keys(await readResources(home))).toEqual([
+      'sonarr.login',
+      'sonarr.renamed',
+      'sonarr.vanished',
+    ]);
+  });
+
+  it('fails a removal the app refuses, keeping its record, and each the plan named in an app it cannot reach', async () => {
+    const refusal = new AppApiError('Sonarr at http://sonarr:8989 refused it', {
+      kind: 'rejected',
+      status: 400,
+    });
+    const left = leftOver({ 7: 'gone' }, () => Promise.reject(refusal));
+    const known = { ...RECORDED, 'sonarr.gone': made(7, 'gone') };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const refused = await wireWith(sonarr, { stack: left.stack, known });
+    const failure = await refused.run.catch((thrown: unknown) => thrown);
+    expect((failure as WiringFailed).message).toBe('the wiring failed for sonarr.gone');
+    expect(refused.actions.at(-1)).toEqual({
+      step: 'wire',
+      resource: 'sonarr.gone',
+      result: 'failed',
+      error: 'Sonarr at http://sonarr:8989 refused it',
+    });
+    expect(Object.keys(await readResources(refused.home))).toEqual([
+      'sonarr.gone',
+      'sonarr.login',
+    ]);
+    // The app refuses Mediaplane's key: what the plan said it removes fails with it.
+    const refusing = await fakeSonarr({ key: 'f'.repeat(32) });
+    const unreached = await wireWith(refusing, {
+      stack: left.stack,
+      known,
+      planned: [{ resource: 'sonarr.gone', action: 'remove' }],
+    });
+    const cause = await unreached.run.catch((thrown: unknown) => thrown);
+    expect((cause as WiringFailed).message).toBe(
+      'the wiring failed for sonarr.login, sonarr.gone',
+    );
+    expect(left.removed).toEqual([]);
+  });
 });
+
+/** A record of a resource Mediaplane made in Sonarr, as `id` named `name`. */
+function made(id: number, name: string): KnownResource {
+  return { ...(RECORDED['sonarr.login'] as KnownResource), id, name };
+}
+
+/**
+ * The wiring stack, with Sonarr's FAKE_LOGIN and three resources it no longer wants,
+ * `gone`, `renamed` and `vanished`, which Sonarr holds as `held` says, by id: each one
+ * removed goes from `held` into `removed`, unless `remove` is given.
+ */
+function leftOver(
+  held: Record<number, string>,
+  remove?: ResourceSpec['remove'],
+): { stack: ReturnType<typeof stackOf>; removed: number[] } {
+  const removed: number[] = [];
+  const holds = new Map(Object.entries(held).map(([id, name]) => [Number(id), name]));
+  const spec = (name: string): ResourceSpec => ({
+    ...FAKE_LOGIN,
+    name,
+    desired: () => undefined,
+    observe: (_api, known) => {
+      const id = Number(known?.id);
+      const holding = holds.get(id);
+      return Promise.resolve(
+        holding === undefined ? undefined : { id, name: holding, fields: {} },
+      );
+    },
+    remove:
+      remove ??
+      ((_api, observed) => {
+        removed.push(Number(observed.id));
+        holds.delete(Number(observed.id));
+        return Promise.resolve();
+      }),
+  });
+  const resources = [FAKE_LOGIN, spec('gone'), spec('renamed'), spec('vanished')];
+  return {
+    stack: stackOf(
+      WIRED_CATALOG.map((def) =>
+        def.id === 'sonarr' ? { ...def, integration: { after: [], resources } } : def,
+      ),
+    ),
+    removed,
+  };
+}

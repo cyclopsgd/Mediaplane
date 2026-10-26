@@ -108,6 +108,28 @@ describe('history records', () => {
     expect((await listRecords(home)).unreadable).toEqual([`${id}.json`]);
   });
 
+  it('keeps what the plan removes from an app, as it keeps the rest of the wiring', async () => {
+    const home = await tempDir('mediaplane-history-');
+    const base = record('20261009T094312Z-00000005');
+    const removing: ChangeRecord = {
+      ...base,
+      plan: {
+        ...base.plan,
+        wiring: [{ resource: 'prowlarr.application_radarr', action: 'remove' }],
+      },
+      actions: [
+        {
+          step: 'wire',
+          resource: 'prowlarr.application_radarr',
+          result: 'done',
+          detail: 'removed',
+        },
+      ],
+    };
+    await writeRecord(home, removing);
+    expect(await readRecord(home, removing.id)).toEqual(removing);
+  });
+
   it('never writes a field it does not know', async () => {
     // A record is made by this release alone: a field it doesn't know is a bug, and could
     // be a file's content.

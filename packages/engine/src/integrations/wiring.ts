@@ -43,10 +43,12 @@ export const PLAN_DEADLINE_MS = 15_000;
  * - `unchanged`;
  * - `after-start`: its app isn't running, or apply will change its container, so it is
  *   checked after the start;
- * - `unknown`: Mediaplane couldn't ask the app (`reason`, and a warning, say why).
+ * - `unknown`: Mediaplane couldn't ask the app (`reason`, and a warning, say why);
+ * - `remove`: Mediaplane made it, by its record, the stack no longer wants it, and the app
+ *   still holds it as Mediaplane made it: apply removes it (spec §8.1(3) step 4).
  */
 export type WiringAction =
-  'create' | 'update' | 'adopt' | 'unchanged' | 'after-start' | 'unknown';
+  'create' | 'update' | 'adopt' | 'unchanged' | 'after-start' | 'unknown' | 'remove';
 
 export interface WiringChange {
   /** "<app>.<resource>", or "<app>" alone for an app Mediaplane only checks. */
@@ -72,7 +74,8 @@ export interface WiringChange {
  *   `secret` the key's name), or a resource holds that key (`source`): a shared key
  *   changed at its source;
  * - `left`: the app still holds a resource Mediaplane made that the stack no longer
- *   wants, such as Prowlarr's link to an arr taken out of the stack.
+ *   wants, such as Prowlarr's link to an arr taken out of the stack. Apply removes it,
+ *   unless `stays` says why it leaves it there.
  */
 export interface Drift {
   /** "<app>.<resource>", or "<app>" for an app that refuses its key. */
@@ -91,6 +94,11 @@ export interface Drift {
   since?: string;
   /** key: the app whose key the resource holds. */
   source?: string;
+  /**
+   * left: why apply leaves it in the app: Mediaplane doesn't remove that kind of resource,
+   * the app holds what is yours in it, or it is no longer as Mediaplane made it.
+   */
+  stays?: string;
 }
 
 /**
@@ -895,10 +903,10 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
     }
     if (client === undefined) {
       for (const resource of targets) add({ resource, action: 'after-start' });
-      // Drift and keep say they couldn't look at what is left there either; apply's
-      // wire step doesn't look at it.
-      if (options.drift !== undefined) {
-        for (const change of leftUnasked(ctx, options.known, only)) add(change);
+      // Drift and keep say they couldn't look at what is left there either; plan, at
+      // what apply's wire step may remove, once the app has started.
+      for (const change of leftUnasked(ctx, options.known, only)) {
+        if (options.drift !== undefined || removable(ctx, change.resource)) add(change);
       }
       continue;
     }
@@ -1045,7 +1053,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       );
       drift.push(...left.drift);
       diagnostics.push(...left.diagnostics);
-      for (const change of left.unknown) add(change);
+      for (const change of left.changes) add(change);
     }
   }
   return redacted({ changes, diagnostics, drift, checks }, [
@@ -1067,6 +1075,8 @@ function redacted(planned: PlannedWiring, secrets: readonly string[]): PlannedWi
   const hidden = <T>(text: T): T =>
     (typeof text === 'string' ? redact(text, values) : text) as T;
   const drift = planned.drift.map((entry): Drift => {
+    // Why one left stays can name what the app holds: a reason, redacted as it is.
+    if (entry.stays !== undefined) return { ...entry, stays: hidden(entry.stays) };
     const actual = hidden(entry.actual);
     const unreadable = hidden(entry.unreadable);
     if (actual === entry.actual && unreadable === entry.unreadable) return entry;
@@ -1123,7 +1133,7 @@ async function healthOf(
 }
 
 /** The resources Mediaplane recorded in `ctx`'s app that the stack no longer wants. */
-function leftOf(
+export function leftOf(
   ctx: WiringContext,
   known: KnownResources,
   only?: string,
@@ -1159,11 +1169,54 @@ function leftUnasked(
   );
 }
 
+/** Whether the resource at `address`, of `ctx`'s app, is of a kind apply removes. */
+function removable(ctx: WiringContext, address: string): boolean {
+  return (ctx.app.def.integration?.resources ?? []).some(
+    (spec) => resourceAddress(ctx.app, spec) === address && spec.remove !== undefined,
+  );
+}
+
+/**
+ * Whether what the app holds is the resource Mediaplane made, as its record says: the
+ * same id in the app, and the name Mediaplane gave it. One renamed, or one of the name
+ * with another id, may be yours now: apply never removes it.
+ */
+export function madeAsRecorded(
+  observed: ObservedResource,
+  record: KnownResource,
+): boolean {
+  return observed.id === record.id && observed.name === record.name;
+}
+
+/** Why apply leaves a resource it doesn't remove: there is no way to. */
+const CANT_REMOVE = "Mediaplane doesn't remove this kind of resource";
+
+/** Why apply leaves a resource that is no longer as Mediaplane made it. */
+const NOT_AS_MADE =
+  "it is no longer as Mediaplane made it (its name or its id in the app has changed), so it may be yours: Mediaplane doesn't remove it";
+
+/**
+ * Why apply leaves `observed`, the app's resource of `spec` that the stack no longer
+ * wants, in the app; undefined when it removes it. Throws AppApiError.
+ */
+export async function whyItStays(
+  spec: ResourceSpec,
+  api: AppApi,
+  observed: ObservedResource,
+  record: KnownResource,
+): Promise<string | undefined> {
+  if (spec.remove === undefined) return CANT_REMOVE;
+  if (!madeAsRecorded(observed, record)) return NOT_AS_MADE;
+  return spec.cannotRemove?.(api, observed);
+}
+
 /**
  * The resources Mediaplane made in `ctx`'s app, by its record, that the stack no longer
- * wants and the app still holds (`left`): apply doesn't remove them. One you stopped it
- * managing (`unmanaged`) is yours. One the app can't say about is a warning, and a change
- * it couldn't check (`unknown`), never said to be gone: drift isn't clear then.
+ * wants and the app still holds (`left`): apply removes each that it can (`remove`),
+ * still as Mediaplane made it (spec §8.1(3) step 4), and drift says why it leaves the
+ * others (`stays`). One you stopped it managing (`unmanaged`) is yours. One the app can't
+ * say about is a warning, and a change it couldn't check (`unknown`), never said to be
+ * gone, nor removed: drift isn't clear then.
  */
 async function leftIn(
   ctx: WiringContext,
@@ -1171,14 +1224,24 @@ async function leftIn(
   known: KnownResources,
   secrets: readonly string[],
   only?: string,
-): Promise<{ drift: Drift[]; diagnostics: Diagnostic[]; unknown: WiringChange[] }> {
+): Promise<{ drift: Drift[]; diagnostics: Diagnostic[]; changes: WiringChange[] }> {
   const drift: Drift[] = [];
   const diagnostics: Diagnostic[] = [];
-  const unknown: WiringChange[] = [];
+  const changes: WiringChange[] = [];
   for (const { spec, address, record } of leftOf(ctx, known, only)) {
     try {
-      if ((await spec.observe(api, record)) !== undefined) {
+      const observed = await spec.observe(api, record);
+      if (observed === undefined) continue;
+      const stays = await whyItStays(spec, api, observed, record);
+      if (stays === undefined) {
         drift.push({ resource: address, kind: 'left' });
+        changes.push({ resource: address, action: 'remove' });
+      } else {
+        drift.push({
+          resource: address,
+          kind: 'left',
+          stays: redact(stays, redactionValues(secrets)),
+        });
       }
     } catch (cause) {
       if (!(cause instanceof AppApiError)) throw cause;
@@ -1189,8 +1252,8 @@ async function leftIn(
       diagnostics.push(
         warning('drift.left-unknown', said, { hint: `see ${DRIFT_RUNBOOK}` }),
       );
-      unknown.push({ resource: address, action: 'unknown', reason: said });
+      changes.push({ resource: address, action: 'unknown', reason: said });
     }
   }
-  return { drift, diagnostics, unknown };
+  return { drift, diagnostics, changes };
 }

@@ -28,6 +28,7 @@ import {
   fieldHoldingSecret,
   joinFailure,
   knownSecrets,
+  leftOf,
   notOnNetwork,
   reachApps,
   redactionValues,
@@ -35,6 +36,7 @@ import {
   resourcesInvalid,
   secretFieldReason,
   wantedResources,
+  whyItStays,
   WIRING_RUNBOOK,
   wiringOrder,
   wiringTargets,
@@ -106,7 +108,9 @@ const HINTS = {
 /**
  * Apply's wire step (spec §5 step 10): for each app with an API, in order, wait until it
  * is ready and check its key, then make each of its resources what the stack wants, and
- * record it in state/resources.json at once. It reads that file again first, under
+ * record it in state/resources.json at once; then remove what Mediaplane made there that
+ * the stack no longer wants, while it is still as Mediaplane made it, and forget its
+ * record (spec §8.1(3) step 4). It reads that file again first, under
  * apply's lock, and never writes over one it can't read. A resource that fails doesn't
  * stop the others; one that `requires` it is skipped (spec §5.1). An error that isn't an
  * app's fails the resource it hit, and stops the step. Each result goes to `record`.
@@ -226,8 +230,15 @@ export async function wire(options: WireOptions): Promise<string[]> {
   };
   for (const app of order) {
     const ctx: WiringContext = { stack, app, admin, keys: appKeys };
-    const targets = wiringTargets(ctx);
     const appId = app.def.id;
+    // What the stack wants, and what apply's own plan said it removes from the app: each
+    // fails, or is skipped, with the app.
+    const targets = [
+      ...wiringTargets(ctx),
+      ...(options.planned ?? [])
+        .filter((change) => change.action === 'remove' && ownedBy(change.resource, appId))
+        .map((change) => change.resource),
+    ];
     const why = options.held?.includes(appId)
       ? {
           list: held,
@@ -387,6 +398,41 @@ export async function wire(options: WireOptions): Promise<string[]> {
           throw stop([], cause, 'state/secrets.json could not be saved: ');
         }
       }
+    }
+    // Then what Mediaplane made there that the stack no longer wants (spec §8.1(3) step
+    // 4): looked at again, removed only while still as Mediaplane made it, and forgotten.
+    for (const { spec, address, record } of leftOf(ctx, known)) {
+      if (spec.remove === undefined) continue;
+      try {
+        const observed = await spec.observe(client.api, record);
+        // Gone already, or one apply leaves, as plan said why.
+        if (observed === undefined) continue;
+        if ((await whyItStays(spec, client.api, observed, record)) !== undefined)
+          continue;
+        await spec.remove(client.api, observed);
+      } catch (cause) {
+        if (!(cause instanceof AppApiError)) throw stop([address], cause);
+        fail(address, cause.message, `wire.${cause.kind}`);
+        continue;
+      }
+      Reflect.deleteProperty(known, address);
+      try {
+        await writeResources(options.home, known, keys);
+      } catch (cause) {
+        // The app holds it no more, as the next plan will find: say so.
+        throw stop(
+          [address],
+          cause,
+          `${app.def.name} no longer holds it, but state/resources.json could not be saved: `,
+        );
+      }
+      done.push(`${address} removed`);
+      options.record({
+        step: 'wire',
+        resource: address,
+        result: 'done',
+        detail: 'removed',
+      });
     }
   }
   if (failed.length > 0) {

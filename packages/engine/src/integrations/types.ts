@@ -177,6 +177,20 @@ export interface ResourceSpec {
     observed: ObservedResource,
     changes?: readonly string[],
   ): Promise<void>;
+  /**
+   * Why apply won't remove what the app holds (`observed`), though the stack no longer
+   * wants it, read from the app and never changing it: one that holds what is yours, such
+   * as a qBittorrent category with torrents in it. Undefined when it may. Plan and apply
+   * ask it before `remove`. Throws AppApiError.
+   */
+  cannotRemove?(api: AppApi, observed: ObservedResource): Promise<string | undefined>;
+  /**
+   * Remove what the app holds (`observed`), once the stack no longer wants it (spec
+   * §8.1(3) step 4): only one Mediaplane made, by its record, and still as it made it (its
+   * id and name). Without it, apply leaves such a resource in the app, and drift reports
+   * it. Throws AppApiError.
+   */
+  remove?(api: AppApi, observed: ObservedResource): Promise<void>;
 }
 
 /** How Mediaplane wires one app (spec §3.2): its resources, after which apps. */
