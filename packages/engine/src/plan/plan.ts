@@ -124,7 +124,12 @@ export interface PlanResult {
 export interface PlanContext {
   stack: ResolvedStack;
   compose: ComposeFile;
+  /** The store plan plans with: `stored`, and the keys it recovered from the apps' files. */
   store: SecretStore;
+  /** The store as state/secrets.json holds it. */
+  stored: SecretStore;
+  /** Every secret an app's answer could repeat: plan's own list (knownSecrets). */
+  secrets: string[];
   current: ContainerState[];
 }
 
@@ -303,6 +308,7 @@ export async function planStack(
   // The secrets you give, such as Plex's token, which is Plex's key.
   const given = await userSecrets(stack, options.env);
   const keys = stackKeys(stack, preview, given);
+  const secrets = knownSecrets(values, preview, admin, given);
   // Keep mine's values (spec §6.3): an override that names nothing Mediaplane manages,
   // or can't be applied, fails the plan before any app is asked, whatever the stack runs.
   diagnostics.push(...checkOverrides(stack, options.catalog, { admin, keys }));
@@ -343,7 +349,7 @@ export async function planStack(
         runtime: options.runtime,
         keys,
         admin,
-        secrets: knownSecrets(values, preview, admin, given),
+        secrets,
         known: known.resources,
         refusedKeys: known.keys,
         ...(options.drift === undefined ? {} : { drift: options.drift }),
@@ -380,7 +386,7 @@ export async function planStack(
       bootstrap,
       diagnostics,
     },
-    context: { stack, compose, store, current },
+    context: { stack, compose, store, stored, secrets, current },
   };
 }
 

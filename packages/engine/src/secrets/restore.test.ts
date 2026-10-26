@@ -3,7 +3,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Catalog, KeyFile } from '../catalog/types';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
-import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
+import {
+  FIXTURE_API,
+  FIXTURE_HOST,
+  fixtureCatalog,
+  fixtureConfig,
+} from '../testing/fixtures';
 import { tempDir } from '../testing/temp';
 import { planKeyRestores, restorableKeyFiles, restoreKeys } from './restore';
 import type { SecretStore } from './store';
@@ -24,7 +29,8 @@ const CONF: KeyFile = {
 
 const CATALOG: Catalog = fixtureCatalog.map((app) =>
   app.id === 'sonarr'
-    ? { ...app, keyFiles: { apiKey: CONF } }
+    ? // An app Mediaplane can ask with its key, so that keep can keep its own.
+      { ...app, api: FIXTURE_API, keyFiles: { apiKey: CONF } }
     : app.id === 'jellyfin'
       ? // A key the app takes from its environment alone: nothing to write back.
         {
@@ -40,12 +46,12 @@ const STORE: SecretStore = {
   apps: { sonarr: { apiKey: KEY }, jellyfin: { apiKey: KEY } },
 };
 
-function stackIn(home: string): ResolvedStack {
+function stackIn(home: string, catalog: Catalog = CATALOG): ResolvedStack {
   const result = resolveStack(
     fixtureConfig(
       'version: 1\npaths: { data: /srv/data }\nnetwork: { bind: localhost }\nmedia_server: jellyfin\napps:\n  qbittorrent: { vpn: false }\n  sonarr: {}\n',
     ),
-    CATALOG,
+    catalog,
     FIXTURE_HOST,
     home,
   );
@@ -138,6 +144,20 @@ describe('planKeyRestores', () => {
       },
     ]);
     expect(JSON.stringify([other, unplaced])).not.toContain(KEY);
+
+    // An app Mediaplane can't ask with its key (Gluetun) can't have its own kept: the
+    // hint doesn't offer it.
+    const unasked: Catalog = fixtureCatalog.map((app) =>
+      app.id === 'sonarr' ? { ...app, keyFiles: { apiKey: CONF } } : app,
+    );
+    const { home: unaskable, path: unaskablePath } = await homeWith(
+      `[main]\nkey=${'b'.repeat(32)}\n`,
+    );
+    await link(unaskablePath, join(unaskable, 'appdata', 'sonarr', 'other-name'));
+    const [asked] = (await planKeyRestores(stackIn(unaskable, unasked), STORE))
+      .diagnostics;
+    expect(asked?.hint).not.toContain('mediaplane keep');
+    expect(asked?.hint).toContain('run apply, which puts its key back');
   });
 
   it("writes nothing for a key file that is a link, and warns it can't tell", async () => {

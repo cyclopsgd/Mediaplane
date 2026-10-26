@@ -20,7 +20,6 @@ import type { Scalar } from './integrations/types';
 import {
   checkApp,
   DRIFT_RUNBOOK,
-  knownSecrets,
   notOnNetwork,
   PLAN_DEADLINE_MS,
   reachApps,
@@ -81,7 +80,11 @@ interface KeyTarget {
 function keyTarget(catalog: PlanOptions['catalog'], path: string): KeyTarget | undefined {
   const [app = '', name = '', ...rest] = path.split('.');
   const def = catalog.find((d) => d.id === app);
-  const file = def?.keyFiles?.[name];
+  // Among the app's own keys: `constructor` and the like are not.
+  const file =
+    def?.keyFiles !== undefined && Object.hasOwn(def.keyFiles, name)
+      ? def.keyFiles[name]
+      : undefined;
   return def === undefined || file === undefined || rest.length > 0
     ? undefined
     : { def, name, file };
@@ -328,16 +331,47 @@ async function keepKey(
   const refusing = result.drift.some(
     (d) => d.kind === 'key' && d.resource === def.id && d.source === undefined,
   );
+  // Plan's warnings go with a refusal, for the why. Those of the app refusing the key it
+  // holds are what a refusal to keep, past that, takes for granted.
+  const refusedWith = (code: string, message: string, hint?: string): KeepResult => {
+    const said = refused(code, message, hint);
+    const warnings = result.diagnostics.filter(
+      (d) => code === 'keep.no-drift' || !d.code.startsWith('wire.'),
+    );
+    return { ...said, diagnostics: [...said.diagnostics, ...warnings] };
+  };
   if (!refusing) {
-    return refused(
+    // The app was asked and took the key when plan found it unchanged; else it wasn't asked.
+    const asked = result.wiring.some(
+      (change) => change.resource === def.id && change.action === 'unchanged',
+    );
+    return refusedWith(
       'keep.no-drift',
-      `${key} has not changed outside Mediaplane: ${def.name} takes the key Mediaplane holds, or couldn't be asked`,
-      `"mediaplane drift" says which; see ${DRIFT_RUNBOOK}`,
+      asked
+        ? `${key} has not changed outside Mediaplane: ${def.name} takes the key Mediaplane holds`
+        : `Mediaplane couldn't ask ${def.name} whether it still takes the key it holds, so it can't tell whether ${key} changed`,
+      `"mediaplane drift" says more; see ${DRIFT_RUNBOOK}`,
     );
   }
   const found = await readKeyFile(context.stack.home, def.id, file);
   const held = context.store.apps[def.id]?.[name];
-  if (found.found !== 'key' || !APP_SECRET.test(found.value) || found.value === held) {
+  // The key of another app in the store is never this app's: an app can hold another's.
+  const another =
+    found.found === 'key'
+      ? Object.entries(context.store.apps).flatMap(([app, secrets]) =>
+          Object.entries(secrets).flatMap(([secret, stored]) =>
+            stored === found.value && !(app === def.id && secret === name)
+              ? [`${app}.${secret}`]
+              : [],
+          ),
+        )
+      : [];
+  if (
+    found.found !== 'key' ||
+    !APP_SECRET.test(found.value) ||
+    found.value === held ||
+    another.length > 0
+  ) {
     const why =
       found.found === 'unreadable'
         ? found.why
@@ -345,8 +379,10 @@ async function keepKey(
           ? 'it holds none'
           : found.value === held
             ? 'it holds the one Mediaplane holds, which the app refuses'
-            : 'it holds the key in a form Mediaplane can\'t keep (only letters, digits and "_")';
-    return refused(
+            : !APP_SECRET.test(found.value)
+              ? 'it holds the key in a form Mediaplane can\'t keep (only letters, digits and "_")'
+              : `it holds the key Mediaplane holds for ${another.join(', ')}`;
+    return refusedWith(
       'keep.no-key',
       `Mediaplane can't keep ${def.name}'s own key: ${where} can't give it: ${why}`,
       `see "A key changed at its source" in ${REBUILD_RUNBOOK}`,
@@ -355,24 +391,41 @@ async function keepKey(
   const value = found.value;
   const asked = await askWith(options, context, def, name, value);
   if (asked !== undefined)
-    return refused('keep.refused', asked, `see ${REBUILD_RUNBOOK}`);
+    return refusedWith('keep.refused', asked, `see ${REBUILD_RUNBOOK}`);
+  // Only this key: the keys plan recovered for other apps are apply's to save.
   await writeSecretStore(
     context.stack.home,
-    withRecoveredKeys(context.store, [{ app: def.id, name, value }]),
+    withRecoveredKeys(context.stored, [{ app: def.id, name, value }]),
   );
-  // The app takes Mediaplane's key again: plan and drift may send it.
-  const state = await readState(context.stack.home);
-  if (Object.hasOwn(state.keys, key)) {
-    Reflect.deleteProperty(state.keys, key);
-    await writeResources(context.stack.home, state.resources, state.keys);
+  const diagnostics = result.diagnostics.filter(
+    (d) =>
+      // What the plan said of the app refusing the key it held, and of the key it
+      // couldn't put back in the app's file, is what keep has put right.
+      !d.code.startsWith('wire.') &&
+      !(d.code === 'keys.restore' && d.message.includes(`(${key})`)),
+  );
+  try {
+    // The app takes Mediaplane's key again: plan and drift may send it.
+    const state = await readState(context.stack.home);
+    if (Object.hasOwn(state.keys, key)) {
+      Reflect.deleteProperty(state.keys, key);
+      await writeResources(context.stack.home, state.resources, state.keys);
+    }
+  } catch (cause) {
+    diagnostics.push(
+      warning(
+        'keep.record',
+        `state/secrets.json keeps ${key}, but state/resources.json could not be updated: ${cause instanceof Error ? cause.message : String(cause)}`,
+        { hint: 'the next apply records it, changing nothing in the app' },
+      ),
+    );
   }
   return {
     ok: true,
     key,
     value: undefined,
     holders: held === undefined ? [] : holdersOf(context, held),
-    // What the plan said of the app refusing the key it held is what keep has put right.
-    diagnostics: result.diagnostics.filter((d) => !d.code.startsWith('wire.')),
+    diagnostics,
   };
 }
 
@@ -390,7 +443,8 @@ async function askWith(
 ): Promise<string | undefined> {
   const app = context.stack.apps.find((candidate) => candidate.def.id === def.id);
   if (app === undefined) return `${def.name} is not in the stack`;
-  const secrets = [value, ...knownSecrets({}, context.store, { password: '' })];
+  // The secrets plan keeps out of what it says, and the key asked with.
+  const secrets = [value, ...context.secrets];
   const reached = await reachApps([app], {
     runtime: options.runtime,
     current: context.current,

@@ -115,6 +115,11 @@ export async function planKeyRestores(
       const why = opened.ok
         ? "Mediaplane can't tell where in it the key goes"
         : opened.why;
+      // Keep can keep only the key of an app Mediaplane can ask with it.
+      const keepAdvice =
+        app.def.api?.key.secret === name
+          ? `"mediaplane keep ${key}" keeps ${appName}'s own key instead, once ${appName} takes it; or `
+          : '';
       const holds =
         found.found === 'key'
           ? `holds another key than the one Mediaplane holds for ${appName} (${key})`
@@ -126,7 +131,7 @@ export async function planKeyRestores(
           {
             hint:
               found.found === 'key'
-                ? `"mediaplane keep ${key}" keeps ${appName}'s own key instead, once ${appName} takes it; or fix what stops Mediaplane, as said above, and run apply, which puts its key back and restarts ${appName}. See ${REBUILD_RUNBOOK}`
+                ? `${keepAdvice}fix what stops Mediaplane, as said above, and run apply, which puts its key back and restarts ${appName}. See ${REBUILD_RUNBOOK}`
                 : `stop ${appName}, move ${path} aside, then run apply, which writes a new one; see ${REBUILD_RUNBOOK}`,
           },
         ),
