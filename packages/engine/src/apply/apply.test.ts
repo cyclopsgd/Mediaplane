@@ -1365,6 +1365,108 @@ describe('apply: qBittorrent behind Gluetun', () => {
     expect(await readFile(file, 'utf8')).toBe(`key=${'9'.repeat(32)}\n`);
   });
 
+  it('stops an app whose key goes back in its file in any state but stopped, before the write', async () => {
+    const catalog = fixtureCatalog.map((app) =>
+      app.id === 'gluetun' ? { ...app, keyFiles: { controlApiKey: KEY_LINE } } : app,
+    );
+    for (const state of ['restarting', 'paused', 'exited', 'created'] as const) {
+      const home = await makeHome();
+      const docker = fakeDocker(home);
+      expect((await apply(options(home, docker, { catalog }))).outcome).toBe('success');
+      const file = join(home, 'appdata', 'gluetun', 'auth.toml');
+      await mkdir(join(file, '..'), { recursive: true });
+      await writeFile(file, `key=${'9'.repeat(32)}\n`);
+      // Crash-looping, or paused: Docker may start it, or it may write its file, any time.
+      let written = '';
+      const inState: Runtime = {
+        ...docker,
+        containers: async () =>
+          (await docker.containers()).map((c) =>
+            c.service === 'gluetun' ? { ...c, state, health: '' } : c,
+          ),
+        stop: async (services, values) => {
+          written = await readFile(file, 'utf8');
+          return docker.stop(services, values);
+        },
+      };
+      docker.calls.length = 0;
+      const result = await apply(options(home, inState, { catalog }));
+      expect(result.plan.secrets.restore).toEqual(['gluetun.controlApiKey']);
+      const stops = docker.calls.filter((c) => c.startsWith('stop'));
+      if (state === 'exited' || state === 'created') {
+        expect(stops.join(' ')).not.toContain('gluetun');
+      } else {
+        expect(stops, state).toEqual(['stop gluetun qbittorrent']);
+        // Stopped first, then written.
+        expect(written).toBe(`key=${'9'.repeat(32)}\n`);
+      }
+      const stored = (await readSecretStore(home)).apps.gluetun?.controlApiKey ?? '';
+      expect(await readFile(file, 'utf8')).toBe(`key=${stored}\n`);
+    }
+  });
+
+  it('stops an app whose key goes back in its file that up recreates, before the write', async () => {
+    const catalog = fixtureCatalog.map((app) =>
+      app.id === 'gluetun' ? { ...app, keyFiles: { controlApiKey: KEY_LINE } } : app,
+    );
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    expect((await apply(options(home, docker, { catalog }))).outcome).toBe('success');
+    const file = join(home, 'appdata', 'gluetun', 'auth.toml');
+    await writeFile(file, `key=${'9'.repeat(32)}\n`);
+    let written = '';
+    const changed: Runtime = {
+      ...docker,
+      // Its service changed in compose.yaml: up recreates it.
+      configHashes: async (compose, values) => {
+        const hashed = await docker.configHashes(compose, values);
+        return hashed.ok
+          ? { ok: true, hashes: { ...hashed.hashes, gluetun: 'fake-changed-hash' } }
+          : hashed;
+      },
+      stop: async (services, values) => {
+        written = await readFile(file, 'utf8');
+        return docker.stop(services, values);
+      },
+    };
+    docker.calls.length = 0;
+    const result = await apply(options(home, changed, { catalog }));
+    expect(result.plan.containers.find((c) => c.service === 'gluetun')?.action).toBe(
+      'recreate',
+    );
+    expect(docker.calls.filter((c) => c.startsWith('stop'))[0]).toContain('gluetun');
+    expect(written).toBe(`key=${'9'.repeat(32)}\n`);
+    expect(docker.calls.indexOf('up')).toBeGreaterThan(
+      docker.calls.findIndex((c) => c.startsWith('stop')),
+    );
+  });
+
+  it('says both when a key it was to put back cannot be and up fails too, and what it did put back', async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    const catalog = fixtureCatalog.map((app) =>
+      app.id === 'gluetun' ? { ...app, keyFiles: { controlApiKey: KEY_LINE } } : app,
+    );
+    expect((await apply(options(home, docker, { catalog }))).outcome).toBe('success');
+    const file = join(home, 'appdata', 'gluetun', 'auth.toml');
+    await writeFile(file, `key=${'9'.repeat(32)}\n`);
+    const failing: Runtime = {
+      ...docker,
+      stop: async (services, values) => {
+        await link(file, `${file}.other-name`);
+        return docker.stop(services, values);
+      },
+      up: () => Promise.resolve({ ok: false, error: 'fake: no space left on device' }),
+    };
+    const result = await apply(options(home, failing, { catalog }));
+    expect(result.actions.find((a) => a.step === 'start')).toEqual({
+      step: 'start',
+      result: 'failed',
+      error:
+        'docker compose up failed: fake: no space left on device; and cannot put gluetun.controlApiKey back in appdata/gluetun/auth.toml: it has other names (hard links), which a rewrite would part from it',
+    });
+  });
+
   it('stops at a restart that fails, before up', async () => {
     const home = await makeHome();
     const docker = fakeDocker(home);

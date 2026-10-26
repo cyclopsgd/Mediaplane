@@ -10,7 +10,12 @@ import {
   fixtureConfig,
 } from '../testing/fixtures';
 import { tempDir } from '../testing/temp';
-import { planKeyRestores, restorableKeyFiles, restoreKeys } from './restore';
+import {
+  KeysNotRestored,
+  planKeyRestores,
+  restorableKeyFiles,
+  restoreKeys,
+} from './restore';
 import type { SecretStore } from './store';
 
 const KEY = 'a'.repeat(32);
@@ -91,23 +96,25 @@ describe('planKeyRestores', () => {
     });
   });
 
-  it("warns of a file it may not read, that it can't tell whether it holds the key", async () => {
-    if (process.getuid?.() === 0) return;
-    const { home, path } = await homeWith(`[main]\nkey=${KEY}\n`);
-    await chmod(path, 0o000);
-    const planned = await planKeyRestores(stackIn(home), STORE);
-    expect(planned.restore).toEqual([]);
-    expect(planned.diagnostics).toEqual([
-      {
-        severity: 'warning',
-        code: 'keys.restore',
-        message:
-          "Mediaplane can't tell whether appdata/sonarr/app.conf holds Mediaplane's key for sonarr (sonarr.apiKey): it could not be read (EACCES)",
-        hint: expect.stringContaining('run plan again') as string,
-      },
-    ]);
-    expect(JSON.stringify(planned)).not.toContain(KEY);
-  });
+  it.skipIf(process.getuid?.() === 0)(
+    "warns of a file it may not read, that it can't tell whether it holds the key",
+    async () => {
+      const { home, path } = await homeWith(`[main]\nkey=${KEY}\n`);
+      await chmod(path, 0o000);
+      const planned = await planKeyRestores(stackIn(home), STORE);
+      expect(planned.restore).toEqual([]);
+      expect(planned.diagnostics).toEqual([
+        {
+          severity: 'warning',
+          code: 'keys.restore',
+          message:
+            "Mediaplane can't tell whether appdata/sonarr/app.conf holds Mediaplane's key for sonarr (sonarr.apiKey): it could not be read (EACCES)",
+          hint: expect.stringContaining('run plan again') as string,
+        },
+      ]);
+      expect(JSON.stringify(planned)).not.toContain(KEY);
+    },
+  );
 
   it('puts back no key Mediaplane holds none of', async () => {
     const { home } = await homeWith('[main]\nport=1\n');
@@ -280,17 +287,57 @@ describe('restoreKeys', () => {
     ).rejects.toThrow("sonarr.apiKey can't be put back");
   });
 
-  it('says why a write that fails failed, by the path and its code', async () => {
-    if (process.getuid?.() === 0) return;
-    const { home } = await homeWith(`[main]\nkey=${'b'.repeat(32)}\n`);
-    // The folder can be read, but not written: the temporary file can't be made.
-    await chmod(join(home, 'appdata', 'sonarr'), 0o500);
-    try {
-      await expect(restoreKeys(stackIn(home), STORE, ['sonarr.apiKey'])).rejects.toThrow(
-        `cannot put sonarr.apiKey back: cannot write ${join(home, 'appdata', 'sonarr', 'app.conf')} (EACCES)`,
-      );
-    } finally {
-      await chmod(join(home, 'appdata', 'sonarr'), 0o700);
-    }
+  it.skipIf(process.getuid?.() === 0)(
+    'says why a write that fails failed, by the file in the home and its code',
+    async () => {
+      const { home } = await homeWith(`[main]\nkey=${'b'.repeat(32)}\n`);
+      // The folder can be read, but not written: the temporary file can't be made.
+      await chmod(join(home, 'appdata', 'sonarr'), 0o500);
+      try {
+        const failure = restoreKeys(stackIn(home), STORE, ['sonarr.apiKey']);
+        await expect(failure).rejects.toThrow(
+          'cannot put sonarr.apiKey back in appdata/sonarr/app.conf: it could not be written (EACCES)',
+        );
+        await expect(failure).rejects.not.toThrow(home);
+      } finally {
+        await chmod(join(home, 'appdata', 'sonarr'), 0o700);
+      }
+    },
+  );
+
+  it('puts back every key it can, then says each it could not, with those it put back', async () => {
+    const { home, path } = await homeWith(`[main]\nkey=${'b'.repeat(32)}\n`);
+    await link(path, join(home, 'appdata', 'sonarr', 'other-name'));
+    await mkdir(join(home, 'appdata', 'prowlarr'));
+    const prowlarr = join(home, 'appdata', 'prowlarr', 'app.conf');
+    await writeFile(prowlarr, `[main]\nkey=${'b'.repeat(32)}\n`);
+    const both = CATALOG.map((app) =>
+      app.id === 'prowlarr' ? { ...app, keyFiles: { apiKey: CONF } } : app,
+    );
+    const resolved = resolveStack(
+      fixtureConfig(
+        'version: 1\npaths: { data: /srv/data }\nnetwork: { bind: localhost }\nmedia_server: jellyfin\napps:\n  qbittorrent: { vpn: false }\n  prowlarr: {}\n  sonarr: {}\n',
+      ),
+      both,
+      FIXTURE_HOST,
+      home,
+    );
+    const stack = resolved.stack;
+    if (stack === undefined) throw new Error(JSON.stringify(resolved.diagnostics));
+    const store: SecretStore = {
+      version: 1,
+      apps: { prowlarr: { apiKey: KEY }, sonarr: { apiKey: KEY } },
+    };
+    const failure = await restoreKeys(stack, store, [
+      'sonarr.apiKey',
+      'prowlarr.apiKey',
+    ]).catch((cause: unknown) => cause);
+    expect(failure).toBeInstanceOf(KeysNotRestored);
+    expect(failure).toMatchObject({
+      message:
+        'cannot put sonarr.apiKey back in appdata/sonarr/app.conf: it has other names (hard links), which a rewrite would part from it',
+      restored: ['prowlarr.apiKey'],
+    });
+    expect(await readFile(prowlarr, 'utf8')).toBe(`[main]\nkey=${KEY}\n`);
   });
 });

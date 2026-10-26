@@ -28,7 +28,7 @@ import {
 } from '../runtime/types';
 import { ADMIN_PASSWORD_PATH, passwordNotIn, withPasswordNotIn } from '../secrets/admin';
 import { withGeneratedSecrets, type RandomBytes } from '../secrets/generate';
-import { restoreKeys } from '../secrets/restore';
+import { KeysNotRestored, restoreKeys } from '../secrets/restore';
 import { writeSecretStore } from '../secrets/store';
 import { givenKeys, secretValues, userSecrets } from '../secrets/values';
 import { acquireLock, LockedError, type Lock } from '../state/lock';
@@ -278,10 +278,14 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     }
     // A guest whose host up starts again (strandedGuests), and an app whose key goes
     // back in its file, which it reads as it starts: stopped now, and up starts them.
-    // One that up recreates is stopped first too, for its file to be written.
+    // One that up recreates is stopped first too, for its file to be written; and one in
+    // any state but stopped (running, restarting in a loop, paused), which Docker may
+    // start, or which may write its file, while it is written.
     const { restore } = shown.secrets;
     const running = new Set(
-      context.current.filter((c) => c.state === 'running').map((c) => c.service),
+      context.current
+        .filter((c) => c.state !== 'exited' && c.state !== 'created')
+        .map((c) => c.service),
     );
     const restart = [
       ...new Set([
@@ -296,13 +300,21 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     if (restart.length > 0) succeeded(await runtime.stop(restart, values));
     // Each key back in its file, the app stopped (spec §6.3). Up runs whatever happened,
     // so that no app is left stopped; then a failure fails the step.
-    let restored: string[] = [];
+    let restored: readonly string[] = [];
     let unrestored: Error | undefined;
     try {
       restored = await restoreKeys(stack, store, restore);
     } catch (cause) {
       unrestored = cause instanceof Error ? cause : new Error(String(cause));
+      if (cause instanceof KeysNotRestored) restored = cause.restored;
     }
+    /** What was put back: said after a failure too, which would hide it. */
+    const putBack =
+      restored.length === 0
+        ? []
+        : [
+            `put ${restored.join(', ')} back in ${restored.length === 1 ? "its app's file" : "their apps' files"}`,
+          ];
     // An app whose first-run setup is open to anyone starts with no published port: the
     // bootstrap step publishes it once it is set up (spec §6.4).
     const unpublished = [
@@ -310,19 +322,26 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       // A held setup that is open, or can't be told, is never published either.
       ...context.heldUnpublished,
     ];
-    await up(unpublished);
+    try {
+      await up(unpublished);
+    } catch (cause) {
+      if (unrestored === undefined) throw cause;
+      // Both failures, and what was put back: one mustn't hide the other.
+      const said = cause instanceof Error ? cause.message : String(cause);
+      throw new Error([`${said}; and ${unrestored.message}`, ...putBack].join('; '), {
+        cause,
+      });
+    }
     // Started with the file that holds it, each has the password now.
     await passwordGiven(givenByFile);
-    if (unrestored !== undefined) throw unrestored;
+    if (unrestored !== undefined) {
+      throw new Error([unrestored.message, ...putBack].join('; '), { cause: unrestored });
+    }
     const [its, it] = unpublished.length === 1 ? ['its', 'it'] : ['their', 'them'];
     return [
       'every app is running and healthy',
       ...(restart.length === 0 ? [] : [`restarted ${restart.join(', ')}`]),
-      ...(restored.length === 0
-        ? []
-        : [
-            `put ${restored.join(', ')} back in ${restored.length === 1 ? "its app's file" : "their apps' files"}`,
-          ]),
+      ...putBack,
       ...(unpublished.length === 0
         ? []
         : [

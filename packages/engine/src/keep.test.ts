@@ -345,23 +345,30 @@ describe('keep', () => {
         "Mediaplane won't write stack.yaml: it has other names (hard links), which a rewrite would part from it",
       hint: line,
     });
-    // A home it can't write in: the new stack.yaml can't be put in place.
-    if (process.getuid?.() === 0) return;
-    const shut = await home();
-    await chmod(shut, 0o555);
-    try {
-      const result = await keep(options(shut, sonarr, 'sonarr.login.user'));
-      expect(result).toMatchObject({ ok: false, value: undefined });
-      expect(result.diagnostics[0]).toMatchObject({
-        code: 'keep.stack-file',
-        message: `Mediaplane couldn't write stack.yaml: cannot write ${join(shut, 'stack.yaml')} (EACCES)`,
-        hint: line,
-      });
-    } finally {
-      await chmod(shut, 0o755);
-    }
-    expect(await readFile(join(shut, 'stack.yaml'), 'utf8')).toBe(STACK);
   });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "gives the line to add when stack.yaml can't be put in place, in a home it can't write in",
+    async () => {
+      const line =
+        'add this line under overrides: in stack.yaml yourself: sonarr.login.user: someone';
+      const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+      const shut = await home();
+      await chmod(shut, 0o555);
+      try {
+        const result = await keep(options(shut, sonarr, 'sonarr.login.user'));
+        expect(result).toMatchObject({ ok: false, value: undefined });
+        expect(result.diagnostics[0]).toMatchObject({
+          code: 'keep.stack-file',
+          message: `Mediaplane couldn't write stack.yaml: cannot write ${join(shut, 'stack.yaml')} (EACCES)`,
+          hint: line,
+        });
+      } finally {
+        await chmod(shut, 0o755);
+      }
+      expect(await readFile(join(shut, 'stack.yaml'), 'utf8')).toBe(STACK);
+    },
+  );
 
   it.skipIf(otherGroup() === undefined)(
     "keeps stack.yaml's group, one of its user's others (skipped where the user has one group)",
