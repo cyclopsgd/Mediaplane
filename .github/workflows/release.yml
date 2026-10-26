@@ -59,6 +59,16 @@ jobs:
         with:
           ref: ${{ needs.release-please.outputs.tag }}
           persist-credentials: false
+      # The tag is read in each job: here, it must be the commit whose CI is awaited.
+      - name: Check that it is the commit release-please tagged
+        env:
+          SHA: ${{ needs.release-please.outputs.sha }}
+          TAG: ${{ needs.release-please.outputs.tag }}
+        run: |
+          [ "$(git rev-parse HEAD)" = "$SHA" ] || {
+            echo "error: $TAG is not at $SHA, the commit release-please tagged" >&2
+            exit 1
+          }
       - name: Wait for All checks passed on it
         env:
           GH_TOKEN: ${{ github.token }}
@@ -122,7 +132,7 @@ jobs:
           name: pushed-${{ matrix.arch }}
           path: ${{ runner.temp }}/pushed/${{ matrix.arch }}
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
   publish:
     name: Tag the image, for both architectures, and attest it
@@ -226,7 +236,7 @@ jobs:
           name: assets
           path: ${{ runner.temp }}/release
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
   upload:
     name: Attest the deploy files and add them to the release

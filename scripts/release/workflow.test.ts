@@ -80,8 +80,8 @@ describe('the release workflow (spec §8.2)', () => {
     }
   });
 
-  it('checks, in each job that builds or ships, that the tag is the commit CI passed', () => {
-    for (const name of ['image', 'publish', 'assets']) {
+  it('checks, in each job that checks out the tag, that it is the commit CI passed', () => {
+    for (const name of ['ci-passed', 'image', 'publish', 'assets']) {
       const steps = jobs[name]?.steps ?? [];
       const checkout = steps.findIndex((step) =>
         step.uses?.startsWith('actions/checkout@'),
@@ -92,6 +92,17 @@ describe('the release workflow (spec §8.2)', () => {
       expect(check?.env?.SHA, name).toBe('${{ needs.release-please.outputs.sha }}');
       expect(check?.run, name).not.toContain('${{');
     }
+  });
+
+  it('keeps the files it passes between jobs for 7 days, as docs/releasing.md says', () => {
+    const uploads = Object.values(jobs).flatMap((job) =>
+      job.steps.filter((step) => step.uses?.startsWith('actions/upload-artifact@')),
+    );
+    expect(uploads.map((step) => step.with?.name)).toEqual([
+      'pushed-${{ matrix.arch }}',
+      'assets',
+    ]);
+    for (const step of uploads) expect(step.with?.['retention-days']).toBe(7);
   });
 
   it("runs CI for every commit on main, none cancelled or queued behind another's", () => {
