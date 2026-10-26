@@ -481,6 +481,31 @@ describe('wire', () => {
     expect((failure as WiringFailed).message).toBe(
       'the wiring failed for sonarr.login; skipped sonarr.second, which needs what failed; skipped jellyfin.needs, jellyfin.free, which wait for a first-run setup',
     );
+    // A setup that failed, rather than one that waits, is said so.
+    const sonarrAgain = await fakeSonarr({ key: KEY });
+    const failed = await wireWith(
+      {
+        seams: sonarrAgain.seams,
+        addresses: { ...sonarrAgain.addresses, 'fake-jellyfin': '127.0.0.1' },
+      },
+      {
+        stack: stackOf(wired),
+        store: {
+          version: 1,
+          apps: { sonarr: { apiKey: KEY }, jellyfin: { apiKey: KEY } },
+          shared: { adminPassword: PASSWORD },
+        },
+        failed: ['jellyfin'],
+      },
+    );
+    expect(
+      ((await failed.run.catch((thrown: unknown) => thrown)) as WiringFailed).message,
+    ).toBe(
+      "the wiring failed for sonarr.login; skipped sonarr.second, which needs what failed; skipped jellyfin.needs, jellyfin.free, whose app's first-run setup failed",
+    );
+    expect(failed.actions.find((a) => a.resource === 'jellyfin.free')?.detail).toBe(
+      "jellyfin's first-run setup failed",
+    );
   });
 
   it('says so when there is no wiring network after the start, and asks no app', async () => {

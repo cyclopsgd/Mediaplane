@@ -67,6 +67,11 @@ export interface WireOptions {
    * are skipped, and so is what requires them.
    */
   waiting?: readonly string[];
+  /**
+   * Apps whose first-run setup failed, which the bootstrap step said: their resources are
+   * skipped, and so is what requires them, as for one that waits.
+   */
+  failed?: readonly string[];
   /** What the run finds in the apps' answers (FoundSecrets); the step's own, by default. */
   found?: FoundSecrets;
   seams?: WiringSeams;
@@ -145,6 +150,8 @@ export async function wire(options: WireOptions): Promise<string[]> {
   const skipped: string[] = [];
   /** Skipped because an app's first-run setup waits, or because they need what is. */
   const waited: string[] = [];
+  /** Skipped because an app's first-run setup failed, or because they need what is. */
+  const unset: string[] = [];
   const done: string[] = [];
   /** The apps that took Mediaplane's key: what a check may ask of another app. */
   const checked = new Map<string, AppApi>();
@@ -200,15 +207,16 @@ export async function wire(options: WireOptions): Promise<string[]> {
   for (const app of order) {
     const ctx: WiringContext = { stack, app, admin, keys: appKeys };
     const targets = wiringTargets(ctx);
-    if (options.waiting?.includes(app.def.id) === true) {
+    const waits = options.waiting?.includes(app.def.id) === true;
+    if (waits || options.failed?.includes(app.def.id) === true) {
       for (const target of targets) {
         skipped.push(target);
-        waited.push(target);
+        (waits ? waited : unset).push(target);
         options.record({
           step: 'wire',
           resource: target,
           result: 'skipped',
-          detail: `${app.def.id}'s first-run setup waits`,
+          detail: `${app.def.id}'s first-run setup ${waits ? 'waits' : 'failed'}`,
         });
       }
       continue;
@@ -246,6 +254,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
       if (blocker !== undefined) {
         skipped.push(address);
         if (waited.includes(blocker)) waited.push(address);
+        if (unset.includes(blocker)) unset.push(address);
         options.record({
           step: 'wire',
           resource: address,
@@ -331,7 +340,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
     }
   }
   if (failed.length > 0) {
-    throw new WiringFailed(failureMessage(failed, skipped, waited), diagnostics, {
+    throw new WiringFailed(failureMessage(failed, skipped, waited, unset), diagnostics, {
       hint: HINTS.resources,
     });
   }
@@ -375,14 +384,18 @@ async function makeFolders(
 
 /**
  * "the wiring failed for a; skipped b, which needs what failed; skipped c, which waits for
- * a first-run setup". A resource skipped because a setup waits didn't fail anything.
+ * a first-run setup; skipped d, whose app's first-run setup failed". A resource skipped
+ * because of a setup didn't fail anything here: the bootstrap step said what did.
  */
 function failureMessage(
   failed: readonly string[],
   skipped: readonly string[],
   waited: readonly string[],
+  unset: readonly string[],
 ): string {
-  const after = skipped.filter((address) => !waited.includes(address));
+  const after = skipped.filter(
+    (address) => !waited.includes(address) && !unset.includes(address),
+  );
   const because =
     after.length === 0
       ? ''
@@ -391,7 +404,11 @@ function failureMessage(
     waited.length === 0
       ? ''
       : `; skipped ${waited.join(', ')}, which ${waited.length === 1 ? 'waits' : 'wait'} for a first-run setup`;
-  return `the wiring failed for ${failed.join(', ')}${because}${waits}`;
+  const unsetUp =
+    unset.length === 0
+      ? ''
+      : `; skipped ${unset.join(', ')}, whose app's first-run setup failed`;
+  return `the wiring failed for ${failed.join(', ')}${because}${waits}${unsetUp}`;
 }
 
 /** The managed fields only: what resources.json keeps. */

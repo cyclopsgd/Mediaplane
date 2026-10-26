@@ -222,7 +222,7 @@ async function runPlex(
   ctx: BootstrapContext,
 ): Promise<void> {
   const plex = stackAddress(stack, 'plex');
-  const token = ctx.keys.plex?.token;
+  const token = ctx.given.plex?.token;
   if (plex === undefined || token === undefined) {
     throw new AppApiError(
       `${api.name} at ${api.where} can't be set up: the stack runs no Plex, or Mediaplane has no Plex token, for it to sign in with`,

@@ -6,7 +6,7 @@ import { emptySecretStore, type SecretStore } from '../secrets/store';
 import { FAKE_SETUP, SET_UP_CATALOG, SIGN_IN_CATALOG } from '../testing/bootstrap';
 import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
 import { tempDir } from '../testing/temp';
-import { inspectBootstrap, planBootstrap } from './bootstrap';
+import { inspectBootstrap, planBootstrap, setupsToMakeKeys } from './bootstrap';
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -211,5 +211,44 @@ describe('planBootstrap: a setup that makes no key', () => {
         "Mediaplane can't read the file in sonarr's appdata that says whether its first-run setup is done, so it can't tell whether the setup is open; sonarr starts unpublished, and is set up again, until it can",
       hint: 'check the permissions of appdata/sonarr',
     });
+  });
+});
+
+describe('setupsToMakeKeys', () => {
+  it('sets up again, published, an app that refuses the key its setup made, once its setup is done', async () => {
+    const stack = await stackIn();
+    await setupFile(stack, 'done\n');
+    expect(await setupsToMakeKeys(stack, ['jellyfin'], [])).toEqual([
+      { app: 'jellyfin', unpublished: false },
+    ]);
+    // Not one that takes its key, nor one the plan sets up already.
+    expect(await setupsToMakeKeys(stack, [], [])).toEqual([]);
+    expect(
+      await setupsToMakeKeys(
+        stack,
+        ['jellyfin'],
+        [{ app: 'jellyfin', unpublished: true }],
+      ),
+    ).toEqual([]);
+  });
+
+  it("leaves one whose setup isn't shown to be done, and one whose setup makes no key", async () => {
+    const stack = await stackIn();
+    await setupFile(stack, 'open\n');
+    expect(await setupsToMakeKeys(stack, ['jellyfin'], [])).toEqual([]);
+    await rm(join(stack.home, 'appdata', 'jellyfin', 'setup.txt'));
+    // It can't be read: whether the setup is open can't be told.
+    await setupFile(stack, undefined);
+    expect(await setupsToMakeKeys(stack, ['jellyfin'], [])).toEqual([]);
+    const resolved = resolveStack(
+      fixtureConfig(STACK),
+      SIGN_IN_CATALOG,
+      FIXTURE_HOST,
+      stack.home,
+    );
+    if (resolved.stack === undefined) throw new Error('the stack did not resolve');
+    await mkdir(join(stack.home, 'appdata', 'sonarr'), { recursive: true });
+    await writeFile(join(stack.home, 'appdata', 'sonarr', 'signed-in.txt'), 'yes\n');
+    expect(await setupsToMakeKeys(resolved.stack, ['sonarr'], [])).toEqual([]);
   });
 });

@@ -156,7 +156,7 @@ describe("Seerr's media server, with Plex", () => {
       retry: { deadlineMs: 0 },
     });
     await seerrBootstrap.run(api, ADMIN, contextOf(PLEX_STACK).stack, {
-      keys: { plex: { token: TOKEN } },
+      given: { plex: { token: TOKEN } },
       plexTv: plexTv.client,
     });
     const calls = () =>

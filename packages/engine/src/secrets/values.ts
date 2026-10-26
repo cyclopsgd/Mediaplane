@@ -65,10 +65,27 @@ export async function userSecrets(
 }
 
 /**
- * Every app's keys, by app then name: the store's, and of the ones you give (userSecrets),
- * only those an app's API takes as its key, such as Plex's token, which is Plex's key to
- * Mediaplane. The others, such as the VPN key, are redacted, but never reach a setup or a
- * resource.
+ * Of the secrets you give (userSecrets), only those an app's API takes as its key, by app
+ * then name, such as Plex's token, which is Plex's key to Mediaplane: what a first-run
+ * setup gets (BootstrapContext.given). The others, such as the VPN key, are redacted, but
+ * never reach a setup or a resource.
+ */
+export function givenKeys(
+  stack: ResolvedStack,
+  given: Readonly<Record<string, Readonly<Record<string, string>>>>,
+): Record<string, Record<string, string>> {
+  const keys: Record<string, Record<string, string>> = {};
+  for (const app of stack.apps) {
+    const name = app.def.api?.key.secret;
+    const value = name === undefined ? undefined : given[app.def.id]?.[name];
+    if (name !== undefined && value !== undefined) keys[app.def.id] = { [name]: value };
+  }
+  return keys;
+}
+
+/**
+ * Every app's keys, by app then name: the store's, and the ones you give that an app's
+ * API takes as its key (givenKeys).
  */
 export function stackKeys(
   stack: ResolvedStack,
@@ -76,12 +93,8 @@ export function stackKeys(
   given: Readonly<Record<string, Readonly<Record<string, string>>>>,
 ): Record<string, Record<string, string>> {
   const keys: Record<string, Record<string, string>> = { ...store.apps };
-  for (const app of stack.apps) {
-    const name = app.def.api?.key.secret;
-    const value = name === undefined ? undefined : given[app.def.id]?.[name];
-    if (name !== undefined && value !== undefined) {
-      keys[app.def.id] = { ...keys[app.def.id], [name]: value };
-    }
+  for (const [app, held] of Object.entries(givenKeys(stack, given))) {
+    keys[app] = { ...keys[app], ...held };
   }
   return keys;
 }

@@ -13,7 +13,7 @@ import { fakeHttpApp, type FakeApp, type FakeReply, type FakeRequest } from './h
  * What a setup gets besides the app's API, for one that needs none of it (Jellyfin's, and
  * Seerr's through Jellyfin): no keys, and no plex.tv.
  */
-export const NO_SETUP_CONTEXT: BootstrapContext = { keys: {}, plexTv: NO_PLEX_TV };
+export const NO_SETUP_CONTEXT: BootstrapContext = { given: {}, plexTv: NO_PLEX_TV };
 
 /** The key the fake setup makes. */
 export const SET_UP_KEY = '9'.repeat(32);

@@ -1840,10 +1840,12 @@ describe('apply: first-run setup before the ports are published', () => {
     setup.state.refuse = 'fake refusal';
     const result = await run();
     expect(result.outcome).toBe('failed');
-    expect(result.actions.slice(-3).map((a) => [a.step, a.result])).toEqual([
-      ['bootstrap', 'failed'],
-      ['wire', 'skipped'],
-      ['verify', 'skipped'],
+    // The wire step runs past it, skipping the app whose setup failed (spec §5.1).
+    expect(result.actions.slice(-4).map((a) => [a.step, a.resource, a.result])).toEqual([
+      ['bootstrap', undefined, 'failed'],
+      ['wire', 'jellyfin', 'skipped'],
+      ['wire', undefined, 'done'],
+      ['verify', undefined, 'skipped'],
     ]);
     expect(ups).toEqual([
       'jellyfin unpublished, setup open',
@@ -1906,6 +1908,31 @@ describe('apply: first-run setup before the ports are published', () => {
     expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
   });
 
+  it('makes the key again, signed in and published throughout, for an app that refuses the one its setup made', async () => {
+    const { home, setup, ups, run } = await setUpStack();
+    expect((await run()).outcome).toBe('success');
+    // Its key deleted by hand, and another made: the app refuses the stored one.
+    setup.state.key = '7'.repeat(32);
+    const again = await run();
+    expect(again.outcome).toBe('success');
+    expect(again.plan.drift).toEqual([
+      { resource: 'jellyfin', kind: 'key', secret: 'apiKey' },
+    ]);
+    expect(again.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: false }]);
+    expect(again.plan.containers.find((c) => c.service === 'jellyfin')?.action).toBe(
+      'unchanged',
+    );
+    expect(again.actions.find((a) => a.step === 'bootstrap')?.detail).toBe(
+      'set up jellyfin and saved jellyfin.apiKey',
+    );
+    // The start step's up alone: it was never unpublished.
+    expect(ups.slice(2)).toEqual(['all published, setup done']);
+    expect((await readSecretStore(home)).apps.jellyfin).toEqual({
+      apiKey: '7'.repeat(32),
+    });
+    expect((await run()).outcome).toBe('no-changes');
+  });
+
   it('sets up again, without its ports, an app whose appdata lost its setup, and keeps its new key', async () => {
     const { home, setup, ups, run } = await setUpStack();
     expect((await run()).outcome).toBe('success');
@@ -1935,10 +1962,12 @@ describe('apply: first-run setup before the ports are published', () => {
     const { home, ups, run } = await setUpStack({ addresses: {} });
     const result = await run();
     expect(result.outcome).toBe('failed');
-    expect(result.actions.slice(-3).map((a) => [a.step, a.result])).toEqual([
-      ['bootstrap', 'failed'],
-      ['wire', 'skipped'],
-      ['verify', 'skipped'],
+    // The wire step runs past it, skipping the app whose setup failed (spec §5.1).
+    expect(result.actions.slice(-4).map((a) => [a.step, a.resource, a.result])).toEqual([
+      ['bootstrap', undefined, 'failed'],
+      ['wire', 'jellyfin', 'skipped'],
+      ['wire', undefined, 'done'],
+      ['verify', undefined, 'skipped'],
     ]);
     expect(result.diagnostics.at(-1)).toMatchObject({
       code: 'apply.bootstrap-failed',
@@ -1991,10 +2020,12 @@ describe('apply: first-run setup before the ports are published', () => {
     const result = await run();
     expect(result.outcome).toBe('failed');
     expect(result.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
-    expect(result.actions.slice(-3).map((a) => [a.step, a.result])).toEqual([
-      ['bootstrap', 'failed'],
-      ['wire', 'skipped'],
-      ['verify', 'skipped'],
+    // The wire step runs past it, skipping the app whose setup failed (spec §5.1).
+    expect(result.actions.slice(-4).map((a) => [a.step, a.resource, a.result])).toEqual([
+      ['bootstrap', undefined, 'failed'],
+      ['wire', 'jellyfin', 'skipped'],
+      ['wire', undefined, 'done'],
+      ['verify', undefined, 'skipped'],
     ]);
     expect(result.diagnostics.at(-1)).toMatchObject({
       code: 'apply.bootstrap-failed',
@@ -2242,6 +2273,35 @@ describe('apply: a first-run setup that makes no key, after another', () => {
       apiKey: 'ab'.repeat(16),
     });
     expect((await run()).outcome).toBe('no-changes');
+  });
+
+  it("wires the rest past a setup that failed, skipping that app's resources, and verifies nothing", async () => {
+    const { setup, run } = await signInStack();
+    // Someone signed in to Sonarr first: its setup fails, as claimed.
+    setup.signIn.refuse = true;
+    setup.signIn.claimant = true;
+    const failed = await run();
+    expect(failed.outcome).toBe('failed');
+    expect(
+      failed.actions.slice(-4).map((a) => [a.step, a.resource ?? '', a.result]),
+    ).toEqual([
+      ['bootstrap', '', 'failed'],
+      ['wire', 'sonarr', 'skipped'],
+      ['wire', '', 'done'],
+      ['verify', '', 'skipped'],
+    ]);
+    // The wire step asked Jellyfin, set up, whether it takes its key: the rest is wired.
+    expect(
+      setup.app.requests.some(
+        (r) => r.path === '/check' && (r.headers.host ?? '').startsWith('jellyfin:'),
+      ),
+    ).toBe(true);
+    expect(failed.actions.find((a) => a.resource === 'sonarr')?.detail).toBe(
+      "sonarr's first-run setup failed",
+    );
+    expect(failed.diagnostics.filter((d) => d.severity === 'error')).toEqual([
+      expect.objectContaining({ code: 'apply.bootstrap-failed' }),
+    ]);
   });
 
   it('sets the apps up in the order of their integrations, not of their names', async () => {
@@ -2623,7 +2683,7 @@ describe("apply: a setup's first start, and what it is given", () => {
         ...def,
         bootstrap: {
           ...bootstrap,
-          firstStart: (_stack, ctx) => {
+          firstStart: (ctx) => {
             seen.push(ctx);
             return fails === undefined
               ? Promise.resolve({ FIRST_START: FIRST })
@@ -2665,13 +2725,13 @@ describe("apply: a setup's first start, and what it is given", () => {
     expect(calls).toContain('up unpublished jellyfin sonarr with sonarr.FIRST_START');
     // The publishing up keeps it only for an app still unpublished: none here.
     expect(given).toEqual([JSON.stringify({ sonarr: { FIRST_START: FIRST } }), '{}']);
-    // The first start and the setup are given the stack's keys, and plex.tv as apply was
-    // given it, but no secret you give that no app's API takes as its key: the VPN key.
+    // The first start and the setup are given plex.tv as apply was given it, and of the
+    // stack's keys only those you give that an app's API takes as its key: none here.
+    // Neither state/secrets.json's (Sonarr's key) nor the VPN key you give.
     expect(seen).toHaveLength(2);
     for (const ctx of seen) {
       expect(ctx.plexTv).toBe(plexTv);
-      expect(ctx.keys.sonarr?.apiKey).toBeDefined();
-      expect(ctx.keys.gluetun?.wireguardKey).toBeUndefined();
+      expect(ctx.given).toEqual({});
     }
     // Never in a record or a result.
     expect(JSON.stringify(first)).not.toContain(FIRST);

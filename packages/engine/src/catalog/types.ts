@@ -164,10 +164,11 @@ export interface ApiSpec {
 /** What a first-run setup can use besides the app's API. It holds secrets: never print it. */
 export interface BootstrapContext {
   /**
-   * The stack's keys, by app then name: those in state/secrets.json, and the ones you
-   * give, such as Plex's token (`keys.plex.token`).
+   * The keys you give that an app's API takes as its key, by app then name: Plex's token
+   * (`given.plex.token`). None of state/secrets.json's: a setup reaches its own app with
+   * the client apply gives it, and no other app's key.
    */
-  keys: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  given: Readonly<Record<string, Readonly<Record<string, string>>>>;
   /** plex.tv: called directly from source, through the plex.tv helper in the image. */
   plexTv: PlexTv;
 }
@@ -201,10 +202,7 @@ export interface Bootstrap {
    * values in its own environment: never in compose.yaml, .env, a record or the output.
    * Each value is a secret of the run. Throws BootstrapFailed, and then nothing starts.
    */
-  firstStart?(
-    stack: ResolvedStack,
-    ctx: BootstrapContext,
-  ): Promise<Record<string, string>>;
+  firstStart?(ctx: BootstrapContext): Promise<Record<string, string>>;
   /**
    * Finish what is left of the setup as the shared admin, in `stack`, and give the secret
    * it made, or the one the app already holds for Mediaplane; undefined for a setup that
@@ -232,10 +230,11 @@ export interface Bootstrap {
 
 /**
  * How you sign in to an app's web UI: with the shared admin login (`'shared'`), with your
- * own account of the service it names (`{ own: 'Plex' }`: your plex.tv account), or with a
- * login a later slice brings.
+ * own plex.tv account (`{ own: 'Plex' }`), or with a login a later slice brings
+ * (`{ comingIn }`), which no app of the catalog has now: `mediaplane credentials` keeps
+ * saying `not-yet` for one, as `mediaplane.credentials/v1` allows, for the apps to come.
  */
-export type AppLoginKind = 'shared' | { own: string } | { comingIn: string };
+export type AppLoginKind = 'shared' | { own: 'Plex' } | { comingIn: string };
 
 export interface ServiceExtras {
   cap_add?: string[];

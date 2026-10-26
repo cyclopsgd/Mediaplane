@@ -4,6 +4,7 @@ import {
   AppApiError,
   bootstrapApps,
   BootstrapFailed,
+  setupFailure,
   createAppApi,
   firstStartEnv,
   HelperError,
@@ -98,7 +99,7 @@ async function plexOf(deadlineMs = 0) {
     },
   });
   const ctx: BootstrapContext = {
-    keys: { plex: { token: TOKEN } },
+    given: { plex: { token: TOKEN } },
     plexTv: plexTv.client,
   };
   return { api, state, plexTv, ctx, stack: stackIn(home) };
@@ -116,8 +117,8 @@ describe("Plex's first-run setup", () => {
   });
 
   it('gives its first start a claim token for your account, fetched with your token', async () => {
-    const { plexTv, ctx, stack } = await plexOf();
-    const env = await plexBootstrap.firstStart?.(stack, ctx);
+    const { plexTv, ctx } = await plexOf();
+    const env = await plexBootstrap.firstStart?.(ctx);
     expect(env).toEqual({ PLEX_CLAIM: plexTv.state.claims[0]?.token });
     expect(plexTv.state.claims).toEqual([
       { token: env?.PLEX_CLAIM, account: FAKE_PLEX_ACCOUNT.id, used: false },
@@ -125,11 +126,11 @@ describe("Plex's first-run setup", () => {
   });
 
   it("says what to do when it can't get a claim token, and never shows the token", async () => {
-    const { stack, plexTv } = await plexOf();
+    const { plexTv } = await plexOf();
     const refused = await thrown(
       Promise.resolve(
-        plexBootstrap.firstStart?.(stack, {
-          keys: { plex: { token: 'revoked-plex-token-0' } },
+        plexBootstrap.firstStart?.({
+          given: { plex: { token: 'revoked-plex-token-0' } },
           plexTv: plexTv.client,
         }),
       ),
@@ -146,8 +147,8 @@ describe("Plex's first-run setup", () => {
     });
     const unreached = await thrown(
       Promise.resolve(
-        plexBootstrap.firstStart?.(stack, {
-          keys: { plex: { token: TOKEN } },
+        plexBootstrap.firstStart?.({
+          given: { plex: { token: TOKEN } },
           plexTv: away,
         }),
       ),
@@ -160,8 +161,8 @@ describe("Plex's first-run setup", () => {
     plexTv.state.failing.push({ path: '/api/claim/token.json', status: 403 });
     const forbidden = await thrown(
       Promise.resolve(
-        plexBootstrap.firstStart?.(stack, {
-          keys: { plex: { token: TOKEN } },
+        plexBootstrap.firstStart?.({
+          given: { plex: { token: TOKEN } },
           plexTv: plexTv.client,
         }),
       ),
@@ -171,7 +172,7 @@ describe("Plex's first-run setup", () => {
     });
     expect((forbidden as Error).message).toContain('(HTTP 403)');
     const none = await thrown(
-      Promise.resolve(plexBootstrap.firstStart?.(stack, { keys: {}, plexTv: away })),
+      Promise.resolve(plexBootstrap.firstStart?.({ given: {}, plexTv: away })),
     );
     expect(none).toMatchObject({
       message:
@@ -199,8 +200,8 @@ describe("Plex's first-run setup", () => {
     ] as const) {
       const unclaimed = await thrown(
         Promise.resolve(
-          plexBootstrap.firstStart?.(stack, {
-            keys: { plex: { token: TOKEN } },
+          plexBootstrap.firstStart?.({
+            given: { plex: { token: TOKEN } },
             plexTv: broken(cause),
           }),
         ),
@@ -218,7 +219,7 @@ describe("Plex's first-run setup", () => {
     ] as const) {
       const failed = await thrown(
         plexBootstrap.run(api, ADMIN, stack, {
-          keys: { plex: { token: TOKEN } },
+          given: { plex: { token: TOKEN } },
           plexTv: broken(cause),
         }),
       );
@@ -593,7 +594,7 @@ describe("Plex's first-run setup", () => {
     claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
     const failed = await thrown(
       plexBootstrap.run(api, ADMIN, stack, {
-        keys: { plex: { token: 'revoked-plex-token-0' } },
+        given: { plex: { token: 'revoked-plex-token-0' } },
         plexTv: plexTv.client,
       }),
     );
@@ -628,7 +629,7 @@ describe("Plex's first start, when it can't be prepared", () => {
     const pending = [{ app: 'plex', unpublished: true }];
     /** A context whose plex.tv fails to give a claim token with `cause`. */
     const failing = (cause: Error): BootstrapContext => ({
-      keys: { plex: { token: TOKEN } },
+      given: { plex: { token: TOKEN } },
       plexTv: { ...NO_PLEX_TV, claimToken: () => Promise.reject(cause) },
     });
     return { runtime, calls, stack: stackIn(home), pending, failing };
@@ -675,7 +676,7 @@ describe("Plex's first start, when it can't be prepared", () => {
       ),
     };
     const failed = await thrown(
-      startVariables(odd, pending, { keys: {}, plexTv: NO_PLEX_TV }, runtime, {}),
+      startVariables(odd, pending, { given: {}, plexTv: NO_PLEX_TV }, runtime, {}),
     );
     expect(failed).toBeInstanceOf(BootstrapFailed);
     expect(failed).toMatchObject({
@@ -774,7 +775,7 @@ describe("Plex's first start, when it can't be prepared", () => {
       ),
     };
     const failed = await thrown(
-      startVariables(odd, pending, { keys: {}, plexTv: NO_PLEX_TV }, runtime, {}),
+      startVariables(odd, pending, { given: {}, plexTv: NO_PLEX_TV }, runtime, {}),
     );
     expect(failed).toBeInstanceOf(BootstrapFailed);
     expect(failed).toMatchObject({
@@ -811,7 +812,7 @@ describe("Plex's first start, when it can't be prepared", () => {
     ];
     /** A context whose plex.tv can't give a claim token. */
     const failing = (): BootstrapContext => ({
-      keys: { plex: { token: TOKEN } },
+      given: { plex: { token: TOKEN } },
       plexTv: {
         ...NO_PLEX_TV,
         claimToken: () => Promise.reject(new HelperError('fake: no helper')),
@@ -888,7 +889,7 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
         }
       },
     };
-    const ctx: BootstrapContext = { keys: given, plexTv: client };
+    const ctx: BootstrapContext = { given, plexTv: client };
     const run = async (from: SecretStore) => {
       const pending = (await inspectBootstrap(stack, from)).changes;
       // The start step: Plex's first start, with what its setup gives it.
@@ -911,6 +912,8 @@ describe("Plex's setup, as apply's bootstrap step runs it", () => {
         },
         seams: apis.seams,
       });
+      const failure = setupFailure(set);
+      if (failure !== undefined) throw failure;
       return { pending, env, ...set };
     };
     return {

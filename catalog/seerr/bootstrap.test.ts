@@ -3,6 +3,7 @@ import {
   AppApiError,
   bootstrapApps,
   BootstrapFailed,
+  setupFailure,
   createAppApi,
   HelperError,
   inspectBootstrap,
@@ -520,6 +521,9 @@ describe("Seerr's first-run setup, through the engine's bootstrap step", () => {
         },
         seams: apis.seams,
       });
+      // As apply says it: a setup that failed is the step's failure.
+      const failure = setupFailure(set);
+      if (failure !== undefined) throw failure;
       return { pending, ...set };
     };
     return { home, state, published, run, store, apis };
@@ -660,7 +664,7 @@ describe("Seerr's first-run setup, with Plex", () => {
       retry: { deadlineMs: 0 },
     });
     const ctx: BootstrapContext = {
-      keys: { plex: { token: TOKEN } },
+      given: { plex: { token: TOKEN } },
       plexTv: plexTv.client,
     };
     return {
@@ -706,7 +710,7 @@ describe("Seerr's first-run setup, with Plex", () => {
     const { api, plexTv, stack } = await plexSeerrOf();
     const refused = await thrown(
       seerrBootstrap.run(api, ADMIN, stack, {
-        keys: { plex: { token: 'revoked-plex-token-0' } },
+        given: { plex: { token: 'revoked-plex-token-0' } },
         plexTv: plexTv.client,
       }),
     );

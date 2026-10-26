@@ -2,9 +2,15 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveStack, type ResolvedStack } from '../resolver/resolve';
-import { FIXTURE_HOST, fixtureCatalog, fixtureConfig } from '../testing/fixtures';
+import {
+  FIXTURE_API,
+  FIXTURE_HOST,
+  fixtureCatalog,
+  fixtureConfig,
+} from '../testing/fixtures';
 import { emptySecretStore, type SecretStore } from './store';
 import {
+  givenKeys,
   missingGeneratedSecrets,
   secretsToGenerate,
   secretValues,
@@ -151,5 +157,30 @@ describe('userSecrets and stackKeys', () => {
   it('leaves out one that is missing', async () => {
     const stack = await stackIn(STACK.replace('secrets/wg.key', 'secrets/none.key'));
     expect(await userSecrets(stack, {})).toEqual({});
+  });
+});
+
+describe('givenKeys', () => {
+  it("gives only the secrets you give that an app's API takes as its key", async () => {
+    const stack = await stackIn();
+    const catalog = fixtureCatalog.map((app) =>
+      app.id === 'gluetun'
+        ? {
+            ...app,
+            api: {
+              ...FIXTURE_API,
+              key: { secret: 'wireguardKey', scheme: 'x-api-key' as const },
+            },
+          }
+        : app,
+    );
+    const keyed = resolveStack(fixtureConfig(STACK), catalog, FIXTURE_HOST, stack.home);
+    if (keyed.stack === undefined) throw new Error('the stack did not resolve');
+    const given = { gluetun: { wireguardKey: 'fake-key', other: 'fake-other' } };
+    expect(givenKeys(keyed.stack, given)).toEqual({
+      gluetun: { wireguardKey: 'fake-key' },
+    });
+    // Without an API that takes it, the VPN key reaches no setup.
+    expect(givenKeys(stack, given)).toEqual({});
   });
 });

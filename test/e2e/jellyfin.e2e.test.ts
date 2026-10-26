@@ -8,7 +8,6 @@ import {
   nodeProbe,
   plan,
   readSecretStore,
-  writeSecretStore,
   type ApplyOptions,
   type Runtime,
 } from '@mediaplane/engine';
@@ -379,14 +378,15 @@ describe('Jellyfin, set up before it is published', () => {
       expect(await testConnection(sonarr), "Sonarr's test of it").toBe('passes');
 
       // Jellyfin's own key, deleted in its dashboard: plan says Jellyfin refuses it, and
-      // both arrs' own test refuses the old key their connections hold. With it taken out
-      // of state/secrets.json, apply signs in as the admin, published, makes a new key,
-      // and gives it to both arrs' connections, whose test then passes.
+      // both arrs' own test refuses the old key their connections hold. apply signs in as
+      // the admin, published, makes a new key, and gives it to both arrs' connections,
+      // whose test then passes (Slice 10a: no hand edit of state/secrets.json).
       const revoked = await api(JELLYFIN, `/Auth/Keys/${key}`, mediaBrowser(key), {
         method: 'DELETE',
       });
       expect(revoked.status, "Jellyfin's key revoked by hand").toBe(204);
       const refused = await plan(options);
+      expect(refused.bootstrap).toEqual([{ app: 'jellyfin', unpublished: false }]);
       expect(refused.wiring.filter((w) => w.resource.startsWith('jellyfin.'))).toEqual(
         WIRED.slice(0, 3).map((resource) => ({
           resource,
@@ -402,8 +402,6 @@ describe('Jellyfin, set up before it is published', () => {
           'ApiKey:',
         );
       }
-      const { jellyfin: _lost, ...others } = store.apps;
-      await writeSecretStore(home, { ...store, apps: others });
       seen.length = 0;
       ids.length = 0;
       const rekeyed = await apply(options);

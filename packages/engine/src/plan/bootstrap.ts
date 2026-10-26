@@ -88,6 +88,32 @@ export async function inspectBootstrap(
   return { changes, diagnostics };
 }
 
+/**
+ * The apps whose first-run setup runs again, published, because they refuse the key it
+ * made (`refusing`, by app: spec §6.3, "a key changed at its source"), as Jellyfin does once
+ * its key is deleted by hand. Only one whose appdata says its setup is done, so nobody can
+ * claim it, and that `listed` doesn't name already: its setup signs in as the shared
+ * admin, finds the key named for Mediaplane or makes another, and saves it; the resources
+ * that hold the old one take the new one in the wire step. Reads only.
+ */
+export async function setupsToMakeKeys(
+  stack: ResolvedStack,
+  refusing: readonly string[],
+  listed: readonly BootstrapChange[],
+): Promise<BootstrapChange[]> {
+  const changes: BootstrapChange[] = [];
+  for (const app of stack.apps) {
+    const setup = app.def.bootstrap;
+    const id = app.def.id;
+    if (setup?.secret === undefined || setup.secret !== app.def.api?.key.secret) continue;
+    if (!refusing.includes(id) || listed.some((change) => change.app === id)) continue;
+    if ((await appSetupDone(stack.home, app)) === true) {
+      changes.push({ app: id, unpublished: false });
+    }
+  }
+  return changes;
+}
+
 /** The apps whose first-run setup apply will finish; see `inspectBootstrap`. */
 export async function planBootstrap(
   stack: ResolvedStack,

@@ -29,7 +29,7 @@ import {
 import { withGeneratedSecrets, type RandomBytes } from '../secrets/generate';
 import { restoreKeys } from '../secrets/restore';
 import { writeSecretStore } from '../secrets/store';
-import { secretValues, stackKeys, userSecrets } from '../secrets/values';
+import { givenKeys, secretValues, userSecrets } from '../secrets/values';
 import { acquireLock, LockedError, type Lock } from '../state/lock';
 import { writeFileAtomic } from '../util/atomic';
 import { codeOf } from '../util/error-code';
@@ -37,7 +37,12 @@ import { readIfExists } from '../util/fs';
 import { foundSecrets, redact } from '../util/redact';
 import { compare } from '../util/sort';
 import { vpnCheck, VPN_RUNBOOK } from '../vpn/check';
-import { bootstrapApps, BootstrapFailed, startVariables } from './bootstrap';
+import {
+  bootstrapApps,
+  BootstrapFailed,
+  setupFailure,
+  startVariables,
+} from './bootstrap';
 import {
   AppdataNotPrivateError,
   ensureAppdataDirs,
@@ -228,7 +233,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     startEnv = await startVariables(
       stack,
       shown.bootstrap,
-      { keys: stackKeys(stack, store, given), plexTv },
+      { given: givenKeys(stack, given), plexTv },
       runtime,
       values,
     );
@@ -290,6 +295,11 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
   });
   /** The apps whose first-run setup waits: the wire step skips their resources. */
   let waiting: string[] = [];
+  /**
+   * The apps whose first-run setup failed: the step fails, but the wire step still runs,
+   * skipping their resources and what requires them (spec §5.1).
+   */
+  let unset: string[] = [];
   /** The secrets the bootstrap and wire steps read in the apps' answers. */
   const found = foundSecrets();
   if (shown.bootstrap.length > 0) {
@@ -311,6 +321,9 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       });
       store = set.store;
       waiting = set.waiting.map((w) => w.app);
+      unset = set.failed.map((f) => f.app);
+      const failure = setupFailure(set);
+      if (failure !== undefined) throw failure;
       // The step goes on: the wire step may make the app ready, as the next apply finds.
       for (const w of set.waiting) {
         steps.diagnostics.push(
@@ -322,7 +335,8 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
       return set.detail;
     });
   }
-  await steps.run('wire', async () => {
+  // Past a setup that failed, which skips that app: not past any other failure.
+  await steps.runDespite('wire', unset.length > 0 ? ['bootstrap'] : [], async () => {
     try {
       const done = await wire({
         home,
@@ -338,6 +352,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         },
         planned: shown.wiring,
         waiting,
+        failed: unset,
         found,
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });
@@ -475,7 +490,20 @@ class Steps {
   }
 
   async run(step: ApplyStep, work: () => Promise<string>): Promise<void> {
-    if (this.failed) {
+    await this.runDespite(step, [], work);
+  }
+
+  /** run(), past a failure of the steps `despite` names. */
+  async runDespite(
+    step: ApplyStep,
+    despite: readonly ApplyStep[],
+    work: () => Promise<string>,
+  ): Promise<void> {
+    if (
+      this.actions.some(
+        (action) => action.result === 'failed' && !despite.includes(action.step),
+      )
+    ) {
       this.#finish({ step, result: 'skipped' });
       return;
     }

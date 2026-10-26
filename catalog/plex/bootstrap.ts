@@ -120,7 +120,7 @@ function opens(settings: readonly { id: string; value?: unknown }[]): OpenSettin
 
 /** Your Plex token, which the setup claims Plex with, from the stack's keys. */
 function tokenOf(ctx: BootstrapContext): string | undefined {
-  return ctx.keys.plex?.token;
+  return ctx.given.plex?.token;
 }
 
 /**
@@ -215,7 +215,7 @@ function claimHint(cause: unknown): string {
 export const plexBootstrap: Bootstrap = {
   done: { path: PREFERENCES, pattern: SERVER_TOKEN },
   open: async (api) => !(await identityOf(api)).claimed,
-  async firstStart(_stack, ctx) {
+  async firstStart(ctx) {
     const token = tokenOf(ctx);
     if (token === undefined) {
       throw new BootstrapFailed(

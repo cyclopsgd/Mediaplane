@@ -46,7 +46,7 @@ import {
   userSecrets,
 } from '../secrets/values';
 import { planAppdata } from './appdata';
-import { inspectBootstrap, type BootstrapChange } from './bootstrap';
+import { inspectBootstrap, setupsToMakeKeys, type BootstrapChange } from './bootstrap';
 import { notYetHealthy, otherHomes, ownPorts, type ContainerChange } from './containers';
 import { diffFiles, type FileChange } from './files';
 import { predictContainers, type PredictResult } from './predict';
@@ -271,7 +271,7 @@ export async function planStack(
   const setups = await inspectBootstrap(stack, store);
   diagnostics.push(...setups.diagnostics);
   if (hasErrors(diagnostics)) return failed(diagnostics);
-  const bootstrap = setups.changes;
+  let bootstrap = setups.changes;
   const unpublished = new Set(bootstrap.filter((b) => b.unpublished).map((b) => b.app));
   containers = containers.map((change) =>
     unpublished.has(change.service) && change.action !== 'create'
@@ -359,6 +359,11 @@ export async function planStack(
       ({ drift, checks } = planned);
       wiring = planned.changes;
       diagnostics.push(...planned.diagnostics);
+      // An app that refuses the key its setup made has the setup run again, signed in.
+      const refusing = drift
+        .filter((d) => d.kind === 'key' && d.source === undefined)
+        .map((d) => d.resource);
+      bootstrap = [...bootstrap, ...(await setupsToMakeKeys(stack, refusing, bootstrap))];
     } catch (cause) {
       if (!(cause instanceof RuntimeError)) throw cause;
       return failed([...diagnostics, dockerUnavailable(cause, options.env)]);

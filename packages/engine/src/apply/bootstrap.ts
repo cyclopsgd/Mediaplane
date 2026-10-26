@@ -17,7 +17,7 @@ import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { RuntimeError, type Runtime } from '../runtime/types';
 import { adminLogin } from '../secrets/admin';
 import { writeSecretStore, type SecretStore } from '../secrets/store';
-import { stackKeys } from '../secrets/values';
+import { givenKeys } from '../secrets/values';
 import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
 
 export interface BootstrapOptions {
@@ -63,6 +63,23 @@ export interface WaitingSetup {
   reason: string;
 }
 
+/** An app whose first-run setup failed, and why: redacted, for the user. */
+export interface FailedSetup {
+  app: string;
+  reason: string;
+}
+
+/** What the bootstrap step did: the store with its keys, and how each setup went. */
+export interface BootstrapResult {
+  store: SecretStore;
+  /** What it did, for the step's detail. */
+  detail: string;
+  /** The setups that wait, which didn't fail. */
+  waiting: WaitingSetup[];
+  /** The setups that failed: their apps stay as the plan started them, or unpublished. */
+  failed: FailedSetup[];
+}
+
 /**
  * The first-run setup failed: what it said, and what to do. It keeps a cause only when
  * given one, for an error whose own text is not shown.
@@ -78,6 +95,19 @@ export class BootstrapFailed extends Error {
 }
 
 const HINT = `fix what the error says, then run apply again: an app whose setup is still open keeps its ports unpublished until then. See ${WIRING_RUNBOOK}`;
+
+/**
+ * The bootstrap step's failure, when a setup failed: what each failed setup said, and
+ * each that waits; undefined when none failed.
+ */
+export function setupFailure(set: BootstrapResult): BootstrapFailed | undefined {
+  if (set.failed.length === 0) return undefined;
+  const said = [
+    ...set.failed.map((f) => f.reason),
+    ...set.waiting.map((w) => `${w.app} waits: ${w.reason}`),
+  ];
+  return new BootstrapFailed(`the first-run setup failed: ${said.join('; ')}`, HINT);
+}
 
 const LEAVE_HINT = `Mediaplane steps off the stack's wiring network before Compose publishes the apps, and couldn't, so nothing was published; fix what the error says, then run apply again. See ${WIRING_RUNBOOK}`;
 
@@ -106,12 +136,11 @@ function withSecret(
  * Seerr signs in through it. A setup that waits (SetupWaiting), or one after an app whose
  * setup failed or waits, is left as it is, unpublished, and doesn't fail the step.
  *
- * Returns the store with the new keys, what it did, and the apps whose setup waits;
- * throws BootstrapFailed when a setup failed, once it has published what it can.
+ * Returns the store with the new keys, what it did, and the apps whose setup waits or
+ * failed (setupFailure says the step's failure), once it has published what it can.
+ * Throws BootstrapFailed when it couldn't reach the apps, or publish them.
  */
-export async function bootstrapApps(
-  options: BootstrapOptions,
-): Promise<{ store: SecretStore; detail: string; waiting: WaitingSetup[] }> {
+export async function bootstrapApps(options: BootstrapOptions): Promise<BootstrapResult> {
   const { stack, runtime } = options;
   // An app without an API isn't in the wiring order: it goes last, and setUp fails it.
   const order = wiringOrder(stack).map((app) => app.def.id);
@@ -146,7 +175,6 @@ export async function bootstrapApps(
   const given = options.given ?? {};
   const secrets = knownSecrets(options.values, options.store, admin, given);
   const found = options.found ?? foundSecrets();
-  const allKeys = stackKeys(stack, options.store, given);
   // A key that Mediaplane chose, and the app takes from its environment (Seerr's), is
   // carried: the setup asks an app that is set up already with it, never with the
   // password. A key the setup makes isn't there yet, or may be stale. One you give (Plex's
@@ -160,7 +188,10 @@ export async function bootstrapApps(
         : [];
     }),
   );
-  const ctx: BootstrapContext = { keys: allKeys, plexTv: options.plexTv ?? NO_PLEX_TV };
+  const ctx: BootstrapContext = {
+    given: givenKeys(stack, given),
+    plexTv: options.plexTv ?? NO_PLEX_TV,
+  };
   let reached: Map<string, ReachedApp>;
   try {
     if ((await runtime.joinWiring()) === 'no-network') {
@@ -184,7 +215,7 @@ export async function bootstrapApps(
     throw new BootstrapFailed(failure.message, failure.hint ?? HINT);
   }
   const saved: string[] = [];
-  const failed: string[] = [];
+  const failed: FailedSetup[] = [];
   const waiting: WaitingSetup[] = [];
   /** The apps whose setup failed or waits: one that comes after them waits too. */
   const unfinished: ResolvedApp[] = [];
@@ -237,7 +268,9 @@ export async function bootstrapApps(
           ...(result.key === undefined ? [] : [result.key]),
         ]),
       );
-    if (result.failure !== undefined) failed.push(clean(result.failure));
+    if (result.failure !== undefined) {
+      failed.push({ app: app.def.id, reason: clean(result.failure) });
+    }
     if (result.waiting !== undefined) {
       waiting.push({ app: app.def.id, reason: clean(result.waiting) });
     }
@@ -263,12 +296,6 @@ export async function bootstrapApps(
     await options.publish(stillOpen);
   }
   const waits = waiting.map((w) => `${w.app} waits: ${w.reason}`);
-  if (failed.length > 0) {
-    throw new BootstrapFailed(
-      `the first-run setup failed: ${[...failed, ...waits].join('; ')}`,
-      HINT,
-    );
-  }
   const finished = apps.filter((app) => !unfinished.includes(app)).map((a) => a.def.id);
   const published = unpublished.filter((app) => !stillOpen.includes(app));
   const keys = saved.length === 0 ? '' : ` and saved ${saved.join(', ')}`;
@@ -280,6 +307,7 @@ export async function bootstrapApps(
       ...waits,
     ].join('; '),
     waiting,
+    failed,
   };
 }
 
@@ -441,7 +469,7 @@ export async function firstStartEnv(
   for (const app of await firstStartApps(stack, pending)) {
     const bootstrap = app.def.bootstrap;
     if (bootstrap?.firstStart === undefined) continue;
-    env[app.def.id] = await bootstrap.firstStart(stack, ctx);
+    env[app.def.id] = await bootstrap.firstStart(ctx);
   }
   return env;
 }
