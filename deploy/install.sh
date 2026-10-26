@@ -26,12 +26,14 @@ fail() {
   printf 'error: %s\n' "$*" >&2
   exit 1
 }
-# Whether image $1 is pinned by digest: <name>@sha256:<64 hex digits>.
+# Whether image $1 is pinned by digest, in the one shape a release names its image in
+# (scripts/release/pin.ts): <name>:<tag>@sha256:<64 hex digits>, with nothing else in it:
+# no space, #, $ or quote, which Compose would read otherwise than this does, and no line
+# end, which grep would take for several images.
 pinned() {
-  case $1 in *@sha256:*) ;; *) return 1 ;; esac
-  digest=${1##*@sha256:}
-  [ ${#digest} -eq 64 ] || return 1
-  case $digest in *[!0-9a-f]*) return 1 ;; esac
+  case $1 in *[!A-Za-z0-9._:/@-]*) return 1 ;; esac
+  printf '%s\n' "$1" |
+    grep -Eq '^[a-z0-9]+([._:/-][a-z0-9]+)*:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}@sha256:[0-9a-f]{64}$'
 }
 # Whether version $1 (such as 2.38.2 or v2.38.2) is at least major $2, minor $3.
 at_least() {
@@ -87,8 +89,9 @@ else
   image=${MEDIAPLANE_IMAGE:-$release_image}
   image=${image:-mediaplane:local}
 fi
-# Every run starts the image that was checked: one from a registry is pinned by digest,
-# which Docker verifies as it pulls it. mediaplane:local is built from the checkout.
+# An image from a registry is pinned by digest, which Docker verifies as it pulls it;
+# mediaplane:local is built from the checkout instead. Compose is then given this image
+# itself (system, below), so it runs exactly what was checked here.
 if [ "$image" != mediaplane:local ] && ! pinned "$image"; then
   fail "MEDIAPLANE_IMAGE=$image isn't pinned by digest: name it as <name>:<tag>@sha256:<digest>, as a release's deploy files do (docker buildx imagetools inspect <name>:<tag> shows the digest), or as mediaplane:local to build it from a checkout"
 fi
@@ -160,19 +163,25 @@ if [ -n "$release_image" ] && [ "$image" != "$release_image" ]; then
   say "Note: deploy/.env names MEDIAPLANE_IMAGE=$image, so this release's image, $release_image, isn't the one that runs: to run it, remove that line from deploy/.env, then run this again."
 fi
 
-# Mediaplane's own deployment, and nothing else: never the stack. deploy/.env decides:
-# the same names exported in this shell would override it. Compose's own would move it to
-# another project or file.
+# Mediaplane's own deployment, and nothing else: never the stack. It runs the image that
+# was checked above, whatever deploy/.env or the file's default say. deploy/.env decides
+# the rest: the same names exported in this shell would override it. So would Compose's
+# own, which would move it to another project, file or .env, and -p names the project
+# against those in deploy/.env too.
 system() (
-  unset MEDIAPLANE_IMAGE MEDIAPLANE_UID MEDIAPLANE_GID DOCKER_GID TZ MEDIAPLANE_HOME \
-    COMPOSE_PROJECT_NAME COMPOSE_FILE COMPOSE_PROFILES
-  docker compose -f "$here/mediaplane.compose.yaml" "$@"
+  unset MEDIAPLANE_UID MEDIAPLANE_GID DOCKER_GID TZ MEDIAPLANE_HOME \
+    COMPOSE_PROJECT_NAME COMPOSE_FILE COMPOSE_PROFILES COMPOSE_ENV_FILES \
+    COMPOSE_DISABLE_ENV_FILE COMPOSE_PROJECT_DIRECTORY
+  MEDIAPLANE_IMAGE=$image
+  export MEDIAPLANE_IMAGE
+  docker compose -f "$here/mediaplane.compose.yaml" -p mediaplane-system "$@"
 )
 # Pulled before anything is recreated, so a pull that fails leaves Mediaplane as it was.
 if [ "$image" = mediaplane:local ]; then
+  say "Pulling the socket proxy (pinned by digest, so Docker checks every byte against it)..."
   system pull socket-proxy || fail "couldn't pull Mediaplane's images: the lines above say why"
 else
-  say "Pulling $image and the socket proxy..."
+  say "Pulling $image and the socket proxy (pinned by digest, so Docker checks every byte against it)..."
   system pull || fail "couldn't pull Mediaplane's images: the lines above say why"
 fi
 system up -d

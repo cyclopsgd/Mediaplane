@@ -399,12 +399,19 @@ describe('the installer', () => {
     if (options.parent === 'locked') chmodSync(parent, 0o555);
     if (options.parent === 'hidden') chmodSync(parent, 0o600);
     const log = join(top, 'calls.log');
+    const seen = join(top, 'seen.log');
     const security =
       options.rootless === true ? '[name=seccomp name=rootless]' : '[name=seccomp]';
     writeFileSync(
       join(bin, 'docker'),
       `#!/bin/sh
 printf 'docker %s\\n' "$*" >> '${log}'
+# The stand-in records what Compose would read from its environment, so that it is no
+# kinder than Compose: COMPOSE_* names move its project, file, profiles and .env, and
+# MEDIAPLANE_* names override deploy/.env.
+case "$*" in
+  'compose -f '*) printf '%s :: %s\\n' "$*" "$(env | grep -E '^(COMPOSE_|MEDIAPLANE_)' | grep -v '^MEDIAPLANE_TEST_' | sort | tr '\\n' ' ')" >> '${seen}' ;;
+esac
 case "$*" in
   'version --format {{.Server.Version}}') echo '${options.engine ?? '29.8.0'}' ;;
   'compose version --short') echo '${options.compose ?? '2.38.2'}' ;;
@@ -434,7 +441,10 @@ exit 0
     // Your own MEDIAPLANE_* settings stay out of the run.
     const env: NodeJS.ProcessEnv = Object.fromEntries(
       Object.entries(process.env).filter(
-        ([name]) => !name.startsWith('MEDIAPLANE_') && name !== 'DOCKER_GID',
+        ([name]) =>
+          !name.startsWith('MEDIAPLANE_') &&
+          !name.startsWith('COMPOSE_') &&
+          name !== 'DOCKER_GID',
       ),
     );
     const homeVar = options.homeVar === undefined ? home : options.homeVar;
@@ -456,6 +466,13 @@ exit 0
         out: result.stdout,
         err: result.stderr,
         calls: existsSync(log) ? readFileSync(log, 'utf8').trimEnd().split('\n') : [],
+        /** Each Compose call, then `::`, then the COMPOSE_* and MEDIAPLANE_* it saw. */
+        seen: existsSync(seen)
+          ? readFileSync(seen, 'utf8')
+              .split('\n')
+              .filter((line) => line !== '')
+              .map((line) => line.trimEnd())
+          : [],
       };
     };
     const cleanup = () => {
@@ -501,7 +518,7 @@ exit 0
           `docker build --tag mediaplane:local ${join(box.top, 'checkout')}`,
         );
         expect(result.calls).toContain(
-          `docker compose -f ${join(box.deploy, 'mediaplane.compose.yaml')} up -d`,
+          `docker compose -f ${join(box.deploy, 'mediaplane.compose.yaml')} -p mediaplane-system up -d`,
         );
         expect(statSync(box.home).isDirectory()).toBe(true);
         const env = readFileSync(join(box.deploy, '.env'), 'utf8');
@@ -651,8 +668,12 @@ exit 0
         const result = box.run();
         expect(result.code, result.err).toBe(0);
         const file = join(box.deploy, 'mediaplane.compose.yaml');
-        const pull = result.calls.indexOf(`docker compose -f ${file} pull`);
-        const up = result.calls.indexOf(`docker compose -f ${file} up -d`);
+        const pull = result.calls.indexOf(
+          `docker compose -f ${file} -p mediaplane-system pull`,
+        );
+        const up = result.calls.indexOf(
+          `docker compose -f ${file} -p mediaplane-system up -d`,
+        );
         expect(pull).toBeGreaterThanOrEqual(0);
         expect(up).toBeGreaterThan(pull);
         expect(result.calls.some((call) => call.startsWith('docker build'))).toBe(false);
@@ -661,6 +682,7 @@ exit 0
         const env = readFileSync(join(box.deploy, '.env'), 'utf8');
         expect(env).not.toContain('MEDIAPLANE_IMAGE');
         expect(result.out).toContain(`Pulling ${RELEASE}`);
+        expect(result.out).toContain('pinned by digest, so Docker checks every byte');
       }),
   );
 
@@ -678,8 +700,8 @@ exit 0
         const file = join(box.deploy, 'mediaplane.compose.yaml');
         expect(result.calls.filter((call) => call.startsWith('docker compose'))).toEqual([
           'docker compose version --short',
-          `docker compose -f ${file} pull`,
-          `docker compose -f ${file} up -d`,
+          `docker compose -f ${file} -p mediaplane-system pull`,
+          `docker compose -f ${file} -p mediaplane-system up -d`,
         ]);
       }),
   );
@@ -694,7 +716,7 @@ exit 0
         for (const call of result.calls.filter((c) => c.startsWith('docker '))) {
           expect(call).toMatch(
             new RegExp(
-              `^docker (version --format \\S+|info( --format \\S+)?|compose version --short|compose -f ${file} (pull|up -d))$`,
+              `^docker (version --format \\S+|info( --format \\S+)?|compose version --short|compose -f ${file} -p mediaplane-system (pull|up -d))$`,
             ),
           );
         }
@@ -760,7 +782,7 @@ exit 0
           `MEDIAPLANE_IMAGE=${own}\n`,
         );
         expect(result.calls).toContain(
-          `docker compose -f ${join(box.deploy, 'mediaplane.compose.yaml')} pull`,
+          `docker compose -f ${join(box.deploy, 'mediaplane.compose.yaml')} -p mediaplane-system pull`,
         );
         expect(result.calls.some((call) => call.startsWith('docker build'))).toBe(false);
       }),
@@ -798,11 +820,147 @@ exit 0
         const result = box.run();
         expect(result.code).toBe(1);
         expect(result.err).toContain('mediaplane:local is built from a checkout');
-        expect(result.calls.some((call) => / build | up -d/.test(` ${call}`))).toBe(
-          false,
-        );
+        expect(result.calls).toEqual([]);
       },
     ));
+
+  it('refuses a checkout whose deploy/.env names no image', () =>
+    inSandbox({ env: 'MEDIAPLANE_HOME=/srv/fake-x\n', homeVar: null }, (box) => {
+      const result = box.run();
+      expect(result.code).toBe(1);
+      expect(result.err).toContain('deploy/.env names no MEDIAPLANE_IMAGE');
+      expect(result.calls).toEqual([]);
+    }));
+
+  it.runIf(asYou)(
+    'from a checkout: builds, pulls the proxy, then starts, in that order',
+    () =>
+      inSandbox({}, (box) => {
+        const result = box.run();
+        expect(result.code, result.err).toBe(0);
+        const file = join(box.deploy, 'mediaplane.compose.yaml');
+        const build = result.calls.indexOf(
+          `docker build --tag mediaplane:local ${join(box.top, 'checkout')}`,
+        );
+        const pull = result.calls.indexOf(
+          `docker compose -f ${file} -p mediaplane-system pull socket-proxy`,
+        );
+        const up = result.calls.indexOf(
+          `docker compose -f ${file} -p mediaplane-system up -d`,
+        );
+        expect(build).toBeGreaterThanOrEqual(0);
+        expect(pull).toBeGreaterThan(build);
+        expect(up).toBeGreaterThan(pull);
+      }),
+  );
+
+  it.runIf(asYou)(
+    'from a checkout: stops at a proxy pull that fails, before the container',
+    () =>
+      inSandbox({ pullFails: true }, (box) => {
+        const result = box.run();
+        expect(result.code).toBe(1);
+        expect(result.err).toContain(`couldn't pull Mediaplane's images`);
+        expect(result.calls.some((call) => call.endsWith(' pull socket-proxy'))).toBe(
+          true,
+        );
+        expect(result.calls.some((call) => call.includes('up -d'))).toBe(false);
+      }),
+  );
+
+  const BAD_IMAGES = [
+    // Compose reads an unquoted .env value up to a " #": this one runs evil:latest.
+    `evil:latest #@sha256:${'2'.repeat(64)}`,
+    `registry.example/team/mediaplane:0.1.0 @sha256:${'2'.repeat(64)}`,
+    `registry.example/team/mediaplane:0.1.0@sha256:${'2'.repeat(64)} extra`,
+    `registry.example/team/mediaplane:$TAG@sha256:${'2'.repeat(64)}`,
+    // Pinned, but with no tag: the release workflow's shape has one.
+    `registry.example/team/mediaplane@sha256:${'2'.repeat(64)}`,
+    `registry.example/team/mediaplane:0.1.0@sha256:${'2'.repeat(64)}0`,
+  ];
+
+  it.each(BAD_IMAGES)(
+    'refuses the image %s in the environment, and writes no deploy/.env',
+    (image) =>
+      inSandbox({}, (box) => {
+        const result = box.run({ MEDIAPLANE_IMAGE: image });
+        expect(result.code).toBe(1);
+        expect(result.err).toContain(`isn't pinned by digest`);
+        expect(result.calls).toEqual([]);
+        expect(existsSync(join(box.deploy, '.env'))).toBe(false);
+      }),
+  );
+
+  it.each(BAD_IMAGES)('refuses the image %s in deploy/.env', (image) =>
+    inSandbox({ env: `MEDIAPLANE_IMAGE=${image}\n`, homeVar: null }, (box) => {
+      const result = box.run();
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(`isn't pinned by digest`);
+      expect(result.calls).toEqual([]);
+    }),
+  );
+
+  it('refuses an image of several lines, one of them pinned', () =>
+    inSandbox({}, (box) => {
+      const image = `evil:latest\nregistry.example/team/mediaplane:0.1.0@sha256:${'2'.repeat(64)}`;
+      const result = box.run({ MEDIAPLANE_IMAGE: image });
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(`isn't pinned by digest`);
+      expect(result.calls).toEqual([]);
+    }));
+
+  it.runIf(asYou)(
+    'gives Compose the image it checked, and nothing of Compose or MEDIAPLANE_* around it',
+    () =>
+      inSandbox({ release: true }, (box) => {
+        const result = box.run({
+          COMPOSE_ENV_FILES: '/fake/other.env',
+          COMPOSE_DISABLE_ENV_FILE: '1',
+          COMPOSE_PROJECT_NAME: 'mediaplane',
+          COMPOSE_PROJECT_DIRECTORY: '/fake',
+          COMPOSE_FILE: '/fake/other.yaml',
+          COMPOSE_PROFILES: 'fake',
+          MEDIAPLANE_UID: '4242',
+        });
+        expect(result.code, result.err).toBe(0);
+        const file = join(box.deploy, 'mediaplane.compose.yaml');
+        expect(result.seen).toEqual([
+          `compose -f ${file} -p mediaplane-system pull :: MEDIAPLANE_IMAGE=${RELEASE}`,
+          `compose -f ${file} -p mediaplane-system up -d :: MEDIAPLANE_IMAGE=${RELEASE}`,
+        ]);
+      }),
+  );
+
+  it.runIf(asYou)(
+    'gives Compose the image deploy/.env names, in mediaplane-system, whatever else it sets',
+    () =>
+      inSandbox({ release: true, homeVar: null }, (box) => {
+        const own = `registry.example/team/mediaplane:0.0.9@sha256:${'2'.repeat(64)}`;
+        writeFileSync(
+          join(box.deploy, '.env'),
+          `MEDIAPLANE_IMAGE=${own}\nCOMPOSE_PROJECT_NAME=mediaplane\nCOMPOSE_PROFILES=fake\nMEDIAPLANE_HOME=${box.home}\n`,
+        );
+        const result = box.run();
+        expect(result.code, result.err).toBe(0);
+        const file = join(box.deploy, 'mediaplane.compose.yaml');
+        expect(result.seen).toEqual([
+          `compose -f ${file} -p mediaplane-system pull :: MEDIAPLANE_IMAGE=${own}`,
+          `compose -f ${file} -p mediaplane-system up -d :: MEDIAPLANE_IMAGE=${own}`,
+        ]);
+      }),
+  );
+
+  it.runIf(asYou)('gives Compose mediaplane:local from a checkout', () =>
+    inSandbox({}, (box) => {
+      const result = box.run({ COMPOSE_PROJECT_NAME: 'mediaplane' });
+      expect(result.code, result.err).toBe(0);
+      const file = join(box.deploy, 'mediaplane.compose.yaml');
+      expect(result.seen).toEqual([
+        `compose -f ${file} -p mediaplane-system pull socket-proxy :: MEDIAPLANE_IMAGE=mediaplane:local`,
+        `compose -f ${file} -p mediaplane-system up -d :: MEDIAPLANE_IMAGE=mediaplane:local`,
+      ]);
+    }),
+  );
 
   it.runIf(asYou)(
     'stops, with the command to run, at a home that is not yours to write',
