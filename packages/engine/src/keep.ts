@@ -20,7 +20,7 @@ import { STACK_PATH } from './paths';
 import { planStack, type PlanOptions } from './plan/plan';
 import { acquireLock, LockedError, type Lock } from './state/lock';
 import { writeFileAtomic } from './util/atomic';
-import { readIfExists } from './util/fs';
+import { fileKind } from './util/fs';
 
 export interface KeepOptions extends PlanOptions {
   /** What to keep: `<app>.<resource>.<field>`, or `<app>.<resource>` for one deleted. */
@@ -67,8 +67,18 @@ export async function keep(options: KeepOptions): Promise<KeepResult> {
   const address = `${def.id}.${spec.name}`;
   const stackPath = join(home, STACK_PATH);
   // Never create state/ in a folder that isn't a Mediaplane home; plan explains why.
-  if ((await readIfExists(stackPath)) === undefined) {
+  // Looked at, not opened: a named pipe would make an open wait for a writer.
+  const kind = await fileKind(stackPath);
+  if (kind === 'missing') {
     return refused((await planStack({ ...options, home })).result.diagnostics);
+  }
+  if (kind === 'other') {
+    return refused([
+      error(
+        'keep.stack-file',
+        `Mediaplane won't read stack.yaml: ${stackPath} is not a regular file`,
+      ),
+    ]);
   }
   let lock: Lock;
   try {

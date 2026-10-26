@@ -108,6 +108,19 @@ describe('migrateSource', () => {
     });
   });
 
+  it.each([
+    ['flow style', '{ version: 1, paths: { data: /srv/data } }\n'],
+    ['JSON', '{"version": 1, "paths": {"data": "/srv/data"}}\n'],
+  ])('has nothing to rewrite in a current version written as %s', (_what, current) => {
+    expect(migrateSource(current, [RENAME_MEDIA], 1)).toEqual({
+      ok: true,
+      from: 1,
+      to: 1,
+      applied: [],
+      text: current,
+    });
+  });
+
   it('refuses edits that overlap the version', () => {
     const overlapping: Migration = {
       ...RENAME_MEDIA,

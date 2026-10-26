@@ -11,7 +11,7 @@ import { error, type Diagnostic } from './diagnostics';
 import { STACK_PATH } from './paths';
 import { acquireLock, LockedError, type Lock } from './state/lock';
 import { writeFileAtomic } from './util/atomic';
-import { readIfExists } from './util/fs';
+import { fileKind, readFileNoWait } from './util/fs';
 
 export interface MigrateOptions {
   home: string;
@@ -63,12 +63,25 @@ export async function migrate(options: MigrateOptions): Promise<MigrateResult> {
     diagnostics,
     ...extra,
   });
-  // Never create state/ in a folder that isn't a Mediaplane home.
-  if ((await readIfExists(stackPath)) === undefined) {
+  // Never create state/ in a folder that isn't a Mediaplane home. Looked at, not opened:
+  // a named pipe would make an open wait for a writer.
+  const kind = await fileKind(stackPath);
+  if (kind === 'missing') {
     return refused([
       error('config.missing', `no stack.yaml at ${stackPath}`, {
         hint: 'run mediaplane init to write one, or pass --home with the Mediaplane home',
       }),
+    ]);
+  }
+  if (kind === 'other') {
+    return refused([
+      error(
+        'migrate.stack-file',
+        `Mediaplane won't read stack.yaml: ${stackPath} is not a regular file`,
+        {
+          hint: 'make it the file Mediaplane writes, or pass --home with the Mediaplane home',
+        },
+      ),
     ]);
   }
   let lock: Lock;
@@ -85,7 +98,7 @@ export async function migrate(options: MigrateOptions): Promise<MigrateResult> {
   try {
     const read = await readStackFile(stackPath);
     // A file it won't write is still read, to give the file as it should be.
-    const text = read.ok ? read.file.text : ((await readIfExists(stackPath)) ?? '');
+    const text = read.ok ? read.file.text : await readFileNoWait(stackPath);
     // Read as plan reads it: an older version migrated in memory, or why not.
     const before = parseConfig(text, migrations);
     if (!before.ok) return refused(before.diagnostics);
@@ -95,6 +108,19 @@ export async function migrate(options: MigrateOptions): Promise<MigrateResult> {
         error(
           'migrate.rewrite',
           `Mediaplane can't rewrite stack.yaml: ${migrated.reason}`,
+          {
+            hint: 'rewrite it yourself, as the stack.yaml reference describes the current version',
+          },
+        ),
+      ]);
+    }
+    // The text to write must read as a valid stack.yaml, as keep checks its own.
+    const after = parseConfig(migrated.text, migrations);
+    if (!after.ok) {
+      return refused([
+        error(
+          'migrate.rewrite',
+          `Mediaplane can't rewrite stack.yaml: the result would not be a valid stack.yaml (${after.diagnostics[0]?.message ?? 'unknown'})`,
           {
             hint: 'rewrite it yourself, as the stack.yaml reference describes the current version',
           },

@@ -1,7 +1,9 @@
+import { execFileSync } from 'node:child_process';
 import {
   chmod,
   chown,
   link,
+  mkdir,
   readdir,
   readFile,
   rename,
@@ -482,6 +484,25 @@ describe('keep', () => {
     ]);
     expect(await readdir(empty)).toEqual([]);
   });
+
+  it.each([
+    ['a directory', (path: string) => mkdir(path)],
+    [
+      'a named pipe',
+      (path: string) => Promise.resolve(void execFileSync('mkfifo', [path])),
+    ],
+  ])(
+    'refuses %s in place of stack.yaml, without waiting or an uncaught error',
+    async (_what, make) => {
+      const sonarr = await fakeSonarr({ key: KEY, user: 'someone', password: PASSWORD });
+      const dir = await tempDir('mediaplane-keep-');
+      await make(join(dir, 'stack.yaml'));
+      expect(codes(await keep(options(dir, sonarr, 'sonarr.login.user')))).toEqual([
+        'keep.stack-file',
+      ]);
+      expect(await readdir(dir)).toEqual(['stack.yaml']);
+    },
+  );
 
   it('keeps stack.yaml as written when its record cannot be updated, and says the next apply records it', async () => {
     const dir = await home();

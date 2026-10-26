@@ -1,6 +1,7 @@
 import { join, resolve } from 'node:path';
 import type { Catalog } from '../catalog/types';
 import { loadConfigFile } from '../config/load';
+import type { Migration } from '../config/migrations';
 import { checkSecretRefs } from '../config/secrets';
 import { error, hasErrors, type Diagnostic } from '../diagnostics';
 import type { HostFacts } from '../host/facts';
@@ -52,6 +53,8 @@ import { strandedGuests } from './stranded';
 
 export interface PlanOptions {
   home: string;
+  /** For tests: the migrations stack.yaml is read through, instead of Mediaplane's own. */
+  migrations?: readonly Migration[];
   catalog: Catalog;
   /**
    * Facts about the host, or how to get them once the stack has loaded. In its image,
@@ -134,7 +137,7 @@ export async function planStack(
       }),
     ]);
   }
-  const loaded = await loadConfigFile(join(home, STACK_PATH));
+  const loaded = await loadConfigFile(join(home, STACK_PATH), options.migrations);
   if (!loaded.ok) return failed(loaded.diagnostics);
 
   // An older stack.yaml's warning first: the plan reads it migrated, in memory.

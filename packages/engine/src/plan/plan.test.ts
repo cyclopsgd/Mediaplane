@@ -2,6 +2,7 @@ import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppDefinition, Catalog } from '../catalog/types';
+import type { Migration } from '../config/migrations';
 import type { HostFacts } from '../host/facts';
 import { COMPOSE_PATH, ENV_PATH, SECRETS_PATH } from '../paths';
 import { portKey } from '../preflight/checks';
@@ -20,6 +21,7 @@ import { FAKE_SETUP } from '../testing/bootstrap';
 import { fakeHash, fakeProbe, fakeRuntime, running } from '../testing/fakes';
 import { FIXTURE_HOST, fixtureCatalog } from '../testing/fixtures';
 import { fakeHttpApp } from '../testing/http';
+import { RENAME_MEDIA } from '../testing/migrations';
 import { fakeSonarr, WIRED_CATALOG } from '../testing/wiring';
 import { plan, planStack } from './plan';
 import { tempDir } from '../testing/temp';
@@ -102,12 +104,14 @@ function planFor(
     env = {},
     catalog = fixtureCatalog,
     wiring,
+    migrations,
   }: {
     runtime?: Runtime;
     probe?: HostProbe;
     env?: NodeJS.ProcessEnv;
     catalog?: Catalog;
     wiring?: WiringSeams;
+    migrations?: readonly Migration[];
   } = {},
 ) {
   return plan({
@@ -118,10 +122,27 @@ function planFor(
     runtime,
     probe,
     ...(wiring === undefined ? {} : { wiring }),
+    ...(migrations === undefined ? {} : { migrations }),
   });
 }
 
 describe('plan', () => {
+  it('reads an older stack.yaml migrated in memory, warning first, and goes on', async () => {
+    const old = STACK.replace('version: 1', 'version: 0').replace(
+      'media_server:',
+      'media:',
+    );
+    const home = await makeHome({ stack: old });
+    const result = await planFor(home, { migrations: [RENAME_MEDIA] });
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics[0]).toMatchObject({
+      severity: 'warning',
+      code: 'config.old-version',
+    });
+    expect(result.containers.map((c) => c.service)).toContain('jellyfin');
+    expect(await readFile(join(home, 'stack.yaml'), 'utf8')).toBe(old);
+  });
+
   it("fails, saying why, for a first-run setup in another app's network", async () => {
     const catalog = fixtureCatalog.map((app) =>
       app.id === 'qbittorrent' ? { ...app, bootstrap: FAKE_SETUP } : app,

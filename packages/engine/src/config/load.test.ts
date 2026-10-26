@@ -407,6 +407,16 @@ describe('parseConfig: versions (spec §5 step 2)', () => {
     });
   });
 
+  it('puts the old-version warning before the schema errors it explains', () => {
+    const old = 'version: 0\npaths: { data: /srv/data }\nmedia: nonsense\n';
+    const result = parseConfig(old, [RENAME_MEDIA]);
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics?.map((d) => d.code)).toEqual([
+      'config.old-version',
+      'config.invalid',
+    ]);
+  });
+
   it('gives no warning for the current version', () => {
     expect(parseConfig(MINIMAL)).not.toHaveProperty('diagnostics');
   });

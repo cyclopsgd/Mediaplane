@@ -1,9 +1,11 @@
-import { chmod, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { chmod, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { migrate } from './migrate';
 import { LOCK_PATH } from './paths';
 import { acquireLock } from './state/lock';
+import type { Migration } from './config/migrations';
 import { RENAME_MEDIA } from './testing/migrations';
 import { tempDir } from './testing/temp';
 
@@ -95,6 +97,74 @@ describe('migrate (spec §5.2)', () => {
     expect(await readFile(join(dir, 'real.yaml'), 'utf8')).toBe(OLD);
   });
 
+  it.each([
+    [
+      'flow style',
+      '{ version: 1, paths: { data: /srv/data }, media_server: jellyfin }\n',
+    ],
+    [
+      'JSON',
+      '{"version": 1, "paths": {"data": "/srv/data"}, "media_server": "jellyfin"}\n',
+    ],
+  ])('has nothing to do for a current version written as %s', async (_what, current) => {
+    const dir = await home(current);
+    expect(await run(dir)).toEqual({
+      ok: true,
+      from: 1,
+      to: 1,
+      changed: false,
+      applied: [],
+      diagnostics: [],
+    });
+    expect(await readFile(join(dir, 'stack.yaml'), 'utf8')).toBe(current);
+  });
+
+  it('refuses a stack.yaml that is a directory, without a lock or an uncaught error', async () => {
+    const dir = await tempDir('mediaplane-migrate-dir-');
+    await mkdir(join(dir, 'stack.yaml'));
+    expect(await run(dir)).toMatchObject({
+      ok: false,
+      changed: false,
+      diagnostics: [{ code: 'migrate.stack-file' }],
+    });
+    await expect(stat(join(dir, 'state'))).rejects.toThrow();
+  });
+
+  it('refuses a stack.yaml that is a named pipe, without waiting for a writer', async () => {
+    const dir = await tempDir('mediaplane-migrate-fifo-');
+    execFileSync('mkfifo', [join(dir, 'stack.yaml')]);
+    expect(await run(dir)).toMatchObject({
+      ok: false,
+      changed: false,
+      diagnostics: [{ code: 'migrate.stack-file' }],
+    });
+    await expect(stat(join(dir, 'state'))).rejects.toThrow();
+  });
+
+  it("refuses a rewrite whose result isn't a valid stack.yaml, writing nothing", async () => {
+    // A migration whose text and data agree with each other, but not with the schema,
+    // the second time it is asked: only the check of the text to write catches it.
+    let asked = 0;
+    const drifting: Migration = {
+      ...RENAME_MEDIA,
+      data: (stack) => {
+        asked += 1;
+        const { media, ...rest } = stack;
+        return asked === 1 ? { ...rest, media_server: media } : { ...rest, bogus: media };
+      },
+      text: (source, doc) =>
+        RENAME_MEDIA.text(source, doc).map((edit) => ({ ...edit, text: 'bogus' })),
+    };
+    const dir = await home(OLD);
+    const result = await run(dir, [drifting]);
+    expect(result).toMatchObject({
+      ok: false,
+      changed: false,
+      diagnostics: [{ code: 'migrate.rewrite' }],
+    });
+    expect(await readFile(join(dir, 'stack.yaml'), 'utf8')).toBe(OLD);
+  });
+
   it('refuses a stack.yaml newer than this Mediaplane', async () => {
     const dir = await home(MIGRATED.replace('version: 1', 'version: 2'));
     expect(await run(dir)).toMatchObject({
@@ -108,7 +178,11 @@ describe('migrate (spec §5.2)', () => {
     const dir = await home(OLD.replace('media: jellyfin', 'media: nonsense'));
     const result = await run(dir);
     expect(result).toMatchObject({ ok: false, changed: false });
-    expect(result.diagnostics[0]?.code).toBe('config.invalid');
+    // The old-version warning first, then the schema's error it explains.
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      'config.old-version',
+      'config.invalid',
+    ]);
     expect(await readFile(join(dir, 'stack.yaml'), 'utf8')).toContain('version: 0');
   });
 

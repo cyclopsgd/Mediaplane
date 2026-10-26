@@ -121,8 +121,7 @@ export const EXIT_CODES: Readonly<Record<string, readonly string[]>> = {
   ],
   migrate: [
     '0: stack.yaml is now the version this Mediaplane writes, or already was',
-    '1: nothing was rewritten: a newer or unknown version, or an error',
-    '1: a file Mediaplane may not write, such as one with managed_by: external',
+    '1: not rewritten: newer or unknown version, unwritable file, or an error',
   ],
   history: ['0: the records were listed or shown', '1: an error, or no such record'],
   credentials: [

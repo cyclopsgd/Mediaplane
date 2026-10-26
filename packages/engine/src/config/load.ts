@@ -23,7 +23,10 @@ const VERSION_HINTS = {
 
 type Issue = ZodError['issues'][number];
 
-export async function loadConfigFile(path: string): Promise<LoadResult> {
+export async function loadConfigFile(
+  path: string,
+  migrations: readonly Migration[] = MIGRATIONS,
+): Promise<LoadResult> {
   const source = await readIfExists(path);
   if (source === undefined) {
     return {
@@ -35,7 +38,7 @@ export async function loadConfigFile(path: string): Promise<LoadResult> {
       ],
     };
   }
-  return parseConfig(source);
+  return parseConfig(source, migrations);
 }
 
 /**
@@ -96,7 +99,11 @@ export function parseConfig(
       ...(warnings.length === 0 ? {} : { diagnostics: warnings }),
     };
   }
-  return { ok: false, diagnostics: result.error.issues.flatMap(toDiagnostics) };
+  // The old-version warning first: the errors name the keys it was migrated to.
+  return {
+    ok: false,
+    diagnostics: [...warnings, ...result.error.issues.flatMap(toDiagnostics)],
+  };
 }
 
 /** yaml's pretty errors append the offending source line, which may hold a secret. */

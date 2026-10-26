@@ -127,12 +127,11 @@ export function migrateSource(
     const doc = parseDocument(text);
     if (doc.errors.length > 0) return { ok: false, reason: 'it is not valid YAML' };
     const root = doc.contents;
-    if (!isMap(root) || root.flow === true) {
-      return {
-        ok: false,
-        reason: 'its top level is not a YAML block of keys, one per line',
-      };
-    }
+    const notBlock = {
+      ok: false as const,
+      reason: 'its top level is not a YAML block of keys, one per line',
+    };
+    if (!isMap(root)) return notBlock;
     const pair = root.items.find((p) => isScalar(p.key) && p.key.value === 'version');
     const value = pair?.value;
     if (!isScalar(value) || typeof value.value !== 'number') {
@@ -142,6 +141,8 @@ export function migrateSource(
     from ??= version;
     if (version > current) return { ok: false, reason: newer(version, current) };
     if (version === current) return { ok: true, text, from, to: current, applied };
+    // Only a file that needs a rewrite must be written one key per line.
+    if (root.flow === true) return notBlock;
     const step = steps(version, migrations, current);
     if (typeof step === 'number' || step[0] === undefined) {
       return { ok: false, reason: unknown(version, current) };
