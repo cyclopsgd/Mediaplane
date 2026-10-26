@@ -508,6 +508,53 @@ describe('wire', () => {
     );
   });
 
+  it("names the app whose setup failed for a resource that needs one of that app's", async () => {
+    // Sonarr's setup failed; Jellyfin's `needs` requires sonarr.login, and `breaks` fails.
+    const wired = WIRED_CATALOG.map((def) =>
+      def.id === 'jellyfin'
+        ? {
+            ...def,
+            api: FIXTURE_API,
+            integration: {
+              after: ['sonarr'],
+              resources: [
+                { ...FAKE_LOGIN, name: 'needs', requires: ['sonarr.login'] },
+                {
+                  ...FAKE_LOGIN,
+                  name: 'breaks',
+                  create: () =>
+                    Promise.reject(new AppApiError('fake refusal', { kind: 'rejected' })),
+                },
+              ],
+            },
+          }
+        : def,
+    );
+    const sonarr = await fakeSonarr({ key: KEY });
+    const { run, actions } = await wireWith(
+      {
+        seams: sonarr.seams,
+        addresses: { ...sonarr.addresses, 'fake-jellyfin': '127.0.0.1' },
+      },
+      {
+        stack: stackOf(wired),
+        store: {
+          version: 1,
+          apps: { sonarr: { apiKey: KEY }, jellyfin: { apiKey: KEY } },
+          shared: { adminPassword: PASSWORD },
+        },
+        failed: ['sonarr'],
+      },
+    );
+    const failure = (await run.catch((thrown: unknown) => thrown)) as WiringFailed;
+    expect(failure.message).toBe(
+      "the wiring failed for jellyfin.breaks; skipped sonarr.login, whose app's first-run setup failed; skipped jellyfin.needs, which needs sonarr, whose first-run setup failed",
+    );
+    expect(actions.find((a) => a.resource === 'jellyfin.needs')?.detail).toBe(
+      'sonarr.login was skipped',
+    );
+  });
+
   it('says so when there is no wiring network after the start, and asks no app', async () => {
     const sonarr = await fakeSonarr({ key: KEY });
     const { run, actions } = await wireWith(sonarr, { join: 'no-network' });

@@ -1,4 +1,4 @@
-import { readFile, rm } from 'node:fs/promises';
+import { readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
@@ -158,7 +158,13 @@ describe('a host rebuilt from stack.yaml and its appdata (spec §6.1, §6.3, §1
       // plan recovers every key from the apps' own files, and generates only the admin
       // password, which went with the store, saying so. Seerr's record that its setup
       // is Mediaplane's went too: it is checked again, unpublished, with its key.
+      // Jellyfin's database, closed cleanly, is opened immutable: nothing is made beside it.
+      const database = join(home, 'appdata', 'jellyfin', 'data', 'data');
+      const besideDatabase = async () =>
+        (await readdir(database)).filter((name) => name.startsWith('jellyfin.db')).sort();
+      expect(await besideDatabase()).toEqual(['jellyfin.db']);
       const shown = await plan(options);
+      expect(await besideDatabase()).toEqual(['jellyfin.db']);
       expect(shown.ok).toBe(true);
       expect(shown.secrets).toEqual({
         generate: ['admin.password'],
@@ -169,6 +175,11 @@ describe('a host rebuilt from stack.yaml and its appdata (spec §6.1, §6.3, §1
         'secrets.admin-password-lost',
       );
       expect(shown.bootstrap).toEqual([{ app: 'seerr', unpublished: true }]);
+      // Jellyfin's key is recovered, so nothing waits on its admin password: Seerr's setup,
+      // done, signs in through nothing.
+      expect(shown.diagnostics.map((d) => d.code)).not.toContain(
+        'bootstrap.needs-password',
+      );
 
       const rebuilt = await apply(options);
       expect(rebuilt.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
@@ -182,6 +193,8 @@ describe('a host rebuilt from stack.yaml and its appdata (spec §6.1, §6.3, §1
         ADMINS.map((resource) => [resource, 'updated password']),
       );
       const after = await readSecretStore(home);
+      // Each app has the new password now: none is left listed as lacking it.
+      expect(after.shared?.adminPasswordNotIn).toBeUndefined();
       for (const key of KEYS) {
         expect(keyOf(after, key) === keyOf(before, key), `${key} is the one before`).toBe(
           true,

@@ -165,8 +165,11 @@ export async function wire(options: WireOptions): Promise<string[]> {
   const skipped: string[] = [];
   /** Skipped because an app's first-run setup waits, or because they need what is. */
   const waited: string[] = [];
-  /** Skipped because an app's first-run setup failed, or because they need what is. */
-  const unset: string[] = [];
+  /**
+   * Skipped because an app's first-run setup failed, or because they need what is: by
+   * address, the app whose setup failed.
+   */
+  const unset = new Map<string, string>();
   /** Skipped because an app's first-run setup is held, or because they need what is. */
   const held: string[] = [];
   const done: string[] = [];
@@ -233,12 +236,13 @@ export async function wire(options: WireOptions): Promise<string[]> {
       : options.waiting?.includes(appId)
         ? { list: waited, detail: 'waits' }
         : options.failed?.includes(appId)
-          ? { list: unset, detail: 'failed' }
+          ? { list: [], detail: 'failed' }
           : undefined;
     if (why !== undefined) {
       for (const target of targets) {
         skipped.push(target);
         why.list.push(target);
+        if (why.detail === 'failed') unset.set(target, appId);
         options.record({
           step: 'wire',
           resource: target,
@@ -283,7 +287,8 @@ export async function wire(options: WireOptions): Promise<string[]> {
       if (blocker !== undefined) {
         skipped.push(address);
         if (waited.includes(blocker)) waited.push(address);
-        if (unset.includes(blocker)) unset.push(address);
+        const unsetBy = unset.get(blocker);
+        if (unsetBy !== undefined) unset.set(address, unsetBy);
         if (held.includes(blocker)) held.push(address);
         options.record({
           step: 'wire',
@@ -432,19 +437,21 @@ async function makeFolders(
 
 /**
  * "the wiring failed for a; skipped b, which needs what failed; skipped c, which waits for
- * a first-run setup; skipped d, whose app's first-run setup failed". A resource skipped
- * because of a setup didn't fail anything here: the bootstrap step said what did.
+ * a first-run setup; skipped d, whose app's first-run setup failed; skipped e, which needs
+ * f, whose first-run setup failed". A resource skipped because of a setup didn't fail
+ * anything here: the bootstrap step said what did. `unset` gives, by address, the app
+ * whose setup failed.
  */
 function failureMessage(
   failed: readonly string[],
   skipped: readonly string[],
   waited: readonly string[],
-  unset: readonly string[],
+  unset: ReadonlyMap<string, string>,
   held: readonly string[],
 ): string {
   const after = skipped.filter(
     (address) =>
-      !waited.includes(address) && !unset.includes(address) && !held.includes(address),
+      !waited.includes(address) && !unset.has(address) && !held.includes(address),
   );
   const because =
     after.length === 0
@@ -454,15 +461,33 @@ function failureMessage(
     waited.length === 0
       ? ''
       : `; skipped ${waited.join(', ')}, which ${waited.length === 1 ? 'waits' : 'wait'} for a first-run setup`;
-  const unsetUp =
-    unset.length === 0
-      ? ''
-      : `; skipped ${unset.join(', ')}, whose app's first-run setup failed`;
+  /** Its own resources, then, by app, the others that need one of them. */
+  const own = [...unset].filter(([address, app]) => ownedBy(address, app));
+  const needing = new Map<string, string[]>();
+  for (const [address, app] of unset) {
+    if (!ownedBy(address, app)) needing.set(app, [...(needing.get(app) ?? []), address]);
+  }
+  const unsetUp = [
+    ...(own.length === 0
+      ? []
+      : [
+          `; skipped ${own.map(([address]) => address).join(', ')}, whose app's first-run setup failed`,
+        ]),
+    ...[...needing].map(
+      ([app, addresses]) =>
+        `; skipped ${addresses.join(', ')}, which ${addresses.length === 1 ? 'needs' : 'need'} ${app}, whose first-run setup failed`,
+    ),
+  ].join('');
   const heldUp =
     held.length === 0
       ? ''
       : `; skipped ${held.join(', ')}, whose app's first-run setup is held`;
   return `the wiring failed for ${failed.join(', ')}${because}${waits}${unsetUp}${heldUp}`;
+}
+
+/** Whether `address` ("<app>.<resource>", or "<app>" for one with none) is `app`'s. */
+function ownedBy(address: string, app: string): boolean {
+  return address === app || address.startsWith(`${app}.`);
 }
 
 /** The managed fields only: what resources.json keeps. */

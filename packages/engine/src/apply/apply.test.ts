@@ -1434,7 +1434,12 @@ describe('apply: qBittorrent behind Gluetun', () => {
     expect(result.plan.containers.find((c) => c.service === 'gluetun')?.action).toBe(
       'recreate',
     );
-    expect(docker.calls.filter((c) => c.startsWith('stop'))[0]).toContain('gluetun');
+    // qBittorrent, in Gluetun's network, is recreated with it (its hash names Gluetun's
+    // container): never left on the old network.
+    expect(result.plan.containers.find((c) => c.service === 'qbittorrent')?.action).toBe(
+      'recreate',
+    );
+    expect(docker.calls.filter((c) => c.startsWith('stop'))).toEqual(['stop gluetun']);
     expect(written).toBe(`key=${'9'.repeat(32)}\n`);
     expect(docker.calls.indexOf('up')).toBeGreaterThan(
       docker.calls.findIndex((c) => c.startsWith('stop')),
@@ -2363,6 +2368,40 @@ describe('apply: first-run setup before the ports are published', () => {
     // Only the start step's up: no publishing one.
     expect(ups).toEqual(['jellyfin unpublished, setup open']);
     expect((await readSecretStore(home)).apps.jellyfin).toEqual({ apiKey: SET_UP_KEY });
+    // A failure to publish stops the wiring, as a failure to reach the apps does.
+    expect(result.actions.slice(-3).map((a) => [a.step, a.result])).toEqual([
+      ['bootstrap', 'failed'],
+      ['wire', 'skipped'],
+      ['verify', 'skipped'],
+    ]);
+  });
+
+  it('stops the wiring when publishing fails after a setup failed too', async () => {
+    const { home, setup, docker, runtime, extra } = await setUpStack();
+    // Its setup fails, then the publishing up can't step off the network: the step's
+    // failure is the one that stops the wiring, not the setup's, which wouldn't.
+    setup.state.refuse = 'fake refusal';
+    let leaves = 0;
+    const failing: Runtime = {
+      ...runtime,
+      leaveWiring: () => {
+        leaves += 1;
+        return leaves === 1
+          ? docker.leaveWiring()
+          : Promise.reject(new RuntimeError('could not leave fake_wiring: fake'));
+      },
+    };
+    const result = await apply(options(home, failing, extra));
+    expect(result.outcome).toBe('failed');
+    expect(result.actions.slice(-3).map((a) => [a.step, a.result])).toEqual([
+      ['bootstrap', 'failed'],
+      ['wire', 'skipped'],
+      ['verify', 'skipped'],
+    ]);
+    expect(result.diagnostics.at(-1)).toMatchObject({
+      code: 'apply.bootstrap-failed',
+      message: 'could not leave fake_wiring: fake',
+    });
   });
 });
 
