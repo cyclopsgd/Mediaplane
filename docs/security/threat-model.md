@@ -354,13 +354,22 @@ What remains:
   answers only the address the name `mediaplane` has there.
 - A compromised app can answer Mediaplane's calls with anything it likes, such as a
   setting that looks right but isn't.
-- SQLite opens the database by the name of the file Mediaplane holds open, not by that
-  open file. A compromised Jellyfin that puts another file, or a named pipe, at that
-  name in the instant between SQLite looking it up and opening it can make SQLite read
-  that one, or wait on the pipe, which hangs `plan`. Mediaplane checks again once SQLite
-  has the file, so another file is refused, unless it was swapped back as quickly; a
-  pipe can't be checked before the wait. Nothing is written either way. A file swapped
-  in at any other time is never what SQLite opens.
+- A compromised Jellyfin can still hang `plan`, `drift` or `keep` while they read its
+  database's key, with a named pipe:
+  - one put at the database's own name in the instant between SQLite looking up the
+    file Mediaplane holds open and opening it by that name;
+  - or one put in place of its write-ahead log or index (`-wal`, `-shm`) after
+    Mediaplane checked them, before SQLite opens them at its first read. That window is
+    wider: a pipe at `-wal` hangs the read (probed).
+
+  It is a hang, never a read or a write through the pipe. Another file put at the
+  database's name in that instant can be read instead, unless Mediaplane's check after
+  SQLite's open sees it; and a folder on the way swapped for a link and back as quickly
+  can do the same. Such a read is bounded by the fixed `ApiKeys` query, and a key that
+  is another app's is refused. Nothing is written either way. A file swapped in at the
+  database's path at any other time is never what SQLite opens. Reading the database in
+  a process of its own, with a deadline, is S10b's.
+
 - Sonarr and Radarr hold qBittorrent's key, as their download client needs, so a
   compromised one can drive qBittorrent: add a torrent, or change its settings.
 - Prowlarr holds Sonarr's and Radarr's keys, as its links need, so a compromised Prowlarr

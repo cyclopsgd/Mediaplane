@@ -93,8 +93,11 @@ the app's key, which it recovered. `mediaplane credentials` shows the new one on
     says its setup is done, it signs in through nothing: it is checked with its own key,
     as above, published, and wired but for what needs Jellyfin's resources. If not, it
     is held too, without its port, while Jellyfin is held, or hasn't the new password
-    yet, with a `bootstrap.needs-password` warning of its own that names Jellyfin. The
-    `apply` after Jellyfin has the password sets Seerr up.
+    yet, with a `bootstrap.needs-password` warning of its own that names Jellyfin, and
+    the `apply` that holds it exits 1, through its verify step, which finds Seerr's setup
+    still to do. When Jellyfin only lacks the password, that same `apply` sets it through
+    Jellyfin's key; when Jellyfin is held, a way out below comes first. The `apply` after
+    Jellyfin has the password sets Seerr up.
 
   Whenever `apply` generates the admin password (after a lost `state/`, or with
   `--rotate`), it saves, in the same write, the ids of every app that holds the shared

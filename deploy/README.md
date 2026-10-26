@@ -389,11 +389,13 @@ release's file is the update.
 **Going back to an earlier release** is the same, with that release's deploy files. It
 too leaves the stack as it is. Each release reads the state a later one wrote
 (`state/secrets.json`, `state/resources.json`, the history records), keeps the fields it
-doesn't know as they are, and doesn't act on them. So an earlier release may do once
-what a later one knows not to: one that doesn't know `shared.adminPasswordNotIn` (the
-apps that lack a new admin password) doesn't hold a Jellyfin listed there, and signs in
-to it with the new password, which Jellyfin refuses, once, in its activity log. Back on
-the later release, the list is as it was.
+doesn't know as they are, and doesn't act on them. So an earlier release may do what a
+later one knows not to. One that doesn't know `shared.adminPasswordNotIn` (the apps that
+lack a new admin password) signs in to each app listed there with the new password, on
+each `apply`, `plan` and `drift`, until a later release has set it: a refusal in
+Jellyfin's activity log, a failed sign-in in the arrs', and one more towards
+qBittorrent's ban of Mediaplane's address. Back on the later release, the list is as it
+was, and that release sets the password through each app's key.
 
 **From a checkout:** pull, then run the installer again. It rebuilds the image and
 recreates Mediaplane's container (and the proxy's, if its pin changed):
@@ -434,9 +436,9 @@ An update that brings Slice 10a (recovery) changes three things you may see:
   Radarr or Prowlarr `config.xml` without `ApiKey`, a `qBittorrent.conf` without
   `WebUI\APIKey`, or a Gluetun `auth/config.toml` without Mediaplane's role used to stop
   `plan` (`<app>.not-seeded`); a key file that holds another key than Mediaplane's was
-  left as it was. Now `plan` lists the key under `Keys to put back in their apps' own
-files`, and the next `apply` stops the app, writes the key there, and starts it once
-  more. Gluetun's restart restarts qBittorrent too. A file Mediaplane can't write is
+  left as it was. Now `plan` lists the key under
+  `Keys to put back in their apps' own files`, and the next `apply` stops the app, writes
+  the key there, and starts it once more. Gluetun's restart restarts qBittorrent too. A file Mediaplane can't write is
   `keys.restore`; the [rebuilding a host runbook](../docs/runbooks/rebuilding-a-host.md)
   says what to do.
 - **A Jellyfin key deleted in its dashboard is made again.** `plan` lists Jellyfin's
@@ -448,7 +450,11 @@ files`, and the next `apply` stops the app, writes the key there, and starts it 
   key or put one back: the record carries a `recover` or `restore` list, which that
   image's schema refuses. `mediaplane history` lists such a record as unreadable, and
   `status` shows the newest record it can read as the last apply. The records stay where
-  they are, and this version reads them again. Nothing else reads them.
+  they are, and this version reads them again. Nothing else reads them. Such an image
+  also refuses `state/secrets.json` while it lists `shared.adminPasswordNotIn`, and every
+  command then stops: an `apply` of this version leaves the list only when it stopped
+  before every app had a new admin password. Run this version's `apply` until the list is
+  gone first, or take the list out of the file, keeping it valid JSON.
 
 An update that brings Seerr's wiring treats a Seerr you set up by hand before it as one
 Mediaplane has no record of. The next `apply` recreates it once, unpublished, and checks

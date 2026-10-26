@@ -2122,8 +2122,11 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     Mediaplane's user, in Jellyfin's folder (probed). Nothing is written. Mediaplane
     opens the database itself, without following a link or waiting on a pipe, checks it,
     and gives SQLite that open file (`/proc/self/fd/<fd>`), so a file swapped in at its
-    path is never what SQLite reads; a `-wal` or `-shm` that is a link, through which
-    SQLite could write, stops the read. What remains is in the threat model (T4).
+    path, once checked, is not what SQLite reads; a `-wal` or `-shm` that is a link,
+    through which SQLite could write, stops the read. What remains (T4 in the threat
+    model): a compromised Jellyfin can still hang the read with a pipe, at the database's
+    name in the instant SQLite opens it, or in place of `-wal` after the check, though
+    never read or write through one. A deadline on the read is S10b's.
   - **Fail closed.** A key file that is there but can't be read (one larger than 1 MiB
     included), or holds a key the store can't keep, stops `plan` (`keys.unrecoverable`):
     a new key would lock Mediaplane out of the app, which still holds the old one. So

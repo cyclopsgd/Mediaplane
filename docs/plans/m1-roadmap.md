@@ -1016,6 +1016,14 @@ password, which are S3c's (and listed again below).
     them too;
   - the indexers end-to-end test could check that `appdata/flaresolverr` is owned by
     the stack's user and group (1000), replayed on both Composes.
+- **From S10a's reviews, for S10b:**
+  - read Jellyfin's database in a process of its own, with a deadline, so that a pipe
+    a compromised Jellyfin puts at the database or its `-wal` can't hang `plan` (threat
+    model, T4). That is a new way for the engine to start a process, so it gets its own
+    design;
+  - the pinned `--json` contract says what `history <id> --json` prints of a later
+    release's record. Until then it prints `mediaplane.change/v1`'s fields only, and
+    the fields it doesn't know stay in the file.
 - **Before the first real migration** of `stack.yaml` (none is planned, S10a and S10b
   included; spec §11, Slice 9): make the commands that only read `stack.yaml`
   (`credentials`, `vpn-check`, `plex-login`) give the old-version warning, which they
