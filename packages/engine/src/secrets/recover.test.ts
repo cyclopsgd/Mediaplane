@@ -303,6 +303,7 @@ describe('recoverKeys', () => {
         { app: 'jellyfin', name: 'apiKey', value: 'd'.repeat(32) },
         { app: 'sonarr', name: 'apiKey', value: KEY },
       ],
+      unfound: [],
       diagnostics: [],
     });
     // One the store holds is the store's.
@@ -319,6 +320,7 @@ describe('recoverKeys', () => {
     const stack = stackIn(await homeWith('sonarr', 'config.xml', '<Config/>'));
     expect(await recoverKeys(stack, emptySecretStore(), true)).toEqual({
       recovered: [],
+      unfound: [],
       diagnostics: [],
     });
   });
@@ -435,9 +437,11 @@ describe('recoverKeys', () => {
     // With the password the app has, its setup signs in to find the key: nothing to say.
     expect(await recoverKeys(stack, emptySecretStore(), false)).toEqual({
       recovered: [],
+      unfound: [],
       diagnostics: [],
     });
     const lost = await recoverKeys(stack, emptySecretStore(), true);
+    expect(lost.unfound).toEqual(['jellyfin']);
     expect(lost.diagnostics).toEqual([
       expect.objectContaining({
         severity: 'warning',
@@ -453,7 +457,7 @@ describe('recoverKeys', () => {
         emptySecretStore(),
         true,
       ),
-    ).toEqual({ recovered: [], diagnostics: [] });
+    ).toEqual({ recovered: [], unfound: [], diagnostics: [] });
   });
 });
 

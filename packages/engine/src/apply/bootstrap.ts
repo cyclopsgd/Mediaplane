@@ -16,6 +16,7 @@ import { NO_PLEX_TV, type PlexTv } from '../plextv/client';
 import type { ResolvedApp, ResolvedStack } from '../resolver/resolve';
 import { RuntimeError, type Runtime } from '../runtime/types';
 import { adminLogin } from '../secrets/admin';
+import { withPasswordNotIn } from '../secrets/admin';
 import { writeSecretStore, type SecretStore } from '../secrets/store';
 import { givenKeys } from '../secrets/values';
 import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
@@ -241,6 +242,12 @@ export async function bootstrapApps(options: BootstrapOptions): Promise<Bootstra
     const secret = app.def.bootstrap?.secret;
     if (result.key !== undefined && secret !== undefined) {
       store = withSecret(store, app.def.id, secret, result.key);
+      // Its setup signed in as the shared admin, or made it: the app has the password, so
+      // it is no longer one that never had it (shared.adminPasswordNotIn).
+      store = withPasswordNotIn(
+        store,
+        (store.shared?.adminPasswordNotIn ?? []).filter((id) => id !== app.def.id),
+      );
       // At once: a key the app made, and Mediaplane lost, would need making again.
       await writeSecretStore(options.home, store);
       saved.push(`${app.def.id}.${secret}`);

@@ -38,6 +38,7 @@ import {
   ADMIN_PASSWORD_PATH,
   adminLogin,
   adminPasswordToGenerate,
+  passwordNotIn,
 } from '../secrets/admin';
 import { withGeneratedSecrets } from '../secrets/generate';
 import { REBUILD_RUNBOOK, recoverKeys, withRecoveredKeys } from '../secrets/recover';
@@ -53,11 +54,10 @@ import {
 import { planAppdata } from './appdata';
 import {
   inspectBootstrap,
-  NEEDS_PASSWORD,
   setupsToMakeKeys,
   withoutSignInsToCome,
   type BootstrapChange,
-  type PasswordToGenerate,
+  type PasswordsToCome,
 } from './bootstrap';
 import { notYetHealthy, otherHomes, ownPorts, type ContainerChange } from './containers';
 import { diffFiles, type FileChange } from './files';
@@ -104,10 +104,7 @@ export interface PlanOptions {
 export const ROTATABLE: readonly string[] = [ADMIN_PASSWORD_PATH];
 
 export interface PlanResult {
-  /**
-   * False when an error stopped the plan; files and containers are then empty. The one
-   * error that stops no plan is `bootstrap.needs-password`: it leaves one app unwired.
-   */
+  /** False when any diagnostic is an error; files and containers are then empty. */
   ok: boolean;
   changed: boolean;
   files: FileChange[];
@@ -155,9 +152,9 @@ export interface PlanContext {
   secrets: string[];
   current: ContainerState[];
   /**
-   * The apps whose first-run setup would only sign in with an admin password apply is yet
-   * to generate, which they never had: not set up, and skipped by the wire step, as an
-   * app whose setup waits (`bootstrap.needs-password`).
+   * The apps whose first-run setup would sign in with an admin password they have never
+   * had: not set up, and skipped by the wire step (`bootstrap.needs-password`). Apply's
+   * keys step saves them as `shared.adminPasswordNotIn`, with the password it generates.
    */
   held: string[];
 }
@@ -236,12 +233,14 @@ export async function planStack(
   // recovery): found before anything is generated, so a lost store never locks Mediaplane
   // out of an app. From here on, the store holds them, as apply's keys step saves them.
   const newPassword = adminPasswordToGenerate(stack.config, stored);
+  // The apps that have never had the one the store holds: their sign-in stays held.
+  const notIn = passwordNotIn(stack.config, stored);
   const recovery = await recoverKeys(stack, stored, newPassword);
   diagnostics.push(...recovery.diagnostics);
   if (hasErrors(diagnostics)) return failed(diagnostics);
   const store = withRecoveredKeys(stored, recovery.recovered);
   const recover = recovery.recovered.map(({ app, name }) => `${app}.${name}`);
-  if (newPassword && recover.length > 0) {
+  if (newPassword && !rotating.password && recover.length > 0) {
     // The apps hold keys Mediaplane gave them, so it generated a password for them too,
     // which went with the store: no app keeps it but as a hash.
     diagnostics.push(
@@ -310,18 +309,17 @@ export async function planStack(
     ]);
   }
   let containers = predicted.changes;
-  // A setup that would only sign in with a password apply is yet to generate is held back,
-  // with an error that names its app: the rest of the stack is still planned and wired.
-  const toGenerate: PasswordToGenerate | undefined = !newPassword
-    ? undefined
-    : rotating.password
-      ? 'rotate'
-      : 'generate';
-  const setups = await inspectBootstrap(stack, store, toGenerate);
-  /** The errors for the setups held back, which stop no plan: said with the result. */
-  const heldBack = setups.diagnostics.filter((d) => d.code === NEEDS_PASSWORD);
-  diagnostics.push(...setups.diagnostics.filter((d) => d.code !== NEEDS_PASSWORD));
-  if (hasErrors(diagnostics)) return failed([...diagnostics, ...heldBack]);
+  // A setup that would sign in with an admin password its app has never had is held back,
+  // with a warning that names the app: the rest of the stack is still planned and wired.
+  // Under --rotate, one whose app has the password Mediaplane holds stops the plan.
+  const toCome: PasswordsToCome = {
+    ...(newPassword ? { toGenerate: rotating.password ? 'rotate' : 'generate' } : {}),
+    notIn,
+    explained: recovery.unfound,
+  };
+  const setups = await inspectBootstrap(stack, store, toCome);
+  diagnostics.push(...setups.diagnostics);
+  if (hasErrors(diagnostics)) return failed(diagnostics);
   let bootstrap = setups.changes;
   const held = [...setups.held];
   // An app whose setup is open starts again without its ports, whatever it runs now: up
@@ -412,6 +410,8 @@ export async function planStack(
         ...(options.only === undefined ? {} : { only: options.only }),
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
         fresh,
+        // Their resources' admin password is a change, unchecked: a sign-in would fail.
+        lacking: Object.fromEntries(notIn.map((app) => [app, [admin.password]])),
       });
       ({ drift, checks } = planned);
       wiring = planned.changes;
@@ -421,18 +421,20 @@ export async function planStack(
       const refusing = drift
         .filter((d) => d.kind === 'key' && d.source === undefined)
         .map((d) => d.resource);
-      const remade = withoutSignInsToCome(
+      const remade = await withoutSignInsToCome(
         stack,
         await setupsToMakeKeys(stack, refusing, bootstrap),
-        toGenerate,
+        toCome,
       );
       bootstrap = [...bootstrap, ...remade.changes];
       held.push(...remade.held);
-      heldBack.push(...remade.diagnostics);
+      diagnostics.push(...remade.diagnostics);
     } catch (cause) {
       if (!(cause instanceof RuntimeError)) throw cause;
       return failed([...diagnostics, dockerUnavailable(cause, options.env)]);
     }
+    // A rotation that would leave an app with a password nobody holds.
+    if (hasErrors(diagnostics)) return failed(diagnostics);
   }
   return {
     result: {
@@ -454,16 +456,17 @@ export async function planStack(
       drift,
       checks,
       bootstrap,
-      diagnostics: [...diagnostics, ...heldBack],
+      diagnostics,
     },
     context: { stack, compose, store, stored, secrets, current, held },
   };
 }
 
-/** `store` without the admin password it holds: one to generate anew. */
+/** `store` without the admin password it holds, and only that: one to generate anew. */
 function withoutPassword(store: SecretStore): SecretStore {
-  const { shared: _shared, ...rest } = store;
-  return rest;
+  const { shared, ...rest } = store;
+  const { adminPassword: _password, ...others } = shared ?? {};
+  return Object.keys(others).length === 0 ? rest : { ...rest, shared: others };
 }
 
 /**

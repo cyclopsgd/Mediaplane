@@ -31,6 +31,7 @@ import { WiringRefused } from '../runtime/docker';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
 import { readSecretStore, writeSecretStore, type SecretStore } from '../secrets/store';
 import {
+  FAKE_ADMIN,
   fakeSetUpApp,
   SET_UP_CATALOG,
   SET_UP_KEY,
@@ -2108,6 +2109,8 @@ describe('apply: first-run setup before the ports are published', () => {
     // Finished by hand, with no key stored, and a file Mediaplane can't read (a folder).
     await mkdir(join(home, 'appdata', 'jellyfin', 'setup.txt'), { recursive: true });
     Object.assign(setup.state, { done: true, admin: 'someone-else', key: SET_UP_KEY });
+    // An admin password apply has, not one to generate: its setup signs in with it.
+    await writeSecretStore(home, WITH_PASSWORD);
     const result = await run();
     expect(result.outcome).toBe('failed');
     expect(result.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
@@ -2260,16 +2263,49 @@ describe('apply: first-run setup before the ports are published', () => {
   });
 });
 
-describe('apply: no sign-in with an admin password apply is yet to generate', () => {
-  /** SET_UP_CATALOG, with Sonarr's FAKE_LOGIN, to be wired past Jellyfin. */
-  const BOTH: Catalog = SET_UP_CATALOG.map((def) =>
-    def.id === 'sonarr'
-      ? { ...def, api: FIXTURE_API, integration: { after: [], resources: [FAKE_LOGIN] } }
-      : def,
-  );
+describe('apply: no sign-in with an admin password an app has never had', () => {
+  /**
+   * SET_UP_CATALOG, with Jellyfin's FAKE_ADMIN and a key it keeps in appdata/jellyfin/key.txt
+   * (absent until a test writes it), and Sonarr's FAKE_LOGIN, wired past Jellyfin.
+   */
+  const BOTH: Catalog = SET_UP_CATALOG.map((def) => {
+    if (def.id === 'sonarr') {
+      return {
+        ...def,
+        api: FIXTURE_API,
+        integration: { after: [], resources: [FAKE_LOGIN] },
+      };
+    }
+    if (def.id === 'jellyfin') {
+      return {
+        ...def,
+        integration: { after: [], resources: [FAKE_ADMIN] },
+        keyFiles: {
+          apiKey: { path: 'key.txt', read: (text: string) => /^(\w+)$/m.exec(text)?.[1] },
+        },
+      };
+    }
+    return def;
+  });
   /** Another random source: what apply generates anew differs from the first apply's. */
   const other = (size: number) => Buffer.alloc(size, 0xcd);
   const REBUILD = runbookUrl('rebuilding-a-host');
+  /** What plan says of a Jellyfin held back, after a lost store. */
+  const HELD = {
+    severity: 'warning',
+    code: 'bootstrap.needs-password',
+    message:
+      "jellyfin takes no key Mediaplane holds, and only its first-run setup can find one, by signing in as the shared admin; but jellyfin has never had the admin password Mediaplane gives the apps, so apply doesn't sign in to it, and leaves it unwired",
+    hint: `set admin.password to a file holding the password jellyfin's admin has, or make an API key named Mediaplane in jellyfin, then run apply again; see ${REBUILD}`,
+  };
+  /** The wire step's skip of a held app's resource. */
+  const SKIPPED = {
+    step: 'wire',
+    resource: 'jellyfin.admin',
+    result: 'skipped',
+    detail:
+      "jellyfin's first-run setup is held: it needs the admin password jellyfin has",
+  };
 
   /** FAKE_SETUP's Jellyfin and a fake Sonarr, each on its own fake server. */
   async function twoApps(catalog: Catalog = BOTH) {
@@ -2294,46 +2330,151 @@ describe('apply: no sign-in with an admin password apply is yet to generate', ()
     return { home, setup, sonarr, run, planned, signIns };
   }
 
-  it('signs in to no app whose key went with the store, skips it with an error, and wires the rest', async () => {
-    const { home, sonarr, run, planned, signIns } = await twoApps();
-    expect((await run()).outcome).toBe('success');
-    const signedIn = signIns();
-    await rm(join(home, SECRETS_PATH));
-    const shown = await planned({ random: other });
+  /** A stack applied once, then its store lost, and applied again: Jellyfin held. */
+  async function heldAfterLostStore() {
+    const stack = await twoApps();
+    expect((await stack.run()).outcome).toBe('success');
+    const old = stack.setup.state.password;
+    expect(old !== '', 'Jellyfin has an admin password').toBe(true);
+    await rm(join(stack.home, SECRETS_PATH));
+    const signedIn = stack.signIns();
+    const shown = await stack.planned({ random: other });
+    const result = await stack.run({ random: other });
+    return { ...stack, old, signedIn, shown, result };
+  }
+
+  it('holds back the sign-in of an app whose key went with the store, with a warning, and wires the rest', async () => {
+    const { home, setup, sonarr, old, shown, result } = await heldAfterLostStore();
     expect(shown.ok).toBe(true);
     expect(shown.secrets.generate).toContain('admin.password');
     // Jellyfin's setup is done: only a sign-in, with a password it never had, is left.
     expect(shown.bootstrap).toEqual([]);
-    expect(shown.diagnostics.filter((d) => d.severity === 'error')).toEqual([
-      expect.objectContaining({
-        code: 'bootstrap.needs-password',
-        message: expect.stringContaining("doesn't sign in to jellyfin") as string,
-        hint: expect.stringContaining(REBUILD) as string,
-      }),
-    ]);
-    expect(shown.wiring).toContainEqual({ resource: 'jellyfin', action: 'after-start' });
-    const result = await run({ random: other });
-    expect(signIns()).toBe(signedIn);
-    expect(result.actions.find((a) => a.resource === 'jellyfin')).toMatchObject({
-      step: 'wire',
-      result: 'skipped',
-      detail: "jellyfin's first-run setup waits",
+    expect(shown.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(shown.diagnostics).toContainEqual(HELD);
+    expect(shown.wiring).toContainEqual({
+      resource: 'jellyfin.admin',
+      action: 'after-start',
     });
+    expect(result.actions.find((a) => a.resource === 'jellyfin.admin')).toEqual(SKIPPED);
     expect(result.actions.find((a) => a.resource === 'sonarr.login')).toMatchObject({
       result: 'done',
       detail: 'updated password',
     });
-    const password = (await readSecretStore(home)).shared?.adminPassword ?? '';
+    const store = await readSecretStore(home);
+    const password = store.shared?.adminPassword ?? '';
+    expect(password !== '' && password !== old, 'a new password was saved').toBe(true);
     expect(sonarr.state.password === password, 'Sonarr has the new password').toBe(true);
-    // Jellyfin is left as it is: verify says so. Never a password in what apply says.
+    // Jellyfin is left as it is, with the password it had: verify says so.
+    expect(setup.state.password === old, 'Jellyfin keeps its password').toBe(true);
+    expect(setup.state.refusedSignIns).toBe(0);
     expect(result.outcome).toBe('failed');
     expect(result.actions.at(-1)).toMatchObject({ step: 'verify', result: 'failed' });
+    // The apps that never had it, by name only, in the write that saved it.
+    const saved = JSON.parse(await readFile(join(home, SECRETS_PATH), 'utf8')) as {
+      shared: Record<string, unknown>;
+    };
+    expect(Object.keys(saved.shared).sort()).toEqual([
+      'adminPassword',
+      'adminPasswordNotIn',
+    ]);
+    expect(saved.shared.adminPasswordNotIn).toEqual(['jellyfin']);
     expect(JSON.stringify(result)).not.toContain(password);
   });
 
-  it('signs in with a rotated password to no app that refuses its key, and wires the rest', async () => {
-    const { setup, sonarr, run, planned, signIns } = await twoApps();
+  it('holds it back on every later run, never signing in with the stored password', async () => {
+    const { home, setup, planned, run, signIns, signedIn } = await heldAfterLostStore();
+    const again = await planned();
+    expect(again.ok).toBe(true);
+    expect(again.bootstrap).toEqual([]);
+    expect(again.diagnostics).toContainEqual(HELD);
+    const later = await run();
+    expect(later.actions.find((a) => a.resource === 'jellyfin.admin')).toEqual(SKIPPED);
+    expect(setup.state.refusedSignIns).toBe(0);
+    expect(signIns()).toBe(signedIn);
+    expect((await readSecretStore(home)).shared?.adminPasswordNotIn).toEqual([
+      'jellyfin',
+    ]);
+  });
+
+  it('sets the password in it through its key once it is found, and forgets it then', async () => {
+    const { home, setup, planned, run } = await heldAfterLostStore();
+    // An API key named Mediaplane made in the app, which the next plan recovers.
+    await writeFile(join(home, 'appdata', 'jellyfin', 'key.txt'), `${setup.state.key}\n`);
+    const shown = await planned();
+    expect(shown.secrets.recover).toEqual(['jellyfin.apiKey']);
+    expect(shown.bootstrap).toEqual([]);
+    expect(shown.diagnostics.map((d) => d.code)).not.toContain(
+      'bootstrap.needs-password',
+    );
+    // Not checked by a sign-in: the app has never had it.
+    expect(shown.wiring).toContainEqual({
+      resource: 'jellyfin.admin',
+      action: 'update',
+      changes: ['password'],
+    });
+    expect(shown.checks).toContainEqual({
+      resource: 'jellyfin.admin',
+      secret: 'password',
+      verdict: 'unchecked',
+      reason: 'the app has never had it: apply sets it',
+    });
+    const fixed = await run();
+    expect(fixed.outcome).toBe('success');
+    const store = await readSecretStore(home);
+    expect(setup.state.password === store.shared?.adminPassword).toBe(true);
+    expect(store.shared?.adminPasswordNotIn).toBeUndefined();
+    expect(setup.state.refusedSignIns).toBe(0);
+    expect((await run()).outcome).toBe('no-changes');
+  });
+
+  it('forgets it once its setup signs in, as when it starts afresh', async () => {
+    const { home, setup, run } = await heldAfterLostStore();
+    // Its appdata moved aside: its startup wizard is open again.
+    await rm(join(home, 'appdata', 'jellyfin', 'setup.txt'));
+    Object.assign(setup.state, { done: false, key: '', admin: '', password: '' });
+    const fresh = await run();
+    expect(fresh.outcome).toBe('success');
+    expect(fresh.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: true }]);
+    const store = await readSecretStore(home);
+    expect(setup.state.password === store.shared?.adminPassword).toBe(true);
+    expect(store.shared?.adminPasswordNotIn).toBeUndefined();
+    expect((await run()).outcome).toBe('no-changes');
+  });
+
+  it('forgets every app once admin.password names a file of your own', async () => {
+    const { home, setup, old, run } = await heldAfterLostStore();
+    await writeFile(join(home, 'secrets', 'admin'), `${old}\n`);
+    await writeFile(
+      join(home, 'stack.yaml'),
+      STACK.replace('apps:', 'admin: { password: { file: secrets/admin } }\napps:'),
+    );
+    const yours = await run();
+    expect(yours.outcome).toBe('success');
+    expect(yours.plan.bootstrap).toEqual([{ app: 'jellyfin', unpublished: false }]);
+    expect((await readSecretStore(home)).shared?.adminPasswordNotIn).toBeUndefined();
+    expect(setup.state.refusedSignIns).toBe(0);
+  });
+
+  it('rotates past an app that never had the password, which stays held', async () => {
+    const { home, planned, run } = await heldAfterLostStore();
+    const before = (await readSecretStore(home)).shared?.adminPassword ?? '';
+    const shown = await planned({ rotate: ['admin.password'] });
+    expect(shown.ok).toBe(true);
+    expect(shown.diagnostics).toContainEqual(HELD);
+    const rotated = await run({ rotate: ['admin.password'] });
+    expect(rotated.actions[0]).toMatchObject({
+      step: 'keys',
+      detail: 'generated admin.password',
+    });
+    const store = await readSecretStore(home);
+    expect((store.shared?.adminPassword ?? '') !== before).toBe(true);
+    expect(store.shared?.adminPasswordNotIn).toEqual(['jellyfin']);
+  });
+
+  it('refuses to rotate the password while an app that has it can only be signed in to', async () => {
+    const { home, setup, sonarr, run, planned, signIns } = await twoApps();
     expect((await run()).outcome).toBe('success');
+    const before = (await readSecretStore(home)).shared?.adminPassword ?? '';
     // Jellyfin's key deleted by hand, and another made: it refuses the stored one.
     setup.state.key = '7'.repeat(32);
     const signedIn = signIns();
@@ -2342,48 +2483,41 @@ describe('apply: no sign-in with an admin password apply is yet to generate', ()
       { app: 'jellyfin', unpublished: false },
     ]);
     const shown = await planned({ rotate: ['admin.password'] });
+    expect(shown.ok).toBe(false);
+    expect(shown.diagnostics).toContainEqual({
+      severity: 'error',
+      code: 'bootstrap.needs-password',
+      message:
+        'jellyfin takes no key Mediaplane holds, and only its first-run setup can find one, by signing in as the shared admin with the admin password it has: rotating that password now would leave jellyfin with one Mediaplane no longer holds',
+      hint: `run apply without --rotate first, which finds jellyfin's key, then rotate it; see ${REBUILD}`,
+    });
+    const rotated = await run({ random: other, rotate: ['admin.password'] });
+    expect(rotated.outcome).toBe('invalid');
+    expect(rotated.actions).toEqual([]);
+    // Nothing changed: no new password saved, nor set in any app.
+    expect((await readSecretStore(home)).shared?.adminPassword === before).toBe(true);
+    expect(sonarr.state.password === before, 'Sonarr keeps its password').toBe(true);
+    expect(setup.state.password === before, 'Jellyfin keeps its password').toBe(true);
+    expect(signIns()).toBe(signedIn);
+  });
+
+  it('says once why an app is left unwired when its key file holds none', async () => {
+    const { home, run, planned } = await twoApps();
+    expect((await run()).outcome).toBe('success');
+    await writeFile(join(home, 'appdata', 'jellyfin', 'key.txt'), '\n');
+    await rm(join(home, SECRETS_PATH));
+    const shown = await planned({ random: other });
     expect(shown.ok).toBe(true);
     expect(shown.bootstrap).toEqual([]);
-    expect(shown.drift).toContainEqual({
-      resource: 'jellyfin',
-      kind: 'key',
-      secret: 'apiKey',
-    });
-    expect(shown.diagnostics).toContainEqual(
-      expect.objectContaining({
-        severity: 'error',
-        code: 'bootstrap.needs-password',
-        hint: expect.stringContaining('without --rotate') as string,
-      }),
-    );
-    const rotated = await run({ random: other, rotate: ['admin.password'] });
-    expect(signIns()).toBe(signedIn);
-    expect(rotated.actions.find((a) => a.resource === 'jellyfin')).toMatchObject({
-      step: 'wire',
-      result: 'skipped',
-    });
-    expect(rotated.actions.find((a) => a.resource === 'sonarr.login')).toMatchObject({
-      result: 'done',
-      detail: 'updated password',
-    });
-    expect(sonarr.state.password !== '', 'Sonarr has a password').toBe(true);
+    expect(
+      shown.diagnostics
+        .filter((d) => d.message.includes('jellyfin'))
+        .map((d) => [d.severity, d.code]),
+    ).toEqual([['warning', 'keys.unrecoverable']]);
   });
 
   it('sets nothing up for an app whose key is recovered from its appdata, and signs in to none', async () => {
-    const catalog = BOTH.map((def) =>
-      def.id === 'jellyfin'
-        ? {
-            ...def,
-            keyFiles: {
-              apiKey: {
-                path: 'key.txt',
-                read: (text: string) => /^(\w+)$/m.exec(text)?.[1],
-              },
-            },
-          }
-        : def,
-    );
-    const { home, run, planned, signIns } = await twoApps(catalog);
+    const { home, setup, run, planned, signIns } = await twoApps();
     expect((await run()).outcome).toBe('success');
     await writeFile(join(home, 'appdata', 'jellyfin', 'key.txt'), `${SET_UP_KEY}\n`);
     await rm(join(home, SECRETS_PATH));
@@ -2395,7 +2529,12 @@ describe('apply: no sign-in with an admin password apply is yet to generate', ()
       'bootstrap.needs-password',
     );
     expect((await run({ random: other })).outcome).toBe('success');
-    expect(signIns()).toBe(signedIn);
+    // The new password, set through its key; one sign-in, by verify's plan, with it.
+    const store = await readSecretStore(home);
+    expect(setup.state.password === store.shared?.adminPassword).toBe(true);
+    expect(store.shared?.adminPasswordNotIn).toBeUndefined();
+    expect(signIns() - signedIn).toBe(1);
+    expect(setup.state.refusedSignIns).toBe(0);
     expect((await run({ random: other })).outcome).toBe('no-changes');
   });
 });

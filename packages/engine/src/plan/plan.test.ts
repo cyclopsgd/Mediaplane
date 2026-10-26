@@ -143,6 +143,7 @@ function planFor(
     catalog = fixtureCatalog,
     wiring,
     migrations,
+    rotate,
   }: {
     runtime?: Runtime;
     probe?: HostProbe;
@@ -150,6 +151,7 @@ function planFor(
     catalog?: Catalog;
     wiring?: WiringSeams;
     migrations?: readonly Migration[];
+    rotate?: readonly string[];
   } = {},
 ) {
   return plan({
@@ -161,6 +163,7 @@ function planFor(
     probe,
     ...(wiring === undefined ? {} : { wiring }),
     ...(migrations === undefined ? {} : { migrations }),
+    ...(rotate === undefined ? {} : { rotate }),
   });
 }
 
@@ -413,6 +416,36 @@ describe('plan', () => {
       // Never the key (the files' content holds the fake image digests' zeros).
       expect(JSON.stringify({ ...result, files: [] })).not.toContain('0'.repeat(32));
       expect(await readdir(join(home, 'state'))).toEqual([]);
+    });
+
+    it("doesn't say the admin password is lost when it is rotated", async () => {
+      const runtime = fakeRuntime({
+        hashes: { ok: true, hashes: HASHES },
+        containers: running(HASHES),
+      });
+      const home = await lostStore(runtime);
+      // The store kept its password, but lost Sonarr's key, which its file still holds.
+      await writeFile(
+        join(home, SECRETS_PATH),
+        JSON.stringify({
+          version: 1,
+          apps: { gluetun: { controlApiKey: '1'.repeat(32) } },
+          shared: { adminPassword: 'fake-admin-password' },
+        }),
+      );
+      const result = await planFor(home, {
+        runtime,
+        catalog: WITH_KEYS,
+        rotate: ['admin.password'],
+      });
+      expect(result).toMatchObject({ ok: true });
+      expect(result.secrets).toMatchObject({
+        generate: ['admin.password'],
+        recover: ['sonarr.apiKey'],
+      });
+      expect(result.diagnostics.map((d) => d.code)).not.toContain(
+        'secrets.admin-password-lost',
+      );
     });
 
     it('fails, rather than generate a key that would lock it out, when it cannot keep the one held', async () => {

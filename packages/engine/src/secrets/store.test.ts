@@ -141,6 +141,22 @@ describe('readSecretStore', () => {
     );
   });
 
+  it('reads the apps that never had the admin password, as names of apps only', async () => {
+    const home = await homeWithStore(
+      '{"version": 1, "apps": {}, "shared": {"adminPassword": "fake-admin-password", "adminPasswordNotIn": ["jellyfin"]}}',
+    );
+    expect((await readSecretStore(home)).shared?.adminPasswordNotIn).toEqual([
+      'jellyfin',
+    ]);
+    // Not something shaped like a secret.
+    const odd = await homeWithStore(
+      '{"version": 1, "apps": {}, "shared": {"adminPasswordNotIn": ["Not An App!"]}}',
+    );
+    await expect(readSecretStore(odd)).rejects.toThrow(
+      'is not a Mediaplane secrets file',
+    );
+  });
+
   it('rejects an unknown shared secret', async () => {
     const home = await homeWithStore(
       '{"version": 1, "apps": {}, "shared": {"fake": "fake-value"}}',
@@ -219,6 +235,42 @@ describe('writeSecretStore', () => {
       version: 1,
       apps: {},
     });
+  });
+
+  it('keeps the apps that never had the admin password, by name, sorted and once, and writes none when there are none', async () => {
+    const home = await tempDir('mediaplane-store-');
+    await writeSecretStore(home, {
+      version: 1,
+      apps: {},
+      shared: {
+        adminPassword: 'fake-admin-password',
+        adminPasswordNotIn: ['sonarr', 'jellyfin', 'sonarr'],
+      },
+    });
+    expect(JSON.parse(await readFile(join(home, SECRETS_PATH), 'utf8'))).toEqual({
+      version: 1,
+      apps: {},
+      shared: {
+        adminPassword: 'fake-admin-password',
+        adminPasswordNotIn: ['jellyfin', 'sonarr'],
+      },
+    });
+    expect((await readSecretStore(home)).shared?.adminPasswordNotIn).toEqual([
+      'jellyfin',
+      'sonarr',
+    ]);
+    await writeSecretStore(home, {
+      version: 1,
+      apps: {},
+      shared: { adminPassword: 'fake-admin-password', adminPasswordNotIn: [] },
+    });
+    expect(JSON.parse(await readFile(join(home, SECRETS_PATH), 'utf8'))).toEqual({
+      version: 1,
+      apps: {},
+      shared: { adminPassword: 'fake-admin-password' },
+    });
+    // A store from before Slice 10 has none.
+    expect((await readSecretStore(home)).shared?.adminPasswordNotIn).toBeUndefined();
   });
 
   it('never saves a key it could not read back, and keeps the store it had', async () => {

@@ -16,6 +16,9 @@ export const APP_SECRET = /^[A-Za-z0-9_]+$/;
 
 const appSecret = z.string().regex(APP_SECRET);
 
+/** An app's id, as the catalog names it ("sonarr"): never shaped like a secret. */
+const APP_ID = /^[a-z][a-z0-9-]*$/;
+
 const storeSchema = z.strictObject({
   version: z.literal(1),
   apps: z.record(z.string(), z.record(z.string(), appSecret)),
@@ -23,7 +26,18 @@ const storeSchema = z.strictObject({
    * Secrets the whole stack shares. Added in Slice 3a: older stores have none. The admin
    * password goes into an app's file only hashed, so any characters will do.
    */
-  shared: z.strictObject({ adminPassword: z.string().min(1).optional() }).optional(),
+  shared: z
+    .strictObject({
+      adminPassword: z.string().min(1).optional(),
+      /**
+       * The apps that have never had `adminPassword`, which Mediaplane generated while it
+       * couldn't set it in them: their sign-in is held until it is set through their key,
+       * or their setup signs in with it. Added in Slice 10: older stores have none. Ids of
+       * apps, never a secret.
+       */
+      adminPasswordNotIn: z.array(z.string().regex(APP_ID)).optional(),
+    })
+    .optional(),
   /**
    * The apps whose first-run setup makes no key (Seerr's), and that Mediaplane finished
    * itself, or checked and found to be its own. Added in Slice 6: older stores have none.
@@ -98,6 +112,12 @@ export async function writeSecretStore(home: string, store: SecretStore): Promis
   );
   await ensureDir(join(home, STATE_DIR), 0o700);
   const adminPassword = store.shared?.adminPassword;
+  const notIn = unique(store.shared?.adminPasswordNotIn ?? []).sort(compare);
+  const shared = {
+    ...(adminPassword === undefined ? {} : { adminPassword }),
+    // Only when there is one, as for setUp.
+    ...(notIn.length === 0 ? {} : { adminPasswordNotIn: notIn }),
+  };
   const setUp = unique(store.setUp ?? []).sort(compare);
   await writeFileAtomic(
     join(home, SECRETS_PATH),
@@ -105,7 +125,7 @@ export async function writeSecretStore(home: string, store: SecretStore): Promis
       {
         version: 1,
         apps,
-        ...(adminPassword === undefined ? {} : { shared: { adminPassword } }),
+        ...(Object.keys(shared).length === 0 ? {} : { shared }),
         // Only when there is one, so a store without any is written as it always was.
         ...(setUp.length === 0 ? {} : { setUp }),
       },

@@ -153,6 +153,62 @@ describe('planWiring', () => {
     expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
   });
 
+  it("says why the other secrets of a resource that holds a new one aren't checked, and takes a password the app never had as one", async () => {
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const twoSecrets: ResourceSpec = {
+      ...FAKE_LOGIN,
+      secrets: ['password', 'token'],
+      desired: ({ admin }) => ({
+        name: 'login',
+        fields: { user: admin.username },
+        secrets: { password: admin.password, token: 'fake-token' },
+      }),
+    };
+    const known: KnownResources = {
+      'sonarr.login': { ...RECORDED['sonarr.login'], secrets: ['password', 'token'] },
+    } as KnownResources;
+    const fresh = await planWiring(
+      options(sonarr, {
+        stack: sonarrWith([twoSecrets]),
+        known,
+        admin: { username: 'admin', password: 'fake-new-password' },
+        fresh: ['fake-new-password'],
+      }),
+    );
+    expect(fresh.checks).toEqual([
+      {
+        resource: 'sonarr.login',
+        secret: 'password',
+        verdict: 'unchecked',
+        reason: 'apply generates it, and sets it: no app holds it yet',
+      },
+      {
+        resource: 'sonarr.login',
+        secret: 'token',
+        verdict: 'unchecked',
+        reason: 'apply sets it with the new one',
+      },
+    ]);
+    // The password Mediaplane holds, which the app has never had (adminPasswordNotIn).
+    const lacking = await planWiring(
+      options(sonarr, {
+        stack: sonarrWith([twoSecrets]),
+        known,
+        lacking: { sonarr: [PASSWORD] },
+      }),
+    );
+    expect(lacking.changes).toEqual([
+      { resource: 'sonarr.login', action: 'update', changes: ['password'] },
+    ]);
+    expect(lacking.checks[0]).toEqual({
+      resource: 'sonarr.login',
+      secret: 'password',
+      verdict: 'unchecked',
+      reason: 'the app has never had it: apply sets it',
+    });
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
+  });
+
   it('checks no secret while a field differs: the update sets them all the same', async () => {
     // The password is right, but under another user name: a sign-in as the wanted user
     // would fail, and name a password that is fine.

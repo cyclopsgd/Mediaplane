@@ -72,6 +72,24 @@ export interface WireOptions {
    * skipped, and so is what requires them, as for one that waits.
    */
   failed?: readonly string[];
+  /**
+   * Apps whose first-run setup the plan held back, since it would sign in with an admin
+   * password they have never had (`bootstrap.needs-password`): skipped as one that waits.
+   */
+  held?: readonly string[];
+  /**
+   * The values of the secrets apply generated in this run: no app holds one yet, so a
+   * resource holding one is set, never checked (ExamineOptions.fresh).
+   */
+  fresh?: readonly string[];
+  /**
+   * The apps that have never had the admin password Mediaplane holds
+   * (`shared.adminPasswordNotIn`): a resource of theirs that holds it is set, never
+   * checked (ExamineOptions.lacks), and `passwordSet` is told once it is.
+   */
+  notIn?: readonly string[];
+  /** Told of each app of `notIn` once a resource of its own is given the admin password. */
+  passwordSet?: (app: string) => Promise<void>;
   /** What the run finds in the apps' answers (FoundSecrets); the step's own, by default. */
   found?: FoundSecrets;
   seams?: WiringSeams;
@@ -152,6 +170,8 @@ export async function wire(options: WireOptions): Promise<string[]> {
   const waited: string[] = [];
   /** Skipped because an app's first-run setup failed, or because they need what is. */
   const unset: string[] = [];
+  /** Skipped because an app's first-run setup is held, or because they need what is. */
+  const held: string[] = [];
   const done: string[] = [];
   /** The apps that took Mediaplane's key: what a check may ask of another app. */
   const checked = new Map<string, AppApi>();
@@ -207,20 +227,29 @@ export async function wire(options: WireOptions): Promise<string[]> {
   for (const app of order) {
     const ctx: WiringContext = { stack, app, admin, keys: appKeys };
     const targets = wiringTargets(ctx);
-    const waits = options.waiting?.includes(app.def.id) === true;
-    if (waits || options.failed?.includes(app.def.id) === true) {
+    const appId = app.def.id;
+    const why = options.held?.includes(appId)
+      ? { list: held, detail: `is held: it needs the admin password ${appId} has` }
+      : options.waiting?.includes(appId)
+        ? { list: waited, detail: 'waits' }
+        : options.failed?.includes(appId)
+          ? { list: unset, detail: 'failed' }
+          : undefined;
+    if (why !== undefined) {
       for (const target of targets) {
         skipped.push(target);
-        (waits ? waited : unset).push(target);
+        why.list.push(target);
         options.record({
           step: 'wire',
           resource: target,
           result: 'skipped',
-          detail: `${app.def.id}'s first-run setup ${waits ? 'waits' : 'failed'}`,
+          detail: `${appId}'s first-run setup ${why.detail}`,
         });
       }
       continue;
     }
+    /** The admin password, for an app that has never had it: set, never checked. */
+    const lacks = options.notIn?.includes(appId) === true ? [admin.password] : [];
     const client = reached.get(app.def.id);
     if (client === undefined) {
       for (const target of targets)
@@ -255,6 +284,7 @@ export async function wire(options: WireOptions): Promise<string[]> {
         skipped.push(address);
         if (waited.includes(blocker)) waited.push(address);
         if (unset.includes(blocker)) unset.push(address);
+        if (held.includes(blocker)) held.push(address);
         options.record({
           step: 'wire',
           resource: address,
@@ -280,6 +310,8 @@ export async function wire(options: WireOptions): Promise<string[]> {
         result = await examine(spec, client.api, ctx, known[address], {
           refused: planned?.action === 'update' ? (planned.changes ?? []) : [],
           context,
+          ...(options.fresh === undefined ? {} : { fresh: options.fresh }),
+          lacks,
         });
         if (result === undefined) continue;
         if (result.action === 'unchanged') {
@@ -337,12 +369,28 @@ export async function wire(options: WireOptions): Promise<string[]> {
           : DONE[result.action];
       done.push(`${address} ${what}`);
       options.record({ step: 'wire', resource: address, result: 'done', detail: what });
+      // The app has the admin password now: it is no longer one that never had it.
+      if (
+        lacks.length > 0 &&
+        Object.values(result.desired.secrets).includes(admin.password)
+      ) {
+        lacks.length = 0;
+        try {
+          await options.passwordSet?.(appId);
+        } catch (cause) {
+          throw stop([], cause, 'state/secrets.json could not be saved: ');
+        }
+      }
     }
   }
   if (failed.length > 0) {
-    throw new WiringFailed(failureMessage(failed, skipped, waited, unset), diagnostics, {
-      hint: HINTS.resources,
-    });
+    throw new WiringFailed(
+      failureMessage(failed, skipped, waited, unset, held),
+      diagnostics,
+      {
+        hint: HINTS.resources,
+      },
+    );
   }
   return done;
 }
@@ -392,9 +440,11 @@ function failureMessage(
   skipped: readonly string[],
   waited: readonly string[],
   unset: readonly string[],
+  held: readonly string[],
 ): string {
   const after = skipped.filter(
-    (address) => !waited.includes(address) && !unset.includes(address),
+    (address) =>
+      !waited.includes(address) && !unset.includes(address) && !held.includes(address),
   );
   const because =
     after.length === 0
@@ -408,7 +458,11 @@ function failureMessage(
     unset.length === 0
       ? ''
       : `; skipped ${unset.join(', ')}, whose app's first-run setup failed`;
-  return `the wiring failed for ${failed.join(', ')}${because}${waits}${unsetUp}`;
+  const heldUp =
+    held.length === 0
+      ? ''
+      : `; skipped ${held.join(', ')}, whose app's first-run setup is held`;
+  return `the wiring failed for ${failed.join(', ')}${because}${waits}${unsetUp}${heldUp}`;
 }
 
 /** The managed fields only: what resources.json keeps. */

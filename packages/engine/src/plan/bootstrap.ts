@@ -20,18 +20,28 @@ export interface BootstrapChange {
 export interface BootstrapPlan {
   changes: BootstrapChange[];
   /**
-   * The apps whose setup would only sign in with an admin password apply is yet to
-   * generate (withoutSignInsToCome): not set up, and their resources skipped.
+   * The apps whose setup would sign in with an admin password they have never had
+   * (withoutSignInsToCome): not set up, and their resources skipped.
    */
   held: string[];
   diagnostics: Diagnostic[];
 }
 
-/**
- * Why the admin password is one apply is yet to generate: state/secrets.json has none, as
- * after a lost store (`generate`), or `--rotate admin.password` (`rotate`).
- */
-export type PasswordToGenerate = 'generate' | 'rotate';
+/** Which apps the admin password apply signs in with is one they have never had. */
+export interface PasswordsToCome {
+  /**
+   * Apply generates it in this run, so no app has it: state/secrets.json has none, as
+   * after a lost store (`generate`), or `--rotate admin.password` (`rotate`).
+   */
+  toGenerate?: 'generate' | 'rotate';
+  /** The apps that have never had the one the store holds (`shared.adminPasswordNotIn`). */
+  notIn?: readonly string[];
+  /**
+   * The apps whose being left unwired another diagnostic explains already (Jellyfin's
+   * `keys.unrecoverable`): held with no warning of their own. Never an error's.
+   */
+  explained?: readonly string[];
+}
 
 /**
  * Each app with a first-run setup (`bootstrap`) that apply will finish: one whose key the
@@ -45,13 +55,13 @@ export type PasswordToGenerate = 'generate' | 'rotate';
  * or before Mediaplane knew, starts unpublished, and its setup checks it is Mediaplane's.
  * An app with a setup that runs inside another app's network is an error: that app
  * publishes its ports, and `ports: !reset []` on the app's own service can't unpublish
- * them. With an admin password apply is yet to generate (`toGenerate`), a setup that
- * would only sign in is held back (withoutSignInsToCome). Reads only; writes nothing.
+ * them. A setup that would sign in with an admin password the app has never had
+ * (`toCome`) is held back (withoutSignInsToCome). Reads only; writes nothing.
  */
 export async function inspectBootstrap(
   stack: ResolvedStack,
   store: SecretStore,
-  toGenerate?: PasswordToGenerate,
+  toCome: PasswordsToCome = {},
 ): Promise<BootstrapPlan> {
   const changes: BootstrapChange[] = [];
   const diagnostics: Diagnostic[] = [];
@@ -99,7 +109,7 @@ export async function inspectBootstrap(
       unpublished: setup.secret === undefined || done !== true,
     });
   }
-  const kept = withoutSignInsToCome(stack, changes, toGenerate);
+  const kept = await withoutSignInsToCome(stack, changes, toCome);
   return {
     changes: kept.changes,
     held: kept.held,
@@ -108,50 +118,72 @@ export async function inspectBootstrap(
 }
 
 /**
- * `changes` without the setups that would only sign in, as the shared admin, to find the
- * key the setup made (published, its secret the app's API key), when the admin password
- * is one apply is yet to generate (`toGenerate`): the app has never had it, so the
- * sign-in could only fail, leaving a mark in the app (decision 15). Each such app is
- * `held`, with an error naming it: its resources are skipped. A setup that starts its app
- * unpublished makes the admin, or signs in through another app, and is kept. Pure.
+ * `changes` without the setups that would sign in, as the shared admin, with an admin
+ * password the app has never had (`toCome`): one generated in this run, or the one the
+ * store holds for an app listed in `notIn`. Such a sign-in could only fail, leaving a mark
+ * in the app (decision 15). Only a setup whose secret is the app's API key signs in so,
+ * to find the key, unless its startup wizard is shown to be open (its appdata says it
+ * isn't done): then the setup makes the admin, with that password. Each held app's
+ * resources are skipped. A warning names it, unless `explained` does; under `rotate`, an
+ * app that still has the password Mediaplane holds is an error, which stops the plan:
+ * rotating would leave it with a password Mediaplane no longer holds. Reads only.
  */
-export function withoutSignInsToCome(
+export async function withoutSignInsToCome(
   stack: ResolvedStack,
   changes: readonly BootstrapChange[],
-  toGenerate: PasswordToGenerate | undefined,
-): { changes: BootstrapChange[]; held: string[]; diagnostics: Diagnostic[] } {
+  toCome: PasswordsToCome,
+): Promise<{ changes: BootstrapChange[]; held: string[]; diagnostics: Diagnostic[] }> {
   const kept: BootstrapChange[] = [];
   const held: string[] = [];
   const diagnostics: Diagnostic[] = [];
   for (const change of changes) {
     const app = stack.apps.find((a) => a.def.id === change.app);
     const secret = app?.def.bootstrap?.secret;
-    const signsInOnly =
-      !change.unpublished && secret !== undefined && secret === app?.def.api?.key.secret;
-    if (toGenerate === undefined || app === undefined || !signsInOnly) {
+    const listed = toCome.notIn?.includes(change.app) === true;
+    const lacks = listed || toCome.toGenerate !== undefined;
+    const signsIn =
+      app !== undefined &&
+      lacks &&
+      secret !== undefined &&
+      secret === app.def.api?.key.secret &&
+      (!change.unpublished || (await appSetupDone(stack.home, app)) !== false);
+    if (app === undefined || !signsIn) {
       kept.push(change);
       continue;
     }
     held.push(change.app);
-    diagnostics.push(needsPassword(app, toGenerate));
+    if (!listed && toCome.toGenerate === 'rotate') {
+      diagnostics.push(rotateBlocked(app));
+    } else if (toCome.explained?.includes(change.app) !== true) {
+      diagnostics.push(needsPassword(app));
+    }
   }
   return { changes: kept, held, diagnostics };
 }
 
-/** The code of the error for a setup held back by withoutSignInsToCome. */
+/** The code of what plan says of a setup held back by withoutSignInsToCome. */
 export const NEEDS_PASSWORD = 'bootstrap.needs-password';
 
-/** The error for an app whose setup would sign in with a password it never had. */
-function needsPassword(app: ResolvedApp, toGenerate: PasswordToGenerate): Diagnostic {
+/** The warning for an app whose setup would sign in with a password it never had. */
+function needsPassword(app: ResolvedApp): Diagnostic {
+  const name = app.def.name;
+  return warning(
+    NEEDS_PASSWORD,
+    `${name} takes no key Mediaplane holds, and only its first-run setup can find one, by signing in as the shared admin; but ${name} has never had the admin password Mediaplane gives the apps, so apply doesn't sign in to it, and leaves it unwired`,
+    {
+      hint: `set admin.password to a file holding the password ${name}'s admin has, or make an API key named Mediaplane in ${name}, then run apply again; see ${REBUILD_RUNBOOK}`,
+    },
+  );
+}
+
+/** The error for a rotation that would leave `app` with a password nobody holds. */
+function rotateBlocked(app: ResolvedApp): Diagnostic {
   const name = app.def.name;
   return error(
     NEEDS_PASSWORD,
-    `${name} takes no key Mediaplane holds, and only its first-run setup can find one, signing in as the shared admin; but the admin password is one apply is yet to generate, which ${name} has never had. Apply doesn't sign in to ${name}, and leaves it unwired`,
+    `${name} takes no key Mediaplane holds, and only its first-run setup can find one, by signing in as the shared admin with the admin password it has: rotating that password now would leave ${name} with one Mediaplane no longer holds`,
     {
-      hint:
-        toGenerate === 'rotate'
-          ? `run apply without --rotate first, which finds ${name}'s key with the admin password it has, then rotate it; see ${REBUILD_RUNBOOK}`
-          : `set admin.password to a file holding the password ${name}'s admin has, then run apply again, which finds its key; the runbook has the other ways: ${REBUILD_RUNBOOK}`,
+      hint: `run apply without --rotate first, which finds ${name}'s key, then rotate it; see ${REBUILD_RUNBOOK}`,
     },
   );
 }

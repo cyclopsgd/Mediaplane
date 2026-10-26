@@ -26,9 +26,10 @@ import {
   type ContainerState,
   type Runtime,
 } from '../runtime/types';
+import { ADMIN_PASSWORD_PATH, passwordNotIn, withPasswordNotIn } from '../secrets/admin';
 import { withGeneratedSecrets, type RandomBytes } from '../secrets/generate';
 import { restoreKeys } from '../secrets/restore';
-import { writeSecretStore } from '../secrets/store';
+import { writeSecretStore, type SecretStore } from '../secrets/store';
 import { givenKeys, secretValues, userSecrets } from '../secrets/values';
 import { acquireLock, LockedError, type Lock } from '../state/lock';
 import { writeFileAtomic } from '../util/atomic';
@@ -176,15 +177,30 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     if (!result.ok) throw new Error(await startFailure(runtime, result.error));
   };
 
+  /** The values of the secrets the keys step generates: no app holds one yet. */
+  let generated: string[] = [];
   await steps.run('keys', async () => {
     // The plan's store holds the keys it recovered from the apps' appdata: saved with the
     // ones generated now, before anything starts (spec §5 step 4, §6.1).
     const result = withGeneratedSecrets(stack, store, options.random);
+    // With the password, in the same write: the apps the plan held back, which never had
+    // it. None when the password is yours: it isn't Mediaplane's to track.
+    const notIn = [...passwordNotIn(stack.config, result.store), ...context.held];
+    const saved = withPasswordNotIn(
+      result.store,
+      stack.config.admin.password === undefined ? notIn : [],
+    );
+    const listChanged =
+      JSON.stringify(saved.shared?.adminPasswordNotIn ?? []) !==
+      JSON.stringify(result.store.shared?.adminPasswordNotIn ?? []);
     const { recover } = shown.secrets;
-    if (result.generated.length > 0 || recover.length > 0) {
-      await writeSecretStore(home, result.store);
+    if (result.generated.length > 0 || recover.length > 0 || listChanged) {
+      await writeSecretStore(home, saved);
     }
-    store = result.store;
+    store = saved;
+    generated = result.generated
+      .map((name) => secretValue(saved, name))
+      .filter((value) => value !== '');
     const done = [
       ...(recover.length === 0 ? [] : [`recovered ${recover.join(', ')} from appdata`]),
       ...(result.generated.length === 0
@@ -293,11 +309,8 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
           ]),
     ].join('; ');
   });
-  /**
-   * The apps whose first-run setup waits: the wire step skips their resources. One held
-   * back by the plan waits for a password it has: plan's error said so.
-   */
-  let waiting: string[] = [...context.held];
+  /** The apps whose first-run setup waits: the wire step skips their resources. */
+  let waiting: string[] = [];
   /**
    * The apps whose first-run setup failed: the step fails, but the wire step still runs,
    * skipping their resources and what requires them (spec §5.1).
@@ -323,7 +336,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });
       store = set.store;
-      waiting = [...context.held, ...set.waiting.map((w) => w.app)];
+      waiting = set.waiting.map((w) => w.app);
       unset = set.failed.map((f) => f.app);
       const failure = setupFailure(set);
       if (failure !== undefined) throw failure;
@@ -356,6 +369,15 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
         planned: shown.wiring,
         waiting,
         failed: unset,
+        held: context.held,
+        fresh: generated,
+        notIn: passwordNotIn(stack.config, store),
+        // At once, as a key the bootstrap step saves: the app has the password now.
+        passwordSet: async (app) => {
+          const left = passwordNotIn(stack.config, store).filter((id) => id !== app);
+          store = withPasswordNotIn(store, left);
+          await writeSecretStore(home, store);
+        },
         found,
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
       });
@@ -626,6 +648,13 @@ async function madePrivate(path: string): Promise<boolean> {
     if (codeOf(cause) === 'EPERM') return false;
     throw cause;
   }
+}
+
+/** The value `store` holds for a secret named as plan names it ("sonarr.apiKey"). */
+function secretValue(store: SecretStore, name: string): string {
+  if (name === ADMIN_PASSWORD_PATH) return store.shared?.adminPassword ?? '';
+  const dot = name.indexOf('.');
+  return store.apps[name.slice(0, dot)]?.[name.slice(dot + 1)] ?? '';
 }
 
 function succeeded(result: CommandResult, prefix = ''): void {

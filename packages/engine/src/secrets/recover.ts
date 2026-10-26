@@ -223,15 +223,17 @@ function noKey(found: KeyFound): string | undefined {
  *   pre-start check reports.
  * - A key the app made (Jellyfin's) that can't be found is found by the app's setup, which
  *   signs in as the shared admin. That needs the password the app has: with the admin
- *   password to be generated (`newPassword`), which the app doesn't know, it is a warning.
+ *   password to be generated (`newPassword`), which the app doesn't know, it is a warning,
+ *   and the app is `unfound`: the warning says why it is left unwired.
  * Reads only; never says a key's value.
  */
 export async function recoverKeys(
   stack: ResolvedStack,
   store: SecretStore,
   newPassword: boolean,
-): Promise<{ recovered: RecoveredKey[]; diagnostics: Diagnostic[] }> {
+): Promise<{ recovered: RecoveredKey[]; unfound: string[]; diagnostics: Diagnostic[] }> {
   const recovered: RecoveredKey[] = [];
+  const unfound: string[] = [];
   const diagnostics: Diagnostic[] = [];
   for (const app of stack.apps) {
     const { id, name: appName } = app.def;
@@ -260,6 +262,7 @@ export async function recoverKeys(
         ? 'The old key is still held by the resources that use it; a new key would break them'
         : `A new key would lock Mediaplane out of ${appName}, which still holds the old one`;
       const lacks = `state/secrets.json has no ${id}.${name}, and ${where}, where ${appName} keeps it, can't give it: ${why}`;
+      if (made) unfound.push(id);
       diagnostics.push(
         made
           ? warning(
@@ -275,7 +278,7 @@ export async function recoverKeys(
       );
     }
   }
-  return { recovered, diagnostics };
+  return { recovered, unfound, diagnostics };
 }
 
 /** `store`, with each recovered key added. */

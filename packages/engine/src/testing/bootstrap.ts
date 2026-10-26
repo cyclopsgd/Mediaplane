@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { SetupWaiting } from '../apply/bootstrap';
 import type { Bootstrap, BootstrapContext, Catalog } from '../catalog/types';
+import type { ResourceSpec } from '../integrations/types';
 import { AppApiError, type AppApi } from '../http/client';
 import type { WiringSeams } from '../integrations/wiring';
 import { NO_PLEX_TV } from '../plextv/client';
@@ -34,7 +35,12 @@ export const FAKE_SETUP: Bootstrap = {
   done: { path: 'setup.txt', pattern: /^done$/m },
   open,
   async run(api, admin) {
-    if (await open(api)) await api.submit('POST', '/setup', { user: admin.username });
+    if (await open(api)) {
+      await api.submit('POST', '/setup', {
+        user: admin.username,
+        password: admin.password,
+      });
+    }
     const session = await api.signIn(
       '/signin',
       { user: admin.username, password: admin.password },
@@ -48,6 +54,43 @@ export const FAKE_SETUP: Bootstrap = {
       );
     }
     return (await api.get('/key', z.looseObject({ key: z.string() }))).key;
+  },
+};
+
+/**
+ * A resource for FAKE_SETUP's app, shaped like Jellyfin's admin: "jellyfin.admin", whose
+ * `user` is a managed field and whose `password` is a secret, set with the app's key and
+ * checked by signing in (POST /signin).
+ */
+export const FAKE_ADMIN: ResourceSpec = {
+  name: 'admin',
+  fields: ['user'],
+  secrets: ['password'],
+  desired: ({ admin }) => ({
+    name: 'admin',
+    fields: { user: admin.username },
+    secrets: { password: admin.password },
+  }),
+  async observe(api) {
+    const { user } = await api.get('/admin', z.looseObject({ user: z.string() }));
+    return user === '' ? undefined : { id: null, name: 'admin', fields: { user } };
+  },
+  async verify(api, desired) {
+    const password = desired.secrets.password ?? '';
+    const session = await api.signIn(
+      '/signin',
+      { user: String(desired.fields.user), password },
+      z.looseObject({ token: z.string() }),
+      [password],
+    );
+    return session !== undefined;
+  },
+  async create(api, desired) {
+    await api.put('/admin', { user: desired.fields.user, ...desired.secrets });
+    return { id: null };
+  },
+  async update(api, desired) {
+    await api.put('/admin', { user: desired.fields.user, ...desired.secrets });
   },
 };
 
@@ -220,6 +263,13 @@ export interface FakeSetUpState {
   keyFails: boolean;
   /** Who the setup was finished as: POST /signin refuses anyone else (401). */
   admin: string;
+  /**
+   * The admin's password, as the setup or PUT /admin set it: POST /signin refuses
+   * another (401). Empty: any will do, as for an admin made by hand.
+   */
+  password: string;
+  /** The sign-ins it refused: each a failed sign-in in the app's own log. */
+  refusedSignIns: number;
   /** Fail GET /setup, with a 500: the app can't say whether it is open. */
   openFails: boolean;
   /** Take the setup's POST, and make the key, but leave the app open all the same. */
@@ -258,6 +308,8 @@ export async function fakeSetUpApp(home: string): Promise<{
     refuse: '',
     keyFails: false,
     admin: '',
+    password: '',
+    refusedSignIns: 0,
     openFails: false,
     staysOpen: false,
     echoKey: false,
@@ -278,17 +330,37 @@ export async function fakeSetUpApp(home: string): Promise<{
     }
     if (path === '/setup' && method === 'POST') {
       if (state.refuse !== '') return { status: 400, body: { message: state.refuse } };
-      state.admin = (JSON.parse(request.body) as { user: string }).user;
+      const made = JSON.parse(request.body) as { user: string; password?: string };
+      state.admin = made.user;
+      state.password = made.password ?? '';
       state.done = !state.staysOpen;
       state.key = SET_UP_KEY;
       writeFileSync(join(home, 'appdata', 'jellyfin', 'setup.txt'), 'done\n');
       return { status: 204 };
     }
     if (path === '/signin' && method === 'POST') {
-      const { user } = JSON.parse(request.body) as { user: string };
-      return state.admin === '' || state.admin === user
-        ? { status: 200, body: { token: 'fake-session' } }
-        : { status: 401 };
+      const { user, password } = JSON.parse(request.body) as {
+        user: string;
+        password: string;
+      };
+      if (
+        (state.admin === '' || state.admin === user) &&
+        (state.password === '' || state.password === password)
+      ) {
+        return { status: 200, body: { token: 'fake-session' } };
+      }
+      state.refusedSignIns += 1;
+      return { status: 401 };
+    }
+    if (path === '/admin') {
+      if (state.key === '' || headers['x-api-key'] !== state.key) return { status: 401 };
+      if (method === 'PUT') {
+        const sent = JSON.parse(request.body) as { user: string; password: string };
+        state.admin = sent.user;
+        state.password = sent.password;
+        return { status: 200, body: {} };
+      }
+      return { status: 200, body: { user: state.admin } };
     }
     if (path === '/key') {
       return state.keyFails

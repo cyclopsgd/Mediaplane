@@ -396,6 +396,12 @@ export interface ExamineOptions {
    * failed sign-in, which counts towards qBittorrent's ban).
    */
   fresh?: readonly string[];
+  /**
+   * The values the app has never had: the admin password Mediaplane holds, for an app
+   * Mediaplane couldn't set it in (`shared.adminPasswordNotIn`). As `fresh`: a change,
+   * which apply sets, and isn't checked, since a sign-in with it could only fail.
+   */
+  lacks?: readonly string[];
 }
 
 /** Apply's VerifyContext, without another app: what a check gets by default. */
@@ -414,6 +420,18 @@ const WITH_REFUSED: Verdict = {
 const FRESH: Verdict = {
   verdict: 'unchecked',
   reason: 'apply generates it, and sets it: no app holds it yet',
+};
+
+/** Why a secret the app has never had isn't checked. */
+const LACKED: Verdict = {
+  verdict: 'unchecked',
+  reason: 'the app has never had it: apply sets it',
+};
+
+/** Why a secret beside a new one (FRESH, LACKED) isn't checked. */
+const WITH_NEW: Verdict = {
+  verdict: 'unchecked',
+  reason: 'apply sets it with the new one',
 };
 
 /** Each of the resource's secrets, with its verdict. */
@@ -515,10 +533,15 @@ export async function examine(
     record === undefined
       ? []
       : fieldDrift(spec, address, compared, record, desired, observed);
-  // A secret apply generates is new to the app: a change, set with the others.
-  const fresh = spec.secrets.filter((secret) =>
-    (options.fresh ?? []).includes(desired.secrets[secret] ?? ''),
-  );
+  // A secret apply generates, or one the app has never had, is new to the app: a change,
+  // set with the others.
+  const newVerdict = (secret: string): Verdict | undefined => {
+    const value = desired.secrets[secret] ?? '';
+    if (value === '') return undefined;
+    if ((options.fresh ?? []).includes(value)) return FRESH;
+    return (options.lacks ?? []).includes(value) ? LACKED : undefined;
+  };
+  const fresh = spec.secrets.filter((secret) => newVerdict(secret) !== undefined);
   // A field that differs makes it an update, which sets the secrets too: checking them
   // would change nothing, and could mislead. A sign-in with a user name the app doesn't
   // have yet fails as if the password were wrong.
@@ -528,9 +551,7 @@ export async function examine(
       : changes.length > 0
         ? unchecked('a managed field differs: apply sets the secrets with it')
         : fresh.length > 0
-          ? eachSecret(spec, address, (secret) =>
-              fresh.includes(secret) ? FRESH : WITH_REFUSED,
-            )
+          ? eachSecret(spec, address, (secret) => newVerdict(secret) ?? WITH_NEW)
           : await checkSecrets(spec, api, address, desired, observed, known, options);
   const refused = checks.filter((check) => check.verdict === 'refused');
   changes.push(...refused.map((check) => check.secret));
@@ -780,6 +801,8 @@ export interface PlanWiringOptions {
   only?: string;
   /** The values of the secrets apply generates (ExamineOptions.fresh). */
   fresh?: readonly string[];
+  /** By app, the values it has never had (ExamineOptions.lacks). */
+  lacking?: Readonly<Record<string, readonly string[]>>;
   seams?: WiringSeams;
 }
 
@@ -947,6 +970,9 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
           ...(only === undefined ? {} : { secrets: false }),
           ...(held === undefined ? {} : { blocked: held }),
           ...(options.fresh === undefined ? {} : { fresh: options.fresh }),
+          ...(options.lacking?.[app.def.id] === undefined
+            ? {}
+            : { lacks: options.lacking[app.def.id] }),
         });
       } catch (cause) {
         if (!(cause instanceof AppApiError)) throw cause;
