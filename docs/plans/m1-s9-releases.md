@@ -63,6 +63,11 @@ registry rate limits, Node's vulnerabilities and the Docker version CI tests), t
 decisions of 2026-10-17, and the two S8 items moved to S9 (FlareSolverr's anonymous volume,
 and a wiring network whose settings change).
 
+Revised after the controller's pre-flight scan of the first version of this plan, as its
+rulings of 2026-10-26 say: I1 to I3 and M1 to M13, each a fix. I2 took the wording route
+(the tag and the release page exist from the merge, with the way back), not draft
+releases. The decisions and tasks a ruling changed say so in their words.
+
 ## How to read the code in this plan
 
 - **A new file is given whole** (`Create`). Write it as shown. A shell script then gets
@@ -185,8 +190,15 @@ it wasn't: nothing was pushed, published or sent to GitHub or plex.tv.
    request publishes nothing; and release-please runs in `cyclopsgd/Mediaplane` only, so a
    fork's `main` publishes nothing. Before building, the release waits until CI's last
    job, `All checks passed`, has passed on the release's commit
-   (`scripts/release/ci-passed.sh`, up to 90 minutes): the tested-set guarantee of §4.3
-   holds for the image too. Each job checks out the release's tag.
+   (`scripts/release/ci-passed.sh`, up to 90 minutes, counting GitHub Actions' own check
+   run only): the tested-set guarantee of §4.3 holds for the image too. Each job checks
+   out the release's tag. The tag and the release page itself exist from the merge:
+   release-please makes them before CI has passed. If CI then fails on that commit,
+   nothing else is published, no image and no deploy files; `docs/releasing.md` says so,
+   and gives the way back (`gh release delete v<version> --cleanup-tag`, fix, and let the
+   next release pull request cut a new version). A draft release, published by the last
+   job, would close that gap, but can't be probed without GitHub (the controller's
+   ruling of 2026-10-26: say it, rather than build it).
 2. **(check) Each architecture is built natively, scanned, then pushed by digest, and
    checked to be what was scanned** (Tasks 3 and 5; §2.1, §7.2(7), §8.2). The dev box has
    no amd64 emulation (`/proc/sys/fs/binfmt_misc` has no `qemu-x86_64`), and the roadmap's
@@ -226,9 +238,13 @@ it wasn't: nothing was pushed, published or sent to GitHub or plex.tv.
    release's image goes unnamed in `deploy/.env`, so unpacking the next release over the
    folder and running its installer is the update; an image you name in `deploy/.env` is
    kept, with a note saying how to run the release's. It only ever runs Docker on
-   `mediaplane.compose.yaml`: a sandbox test lists every call.
+   `mediaplane.compose.yaml`: a sandbox test lists every call. Its Compose calls unset
+   `COMPOSE_PROJECT_NAME`, `COMPOSE_FILE` and `COMPOSE_PROFILES` too, which would move them
+   to another project or file. Every installer test runs it in the sandbox, with stand-ins
+   for `docker` and `sudo` first on `PATH`, so that a refusal that regressed would reach
+   neither the real Docker nor `sudo`; the refusals check that no Docker call was made.
 5. **(check) Updating is the next release's deploy files, then `pull` and `up -d`**
-   (Tasks 4 and 7; §4.4). §4.4 says `docker compose pull && up -d` on
+   (Tasks 4 and 5; §4.4). §4.4 says `docker compose pull && up -d` on
    `mediaplane-system`. With the image pinned by digest, `pull` with the same file
    changes nothing; with the next release's file it pulls that release. Going back is the
    same with an earlier release's files. `test/e2e/update.e2e.test.ts` proves it on real
@@ -236,9 +252,13 @@ it wasn't: nothing was pushed, published or sent to GitHub or plex.tv.
    the test's own, deploy files made for each by `writeBundle`, Mediaplane deployed from
    the first with `pull` and `up -d --wait`, a stack applied, then the second release,
    `plan`, and the first again. Each time, every container of the stack has the same id,
-   image, state, start time and restart count, the stack's networks and volumes are the
-   same, and the files in `generated/` and `state/` have the same digests; `plan` exits 0.
-   It took 88 s on the dev box. This refines §4.4's wording, not its intent.
+   image, state, start time, restart count and mounts, the stack's networks are the same,
+   and every file under `generated/` and `state/` (but `state/lock`) has the same digest;
+   Docker's own events show that each deploy pulled only the release's image and the
+   proxy's, and that `plan` pulled nothing; `plan` exits 0. The stack has no volumes of
+   its own (every app's folders are bind mounts, which the mounts show), so none are
+   compared. It took about 90 s on the dev box. This refines §4.4's wording, not its
+   intent.
 6. **(check) (owner) The catalog's images are scanned, and fail on what upstream can't
    fix only after a date** (Task 3; §7.2(7)). Probed: Trivy, from the registries, on all
    ten pinned images and both architectures, found critical vulnerabilities with a fix
@@ -358,7 +378,10 @@ it wasn't: nothing was pushed, published or sent to GitHub or plex.tv.
     and long syntax: the tmpfs is dropped), while a bind mount replaces it. So FlareSolverr
     gets `volumes: { appdata: '/config' }` and `runAs: 'fixed:1000'`, which apply's
     ownership step gives it. An existing install keeps its old anonymous volume once; the
-    deploy guide says how to find it.
+    deploy guide says how to find it. That the bind mount takes the old volume's place on
+    an existing install was probed (above), not tested: the indexers end-to-end test
+    always starts FlareSolverr afresh, and a test of it would need a first deploy without
+    the mount, then an `apply`.
 16. **A wiring network whose settings change: never made anew by Mediaplane** (Task 7; the
     S8 item). Through the socket proxy Mediaplane can delete no network, and no
     permission is added. The render test already pins the network (`{ wiring: { internal:
@@ -373,8 +396,10 @@ it wasn't: nothing was pushed, published or sent to GitHub or plex.tv.
     npm packages, reads only and has no secret; `upload` writes contents and signs. The
     same test checks every Action is pinned by commit with its version, no
     `pull_request_target`, `workflow_run` or `issue_comment` trigger, no secret or event
-    text pasted into a script, `persist-credentials: false` on every checkout, and no
-    `secrets.GITHUB_TOKEN`. actionlint (with shellcheck) checks the workflows, and
+    text pasted into a script (the repository's composite actions' scripts too, which get
+    their inputs through env), `persist-credentials: false` on every checkout, and no
+    `secrets.GITHUB_TOKEN`. `release.yml`'s permissions are written once, in
+    `scripts/release/permissions.ts`, which both tests read. actionlint (with shellcheck) checks the workflows, and
     shellcheck the scripts, in CI.
 18. **CI runs weekly too** (Task 3): a scan finds new vulnerabilities in pinned images, and
     Node publishes security releases, without a push. On a schedule there is no base
@@ -388,7 +413,9 @@ it wasn't: nothing was pushed, published or sent to GitHub or plex.tv.
     `ghcr.io/cyclopsgd/mediaplane:<version>@sha256:…`, the reference a release's
     deployment gives the host helper.
 21. **The docs** (Task 8): the deploy guide (install from a release, verify, update, go
-    back, move from a checkout, what an update never touches, what Slice 9 changes), a new
+    back, move from a checkout, what an update never touches, what Slice 9 changes, and a
+    line saying its links lead into the repository, since it also ships in a release's
+    deploy files: the planner's choice, over rewriting each link to the tag), a new
     `docs/releasing.md` (the process, the tokens and secrets, a release that stops halfway,
     checking one), the root README, the architecture, the threat model (T7 rewritten, T18
     new), `CONTRIBUTING.md` (commits and pins), the FlareSolverr README, the wiring
@@ -453,9 +480,9 @@ The docs: `docs/releasing.md` (new), and the generated references and app facts.
    Node's security releases, Docker Engine 24, Docker Hub's login, and a weekly run.
 4. `install.sh` installs a release, pinned by digest.
 5. The release workflow: publish only a release, after CI, with the deploy files and the
-   tested app versions.
+   tested app versions; and updating Mediaplane end to end.
 6. `mediaplane migrate`, and `stack.yaml`'s version on load.
-7. FlareSolverr's folder, and updating Mediaplane end to end.
+7. FlareSolverr's folder, and the wiring network's settings.
 8. Docs.
 
 Each task's behaviour agrees with the decisions when it lands: nothing a task builds is
@@ -1391,10 +1418,41 @@ describe('missedSecurityReleases', () => {
 
 ```diff
 diff --git a/scripts/supply-chain.test.ts b/scripts/supply-chain.test.ts
-index 8000b72..e889713 100644
+index 8000b72..086de26 100644
 --- a/scripts/supply-chain.test.ts
 +++ b/scripts/supply-chain.test.ts
-@@ -226,5 +226,13 @@ describe('Renovate (spec §8.2)', () => {
+@@ -14,2 +14,10 @@ const WORKFLOWS = readdirSync(join(ROOT, '.github/workflows'))
+ 
++/** The repository's own composite actions, which workflows run as `./.github/actions/…`. */
++const ACTIONS = readdirSync(join(ROOT, '.github/actions'))
++  .sort()
++  .map((name) => `.github/actions/${name}/action.yml`);
++
++/** `${{ … }}` text a script must never hold: a secret, or what anyone can write. */
++const PASTED = /\$\{\{[^}]*\b(?:secrets|github\.event|github\.head_ref|inputs)\b/;
++
+ interface Step {
+@@ -133,5 +141,3 @@ describe('the workflows (spec §7.2(7))', () => {
+           // into its source, where a quote in it would run as code.
+-          expect(step.run ?? '').not.toMatch(
+-            /\$\{\{[^}]*\b(?:secrets|github\.event|github\.head_ref|inputs)\b/,
+-          );
++          expect(step.run ?? '').not.toMatch(PASTED);
+           if (step.uses?.startsWith('actions/checkout@') === true) {
+@@ -144,2 +150,12 @@ describe('the workflows (spec §7.2(7))', () => {
+   );
++
++  it.each(ACTIONS)(
++    '%s, a composite action, keeps secrets and inputs out of its scripts',
++    (path) => {
++      const { runs } = parse(read(path)) as { runs: { steps: Step[] } };
++      expect(runs.steps.length).toBeGreaterThan(0);
++      // Its inputs reach a script through env, as a workflow's secrets do.
++      for (const step of runs.steps) expect(step.run ?? '').not.toMatch(PASTED);
++    },
++  );
+ });
+@@ -226,5 +242,13 @@ describe('Renovate (spec §8.2)', () => {
        );
 -    expect(found('.github/workflows/ci.yml')).toEqual(
 -      expect.arrayContaining(['aquasec/trivy', 'ghcr.io/gitleaks/gitleaks']),
@@ -1462,7 +1520,7 @@ runs:
 
 ```diff
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index 97cc4f7..97893d6 100644
+index 97cc4f7..41212c4 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
 @@ -6,2 +6,6 @@ on:
@@ -1472,7 +1530,7 @@ index 97cc4f7..97893d6 100644
 +  schedule:
 +    - cron: '41 4 * * 1'
  
-@@ -47,4 +51,9 @@ jobs:
+@@ -47,6 +51,11 @@ jobs:
          run: pnpm audit --prod --audit-level critical
 +      # Node is a binary in the image's base, which neither Trivy nor pnpm audit sees. This
 +      # needs nodejs.org.
@@ -1480,9 +1538,23 @@ index 97cc4f7..97893d6 100644
 +        run: pnpm exec tsx scripts/ci/node-security.ts
  
 -  # Decides whether the end-to-end and image jobs, which pull images, are needed. The
+-  # decision is made inside the workflow, rather than with an `on:` path filter, so the
+-  # workflow still runs on a docs-only push and `gate` (the last job) still reports.
 +  # Decides whether the jobs that pull images (end-to-end, image, catalog images, the
-+  # Engine floor) are needed. The
-   # decision is made inside the workflow, rather than with an `on:` path filter, so the
++  # Engine floor) are needed. The decision is made inside the workflow, rather than with
++  # an `on:` path filter, so the workflow still runs on a docs-only push and `gate` (the
++  # last job) still reports.
+   changes:
+@@ -69,3 +78,3 @@ jobs:
+           if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+-            echo "No usable base commit, so the end-to-end and image jobs run."
++            echo "No usable base commit, so every job that pulls images runs."
+             echo "code=true" >> "$GITHUB_OUTPUT"
+@@ -78,3 +87,3 @@ jobs:
+           else
+-            echo "Only docs changed, so the end-to-end and image jobs are skipped."
++            echo "Only docs changed, so the jobs that pull images are skipped."
+             echo "code=false" >> "$GITHUB_OUTPUT"
 @@ -112,2 +121,6 @@ jobs:
            persist-credentials: false
 +      - uses: ./.github/actions/docker-hub-login
@@ -2102,7 +2174,7 @@ chmod +x scripts/ci/build-image.sh scripts/ci/scan-image.sh scripts/ci/scan-cata
 - [ ] **Step 4: Run the tests, and see them pass**
 
 Run: `pnpm vitest run scripts/ci scripts/supply-chain.test.ts`
-Expected: PASS, 36 tests.
+Expected: PASS, 37 tests.
 
 - [ ] **Step 5: See Node's check fail on the image's Node, then bump it**
 
@@ -2143,7 +2215,7 @@ container, network or volume (`docker volume ls` lists what it did before). Then
 - [ ] **Step 7: Run the full check**
 
 Run: `pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check`
-Expected: every step passes; `pnpm test` reports 2164 tests in 97 files.
+Expected: every step passes; `pnpm test` reports 2165 tests in 97 files.
 
 - [ ] **Step 8: Commit**
 
@@ -2193,7 +2265,7 @@ Decision: no new proxy permission: a test shows the allow-list already lets the 
 
 ```diff
 diff --git a/deploy/deploy.test.ts b/deploy/deploy.test.ts
-index c501eef..9139350 100644
+index c501eef..86b4479 100644
 --- a/deploy/deploy.test.ts
 +++ b/deploy/deploy.test.ts
 @@ -19,2 +19,3 @@ import { afterAll, describe, expect, it } from 'vitest';
@@ -2236,12 +2308,22 @@ index c501eef..9139350 100644
    build*) exit ${options.buildFails === true ? '1' : '0'} ;;
 +  *' pull'*) exit ${options.pullFails === true ? '1' : '0'} ;;
  esac
-@@ -456,3 +478,3 @@ exit 0
+@@ -418,3 +440,4 @@ exit 0
+     const homeVar = options.homeVar === undefined ? home : options.homeVar;
+-    const run = () => {
++    /** install.sh, with `extra` added to its environment, after the sandbox's own. */
++    const run = (extra: NodeJS.ProcessEnv = {}) => {
+       const result = spawnSync(join(deploy, 'install.sh'), [], {
+@@ -427,2 +450,3 @@ exit 0
+           MEDIAPLANE_TEST_DOCKER_SOCKET: socketPath,
++          ...extra,
+         },
+@@ -456,3 +480,3 @@ exit 0
    const changedNothing = (box: Sandbox, calls: string[]) => {
 -    expect(calls.some((call) => / build | up -d/.test(` ${call}`))).toBe(false);
 +    expect(calls.some((call) => / build | pull| up -d/.test(` ${call}`))).toBe(false);
      expect(calls.some((call) => call.startsWith('sudo'))).toBe(false);
-@@ -552,5 +574,8 @@ exit 0
+@@ -552,5 +576,8 @@ exit 0
  
 -  it.runIf(asYou)('reads a deploy/.env home with Windows line ends as Compose does', () =>
 +  it.runIf(asYou)('reads a deploy/.env with Windows line ends as Compose does', () =>
@@ -2252,13 +2334,13 @@ index c501eef..9139350 100644
 +        `MEDIAPLANE_IMAGE=mediaplane:local\r\nMEDIAPLANE_HOME=${box.home}\r\n`,
 +      );
        const result = box.run();
-@@ -558,2 +583,5 @@ exit 0
+@@ -558,2 +585,5 @@ exit 0
        expect(statSync(box.home).isDirectory()).toBe(true);
 +      expect(result.calls).toContain(
 +        `docker build --tag mediaplane:local ${join(box.top, 'checkout')}`,
 +      );
      }),
-@@ -616,2 +644,182 @@ exit 0
+@@ -616,2 +646,162 @@ exit 0
  
 +  it.runIf(asYou)(
 +    'from a release: pulls its image, pinned by digest, before it starts it, and builds nothing',
@@ -2341,18 +2423,11 @@ index c501eef..9139350 100644
 +    'refuses an image not pinned by digest, before it changes anything: %o %s',
 +    (options, image) =>
 +      inSandbox(options, (box) => {
-+        const result = spawnSync(join(box.deploy, 'install.sh'), [], {
-+          encoding: 'utf8',
-+          env: {
-+            PATH: process.env.PATH ?? '',
-+            MEDIAPLANE_IMAGE: image,
-+          },
-+        });
-+        expect(result.status).toBe(1);
-+        expect(result.stderr).toContain(
-+          `MEDIAPLANE_IMAGE=${image} isn't pinned by digest`,
-+        );
-+        expect(result.stderr).toContain('@sha256:');
++        const result = box.run({ MEDIAPLANE_IMAGE: image });
++        expect(result.code).toBe(1);
++        expect(result.err).toContain(`MEDIAPLANE_IMAGE=${image} isn't pinned by digest`);
++        expect(result.err).toContain('@sha256:');
++        expect(result.calls).toEqual([]);
 +      }),
 +  );
 +
@@ -2377,26 +2452,15 @@ index c501eef..9139350 100644
 +    () =>
 +      inSandbox({}, (box) => {
 +        const own = `registry.example/team/mediaplane:0.1.0@sha256:${'2'.repeat(64)}`;
-+        const result = spawnSync(join(box.deploy, 'install.sh'), [], {
-+          encoding: 'utf8',
-+          env: {
-+            ...process.env,
-+            PATH: `${join(box.top, 'bin')}:${box.commands}:${process.env.PATH ?? ''}`,
-+            MEDIAPLANE_HOME: box.home,
-+            MEDIAPLANE_IMAGE: own,
-+            MEDIAPLANE_TEST_BIN_DIR: box.commands,
-+            MEDIAPLANE_TEST_DOCKER_SOCKET: join(box.top, 'docker.sock'),
-+          },
-+        });
-+        expect(result.status, result.stderr).toBe(0);
++        const result = box.run({ MEDIAPLANE_IMAGE: own });
++        expect(result.code, result.err).toBe(0);
 +        expect(readFileSync(join(box.deploy, '.env'), 'utf8')).toContain(
 +          `MEDIAPLANE_IMAGE=${own}\n`,
 +        );
-+        const calls = readFileSync(join(box.top, 'calls.log'), 'utf8');
-+        expect(calls).toContain(
-+          `compose -f ${join(box.deploy, 'mediaplane.compose.yaml')} pull\n`,
++        expect(result.calls).toContain(
++          `docker compose -f ${join(box.deploy, 'mediaplane.compose.yaml')} pull`,
 +        );
-+        expect(calls).not.toContain('docker build');
++        expect(result.calls.some((call) => call.startsWith('docker build'))).toBe(false);
 +      }),
 +  );
 +
@@ -2416,14 +2480,12 @@ index c501eef..9139350 100644
 +        homeVar: null,
 +      },
 +      (box) => {
-+        const result = spawnSync(join(box.deploy, 'install.sh'), [], {
-+          encoding: 'utf8',
-+          env: { PATH: process.env.PATH ?? '', MEDIAPLANE_IMAGE: RELEASE },
-+        });
-+        expect(result.status).toBe(1);
-+        expect(result.stderr).toContain(
++        const result = box.run({ MEDIAPLANE_IMAGE: RELEASE });
++        expect(result.code).toBe(1);
++        expect(result.err).toContain(
 +          `deploy/.env says the image is mediaplane:local, but MEDIAPLANE_IMAGE says ${RELEASE}`,
 +        );
++        expect(result.calls).toEqual([]);
 +      },
 +    ));
 +
@@ -2524,7 +2586,7 @@ Expected: FAIL, both files before any test runs: `Cannot find module
 
 ```diff
 diff --git a/deploy/install.sh b/deploy/install.sh
-index 569df81..9026a85 100755
+index 569df81..0701d89 100755
 --- a/deploy/install.sh
 +++ b/deploy/install.sh
 @@ -1,9 +1,10 @@
@@ -2594,19 +2656,22 @@ index 569df81..9026a85 100755
 +    # release's names the next one.
 +    if [ "$image" != "$release_image" ]; then say "MEDIAPLANE_IMAGE=$image"; fi
      say "MEDIAPLANE_UID=$(id -u)"
-@@ -124,7 +158,20 @@ fi
+@@ -124,7 +158,22 @@ fi
  
 -# deploy/.env decides: the same names exported in this shell would override it.
 -(
+-  unset MEDIAPLANE_IMAGE MEDIAPLANE_UID MEDIAPLANE_GID DOCKER_GID TZ MEDIAPLANE_HOME
+-  docker compose -f "$here/mediaplane.compose.yaml" up -d
 +if [ -n "$release_image" ] && [ "$image" != "$release_image" ]; then
 +  say "Note: deploy/.env names MEDIAPLANE_IMAGE=$image, so this release's image, $release_image, isn't the one that runs: to run it, remove that line from deploy/.env, then run this again."
 +fi
 +
 +# Mediaplane's own deployment, and nothing else: never the stack. deploy/.env decides:
-+# the same names exported in this shell would override it.
++# the same names exported in this shell would override it. Compose's own would move it to
++# another project or file.
 +system() (
-   unset MEDIAPLANE_IMAGE MEDIAPLANE_UID MEDIAPLANE_GID DOCKER_GID TZ MEDIAPLANE_HOME
--  docker compose -f "$here/mediaplane.compose.yaml" up -d
++  unset MEDIAPLANE_IMAGE MEDIAPLANE_UID MEDIAPLANE_GID DOCKER_GID TZ MEDIAPLANE_HOME \
++    COMPOSE_PROJECT_NAME COMPOSE_FILE COMPOSE_PROFILES
 +  docker compose -f "$here/mediaplane.compose.yaml" "$@"
  )
 +# Pulled before anything is recreated, so a pull that fails leaves Mediaplane as it was.
@@ -2707,7 +2772,7 @@ Expected: PASS, 132 tests. Then shellcheck `deploy/install.sh` as in Task 2: no 
 - [ ] **Step 5: Run the full check**
 
 Run: `pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check`
-Expected: every step passes; `pnpm test` reports 2184 tests in 98 files.
+Expected: every step passes; `pnpm test` reports 2185 tests in 98 files.
 
 - [ ] **Step 6: Commit**
 
@@ -2734,9 +2799,9 @@ Decision: the deploy files: the repository's `deploy/`, pinned, the same bytes f
 Decision: each job's token and secrets, exactly (decision 17); updating, and going back, proved on real Docker (decision 5).
 
 **Files:**
-- Create: `.github/workflows/release.yml`, `scripts/release/ci-passed.sh`, `scripts/release/ci-passed.test.ts`, `scripts/release/deploy-bundle.test.ts`, `scripts/release/deploy-bundle.ts`, `scripts/release/publish-image.sh`, `scripts/release/tested-apps.test.ts`, `scripts/release/tested-apps.ts`, `scripts/release/workflow.test.ts`, `test/e2e/update.e2e.test.ts`
-- Modify: `scripts/ci/build-image.sh`
-- Test: `scripts/supply-chain.test.ts`, `test/e2e/helpers.ts`
+- Create: `.github/workflows/release.yml`, `scripts/release/ci-passed.sh`, `scripts/release/ci-passed.test.ts`, `scripts/release/deploy-bundle.test.ts`, `scripts/release/deploy-bundle.ts`, `scripts/release/permissions.ts`, `scripts/release/publish-image.sh`, `scripts/release/tested-apps.test.ts`, `scripts/release/tested-apps.ts`, `scripts/release/workflow.test.ts`, `test/e2e/update.e2e.test.ts`
+- Modify: `scripts/ci/build-image.sh`, `test/e2e/helpers.ts`
+- Test: `scripts/supply-chain.test.ts`
 
 **Interfaces:**
 - **Consumes:** Task 1's `release-please-config.json` and manifest; Task 3's `build-image.sh`,
@@ -2748,15 +2813,41 @@ Decision: each job's token and secrets, exactly (decision 17); updating, and goi
   `writeBundle({ root, out, version, image, epoch }): Promise<{ archive; sha256 }>` in
   `scripts/release/deploy-bundle.ts`; `testedApps(defs, image): string` in
   `scripts/release/tested-apps.ts`; `scripts/release/ci-passed.sh <sha> [<minutes>]`;
-  `buildImage(tag, args?)` in `test/e2e/helpers.ts`.
+  `RELEASE_JOB_PERMISSIONS` in `scripts/release/permissions.ts`; `buildImage(tag, args?)`
+  in `test/e2e/helpers.ts`.
 
 - [ ] **Step 1: Write the failing tests**
+
+`scripts/release/permissions.ts` is what the tests expect of `release.yml`'s tokens, in
+one place: `supply-chain.test.ts` and `workflow.test.ts` both import it.
+
+**Create** `scripts/release/permissions.ts`:
+
+```ts
+/**
+ * What each job of `.github/workflows/release.yml` may do with its token, and nothing
+ * more: `scripts/supply-chain.test.ts` and `workflow.test.ts` both hold the workflow to it.
+ */
+export const RELEASE_JOB_PERMISSIONS: Record<string, Record<string, string>> = {
+  'release-please': { contents: 'write', issues: 'write', 'pull-requests': 'write' },
+  'ci-passed': { contents: 'read', checks: 'read' },
+  image: { contents: 'read', packages: 'write' },
+  publish: {
+    contents: 'read',
+    packages: 'write',
+    'id-token': 'write',
+    attestations: 'write',
+  },
+  assets: { contents: 'read' },
+  upload: { contents: 'write', 'id-token': 'write', attestations: 'write' },
+};
+```
 
 **Create** `scripts/release/ci-passed.test.ts`:
 
 ```ts
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -2813,7 +2904,7 @@ describe('ci-passed.sh', () => {
   it("asks GitHub for CI's last job on the commit", () => {
     const result = run([[passed]]);
     expect(result.calls).toEqual([
-      `api repos/owner/repo/commits/${SHA}/check-runs?check_name=All%20checks%20passed&per_page=100 --jq [.check_runs[] | {status, conclusion}]`,
+      `api repos/owner/repo/commits/${SHA}/check-runs?check_name=All%20checks%20passed&app_id=15368&per_page=100 --jq [.check_runs[] | {status, conclusion}]`,
     ]);
   });
 
@@ -2841,13 +2932,20 @@ describe('ci-passed.sh', () => {
     expect(result.err).toContain('within 0 minutes, so nothing is published');
   });
 
-  it('refuses what is not a commit sha', () => {
+  it('refuses what is not a commit sha, asking GitHub nothing', () => {
+    // A stand-in gh first on PATH, which fails and logs: never the real one.
+    const dir = mkdtempSync(join(tmpdir(), 'mp-ci-passed-'));
+    dirs.push(dir);
+    writeFileSync(join(dir, 'gh'), `#!/bin/sh\necho "$*" >> '${dir}/calls'\nexit 1\n`, {
+      mode: 0o755,
+    });
     const result = spawnSync(SCRIPT, ['main'], {
       encoding: 'utf8',
-      env: { PATH: process.env.PATH ?? '', GITHUB_REPOSITORY: 'owner/repo' },
+      env: { PATH: `${dir}:${process.env.PATH ?? ''}`, GITHUB_REPOSITORY: 'owner/repo' },
     });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('"main" is not a commit sha');
+    expect(existsSync(join(dir, 'calls'))).toBe(false);
   });
 });
 ```
@@ -3032,6 +3130,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { ROOT } from '../root';
+import { RELEASE_JOB_PERMISSIONS } from './permissions';
 
 interface Step {
   id?: string;
@@ -3102,19 +3201,7 @@ describe('the release workflow (spec §8.2)', () => {
       Object.fromEntries(
         Object.entries(jobs).map(([name, job]) => [name, job.permissions]),
       ),
-    ).toEqual({
-      'release-please': { contents: 'write', issues: 'write', 'pull-requests': 'write' },
-      'ci-passed': { contents: 'read', checks: 'read' },
-      image: { contents: 'read', packages: 'write' },
-      publish: {
-        contents: 'read',
-        packages: 'write',
-        'id-token': 'write',
-        attestations: 'write',
-      },
-      assets: { contents: 'read' },
-      upload: { contents: 'write', 'id-token': 'write', attestations: 'write' },
-    });
+    ).toEqual(RELEASE_JOB_PERMISSIONS);
   });
 
   it('keeps every secret out of the job that installs npm packages, and of the rest but two', () => {
@@ -3156,13 +3243,20 @@ describe('the release workflow (spec §8.2)', () => {
         step.uses?.startsWith('actions/attest-build-provenance@'),
       );
     expect(attest('publish')[0]?.with).toMatchObject({ 'push-to-registry': true });
-    expect(attest('upload')[0]?.with?.['subject-path']).toMatch(
-      /mediaplane-deploy-\*\.tar\.gz$/,
-    );
+    const subjects = String(attest('upload')[0]?.with?.['subject-path'])
+      .trim()
+      .split('\n');
+    expect(subjects.map((path) => path.replace(/^.*\//, ''))).toEqual([
+      'mediaplane-deploy-*.tar.gz',
+      'SHA256SUMS',
+    ]);
     const runs = JSON.stringify(jobs.assets?.steps);
     expect(runs).toContain('scripts/release/deploy-bundle.ts');
     expect(runs).toContain('scripts/release/tested-apps.ts');
-    expect(JSON.stringify(jobs.upload?.steps)).toContain('gh release edit');
+    const upload = JSON.stringify(jobs.upload?.steps);
+    expect(upload).toContain('gh release edit');
+    // A re-run replaces the section, rather than adding a second.
+    expect(upload).toContain("sed -i '/^## Tested app versions$/,$d' body.md");
   });
 });
 ```
@@ -3171,24 +3265,16 @@ describe('the release workflow (spec §8.2)', () => {
 
 ```diff
 diff --git a/scripts/supply-chain.test.ts b/scripts/supply-chain.test.ts
-index e889713..42797f7 100644
+index 086de26..233301e 100644
 --- a/scripts/supply-chain.test.ts
 +++ b/scripts/supply-chain.test.ts
-@@ -37,2 +37,15 @@ const JOB_PERMISSIONS: Record<string, Record<string, unknown>> = {
+@@ -5,2 +5,3 @@ import { describe, expect, it } from 'vitest';
+ import { parse } from 'yaml';
++import { RELEASE_JOB_PERMISSIONS } from './release/permissions';
+ import { ROOT } from './root';
+@@ -45,2 +46,3 @@ const JOB_PERMISSIONS: Record<string, Record<string, unknown>> = {
    '.github/workflows/plex.yml': {},
-+  '.github/workflows/release.yml': {
-+    'release-please': { contents: 'write', issues: 'write', 'pull-requests': 'write' },
-+    'ci-passed': { contents: 'read', checks: 'read' },
-+    image: { contents: 'read', packages: 'write' },
-+    publish: {
-+      contents: 'read',
-+      packages: 'write',
-+      'id-token': 'write',
-+      attestations: 'write',
-+    },
-+    assets: { contents: 'read' },
-+    upload: { contents: 'write', 'id-token': 'write', attestations: 'write' },
-+  },
++  '.github/workflows/release.yml': RELEASE_JOB_PERMISSIONS,
  };
 ```
 
@@ -3225,6 +3311,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { nodeExec, type ExecResult } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
 import { writeBundle } from '../../scripts/release/deploy-bundle';
 import {
   buildImage,
@@ -3253,12 +3340,41 @@ const BUILDS = {
   b: `mediaplane-e2e:${String(process.pid)}-b`,
 };
 
-/** What an update must leave as it is: the stack's containers, networks, volumes, files. */
+/**
+ * What an update must leave as it is: each container of the stack (its id, image, state,
+ * start time, restarts and mounts), its networks, and every file in `generated/` and
+ * `state/`. The stack has no volumes of its own: every app's folders are bind mounts,
+ * which each container's mounts show.
+ */
 interface Snapshot {
-  containers: string[];
+  containers: unknown[];
   networks: string[];
-  volumes: string[];
   files: Record<string, string>;
+}
+
+interface Inspected {
+  Name: string;
+  Id: string;
+  Image: string;
+  State: { Status: string; StartedAt: string };
+  RestartCount: number;
+  Mounts: { Type: string; Source: string; Destination: string; RW: boolean }[];
+}
+
+/** Every file under `dir`, by its path from `home`, with its digest. */
+async function digests(home: string, dir: string): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  for (const entry of await readdir(join(home, dir), { withFileTypes: true })) {
+    const path = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) Object.assign(files, await digests(home, path));
+    // The lock is taken and released by each command: it holds no state of the stack.
+    else if (path !== 'state/lock') {
+      files[path] = createHash('sha256')
+        .update(await readFile(join(home, path)))
+        .digest('hex');
+    }
+  }
+  return files;
 }
 
 async function snapshot(home: string): Promise<Snapshot> {
@@ -3266,40 +3382,54 @@ async function snapshot(home: string): Promise<Snapshot> {
   const ids = (await docker('ps', '--all', '--quiet', '--filter', label))
     .split('\n')
     .filter(Boolean);
-  const containers =
-    ids.length === 0
-      ? []
-      : (
-          await docker(
-            'inspect',
-            '--format',
-            '{{.Name}} {{.Id}} {{.Image}} {{.State.Status}} {{.State.StartedAt}} {{.RestartCount}}',
-            ...ids,
-          )
-        ).split('\n');
+  const inspected =
+    ids.length === 0 ? [] : (JSON.parse(await docker('inspect', ...ids)) as Inspected[]);
+  const containers = inspected
+    .map((c) => ({
+      name: c.Name,
+      id: c.Id,
+      image: c.Image,
+      status: c.State.Status,
+      startedAt: c.State.StartedAt,
+      restarts: c.RestartCount,
+      mounts: c.Mounts.map(
+        (m) => `${m.Type} ${m.Source} ${m.Destination} ${String(m.RW)}`,
+      ).sort(),
+    }))
+    .sort((a, b) => (a.name < b.name ? -1 : 1));
   const networks = (
     await docker('network', 'ls', '--filter', label, '--format', '{{.Name}} {{.ID}}')
   ).split('\n');
-  const volumes = (await docker('volume', 'ls', '--quiet', '--filter', label))
-    .split('\n')
-    .filter(Boolean);
-  const files: Record<string, string> = {};
-  for (const dir of ['generated', 'state']) {
-    for (const name of await readdir(join(home, dir))) {
-      const path = join(home, dir, name);
-      if (!(await stat(path)).isFile() || name === 'lock') continue;
-      files[`${dir}/${name}`] = createHash('sha256')
-        .update(await readFile(path))
-        .digest('hex');
-    }
-  }
   return {
-    containers: containers.sort(),
+    containers,
     networks: networks.sort(),
-    volumes: volumes.sort(),
-    files,
+    files: { ...(await digests(home, 'generated')), ...(await digests(home, 'state')) },
   };
 }
+
+/** Now, in seconds with milliseconds, as `docker events` takes a time. */
+const now = () => (Date.now() / 1000).toFixed(3);
+
+/** The images Docker pulled between `since` and now, as `<name>@<digest>`, sorted. */
+async function pulled(since: string): Promise<string[]> {
+  const ids = await docker(
+    'events',
+    '--since',
+    since,
+    '--until',
+    now(),
+    '--filter',
+    'type=image',
+    '--filter',
+    'event=pull',
+    '--format',
+    '{{.Actor.ID}}',
+  );
+  return [...new Set(ids.split('\n').filter(Boolean))].sort();
+}
+
+/** `name:tag@digest` as Docker names it when it pulls it: `name@digest`. */
+const byDigest = (image: string) => image.replace(/:[^/:@]+@/, '@');
 
 describe('updating Mediaplane (spec §4.4), the way deploy/README.md says', () => {
   it('pulls the next release and recreates only Mediaplane, never the stack; going back does the same', async () => {
@@ -3354,11 +3484,29 @@ describe('updating Mediaplane (spec §4.4), the way deploy/README.md says', () =
         ],
         { env, cwd: '/', timeoutMs: 300_000 },
       );
+    /** Pull, then up -d; Docker must pull only the release's image and the proxy's. */
     const deploy = async (release: string) => {
+      const since = now();
       for (const args of [['pull'], ['up', '-d', '--wait']]) {
         const result = await system(release, args);
         expect(result.code, `${args.join(' ')}: ${result.stderr}`).toBe(0);
       }
+      const file = join(
+        bundles,
+        release,
+        'mediaplane',
+        'deploy',
+        'mediaplane.compose.yaml',
+      );
+      const services = (
+        parse(await readFile(file, 'utf8')) as {
+          services: Record<string, { image: string }>;
+        }
+      ).services;
+      const proxy = services['socket-proxy']?.image ?? '';
+      expect(await pulled(since)).toEqual(
+        [byDigest(releases[release]?.image ?? ''), byDigest(proxy)].sort(),
+      );
     };
     const mediaplane = (...args: string[]) =>
       nodeExec('docker', ['exec', CONTAINER, 'mediaplane', ...args], {
@@ -3366,6 +3514,7 @@ describe('updating Mediaplane (spec §4.4), the way deploy/README.md says', () =
         timeoutMs: 900_000,
       });
     const running = async () => docker('inspect', '--format', '{{.Image}}', CONTAINER);
+    const releases: Record<string, { image: string; id: string }> = {};
     try {
       await docker(
         'run',
@@ -3380,7 +3529,6 @@ describe('updating Mediaplane (spec §4.4), the way deploy/README.md says', () =
       );
       const port = await publishedPort(REGISTRY, '5000/tcp');
       // Two releases, each pushed, and its deploy files pinned to its digest.
-      const releases: Record<string, { image: string; id: string }> = {};
       for (const [name, tag] of Object.entries(BUILDS)) {
         await buildImage(tag, ['--label', `io.mediaplane.e2e.release=${name}`]);
         const remote = `127.0.0.1:${String(port)}/mediaplane-e2e:${String(process.pid)}-${name}`;
@@ -3435,15 +3583,19 @@ describe('updating Mediaplane (spec §4.4), the way deploy/README.md says', () =
       expect(applied.code, applied.stderr).toBe(0);
       const before = await snapshot(home);
       expect(before.containers.length).toBeGreaterThan(0);
-      expect(before.containers.every((c) => c.includes(' running '))).toBe(true);
+      expect(
+        before.containers.every((c) => (c as { status: string }).status === 'running'),
+      ).toBe(true);
 
       // The update: release B's deploy files, pull, up -d.
       await deploy('b');
       expect(await running()).toBe(releases.b?.id);
       expect(await snapshot(home)).toEqual(before);
-      // Mediaplane B finds the stack as A left it.
+      // Mediaplane B finds the stack as A left it, and pulls nothing to look.
+      const looked = now();
       const planned = await mediaplane('plan');
       expect(planned.code, `${planned.stdout}${planned.stderr}`).toBe(0);
+      expect(await pulled(looked)).toEqual([]);
       expect(await snapshot(home)).toEqual(before);
 
       // Going back to A is the same, with A's deploy files.
@@ -3711,7 +3863,9 @@ jobs:
           path: ${{ runner.temp }}/release
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: ${{ runner.temp }}/release/mediaplane-deploy-*.tar.gz
+          subject-path: |
+            ${{ runner.temp }}/release/mediaplane-deploy-*.tar.gz
+            ${{ runner.temp }}/release/SHA256SUMS
       - name: Add them, and the tested app versions, to the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -3721,6 +3875,8 @@ jobs:
           gh release upload "$TAG" mediaplane-deploy-*.tar.gz SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --clobber
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > body.md
+          # A re-run replaces the section it added before, rather than adding another.
+          sed -i '/^## Tested app versions$/,$d' body.md
           printf '\n' >> body.md
           cat notes.md >> body.md
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file body.md
@@ -3802,7 +3958,8 @@ index b78d58e..ac4ed54 100755
 #
 #   scripts/release/ci-passed.sh <commit sha> [<minutes>]
 #
-# It asks GitHub with gh, as GH_TOKEN, about GITHUB_REPOSITORY.
+# It asks GitHub with gh, as GH_TOKEN, about GITHUB_REPOSITORY, for the check run of
+# GitHub Actions (app 15368) only, so that no other app's check of that name counts.
 set -eu
 
 [ $# -ge 1 ] && [ $# -le 2 ] || {
@@ -3820,7 +3977,7 @@ case $sha in
 esac
 deadline=$(($(date +%s) + minutes * 60))
 while :; do
-  runs=$(gh api "repos/$repo/commits/$sha/check-runs?check_name=All%20checks%20passed&per_page=100" \
+  runs=$(gh api "repos/$repo/commits/$sha/check-runs?check_name=All%20checks%20passed&app_id=15368&per_page=100" \
     --jq '[.check_runs[] | {status, conclusion}]')
   if printf '%s' "$runs" | jq -e 'any(.[]; .status == "completed" and .conclusion == "success")' >/dev/null; then
     echo "CI passed on $sha."
@@ -3844,7 +4001,8 @@ done
 ```ts
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { chmod, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -3910,17 +4068,8 @@ export async function writeBundle(
   if (!/^\d+\.\d+\.\d+$/.test(version)) {
     throw new Error(`the version is <major>.<minor>.<patch>, not "${version}"`);
   }
-  const sources = new Map<string, string>();
-  for (const path of [
-    'LICENSE',
-    'deploy/README.md',
-    'deploy/install.sh',
-    'deploy/mediaplane',
-    'deploy/mediaplane.compose.yaml',
-  ]) {
-    sources.set(path, await readFile(join(root, path), 'utf8'));
-  }
-  const files = bundleFiles((path) => sources.get(path) ?? '', image);
+  // Each file bundleFiles names, read from the repository: one list, so none ships empty.
+  const files = bundleFiles((path) => readFileSync(join(root, path), 'utf8'), image);
   const stage = await mkdtemp(join(tmpdir(), 'mediaplane-bundle-'));
   try {
     for (const file of files) {
@@ -4100,7 +4249,7 @@ chmod +x scripts/release/ci-passed.sh scripts/release/publish-image.sh
 - [ ] **Step 4: Run the tests, and see them pass**
 
 Run: `pnpm vitest run scripts/release scripts/supply-chain.test.ts`
-Expected: PASS, 71 tests. Then actionlint and shellcheck, as in Task 2: no finding.
+Expected: PASS, 72 tests. Then actionlint and shellcheck, as in Task 2: no finding.
 
 - [ ] **Step 5: Update Mediaplane, and go back, on real Docker**
 
@@ -4108,14 +4257,16 @@ Run: `pnpm vitest run --config vitest.e2e.config.ts test/e2e/update.e2e.test.ts`
 Expected: PASS, 1 test, in about a minute and a half on the dev box once its images are
 pulled: two releases built and pushed to a registry of the test's own, the stack applied
 from the first, the second deployed with its deploy files, `plan` exiting 0, the first
-deployed again, and each time the stack's containers, networks, volumes and files the same.
+deployed again; each time the stack's containers (their mounts too), networks and files
+the same, and Docker pulling only the release's image and the proxy's (and nothing for
+`plan`).
 Then `docker ps -a`, `docker network ls` and `docker volume ls` show nothing named
 `mediaplane-e2e-`.
 
 - [ ] **Step 6: Run the full check**
 
 Run: `pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check`
-Expected: every step passes; `pnpm test` reports 2212 tests in 102 files.
+Expected: every step passes; `pnpm test` reports 2213 tests in 102 files.
 
 - [ ] **Step 7: Commit**
 
@@ -4126,6 +4277,7 @@ git add .github/workflows/release.yml \
   scripts/release/ci-passed.test.ts \
   scripts/release/deploy-bundle.test.ts \
   scripts/release/deploy-bundle.ts \
+  scripts/release/permissions.ts \
   scripts/release/publish-image.sh \
   scripts/release/tested-apps.test.ts \
   scripts/release/tested-apps.ts \
@@ -4587,7 +4739,6 @@ describe('migrate (spec §5.2)', () => {
   it('refuses a stack.yaml it would replace a link with, giving the file as it should be', async () => {
     const dir = await home(OLD);
     await writeFile(join(dir, 'real.yaml'), OLD);
-    await symlink(join(dir, 'real.yaml'), join(dir, 'linked.yaml'));
     const linked = await tempDir('mediaplane-migrate-link-');
     await symlink(join(dir, 'real.yaml'), join(linked, 'stack.yaml'));
     const result = await run(linked);
@@ -5307,7 +5458,7 @@ Expected: PASS. Then `pnpm test:coverage`: the thresholds hold.
 - [ ] **Step 6: Run the full check**
 
 Run: `pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check`
-Expected: every step passes; `pnpm test` reports 2247 tests in 104 files.
+Expected: every step passes; `pnpm test` reports 2248 tests in 104 files.
 
 - [ ] **Step 7: Commit**
 
@@ -5469,7 +5620,7 @@ Expected: PASS: FlareSolverr's container has only bind mounts, `/config` being
 - [ ] **Step 6: Run the full check**
 
 Run: `pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check`
-Expected: every step passes; `pnpm test` reports 2248 tests in 104 files.
+Expected: every step passes; `pnpm test` reports 2249 tests in 104 files.
 
 - [ ] **Step 7: Commit**
 
@@ -5533,7 +5684,7 @@ index 36784f7..e612ab3 100644
 
 ```diff
 diff --git a/README.md b/README.md
-index 7bdfc3c..bb882f9 100644
+index 7bdfc3c..c08d015 100644
 --- a/README.md
 +++ b/README.md
 @@ -3,3 +3,3 @@
@@ -5564,14 +5715,17 @@ index 7bdfc3c..bb882f9 100644
 +pinned by digest (see [`deploy/README.md`](deploy/README.md)). There has been no release
 +yet, so for now install it from a checkout, as your normal user:
  
-@@ -333,4 +339,4 @@ cd Mediaplane
+@@ -333,5 +339,6 @@ cd Mediaplane
  
 -The installer checks Docker, builds the image, starts Mediaplane and installs the
 -`mediaplane` command, then offers to run `mediaplane init`. That asks a few questions,
+-including your own admin password if you'd rather type one, and with Plex signs you in.
 +The installer checks Docker, builds the image (or, from a release, pulls it), starts
-+Mediaplane and installs the `mediaplane` command, then offers to run `mediaplane init`. That asks a few questions,
- including your own admin password if you'd rather type one, and with Plex signs you in.
-@@ -582,7 +588,7 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
++Mediaplane and installs the `mediaplane` command, then offers to run `mediaplane init`.
++That asks a few questions, including your own admin password if you'd rather type one,
++and with Plex signs you in.
+ [`deploy/README.md`](deploy/README.md) has the details, and the same steps by hand.
+@@ -582,7 +589,7 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
    test and `vpn-check`), S3b (the wiring framework), S3c (the download path), S4
 -  (indexers), S5 (Jellyfin), S6 (requests), S7 (Plex) and S8 (drift). Between S7 and
 +  (indexers), S5 (Jellyfin), S6 (requests), S7 (Plex), S8 (drift) and S9 (releases and
@@ -5582,12 +5736,12 @@ index 7bdfc3c..bb882f9 100644
 -- **After that:** S10 (recovery and automation), which completes M1.
 +- **Next:** S10 (recovery and automation), which completes M1.
  
-@@ -593,2 +599,4 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
+@@ -593,2 +600,4 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
  - **[Architecture](docs/architecture.md):** how the pieces fit, as built so far.
 +- **[Releasing](docs/releasing.md):** how a release is cut, what it publishes, and how to
 +  check one.
  - **[`stack.yaml` reference](docs/reference/stack-yaml.md):** every field, generated from
-@@ -629,2 +637,2 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). To report a security issue, see
+@@ -629,2 +638,2 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). To report a security issue, see
  
 -[GPL-3.0](LICENSE)
 +[GPL-3.0-or-later](LICENSE)
@@ -5613,10 +5767,16 @@ index ba4524d..09ddca7 100644
 
 ```diff
 diff --git a/deploy/README.md b/deploy/README.md
-index be1a4fb..aa1aad1 100644
+index be1a4fb..859737f 100644
 --- a/deploy/README.md
 +++ b/deploy/README.md
-@@ -30,4 +30,5 @@ never touch Mediaplane itself.
+@@ -2,2 +2,5 @@
+ 
++In a release's deploy files, this guide's links lead into the repository: open them on
++GitHub, at github.com/cyclopsgd/Mediaplane, at the release's tag.
++
+ Mediaplane runs as two containers in their own Compose project, `mediaplane-system`:
+@@ -30,4 +33,5 @@ never touch Mediaplane itself.
    the Compose plugin 2.24 or newer. Rootless Docker is not supported. Mediaplane checks
 -  for Engine 24. The container brings its own Docker CLI 29.8.1 and Compose 5.5.1, which
 -  have been tested only with Docker Engine 28 and 29 so far.
@@ -5624,7 +5784,7 @@ index be1a4fb..aa1aad1 100644
 +  runs the end-to-end tests on Docker Engine 28, and checks the calls Mediaplane makes
 +  with that CLI and Compose against Engine 24, the oldest supported.
  - **No SELinux in enforcing mode.** Such hosts aren't supported yet: neither
-@@ -42,4 +43,34 @@ never touch Mediaplane itself.
+@@ -42,4 +46,34 @@ never touch Mediaplane itself.
  
 -No image is published yet: releases arrive in Slice 9. So you install from a checkout,
 -as your normal user, not root:
@@ -5661,14 +5821,14 @@ index be1a4fb..aa1aad1 100644
 +
 +### From a checkout
  
-@@ -51,3 +82,5 @@ cd Mediaplane
+@@ -51,3 +85,5 @@ cd Mediaplane
  
 -`install.sh` does everything the next section does by hand:
 +### What `install.sh` does
 +
 +It does everything [By hand](#by-hand) does:
  
-@@ -56,4 +89,5 @@ cd Mediaplane
+@@ -56,4 +92,5 @@ cd Mediaplane
  - creates the home, `/opt/mediaplane` or `MEDIAPLANE_HOME`, owned by you;
 -- builds the image, and writes `deploy/.env` with your ids, the Docker socket's group and
 -  your timezone;
@@ -5676,7 +5836,7 @@ index be1a4fb..aa1aad1 100644
 +  image;
 +- writes `deploy/.env` with your ids, the Docker socket's group and your timezone;
  - starts Mediaplane's container, and installs the `mediaplane` command in
-@@ -70,6 +104,11 @@ you only a home it has just created, never a folder that was already there. With
+@@ -70,6 +107,11 @@ you only a home it has just created, never a folder that was already there. With
    different `MEDIAPLANE_HOME` is refused. To move the home, edit `deploy/.env`.
 -- **Updating:** run it again after `git pull`. It rebuilds the image, keeps your
 -  `deploy/.env` as it is, and never touches your stack.
@@ -5692,7 +5852,7 @@ index be1a4fb..aa1aad1 100644
 +  image from `deploy/.env`, so change it there. `mediaplane:local` is the one image it
 +  takes unpinned: the one it builds from a checkout.
  - **If `mediaplane` then runs something else** in your shell, `type -a mediaplane` shows
-@@ -79,3 +118,6 @@ you only a home it has just created, never a folder that was already there. With
+@@ -79,3 +121,6 @@ you only a home it has just created, never a folder that was already there. With
  
 -Build the image from a checkout:
 +From a release, the image is named in its `mediaplane.compose.yaml`, so skip the build
@@ -5700,15 +5860,17 @@ index be1a4fb..aa1aad1 100644
 +`docker compose -f deploy/mediaplane.compose.yaml pull` before `up -d`. From a checkout,
 +build the image:
  
-@@ -296,4 +338,39 @@ host
+@@ -296,4 +341,41 @@ host
  
 -Pull, then run the installer again. It rebuilds the image and recreates Mediaplane's
 -container:
 +Updating Mediaplane recreates Mediaplane's own container, and nothing else. It never
 +restarts, recreates or pulls an app of your stack, and leaves the stack's networks, its
-+volumes and `generated/` as they are: an end-to-end test checks each container's id and
-+start time across an update and back. Afterwards, `mediaplane plan` shows what the new
-+version would change, if anything, and only `apply` changes it, when you run it.
++volumes and `generated/` as they are: an end-to-end test checks each container's id,
++start time, restarts and mounts, every file in `generated/` and `state/`, and that Docker
++pulls only Mediaplane's image and the proxy's, across an update and back. Afterwards,
++`mediaplane plan` shows what the new version would change, if anything, and only `apply`
++changes it, when you run it.
 +
 +**From a release** (from the first one): unpack the next release's deploy files over the
 +old ones, in the same folder, then run its installer. It keeps your `deploy/.env`, pulls
@@ -5742,7 +5904,7 @@ index be1a4fb..aa1aad1 100644
 +**From a checkout:** pull, then run the installer again. It rebuilds the image and
 +recreates Mediaplane's container:
  
-@@ -312,4 +389,6 @@ docker compose -f deploy/mediaplane.compose.yaml up -d
+@@ -312,4 +394,6 @@ docker compose -f deploy/mediaplane.compose.yaml up -d
  
 -Once images are published (Slice 9), `docker compose -f deploy/mediaplane.compose.yaml pull`
 -replaces the build. Updating Mediaplane never restarts your stack.
@@ -5751,7 +5913,7 @@ index be1a4fb..aa1aad1 100644
 +release's `install.sh`. The installer refuses to build `mediaplane:local` where there is
 +no checkout, and says so.
  
-@@ -347,2 +426,13 @@ An update that brings Plex's wiring changes three things you may see:
+@@ -347,2 +431,13 @@ An update that brings Plex's wiring changes three things you may see:
  
 +An update that brings releases (Slice 9) changes two things you may see:
 +
@@ -5771,7 +5933,7 @@ index be1a4fb..aa1aad1 100644
 
 ```diff
 diff --git a/docs/architecture.md b/docs/architecture.md
-index a818ba9..920b39f 100644
+index a818ba9..ae69855 100644
 --- a/docs/architecture.md
 +++ b/docs/architecture.md
 @@ -3,3 +3,3 @@
@@ -5779,14 +5941,15 @@ index a818ba9..920b39f 100644
 -covering what is built so far (Slices 1 to 8). The design describes the whole of M1;
 +covering what is built so far (Slices 1 to 9). The design describes the whole of M1;
  this page describes what exists.
-@@ -851,2 +851,41 @@ pass, down or leak
+@@ -851,2 +851,42 @@ pass, down or leak
  
 +## Releases and updates
 +
 +- **Versions.** release-please keeps a release pull request, with the next version and
 +  `CHANGELOG.md`, from the Conventional Commits on `main`. Merging it tags the release.
 +  [Releasing](releasing.md) has the whole process.
-+- **The image.** `ghcr.io/cyclopsgd/mediaplane:<version>` is one index of two images,
++- **The image.** From the first release, `ghcr.io/cyclopsgd/mediaplane:<version>` is
++  one index of two images,
 +  amd64 and arm64, each built natively on its own runner, with an SBOM and build
 +  provenance attached, and a signed attestation of its provenance beside it. Its times
 +  come from the commit, so one commit builds one image. Each image is scanned by Trivy
@@ -5816,12 +5979,12 @@ index a818ba9..920b39f 100644
 +- **The wiring network's settings never change in an update.** Compose would have to
 +  make it anew, and through the socket proxy it can delete no network. A release that
 +  had to change them would bring its own steps, in its notes.
-+- **Every pin is kept current** by Renovate: the catalog's apps (each bump runs the full
-+  end-to-end suite and is merged by hand), the images outside the catalog, npm packages
-+  and the Actions' commits.
++- **Every pin is kept current** by Renovate, once the Renovate app is installed (an
++  owner's step): the catalog's apps (each bump runs the full end-to-end suite and is
++  merged by hand), the images outside the catalog, npm packages and the Actions' commits.
 +
  ## Security
-@@ -860,3 +899,2 @@ The [roadmap](plans/m1-roadmap.md) has the order:
+@@ -860,3 +900,2 @@ The [roadmap](plans/m1-roadmap.md) has the order:
  
 -- releases and safe updates (Slice 9);
  - recovery and automation (Slice 10), which completes M1.
@@ -5831,7 +5994,7 @@ index a818ba9..920b39f 100644
 
 ```diff
 diff --git a/docs/design/m1-engine-cli.md b/docs/design/m1-engine-cli.md
-index 45bd6d7..748d6e3 100644
+index 45bd6d7..3f43bc0 100644
 --- a/docs/design/m1-engine-cli.md
 +++ b/docs/design/m1-engine-cli.md
 @@ -5,3 +5,3 @@
@@ -5863,7 +6026,7 @@ index 45bd6d7..748d6e3 100644
 -  with publishing, in S9.
 +  with publishing, in S9 (one index of both, made by the release workflow).
  - **Generated references from S2c.** The `stack.yaml` reference, its JSON Schema at
-@@ -1970 +1972,81 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
+@@ -1970 +1972,85 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
  - **No new Docker API call:** drift and keep make the calls `plan` makes (§7.2(2)).
 +
 +### Slice 9: releases and safe updates (2026-10-25)
@@ -5877,8 +6040,11 @@ index 45bd6d7..748d6e3 100644
 +  release-please's, and Prettier leaves it alone.
 +- **Only a release publishes** (§8.2). The release workflow runs on a push to `main`;
 +  only one that merges release-please's pull request cuts a release, and only in this
-+  repository. It then waits until CI's `All checks passed` has passed on the release's
-+  commit, so a release publishes only a commit CI passed.
++  repository. release-please tags the commit and writes the release page at the merge;
++  the workflow then waits until CI's `All checks passed` has passed on the release's
++  commit, so the image and the deploy files are published only for a commit CI passed.
++  If CI fails there, the release page stays without them, and `docs/releasing.md` gives
++  the way back (`gh release delete v<version> --cleanup-tag`).
 +- **The image** (§2.1, §7.2(7), §8.2). Each architecture is built natively on its own
 +  runner, by `scripts/ci/build-image.sh`: BuildKit and its SBOM scanner pinned by digest,
 +  an SBOM and provenance (`mode=max`, which holds no secret: the build is given none),
@@ -5907,8 +6073,9 @@ index 45bd6d7..748d6e3 100644
 +  next release's `mediaplane.compose.yaml`: its image is pinned, so the file is the update,
 +  and `pull` with the old one changes nothing. `install.sh` does the same. It recreates
 +  only Mediaplane's container: an end-to-end test checks every container of the stack
-+  (its id, image, state, start time and restarts), its networks, its volumes, and the
-+  files in `generated/` and `state/`, across an update, a `plan`, and going back.
++  (its id, image, state, start time, restarts and mounts), its networks, and every file
++  in `generated/` and `state/`, and that Docker pulls only Mediaplane's image and the
++  proxy's, across an update, a `plan` (which pulls nothing), and going back.
 +- **The wiring network's settings never change in an update** (§11, Slice 3b): Compose
 +  would have to make it anew, and the socket proxy deletes no network. A release that
 +  had to change them would bring its own steps in its notes.
@@ -5966,7 +6133,7 @@ index 18317df..bf5d4f9 100644
 
 ```diff
 diff --git a/docs/plans/m1-roadmap.md b/docs/plans/m1-roadmap.md
-index c167160..ffca5a3 100644
+index c167160..4b51a8f 100644
 --- a/docs/plans/m1-roadmap.md
 +++ b/docs/plans/m1-roadmap.md
 @@ -26,2 +26,3 @@ Detailed plans so far:
@@ -5993,21 +6160,27 @@ index c167160..ffca5a3 100644
 +  `engine-floor` job checks the image's Docker CLI and Compose against Docker Engine 24,
 +  and `catalog-images` scans the apps' images.
  
-@@ -653,2 +657,6 @@ password, which are S3c's (and listed again below).
+@@ -271,3 +275,4 @@ added an S9 item and changed one, and its final review an S8 item and an S9 item
+ its conflict check an S9 item. Slice 8 (2026-10-25) settled each S8 item: built, decided,
+-or moved with its reason, as each says. Each
++or moved with its reason, as each says. Slice 9 (2026-10-26) settled each S9 item: built,
++decided, or an owner's step, as each says. Each
+ slice plan must address the items for that slice.
+@@ -653,2 +658,6 @@ password, which are S3c's (and listed again below).
      a folder there needs the image's user probed first.
 +  - **Done in S9:** probed: the image runs as uid 1000 and keeps nothing in `/config`, and
 +    Compose carries an anonymous volume over to a recreated container (so it is a removed
 +    container that leaves one), even past a `tmpfs` there; only a bind mount replaces it.
 +    So `appdata/flaresolverr` is mounted there, owned by uid 1000.
  - **Rotating the admin password.** There is no way to replace the generated password
-@@ -660,2 +668,6 @@ password, which are S3c's (and listed again below).
+@@ -660,2 +669,6 @@ password, which are S3c's (and listed again below).
    - **Moved to S9:** its settings change only with Mediaplane's own updates.
 +  - **Decided in S9:** Mediaplane doesn't make it anew: through the socket proxy it can
 +    delete no network, and no proxy permission is added. No release changes its settings
 +    (the render test pins them); one that had to would bring its own steps in its notes.
 +    The update end-to-end test shows an update leaving it as it is.
  - **The `partial` outcome.** Spec §5 step 12 names `success`, `partial` and `failed`.
-@@ -791,4 +803,7 @@ password, which are S3c's (and listed again below).
+@@ -791,4 +804,7 @@ password, which are S3c's (and listed again below).
    gaps.
 +  - **Settled in S9,** each as the item says below. `main`'s protection is the owner's
 +    to set: the S9 plan gives the settings for light and strict, and recommends strict.
@@ -6016,19 +6189,19 @@ index c167160..ffca5a3 100644
 +  - the licence is GPL-3.0-or-later (**done in S9:** every `package.json`'s `license`,
 +    the image's label, the README and the spec);
    - no code of conduct, and no community-support material such as issue templates or
-@@ -819,2 +834,4 @@ password, which are S3c's (and listed again below).
+@@ -819,2 +835,4 @@ password, which are S3c's (and listed again below).
    SPDX `license` field.
 +  - **Done in S9:** the SPDX field (GPL-3.0-or-later). Private vulnerability reporting
 +    stays an owner's step: the S9 plan gives the command.
  - **Docs:** make the `--json` contract explicit (pin its fields and document
-@@ -826,3 +843,5 @@ password, which are S3c's (and listed again below).
+@@ -826,3 +844,5 @@ password, which are S3c's (and listed again below).
    Align it in the `--json` pass: adding `ok: true` is additive within v1.
 -- **Tests:** tighten the catalog tag test, and add Renovate. Let
 +- **Tests:** tighten the catalog tag test, and add Renovate.
 +  - **Renovate done in S9;** `scripts/supply-chain.test.ts` also checks that Renovate can
 +    read each pinned tag. Tightening the catalog's own tag test stays S10's. Let
    `test/e2e/deploy.e2e.test.ts` deploy with `deployMediaplane()` from
-@@ -869,2 +888,7 @@ password, which are S3c's (and listed again below).
+@@ -869,2 +889,7 @@ password, which are S3c's (and listed again below).
    README's facts block shows the pin.
 +  - **Done in S9:** Renovate's custom managers find each of these, and each catalog pin
 +    (tag and digest), with a versioning rule for each linuxserver.io tag (probed with
@@ -6036,27 +6209,27 @@ index c167160..ffca5a3 100644
 +    The hosted Renovate can't run `pnpm docs:generate`, so CI's docs check fails the
 +    bump until it is run on the branch, and Renovate's pull request says so.
  - **Node's own vulnerabilities.** Node comes with the image's `node` base as a
-@@ -874,2 +898,6 @@ password, which are S3c's (and listed again below).
+@@ -874,2 +899,6 @@ password, which are S3c's (and listed again below).
    releases.
 +  - **Decided in S9: yes.** `scripts/ci/node-security.ts` fails CI, on every pull request
 +    and weekly, while Node's index lists a security release of the image's line newer
 +    than the image's Node. It found one at once (24.22.1, over 24.21.0), so S9 bumps the
 +    pin.
  - **The Docker version CI tests.** The runners' Docker moves with GitHub's images,
-@@ -877,2 +905,6 @@ password, which are S3c's (and listed again below).
+@@ -877,2 +906,6 @@ password, which are S3c's (and listed again below).
    whether to test it.
 +  - **Decided in S9:** the floor's risk is the API the image's own Docker CLI and Compose
 +    speak, so CI's `engine-floor` job runs them against Docker Engine 24 in Docker, with
 +    the calls Mediaplane makes (probed: they pass). The full end-to-end suite stays on
 +    the runners' Docker, which would take twice as long to run again on 24.
  - **Publish the image,** and give `MEDIAPLANE_IMAGE` in
-@@ -880,2 +912,5 @@ password, which are S3c's (and listed again below).
+@@ -880,2 +913,5 @@ password, which are S3c's (and listed again below).
    instead of build.
 +  - **Done in S9,** from the first release: a release's own deploy files pin its image
 +    by digest; the repository's leave it out, so a checkout builds. The first release is
 +    the owner's.
  - **Registry rate limits in CI** (S6). S5's first arm64 run failed on
-@@ -885,2 +920,6 @@ password, which are S3c's (and listed again below).
+@@ -885,2 +921,6 @@ password, which are S3c's (and listed again below).
    image jobs. S6 adds no image: each e2e file pulls only what is missing.
 +  - **Done in S9:** with the secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (the
 +    owner's, read-only), the jobs that pull images log in to Docker Hub; without them, as
@@ -6070,8 +6243,9 @@ index c167160..ffca5a3 100644
 ````markdown
 # Releasing Mediaplane
 
-Mediaplane's releases come from [release-please](https://github.com/googleapis/release-please)
-and the release workflow, `.github/workflows/release.yml` (spec §8.2). This page says
+Mediaplane's releases come from
+[release-please](https://github.com/googleapis/release-please) and the release workflow,
+`.github/workflows/release.yml` (spec §8.2). This page says
 how a release is cut, what it publishes, and how to check one. There has been no
 release yet: everything below happens from the first one.
 
@@ -6096,13 +6270,14 @@ push to main
 1. **Every push to `main`** has release-please update its release pull request,
    `chore(main): release <version>`. The version comes from the Conventional Commits
    since the last release: before 1.0, a `fix:` raises the patch number, and a `feat:`
-   or a breaking change the minor one. The pull request also updates `CHANGELOG.md`, the version in
-   both `package.json` files, and the CLI's `mediaplane --version`.
+   or a breaking change the minor one. The pull request also updates `CHANGELOG.md`,
+   the version in both `package.json` files, and the CLI's `mediaplane --version`.
 2. **CI runs on that pull request** at once when the repository has the
    `RELEASE_PLEASE_TOKEN` secret. With GitHub's own token, GitHub starts no workflow for
    it, so close the pull request and open it again: that starts CI.
 3. **Merging it cuts the release.** release-please tags the commit `v<version>` and
-   writes the GitHub release, with the changelog.
+   writes the GitHub release, with the changelog, at once: the tag and the release page
+   exist from the merge, before CI has passed on it.
 4. **In the same run, the release workflow publishes it,** once CI's last job,
    `All checks passed`, has passed on that commit (it waits up to 90 minutes):
    - on an amd64 runner and an arm64 runner, natively, it builds the image, with its
@@ -6152,11 +6327,26 @@ GitHub gives no secret to a fork's pull request: there, CI pulls anonymously.
 
 Re-run the failed jobs from the workflow run's page. Each step can run again:
 
-- before the images are pushed, nothing is published;
+- before the images are pushed, nothing is published but the tag and the release page,
+  which release-please made at the merge;
+- the wait for CI fails at once when every `All checks passed` run on the commit so far
+  failed, such as the pull request's, before the run of the push to `main` has
+  finished: re-run it once that run has passed;
 - an image pushed by digest but not tagged is an untagged version in the package, which
   the next run tags or leaves;
 - the deploy files are uploaded with `--clobber`, and the notes are written from the
-  release's own.
+  release's own, the tested app versions taking the place of those a run added before.
+
+If CI fails on the release's commit, nothing else is published: no image and no deploy
+files, so the release page has none, and the deploy guide's commands find nothing for
+that version. Take the release and its tag away, fix the fault on `main`, and let the
+next release pull request cut a new version, once release-please opens it:
+
+```bash
+gh release delete v0.1.0 --cleanup-tag --repo cyclopsgd/Mediaplane
+```
+
+(`0.1.0` is an example.)
 
 ## Checking a release
 
@@ -6178,25 +6368,28 @@ and its SBOM and provenance with `--format '{{json .SBOM}}'` and
 
 ```diff
 diff --git a/docs/runbooks/wiring-failed.md b/docs/runbooks/wiring-failed.md
-index 83691ed..3f2538a 100644
+index 83691ed..7b49c42 100644
 --- a/docs/runbooks/wiring-failed.md
 +++ b/docs/runbooks/wiring-failed.md
-@@ -779,3 +779,4 @@ differ, and a `reason` when it is `unknown`.
+@@ -779,4 +779,6 @@ differ, and a `reason` when it is `unknown`.
  - **The wiring network must be made anew,** when its settings changed, or when
 -  Mediaplane refused it (`wire.network`, above). When its settings changed, Compose has
+-  to delete the network, and through the socket proxy it can't: `apply` then stops at
 +  Mediaplane refused it (`wire.network`, above). No release of Mediaplane changes its
-+  settings: one that had to would say so in its notes, with its own steps. When its settings changed, Compose has
-   to delete the network, and through the socket proxy it can't: `apply` then stops at
++  settings: one that had to would say so in its notes, with its own steps. When its
++  settings changed, Compose has to delete the network, and through the socket proxy it
++  can't: `apply` then stops at
+   the containers step, with a message from Compose that names the network. The apps are
 ```
 
 **Change** `docs/security/threat-model.md`:
 
 ```diff
 diff --git a/docs/security/threat-model.md b/docs/security/threat-model.md
-index 36874f2..daadfa5 100644
+index 36874f2..a85900d 100644
 --- a/docs/security/threat-model.md
 +++ b/docs/security/threat-model.md
-@@ -508,12 +508,25 @@ Controls today:
+@@ -508,12 +508,27 @@ Controls today:
  
 -- Every image is pinned by digest: the apps, the proxy, and Node and the Docker CLI in
 -  Mediaplane's image.
@@ -6210,8 +6403,9 @@ index 36874f2..daadfa5 100644
 +  image is written where Renovate doesn't look.
 +- npm packages come from the lockfile, and GitHub Actions are pinned by commit, with
 +  their version beside it. A test checks each.
-+- Renovate opens a pull request for every newer pin: an app's runs the full end-to-end
-+  suite, and none is merged automatically.
++- Once the Renovate app is installed (an owner's step), Renovate opens a pull request
++  for every newer pin: an app's runs the full end-to-end suite, and none is merged
++  automatically.
 +- CI's checks that fail the build, on every pull request and weekly:
 +  - Trivy scans Mediaplane's image on amd64 and arm64, built as a release builds it:
 +    its Alpine packages, the Docker CLI's Go standard library and Compose's Go modules.
@@ -6227,9 +6421,10 @@ index 36874f2..daadfa5 100644
  - gitleaks scans the full history on every push to `main` and every pull request.
 +- From the first release, each image is published with an SBOM and build provenance,
 +  and a signed attestation of its provenance; the release's deploy files name it by
-+  digest, and are attested too. A release publishes only a commit CI passed.
++  digest, and they and `SHA256SUMS` are attested too. A release publishes its image and
++  deploy files only for a commit CI passed.
  
-@@ -521,8 +534,28 @@ What remains:
+@@ -521,8 +536,31 @@ What remains:
  
 -- Neither scan sees Node itself, which is not an Alpine package, nor the Docker CLI's own
 -  code: they stay current only when their pinned images are bumped.
@@ -6253,13 +6448,16 @@ index 36874f2..daadfa5 100644
 +  them). The one job that installs npm packages has a read-only token and no secret.
 +- No workflow runs a pull request's code with secrets: there is no `pull_request_target`,
 +  and no secret reaches a script but through its environment.
-+- A release publishes only a commit whose CI passed, builds from its tag, and pushes the
-+  image Trivy scanned, checked by digest.
++- A release publishes its image and deploy files only for a commit whose CI passed,
++  builds from its tag, and pushes the image Trivy scanned, checked by digest.
 +
 +What remains:
 +
 +- Whoever can push to `main`, or merge the release pull request, can publish a release.
 +  Protecting `main` (an owner's step) narrows that.
++- The tag and the release page exist from the merge, before CI has passed: release-please
++  makes them. If CI then fails on that commit, nothing else is published, and the page
++  stays without files until it is deleted (`docs/releasing.md` gives the command).
 +- `RELEASE_PLEASE_TOKEN`, when set, is a token of the owner's that may write this
 +  repository's contents, issues and pull requests: the release-please job has it, and no
 +  other.
@@ -6275,7 +6473,7 @@ Expected: no output. Every `text` block in `docs/releasing.md`, `docs/architectu
 - [ ] **Step 4: Run the full check**
 
 Run: `pnpm format && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check`
-Expected: every step passes; `pnpm test` reports 2248 tests in 104 files.
+Expected: every step passes; `pnpm test` reports 2249 tests in 104 files.
 
 - [ ] **Step 5: Commit**
 
@@ -6304,13 +6502,18 @@ git commit -m "docs: installing and updating from a release, the release process
   sudo modprobe wireguard`), this passes:
   `pnpm format && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm docs:check && pnpm test:e2e`.
   Coverage stays at or above 90% on lines, functions, branches and statements. When this
-  plan was replayed: 98.18% statements, 93.18% branches, 98.28% functions and 99.32% lines, with 2248 tests in 104 files.
+  plan was replayed: 98.18% statements, 93.18% branches, 98.28% functions and 99.32% lines, with 2249 tests in 104 files.
 - [ ] `pnpm test:e2e` passes with Compose 2.38.2 as the host plugin too, and leaves no
   `mediaplane-e2e-*` container, network, volume or image, and no `mediaplane-e2e-*`
   folder. When this plan was replayed, alone on the dev box, warm, without the plex.tv
   token (so the nightly test was skipped):
   - with Compose 5.5.1, 28 tests passed and 1 skipped in 12 files, in 15 min 46 s;
   - with Compose 2.38.2, 28 passed and 1 skipped, in 16 min 54 s.
+
+  After the pre-flight rulings, the replay ran the one end-to-end file they touch,
+  `test/e2e/update.e2e.test.ts` (no end-to-end test runs `install.sh`): it passed in 76 s
+  with Compose 5.5.1 and in 75 s with 2.38.2. The rest is unchanged from the full run
+  above.
 
   CI's e2e job allows 60 minutes, so `ci.yml` keeps its timeout.
 - [ ] Actionlint, shellcheck and `renovate-config-validator --strict` pass, as in Task 2;
