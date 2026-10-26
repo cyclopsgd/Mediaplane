@@ -934,7 +934,8 @@ password, which are S3c's (and listed again below).
   and say so in Renovate's pull request for a Compose bump.
 - **From S9's reviews, for S10.** None hides a fault in S9's releases:
   - a test that Renovate can read the tag of each image pinned outside the catalog
-    (busybox, Trivy, gitleaks, actionlint, Node, Docker, the socket proxy), as
+    (busybox, Trivy, gitleaks, actionlint, Node, Docker, the socket proxy, BuildKit,
+    BuildKit's SBOM scanner, the registry), as
     `scripts/supply-chain.test.ts` does for the catalog's and WireGuard's;
   - `install.sh` clears the shell's `COMPOSE_*` settings, but not `DOCKER_HOST` or
     `DOCKER_CONTEXT`, so a shell that sets one points Compose at another daemon than
