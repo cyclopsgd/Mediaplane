@@ -1,25 +1,16 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { tempDirSync } from '@mediaplane/engine/testing';
+import { describe, expect, it } from 'vitest';
 import { ROOT } from '../root';
 import { bundleFiles, writeBundle } from './deploy-bundle';
 import { pinnedDeployment, pinnedInstaller } from './pin';
 
 const IMAGE = `ghcr.io/cyclopsgd/mediaplane:0.1.0@sha256:${'1'.repeat(64)}`;
 const read = (path: string) => readFileSync(join(ROOT, path), 'utf8');
-let dirs: string[] = [];
-const temp = () => {
-  const dir = mkdtempSync(join(tmpdir(), 'mp-bundle-'));
-  dirs.push(dir);
-  return dir;
-};
-afterEach(() => {
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
-  dirs = [];
-});
+const temp = () => tempDirSync('mp-bundle-');
 
 describe('bundleFiles', () => {
   it("holds the deploy folder, with the release's image named in two of its files, and the licence", () => {
@@ -125,4 +116,34 @@ describe('writeBundle', () => {
       ).rejects.toThrow('the version is <major>.<minor>.<patch>');
     },
   );
+});
+
+describe('deploy-bundle.ts as a script', () => {
+  const run = (env: Record<string, string>) => {
+    const out = temp();
+    const result = spawnSync(
+      join(ROOT, 'node_modules/.bin/tsx'),
+      [join(ROOT, 'scripts/release/deploy-bundle.ts'), '0.1.0', IMAGE, out],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', ...env } },
+    );
+    return { result, archive: join(out, 'mediaplane-deploy-0.1.0.tar.gz') };
+  };
+
+  it('writes the bundle with SOURCE_DATE_EPOCH set', () => {
+    const { result, archive } = run({ SOURCE_DATE_EPOCH: '1700000000' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(archive)).toBe(true);
+  });
+
+  it.each([
+    ['unset', {}],
+    ['empty', { SOURCE_DATE_EPOCH: '' }],
+    ['not a number', { SOURCE_DATE_EPOCH: 'now' }],
+    ['negative', { SOURCE_DATE_EPOCH: '-1' }],
+  ])('refuses SOURCE_DATE_EPOCH %s, writing nothing', (_name, env) => {
+    const { result, archive } = run(env);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('with SOURCE_DATE_EPOCH set');
+    expect(existsSync(archive)).toBe(false);
+  });
 });

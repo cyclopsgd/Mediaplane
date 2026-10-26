@@ -1,18 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { tempDirSync } from '@mediaplane/engine/testing';
+import { describe, expect, it } from 'vitest';
 import { ROOT } from '../root';
 
 const SCRIPT = join(ROOT, 'scripts/release/ci-passed.sh');
 const SHA = 'a'.repeat(40);
-let dirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
-  dirs = [];
-});
 
 /**
  * ci-passed.sh with a stand-in for gh, first on PATH, that answers each call with the
@@ -20,8 +14,7 @@ afterEach(() => {
  * after that, and logs its arguments.
  */
 function run(answers: object[][], minutes = '1') {
-  const dir = mkdtempSync(join(tmpdir(), 'mp-ci-passed-'));
-  dirs.push(dir);
+  const dir = tempDirSync('mp-ci-passed-');
   answers.forEach((answer, i) => {
     writeFileSync(join(dir, `answer-${String(i)}`), JSON.stringify(answer));
   });
@@ -86,8 +79,7 @@ describe('ci-passed.sh', () => {
 
   it('refuses what is not a commit sha, asking GitHub nothing', () => {
     // A stand-in gh first on PATH, which fails and logs: never the real one.
-    const dir = mkdtempSync(join(tmpdir(), 'mp-ci-passed-'));
-    dirs.push(dir);
+    const dir = tempDirSync('mp-ci-passed-');
     writeFileSync(join(dir, 'gh'), `#!/bin/sh\necho "$*" >> '${dir}/calls'\nexit 1\n`, {
       mode: 0o755,
     });
@@ -99,4 +91,24 @@ describe('ci-passed.sh', () => {
     expect(result.stderr).toContain('"main" is not a commit sha');
     expect(existsSync(join(dir, 'calls'))).toBe(false);
   });
+
+  it.each([['abc1234'], ['a'.repeat(39)], ['a'.repeat(41)], ['A'.repeat(40)]])(
+    'refuses %s: a commit sha is exactly 40 lowercase hex characters',
+    (sha) => {
+      const dir = tempDirSync('mp-ci-passed-');
+      writeFileSync(join(dir, 'gh'), `#!/bin/sh\necho "$*" >> '${dir}/calls'\nexit 1\n`, {
+        mode: 0o755,
+      });
+      const result = spawnSync(SCRIPT, [sha], {
+        encoding: 'utf8',
+        env: {
+          PATH: `${dir}:${process.env.PATH ?? ''}`,
+          GITHUB_REPOSITORY: 'owner/repo',
+        },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('is not a commit sha');
+      expect(existsSync(join(dir, 'calls'))).toBe(false);
+    },
+  );
 });

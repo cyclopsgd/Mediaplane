@@ -13,9 +13,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  # A new push cancels the previous run on a branch, but never the previous commit's full
-  # run on main.
+  # One group per commit on main: a push to main neither cancels nor queues behind another
+  # (a pending run in a shared group is cancelled by the next), so every commit there,
+  # the release's too, gets its own full run and its own "All checks passed". One group per
+  # ref elsewhere.
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  # A new push cancels the previous run on a branch, but never a run on main.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -243,6 +246,8 @@ jobs:
   # checks never exist and a required one would wait forever. This job always runs and
   # always reports. `always()`, not `!cancelled()`: a cancelled run must not pass.
   gate:
+    # scripts/release/ci-passed.sh looks for a check run of exactly this name, and
+    # release.yml publishes only a commit where it passed: renaming it needs both changed.
     name: All checks passed
     needs: [check, changes, e2e, image, catalog-images, engine-floor, secrets]
     if: always()

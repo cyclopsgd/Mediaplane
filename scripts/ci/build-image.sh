@@ -37,10 +37,13 @@ esac
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 
 # A builder of its own, with the pinned BuildKit: Docker's own builder can't attach an
-# SBOM or provenance to an image it keeps.
-docker buildx inspect "$BUILDER" >/dev/null 2>&1 ||
+# SBOM or provenance to an image it keeps. One that runs another BuildKit (a pin since
+# bumped) is made afresh, so that the pin is the one that builds.
+if ! docker buildx inspect "$BUILDER" 2>/dev/null | grep -qF "image=\"$BUILDKIT\""; then
+  docker buildx rm "$BUILDER" >/dev/null 2>&1 || true
   docker buildx create --name "$BUILDER" --driver docker-container \
     --driver-opt "image=$BUILDKIT" --bootstrap >/dev/null
+fi
 # The commit's time, for the image's creation time and its files' times.
 SOURCE_DATE_EPOCH=$(git -C "$root" log -1 --format=%ct)
 export SOURCE_DATE_EPOCH
@@ -60,7 +63,7 @@ image_in() {
 
 if [ -z "$name" ]; then
   mkdir -p "$out"
-  rm -rf "$out/oci" "$out/digest"
+  rm -rf "$out/oci" "$out/oci.json" "$out/digest"
   build "$out/oci.json" "type=oci,dest=$out/oci,tar=false,rewrite-timestamp=true"
   index=$(jq -er '.manifests[0].digest' "$out/oci/index.json")
   digest=$(image_in <"$out/oci/blobs/sha256/${index#sha256:}")
@@ -71,7 +74,7 @@ fi
 
 [ -s "$out/digest" ] || fail "nothing built in $out: build it and scan it first"
 digest=$(cat "$out/digest")
-rm -f "$out/pushed"
+rm -f "$out/pushed" "$out/push.json"
 build "$out/push.json" \
   "type=image,name=$name,push-by-digest=true,name-canonical=true,push=true,rewrite-timestamp=true"
 pushed=$(jq -er '."containerimage.digest"' "$out/push.json")

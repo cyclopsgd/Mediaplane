@@ -17,9 +17,13 @@ name=$1
 version=$2
 out=$3
 shift 3
+# <major>.<minor>.<patch>, as deploy-bundle.ts takes it: digits and exactly two dots, none
+# first, last or twice in a row.
+dots=$(printf '%s' "$version" | tr -cd . | wc -c)
 case $version in
-  *[!0-9.]* | '' | .* | *. | *..*) fail "the version is <major>.<minor>.<patch>, not \"$version\"" ;;
+  *[!0-9.]* | '' | .* | *. | *..*) dots=0 ;;
 esac
+[ "$dots" -eq 2 ] || fail "the version is <major>.<minor>.<patch>, not \"$version\""
 sources=
 for file in "$@"; do
   sources="$sources $name@$(cat "$file")"

@@ -16,12 +16,15 @@ set -eu
 sha=$1
 minutes=${2:-90}
 repo=${GITHUB_REPOSITORY:?GITHUB_REPOSITORY names the repository}
+# A full sha: 40 hex characters, so that "main" or an abbreviation asks GitHub nothing.
 case $sha in
-  *[!0-9a-f]* | '')
-    echo "error: \"$sha\" is not a commit sha" >&2
-    exit 1
-    ;;
+  *[!0-9a-f]* | '') sha_ok=no ;;
+  *) [ "${#sha}" -eq 40 ] && sha_ok=yes || sha_ok=no ;;
 esac
+[ "$sha_ok" = yes ] || {
+  echo "error: \"$sha\" is not a commit sha" >&2
+  exit 1
+}
 deadline=$(($(date +%s) + minutes * 60))
 while :; do
   runs=$(gh api "repos/$repo/commits/$sha/check-runs?check_name=All%20checks%20passed&app_id=15368&per_page=100" \

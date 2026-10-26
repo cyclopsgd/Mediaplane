@@ -20,6 +20,7 @@ interface Job {
   steps: Step[];
 }
 const text = readFileSync(join(ROOT, '.github/workflows/release.yml'), 'utf8');
+const ciText = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
 const release = parse(text) as {
   on: Record<string, unknown>;
   permissions: unknown;
@@ -58,6 +59,59 @@ describe('the release workflow (spec §8.2)', () => {
       step.run?.includes('ci-passed.sh'),
     );
     expect(wait?.env?.SHA).toBe('${{ needs.release-please.outputs.sha }}');
+  });
+
+  it('has CI passed in the needs, direct or not, of every job that publishes', () => {
+    const closure = (name: string, seen = new Set<string>()): Set<string> => {
+      for (const need of needs(jobs[name] ?? ({} as Job))) {
+        if (!seen.has(need)) {
+          seen.add(need);
+          closure(need, seen);
+        }
+      }
+      return seen;
+    };
+    const publishing = Object.keys(jobs).filter(
+      (name) => name !== 'release-please' && name !== 'ci-passed',
+    );
+    expect(publishing.sort()).toEqual(['assets', 'image', 'publish', 'upload']);
+    for (const name of publishing) {
+      expect(closure(name), name).toContain('ci-passed');
+    }
+  });
+
+  it('checks, in each job that builds or ships, that the tag is the commit CI passed', () => {
+    for (const name of ['image', 'publish', 'assets']) {
+      const steps = jobs[name]?.steps ?? [];
+      const checkout = steps.findIndex((step) =>
+        step.uses?.startsWith('actions/checkout@'),
+      );
+      const check = steps[checkout + 1];
+      expect(check?.run, name).toContain('git rev-parse HEAD');
+      // The sha reaches the script through the environment, never pasted into it.
+      expect(check?.env?.SHA, name).toBe('${{ needs.release-please.outputs.sha }}');
+      expect(check?.run, name).not.toContain('${{');
+    }
+  });
+
+  it("runs CI for every commit on main, none cancelled or queued behind another's", () => {
+    const ci = parse(ciText) as {
+      concurrency: { group: string; 'cancel-in-progress': string };
+    };
+    expect(ci.concurrency.group).toBe(
+      "ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}",
+    );
+    // A branch's new push still cancels its older run, and main's never does.
+    expect(ci.concurrency['cancel-in-progress']).toBe(
+      "${{ github.ref != 'refs/heads/main' }}",
+    );
+  });
+
+  it('names the gate as ci-passed.sh looks for it, "All checks passed"', () => {
+    const ci = parse(ciText) as { jobs: Record<string, { name?: string }> };
+    expect(ci.jobs.gate?.name).toBe('All checks passed');
+    const script = readFileSync(join(ROOT, 'scripts/release/ci-passed.sh'), 'utf8');
+    expect(script).toContain('check_name=All%20checks%20passed');
   });
 
   it("builds from the release's tag, never from main as it is later", () => {

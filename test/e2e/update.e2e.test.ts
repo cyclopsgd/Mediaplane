@@ -35,13 +35,15 @@ const BUILDS = {
 
 /**
  * What an update must leave as it is: each container of the stack (its id, image, state,
- * start time, restarts and mounts), its networks, and every file in `generated/` and
- * `state/`. The stack has no volumes of its own: every app's folders are bind mounts,
- * which each container's mounts show.
+ * start time, restarts, mounts and the networks it is on), the stack's networks and
+ * volumes, and every file in `generated/` and `state/`. The stack has no volumes of its
+ * own (every app's folders are bind mounts, which each container's mounts show), and the
+ * test asserts it, so a volume added later is seen to be kept too.
  */
 interface Snapshot {
   containers: unknown[];
   networks: string[];
+  volumes: string[];
   files: Record<string, string>;
 }
 
@@ -52,6 +54,7 @@ interface Inspected {
   State: { Status: string; StartedAt: string };
   RestartCount: number;
   Mounts: { Type: string; Source: string; Destination: string; RW: boolean }[];
+  NetworkSettings: { Networks: Record<string, { NetworkID: string }> };
 }
 
 /** Every file under `dir`, by its path from `home`, with its digest. */
@@ -88,14 +91,21 @@ async function snapshot(home: string): Promise<Snapshot> {
       mounts: c.Mounts.map(
         (m) => `${m.Type} ${m.Source} ${m.Destination} ${String(m.RW)}`,
       ).sort(),
+      networks: Object.entries(c.NetworkSettings.Networks)
+        .map(([network, attached]) => `${network} ${attached.NetworkID}`)
+        .sort(),
     }))
     .sort((a, b) => (a.name < b.name ? -1 : 1));
   const networks = (
     await docker('network', 'ls', '--filter', label, '--format', '{{.Name}} {{.ID}}')
   ).split('\n');
+  const volumes = (await docker('volume', 'ls', '--quiet', '--filter', label))
+    .split('\n')
+    .filter(Boolean);
   return {
     containers,
     networks: networks.sort(),
+    volumes: volumes.sort(),
     files: { ...(await digests(home, 'generated')), ...(await digests(home, 'state')) },
   };
 }
@@ -276,6 +286,8 @@ describe('updating Mediaplane (spec §4.4), the way deploy/README.md says', () =
       expect(applied.code, applied.stderr).toBe(0);
       const before = await snapshot(home);
       expect(before.containers.length).toBeGreaterThan(0);
+      expect(before.volumes).toEqual([]);
+      expect(before.networks.filter(Boolean).length).toBeGreaterThan(0);
       expect(
         before.containers.every((c) => (c as { status: string }).status === 'running'),
       ).toBe(true);

@@ -122,9 +122,11 @@ export async function writeBundle(
 // files' time in SOURCE_DATE_EPOCH.
 if (ranAsScript(import.meta.url, process.argv[1])) {
   const [version = '', image = '', out = ''] = process.argv.slice(2);
-  const epoch = Number(process.env.SOURCE_DATE_EPOCH ?? '');
+  // Unset or empty is no time: Number('') would be 0, and a bundle dated 1970 by mistake.
+  const rawEpoch = process.env.SOURCE_DATE_EPOCH ?? '';
+  const epoch = /^\d+$/.test(rawEpoch) ? Number(rawEpoch) : -1;
   try {
-    if (out === '' || !Number.isInteger(epoch) || epoch < 0) {
+    if (out === '' || epoch < 0) {
       throw new Error(
         'usage: deploy-bundle.ts <version> <image> <out-dir>, with SOURCE_DATE_EPOCH set',
       );
