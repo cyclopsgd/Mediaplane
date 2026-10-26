@@ -79,7 +79,7 @@ Each line says what kind of drift it is:
 - `?` **still in the app, though the stack no longer wants it:** Mediaplane made it, such
   as Prowlarr's link to Sonarr, and Sonarr has since left the stack. `apply` leaves it:
   remove it in the app, or keep it as yours with `mediaplane keep <app>.<resource>`.
-  Removing it for you comes in Slice 10.
+  Removing it for you comes in Slice 10b.
 
 ## Checks
 
@@ -140,11 +140,14 @@ Choose, for each change, which side wins.
   `mediaplane keep <app>.<resource>` writes `<app>.<resource>: unmanaged`. Mediaplane
   doesn't make it again, look at it, or report it. A library of Seerr's that is no longer
   managed in Jellyfin or Plex is no longer enabled by Mediaplane in Seerr either.
-- **A key changed at its source** (`refuses the key Mediaplane holds for it`): put the
-  stored key back in the app, as the
-  [wiring failed runbook](wiring-failed.md#fix) shows for each app, then run `apply`.
-  `apply` checks the key again, and once the app takes it, drift and `plan` ask the app
-  again. Mediaplane doesn't put the key back for you yet (Slice 10).
+- **A key changed at its source** (`refuses the key Mediaplane holds for it`): `apply`
+  puts the key Mediaplane holds back where the app keeps it in a file of its own
+  (qBittorrent's), restarting the app, and has Jellyfin make another. To keep the app's
+  own key instead, `mediaplane keep <app>.<key>`, such as `qbittorrent.apiKey`: once the
+  app takes the key its file holds, it is kept in `state/secrets.json`, and the next
+  `apply` gives it to each resource that holds the old one, which `keep` names. The
+  [rebuilding a host runbook](rebuilding-a-host.md#a-key-changed-at-its-source) has the
+  details for each app.
 - **A download client's key not checked, because qBittorrent lacks a category it
   names.** Sonarr's or Radarr's own test of its download client makes each such
   category in qBittorrent, with no save path, so `plan` and drift don't run it:

@@ -171,26 +171,13 @@ LinuxServer.io image, unmodified.
 ## Known issues
 
 - **Set up before Slice 3a.** If Radarr first started before Mediaplane wrote its
-  `config.xml`, the file has no API key, and `plan` stops with `radarr.not-seeded`. To
-  fix it, stop Radarr, move the file aside, and apply again: Mediaplane writes a new
-  one before Radarr starts. You lose the settings kept in that file, such as a URL
-  base you set in Radarr. Your library and history stay.
-
-  ```bash
-  docker stop mediaplane-radarr-1
-  file=/opt/mediaplane/appdata/radarr/config.xml
-  mv "$file" "$file.before-3a"
-  mediaplane apply
-  ```
-
-  Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
-  `sudo mv`. The old file keeps your settings, to enter again in Radarr. Slice 10
-  does this for you.
-
-  If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the
-  stack's `user:`, not to the user Mediaplane runs as (`MEDIAPLANE_UID` in its
-  container). Give the folder to Mediaplane's user, with
-  `sudo chown <uid>:<gid> /opt/mediaplane/appdata/radarr` and the ids from
-  `deploy/.env`, then apply again. Radarr takes the folder back when it starts. Or
-  delete `appdata/radarr` to start Radarr afresh: it loses its database and settings,
-  but not your media.
+  `config.xml`, the file has no API key: Radarr takes its key from its environment, and
+  doesn't write it there. `plan` lists `radarr.apiKey` under
+  `Keys to put back in their apps' own files`, and Radarr as `> restart`: `apply` stops
+  Radarr, puts the key in its `config.xml`, keeping the rest, and starts it again. If
+  Mediaplane can't write the file (`keys.restore`), the
+  [rebuilding a host runbook](../../docs/runbooks/rebuilding-a-host.md) says what to do.
+- **Its key after a lost `state/`** is read back from `config.xml`, before anything is
+  generated, as the [rebuilding a host runbook](../../docs/runbooks/rebuilding-a-host.md)
+  says. One Mediaplane can't read stops `plan` (`keys.unrecoverable`): a new key would
+  lock it out of Radarr.

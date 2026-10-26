@@ -329,6 +329,11 @@ Controls today:
   when it exits.
 - Mediaplane writes an app's pre-start files only inside its `appdata/<app>` folder. It
   refuses a path that leaves the folder, and a link on the way that leads outside it.
+- Mediaplane reads an app's key from its appdata only when `state/secrets.json` lacks it,
+  and never through a link that leads out of the app's folder: a compromised app could
+  otherwise plant a link to another app's file, and have Mediaplane take that app's key
+  as its own, and send it there. A key put back in an app's file is written only there,
+  never through a link, nor over a file with other names, or of another user or group.
 
 - An app's answers to Mediaplane are read at most 5 MiB at a time, checked against what
   Mediaplane expects, and never run or shown whole: only the app's own message about a
@@ -362,7 +367,7 @@ What remains:
   share your other servers with it as you need.
 - A link stays in Prowlarr when its arr leaves the stack, and keeps that arr's key,
   until it is removed by hand (in Prowlarr's web UI). `mediaplane drift` reports it, as
-  still in the app though the stack no longer wants it; removing it for you is Slice 10.
+  still in the app though the stack no longer wants it; removing it for you is Slice 10b.
 - The apps' calls to each other, and Mediaplane's to them, are plain HTTP on Docker's own
   networks, with keys in them. An app with Docker's default capabilities could try to
   intercept another's traffic on a network they share.
@@ -479,6 +484,9 @@ Controls today:
   Seerr's `settings.json`, with Sonarr's, Radarr's and a Jellyfin key in clear.
   The apps rewrite their own files readable by every user on the host (0644), so
   Mediaplane keeps `appdata/` itself private (0700), as it does `state/`.
+- Key recovery reads those keys back after a lost `state/`, Jellyfin's from its database,
+  opened read-only. A key read so is a secret of the run from then on: kept out of every
+  message, record and output, as the store's are.
 
 What remains:
 
@@ -627,7 +635,8 @@ What remains:
   four `plan`s, or declined `apply`s, before the `apply` ban Mediaplane's address, never
   your browser's. Its key still works. The [runbook](../runbooks/wiring-failed.md) says
   what to do.
-- There is no way yet to rotate the generated password (Slice 10).
+- `mediaplane apply --rotate admin.password` gives every app a new generated password,
+  through each app's key. A password of your own is rotated in its file.
 
 ### T11. Something on the stack's network uses Gluetun's control server
 

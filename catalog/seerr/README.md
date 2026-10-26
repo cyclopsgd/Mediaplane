@@ -138,7 +138,7 @@ With Jellyfin as the media server (with Plex, see below):
 
 ## Not built yet
 
-- **Slice 10:** a way to give Seerr a new Plex token: it keeps the one it signed in with.
+- **Slice 10b:** a way to give Seerr a new Plex token: it keeps the one it signed in with.
 
 See the [roadmap](../../docs/plans/m1-roadmap.md).
 

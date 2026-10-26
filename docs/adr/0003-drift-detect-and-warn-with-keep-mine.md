@@ -85,11 +85,14 @@ address after five failed sign-ins in a row.
   name, and each app found refusing its own key, by the key's name, in
   `state/resources.json`: its one write, besides its lock in `state/lock`.
 
-- **Shared keys are reported, not repaired, in S8.** A key changed at its source, such
-  as qBittorrent's made anew in its web UI, is drift on qBittorrent and on each resource
-  that holds it. Putting the old key back at the source, or taking the new one and giving
-  it to every consumer, needs the key read from the app's own files, which is key
-  recovery: Slice 10 brings both. The wiring failed runbook gives the steps by hand.
+- **Shared keys are reported in S8, and repaired from Slice 10a.** A key changed at its
+  source, such as qBittorrent's made anew in its web UI, is drift on qBittorrent and on
+  each resource that holds it. Re-apply puts the old key back at the source: `apply`
+  stops the app, writes the key into the app's own file, and starts it again. Keep mine
+  is `mediaplane keep <app>.<key>`: it reads the new key from the app's own file, which
+  is key recovery, keeps it in `state/secrets.json` once the app takes it, and names
+  every resource that holds the old one, which the next `apply` gives it to. Keep writes
+  to no app, as drift doesn't.
 
 ## Consequences
 
@@ -106,7 +109,7 @@ address after five failed sign-ins in a row.
 - **Drift can't tell a secret changed in the app from one you changed in the stack:**
   either way, the app refuses the secret the stack has. Its message says both.
 - **A resource left in an app is reported, never removed.** Removing what Mediaplane made
-  when its app leaves the stack needs a delete for every kind of resource: Slice 10.
+  when its app leaves the stack needs a delete for every kind of resource: Slice 10b.
 - **After upgrading to Slice 8, `plan` adopts each root folder once,** changing nothing
   in the apps: it now also records whether the arr reaches the folder.
 - **Drift runs only when you run it** in M1. M2 can run it on a schedule as it is: it

@@ -159,26 +159,13 @@ to the solver only when the site answers with a Cloudflare challenge.
   they now fail, since the solver is gone. Delete it in Prowlarr's web UI (Settings, then
   Indexers, under Indexer Proxies), or turn a solver on again.
 - **Set up before Slice 3a.** If Prowlarr first started before Mediaplane wrote its
-  `config.xml`, the file has no API key, and `plan` stops with `prowlarr.not-seeded`. To
-  fix it, stop Prowlarr, move the file aside, and apply again: Mediaplane writes a new
-  one before Prowlarr starts. You lose the settings kept in that file, such as a URL
-  base you set in Prowlarr. Your indexers stay.
-
-  ```bash
-  docker stop mediaplane-prowlarr-1
-  file=/opt/mediaplane/appdata/prowlarr/config.xml
-  mv "$file" "$file.before-3a"
-  mediaplane apply
-  ```
-
-  Use your own home, and the container name `docker ps` shows. If `mv` is refused, use
-  `sudo mv`. The old file keeps your settings, to enter again in Prowlarr. Slice 10
-  does this for you.
-
-  If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the
-  stack's `user:`, not to the user Mediaplane runs as (`MEDIAPLANE_UID` in its
-  container). Give the folder to Mediaplane's user, with
-  `sudo chown <uid>:<gid> /opt/mediaplane/appdata/prowlarr` and the ids from
-  `deploy/.env`, then apply again. Prowlarr takes the folder back when it starts. Or
-  delete `appdata/prowlarr` to start Prowlarr afresh: it loses its database and settings,
-  your indexers included.
+  `config.xml`, the file has no API key: Prowlarr takes its key from its environment, and
+  doesn't write it there. `plan` lists `prowlarr.apiKey` under
+  `Keys to put back in their apps' own files`, and Prowlarr as `> restart`: `apply` stops
+  Prowlarr, puts the key in its `config.xml`, keeping the rest, and starts it again. If
+  Mediaplane can't write the file (`keys.restore`), the
+  [rebuilding a host runbook](../../docs/runbooks/rebuilding-a-host.md) says what to do.
+- **Its key after a lost `state/`** is read back from `config.xml`, before anything is
+  generated, as the [rebuilding a host runbook](../../docs/runbooks/rebuilding-a-host.md)
+  says. One Mediaplane can't read stops `plan` (`keys.unrecoverable`): a new key would
+  lock it out of Prowlarr.

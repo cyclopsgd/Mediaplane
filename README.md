@@ -41,8 +41,11 @@ Compose and wires the apps together for you.**
 >   update that changes the image's Compose may recreate the apps once, keeping their
 >   data and settings: see [Updating](deploy/README.md#updating)). There has been no
 >   release yet.
-> - **Next:** rebuilding a host from `stack.yaml` and its appdata, and driving
->   Mediaplane from automation.
+> - **Rebuilding a host:** from `stack.yaml` and the apps' appdata, `apply` recovers each
+>   key the apps hold, finds what it made in them by name, and sets a new admin password
+>   through their keys if the generated one is lost. A key changed in an app is put back,
+>   or kept with `mediaplane keep`.
+> - **Next:** driving Mediaplane from automation.
 > - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
 >   your LAN (`network.bind: lan`) or keep them on this machine (`localhost`).
 >
@@ -93,7 +96,8 @@ Mediaplane does that part for you:
 | Hardware transcoding for Plex or Jellyfin (`hardware_transcoding`)                | Done    |
 | Detect manual changes and offer Re-apply or "Keep mine" (`drift`, `keep`)         | Done    |
 | Releases, and updating Mediaplane without touching the stack (none cut yet)       | Done    |
-| Rebuild a host, or deploy with automation such as Ansible                         | Planned |
+| Rebuild a host from `stack.yaml` and its appdata                                  | Done    |
+| Deploy with automation such as Ansible                                            | Planned |
 
 ## The stack
 
@@ -590,11 +594,11 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
 - **Merged:** S1 (the pure core), S2a (`plan` against a real host), S2b (`apply`), S2c
   (packaging), S3a (the shared admin and pre-start files), S3d (the VPN's kill-switch
   test and `vpn-check`), S3b (the wiring framework), S3c (the download path), S4
-  (indexers), S5 (Jellyfin), S6 (requests), S7 (Plex), S8 (drift) and S9 (releases and
-  safe updates). Between S7 and
+  (indexers), S5 (Jellyfin), S6 (requests), S7 (Plex), S8 (drift), S9 (releases and
+  safe updates) and S10a (recovery). Between S7 and
   S8, smaller changes added a guided install (`deploy/install.sh`, and `init` asking for
   your own admin password and signing you in to Plex) and hardware transcoding.
-- **Next:** S10 (recovery and automation), which completes M1.
+- **Next:** S10b (automation), which completes M1.
 
 ## Documentation
 

@@ -683,6 +683,15 @@ only after `apply`, because `plan` joins the network to ask the apps. Bring
 `mediaplane-system` down first, or take Mediaplane off:
 `docker network disconnect mediaplane_wiring mediaplane`.
 
+## Moving to a new host
+
+Keep `stack.yaml`, `secrets/`, `compose.override.yaml` and `appdata/` from the Mediaplane
+home, and your data folder. On the new host, install Mediaplane with the same
+`MEDIAPLANE_HOME`, put them back, then run `mediaplane plan` and `mediaplane apply`: it
+recovers each app's key from its appdata, and finds what it made in the apps by name. The
+[rebuilding a host runbook](../docs/runbooks/rebuilding-a-host.md) has the steps, and
+what Mediaplane can't recover.
+
 ## Removing Mediaplane
 
 `docker compose -f deploy/mediaplane.compose.yaml down` removes Mediaplane and the proxy,

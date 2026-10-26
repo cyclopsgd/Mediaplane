@@ -182,7 +182,9 @@ render
   ▼
 diff
   │ files, containers,
-  │ keys to generate,
+  │ keys to recover from
+  │ appdata, to generate,
+  │ or to put back,
   │ apps not healthy yet,
   │ first-run setups
   ▼
@@ -218,7 +220,9 @@ update to Mediaplane's image brings a new one.
 ```text
 lock
  → plan, then ask
- → generate keys
+ → save the keys found
+   in appdata, generate
+   the rest
  → write files, and
    pre-start files
    if absent
@@ -226,7 +230,10 @@ lock
  → set appdata owners
  → step off the wiring
    network; stop a
-   stranded qBittorrent
+   stranded qBittorrent,
+   and an app whose key
+   goes back in its file
+   (then written)
  → up --wait, an app
    still to set up with
    no published port
@@ -244,14 +251,17 @@ lock
   plans afresh, and does only what is left.
 - **Images are pulled before any container changes.** Nothing is stopped before the
   pull, so a network failure leaves the running stack alone.
-- **Keys are saved before any container starts.**
+- **Keys are saved before any container starts.** A key `state/secrets.json` lacks is
+  first looked for in the app's own appdata, and only generated when the app holds none:
+  see [Rebuilding a host](#rebuilding-a-host).
 - **Pre-start files are written once, before the first start.** Some apps read a file
   when they start: Sonarr's, Radarr's and Prowlarr's `config.xml`, qBittorrent's
   `qBittorrent.conf` and Gluetun's `auth/config.toml`. Apply writes each one only when
   it is absent, in the files step, 0600, and never changes it after that, because the
   apps rewrite them. `plan` lists them as `before first start`, without their content.
   A file that is there but lacks Mediaplane's key is from an install made before
-  Slice 3a: `plan` stops with `<app>.not-seeded`.
+  Slice 3a: apply puts the key in it, the app stopped (see
+  [Rebuilding a host](#rebuilding-a-host)).
 - **Pulls are retried.** When a registry times out, drops the connection, answers with
   a 500, 502, 503 or 504 error, or rate-limits, apply pulls again, up to three times,
   after 5, 15 and 45 seconds. Other errors, such as a missing image or a refused login,
@@ -325,6 +335,55 @@ exist, are on the same filesystem as the folder itself. qBittorrent saves into
 `/data/torrents`, a folder per category, and Sonarr's and Radarr's libraries are
 `/data/media/tv` and `/data/media/movies`, which `apply` makes, and which are Jellyfin's
 Shows and Movies libraries.
+
+## Rebuilding a host
+
+A host is rebuilt from `stack.yaml`, `secrets/`, `compose.override.yaml`, `appdata/` and
+the data folder. Mediaplane makes the rest again
+([runbook](runbooks/rebuilding-a-host.md)):
+
+```text
+appdata/<app>/
+  │ the app's own files
+  ▼
+keys state/secrets.json
+lacks, read back
+  │ never through a link
+  │ out of the folder
+  ▼
+plan: secrets.recover
+  ▼
+apply's keys step
+saves them
+  ▼
+the wiring: each
+resource found by its
+name, and adopted
+```
+
+- **Key recovery.** Each app says where it keeps its keys (`keyFiles` in the catalog):
+  `config.xml` for Sonarr, Radarr and Prowlarr, `qBittorrent.conf`, Seerr's
+  `settings.json`, Gluetun's `auth/config.toml`, and Jellyfin's database, opened
+  read-only with Node's own SQLite. A key file that is there but can't be read stops
+  `plan` (`keys.unrecoverable`): a new key would lock Mediaplane out of an app that still
+  holds the old one.
+- **The admin password can't be read back:** the apps keep a hash. When the one
+  Mediaplane generated went with `state/`, apply generates another, and sets it in each
+  app through the app's key. `apply --rotate admin.password` does the same on purpose.
+  A secret apply generates is never checked by `plan`: no app holds it yet.
+- **Re-adoption.** Every resource Mediaplane makes has a name of its own, by which it is
+  found when `state/resources.json` lacks its id (`adopt`).
+- **A key changed at its source.** An app that keeps its key in a file of its own
+  (qBittorrent, whose web UI rotates it there, Gluetun, and the arrs' `config.xml`) gets
+  the key Mediaplane holds back: `plan` lists it under
+  `Keys to put back in their apps' own files`, the app as `restart`, and apply's start
+  step stops the app, writes the file, as Keep mine writes `stack.yaml`, and `up` starts
+  it again. `mediaplane keep <app>.<key>` keeps the app's own key instead, once the app
+  takes it, and the next `apply` gives it to every resource that holds the old one.
+  Jellyfin, which makes its own key, is signed in to again, while it stays published,
+  and makes another.
+- **A first-run setup that fails** fails its step, but the wiring still runs, skipping
+  that app's resources and what requires them; verify doesn't run.
 
 ## Bootstrap before publish
 
@@ -753,9 +812,10 @@ O ≠ L, O ≠ D: drift, changed
   to know of, redacted once at the end of the run.
 
   `plan` shows the same drift. What puts each right is said by its kind: `apply` puts
-  back a field, a resource or a secret; a key changed at its source, and what is left in
-  an app, are put right by hand, or kept, until Slice 10. Its exit code is 0 when
-  nothing changed and every resource and secret was checked, and 2 otherwise.
+  back a field, a resource or a secret, and a key changed at its source where the app
+  keeps it in a file of its own; what is left in an app is removed by hand, or kept,
+  until Slice 10b. Its exit code is 0 when nothing changed and every resource and secret
+  was checked, and 2 otherwise.
 
 - **Its checks leave few marks** (the owner's decisions of 2026-10-17). A secret it finds
   refused isn't checked again, by drift or `plan`, until `apply` sets it, nor is what only
@@ -797,8 +857,9 @@ O ≠ L, O ≠ D: drift, changed
   ([ADR 0003](adr/0003-drift-detect-and-warn-with-keep-mine.md)). Keeping a download
   client's category gives qBittorrent's category that name: `apply` makes it, and drift
   is clear once it has.
-- **Not yet:** putting back a key at its source, or giving a new one to every app that
-  holds it, and removing what Mediaplane made when its app leaves the stack (Slice 10);
+- **Keep mine of a key:** `mediaplane keep <app>.<key>` keeps an app's own key, changed
+  at its source, as [Rebuilding a host](#rebuilding-a-host) says.
+- **Not yet:** removing what Mediaplane made when its app leaves the stack (Slice 10b);
   drift on a schedule (M2).
 
 ## `vpn-check`
@@ -908,4 +969,6 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
-- recovery and automation (Slice 10), which completes M1.
+- automation (Slice 10b): removing what Mediaplane made when its app leaves the stack,
+  a new Plex token for the arrs and Seerr, the `--json` contract, and the docs that
+  complete M1.

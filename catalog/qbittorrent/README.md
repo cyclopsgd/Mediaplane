@@ -163,28 +163,16 @@ holds for it`. Neither drift nor `plan` sends that key again until `apply` check
   it generated one: it keeps it, and never generates another. `apply` then sets it in
   qBittorrent.
 - **Set up before Slice 3a.** If qBittorrent first started before Mediaplane wrote its
-  `qBittorrent.conf`, it runs with the image's own file. That file has no API key, and
-  until you set a password, qBittorrent makes a new temporary one at every start. `plan`
-  stops with `qbittorrent.not-seeded`. To fix it, stop qBittorrent, move the file
-  aside, and apply again: Mediaplane writes a new one before qBittorrent starts. You
-  lose the settings kept in that file, such as speed limits. Your torrents stay.
-
-  ```bash
-  docker stop mediaplane-qbittorrent-1
-  file=/opt/mediaplane/appdata/qbittorrent/qBittorrent/qBittorrent.conf
-  mv "$file" "$file.before-3a"
-  mediaplane apply
-  ```
-
-  Stop it first: qBittorrent writes the file again when it stops. Use your own home,
-  and the container name `docker ps` shows. If `mv` is refused, use `sudo mv`. Then
-  sign in with what `mediaplane credentials` shows. The old file keeps your settings,
-  to enter again in qBittorrent. Slice 10 does this for you.
-
-  If `apply` then fails with `cannot create … (EACCES)`, the folder belongs to the
-  stack's `user:`, not to the user Mediaplane runs as (`MEDIAPLANE_UID` in its
-  container). Give the folder to Mediaplane's user, with
-  `sudo chown <uid>:<gid> /opt/mediaplane/appdata/qbittorrent/qBittorrent` and the ids
-  from `deploy/.env`, then apply again. qBittorrent takes the folder back when it
-  starts. Or delete `appdata/qbittorrent` to start qBittorrent afresh: it loses its
-  settings and its list of torrents, but not the files it downloaded.
+  `qBittorrent.conf`, its file has no API key. `plan` lists `qbittorrent.apiKey` under
+  `Keys to put back in their apps' own files`: `apply` stops qBittorrent, puts the key in
+  its file, under `[Preferences]`, keeping the rest, and starts it again. The file's
+  login is still the image's, with its temporary password: the wiring then sets the
+  shared login, through the key.
+- **Its key made anew in its web UI** (Options, WebUI, API key) is written into
+  `qBittorrent.conf` at once, and shuts Mediaplane out. `apply` puts the stored key back,
+  restarting qBittorrent; or `mediaplane keep qbittorrent.apiKey` keeps the new one, and
+  the next `apply` gives it to Sonarr's and Radarr's download clients. The
+  [rebuilding a host runbook](../../docs/runbooks/rebuilding-a-host.md#a-key-changed-at-its-source)
+  has the details.
+- **Its key after a lost `state/`** is read back from `qBittorrent.conf`, before anything
+  is generated. One Mediaplane can't read stops `plan` (`keys.unrecoverable`).

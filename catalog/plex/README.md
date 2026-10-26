@@ -185,7 +185,7 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
 - **A new token from `plex-login` reaches the arrs only once the old one is refused.**
   Sonarr and Radarr keep the token they hold while Plex takes it, and get yours at the
   next `apply` when Plex refuses theirs. Seerr keeps the token it signed in with, and
-  Mediaplane can't give it another yet (Slice 10).
+  Mediaplane can't give it another yet (Slice 10b).
 - **A Plex claimed outside `apply`,** with another account, stays unpublished: see the
   [runbook](../../docs/runbooks/wiring-failed.md).
 - **The first `apply` needs plex.tv,** from Docker's default bridge network in the image:

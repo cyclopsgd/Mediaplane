@@ -267,33 +267,29 @@ differ, and a `reason` when it is `unknown`.
 ## Fix
 
 - **`refused Mediaplane's API key (HTTP 401 or 403)`.** The app's key is no longer the
-  one in `state/secrets.json`.
-  - **qBittorrent** keeps its key only in its file, so a key made anew in its web UI
-    shuts Mediaplane out. Stop it, put the stored key back, and start it:
-    `docker stop mediaplane-qbittorrent-1`, set `WebUI\APIKey=` in
-    `appdata/qbittorrent/qBittorrent/qBittorrent.conf` to `qbittorrent.apiKey` from
-    `state/secrets.json`, then `docker start mediaplane-qbittorrent-1`.
-  - **Sonarr, Radarr and Prowlarr** get the stored key in their environment, and in
-    `config.xml` before their first start. Restarting the container may put the stored
-    key back, if the app prefers its environment, but that depends on the app. What works
-    either way: stop the app, set `<ApiKey>` in `appdata/<app>/config.xml` to
-    `<app>.apiKey` from `state/secrets.json` (use `sudo` if the file isn't yours), and
-    start it. If `plan` says `<app>.not-seeded`, follow the app's README.
-  - **Jellyfin** makes its own key, so no key can be put back: a new one is made. A key
-    deleted in Jellyfin's dashboard (API Keys) shuts Mediaplane out of every Jellyfin
-    resource, and `plan` shows them as `? unknown`, with this message. Edit
-    `state/secrets.json` and remove the `jellyfin` entry under `apps`, keeping the file
-    valid JSON (use `sudo` if the file isn't yours). Then run `apply`: Jellyfin is still
-    set up, so Mediaplane signs in as the shared admin, with its port published, makes a
-    new key named `Mediaplane`, keeps it, and gives it to Sonarr's and Radarr's
-    connections, whose own test refuses the old one (`updated apiKey`).
-  - **Seerr** takes the stored key from its environment at every start, whatever its
-    `settings.json` says, so a key made anew in its web UI lasts only until Seerr
-    restarts: `docker restart mediaplane-seerr-1` puts the stored one back.
+  one in `state/secrets.json`: a key changed at its source. The
+  [rebuilding a host runbook](rebuilding-a-host.md#a-key-changed-at-its-source) has the
+  details.
+  - **qBittorrent** keeps its key only in its file, which its web UI writes when it makes
+    a new key. Run `apply`: it stops qBittorrent, puts the stored key back in
+    `appdata/qbittorrent/qBittorrent/qBittorrent.conf`, and starts it again. Or keep
+    qBittorrent's own key: `mediaplane keep qbittorrent.apiKey`, then `apply`, which gives
+    it to Sonarr's and Radarr's download clients.
+  - **Sonarr, Radarr, Prowlarr and Seerr** take the stored key from their environment at
+    every start, and their web UIs can't change it then. One that refuses it was given
+    another by hand, such as an `<APP>__AUTH__APIKEY` or `API_KEY` in
+    `compose.override.yaml`: take that out, and run `apply`.
+  - **Jellyfin** makes its own key. One deleted in its dashboard (API Keys) shuts
+    Mediaplane out of every Jellyfin resource, and `plan` shows them as `? unknown`, with
+    this message, and lists Jellyfin's first-run setup again,
+    `signing in as the admin, to make its key`. Run `apply`: Jellyfin is still set up, so
+    Mediaplane signs in as the shared admin, with its port published, takes the newest
+    key named `Mediaplane` or makes one, keeps it, and gives it to Sonarr's and Radarr's
+    connections, whose own test refuses the old one (`updated apiKey`). That needs the
+    password Jellyfin's admin has.
   - `mediaplane drift` reports a key changed at its source, on the app and on each
     resource that holds it, and keeps that the app refused it: neither drift nor `plan`
-    sends the app that key again until `apply` checks it, so put the key back, then run
-    `apply`. Slice 10 restores a key at its source for you, and makes Jellyfin's anew.
+    sends the app that key again until `apply` checks it.
 - **`refused the request (HTTP 403)`, with
   `banned after too many failed authentication attempts`** (`wire.auth`). qBittorrent
   stops an address from signing in for an hour after five failed sign-ins in a row.

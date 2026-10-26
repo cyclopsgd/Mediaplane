@@ -549,10 +549,10 @@ in `compose.override.yaml` is therefore wired automatically.
 |---|---|
 | `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt, including the format of `--vpn-addresses` (on a terminal, only the refusal of `--vpn-addresses` without `--vpn-provider`, and whether `--lan-subnet` fits this host, wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file. It also checks the home first, creates the data folder, adds a note before each question, and takes the WireGuard key on a hidden prompt (§11, Slice 3b) |
 | `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key or password check can leave a mark in an app: §11, Slices 3c, 4, 5, 6, 7 and 8; it never calls plex.tv); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
-| `apply` | Converge on `stack.yaml` (§5) |
+| `apply` | Converge on `stack.yaml` (§5). `--rotate admin.password`, which `plan` takes too, generates a new admin password, and sets it in every app (§11, Slice 10a) |
 | `status [app]` | Container health, VPN state, and the last apply's outcome |
 | `drift` | Report drift only (§6.3): it changes nothing in the apps but for its checks' marks, fewer than `plan`'s, and keeps what it found of each secret, and of each app's own key, in `state/resources.json`; like `plan`, it joins the wiring network in the image, and like `apply` it holds `state/lock` while it runs (§11, Slice 8) |
-| `keep <path>` | Keep mine: record a drifted value, or a resource deleted or left in an app, as an override, adding one line to `stack.yaml`, and record it as applied in `state/resources.json`; like `plan`, it joins the wiring network in the image, and it holds `state/lock` while it runs (§11, Slice 8) |
+| `keep <path>` | Keep mine: record a drifted value, or a resource deleted or left in an app, as an override, adding one line to `stack.yaml`, and record it as applied in `state/resources.json`; or, for an app's own key changed at its source (`<app>.<key>`), keep the key its own file holds in `state/secrets.json`, which the next `apply` gives to each resource that holds the old one (§11, Slice 10a); like `plan`, it joins the wiring network in the image, and it holds `state/lock` while it runs (§11, Slice 8) |
 | `history [id]` | List change records, or show one in full |
 | `credentials [app]` | Show the shared admin login and per-app URLs (never printed in `--json` unless `--reveal` is given) |
 | `plex-login` | Run the plex.tv PIN flow and save the token where `plex.token` names a file (`secrets/plex-token`), through a short-lived helper in the image (§11, Slice 7) |
@@ -615,7 +615,9 @@ generating anything:
 
 - `ApiKey` from `config.xml`;
 - `WebUI\APIKey` from `qBittorrent.conf`;
-- `main.apiKey` from Seerr's `settings.json`.
+- `main.apiKey` from Seerr's `settings.json`;
+- Mediaplane's role's `apikey` from Gluetun's `auth/config.toml`, and Jellyfin's key from
+  its database (§11, Slice 10a).
 
 New credentials are generated only for apps with no recoverable key. If a
 credential cannot be recovered, for example the Jellyfin admin password, `plan`
@@ -2094,3 +2096,91 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   With only one of the two, the job warns and pulls anonymously.
 - **Node is 24.22.1**, a security release over 24.21.0, which the new check found.
 - **No new Docker API call:** the socket proxy's allow-list is unchanged (§7.2(2)).
+
+### Slice 10a: recovery (2026-10-26)
+
+- **S10 ships in two parts** (§2.3): S10a, recovery (a host rebuilt from `stack.yaml`
+  and its appdata, and the keys and setups Mediaplane holds there), and S10b, automation
+  (removing what Mediaplane made when its app leaves the stack, a new Plex token for the
+  arrs and Seerr, the `--json` contract, and the docs that complete M1). The roadmap
+  gives each part's items.
+- **Key recovery** (§6.1, §10 "Lost `state/`"). Each app says where it keeps its keys in
+  its appdata (`keyFiles` in the catalog). `plan`, `drift`, `keep` and `apply` read every
+  key `state/secrets.json` lacks from there, before anything is generated: `config.xml`
+  (Sonarr, Radarr, Prowlarr), `qBittorrent.conf`, Seerr's `settings.json`, as this
+  section lists them, and Gluetun's `auth/config.toml` (Mediaplane's role, from Slice
+  3a). `plan` lists them under `Secrets to recover from the apps' appdata:`
+  (`secrets.recover` in `--json`, additive within `mediaplane.plan/v1`), and the plan is
+  changed; apply's keys step saves them with those it generates (`recover` in the change
+  record's `plan.secrets`, an optional field within `mediaplane.change/v1`).
+  - **Jellyfin's key,** which Jellyfin makes, is recovered from its database
+    (`data/data/jellyfin.db`, the newest key named `Mediaplane`, as its setup picks
+    one), opened read-only with Node's own `node:sqlite`: Jellyfin keeps it in WAL mode,
+    so a read stops none of its writes and sees each at once, even as another user, with
+    the files readable (probed on Jellyfin 12.2). One closed cleanly, with no `-wal` and
+    `-shm` beside it, is opened immutable: a read-only open would make both, as
+    Mediaplane's user, in Jellyfin's folder (probed). Nothing is written.
+  - **Fail closed.** A key file that is there but can't be read, or holds a key the store
+    can't keep, stops `plan` (`keys.unrecoverable`): a new key would lock Mediaplane out
+    of the app, which still holds the old one. A file whose real path leads out of the
+    app's appdata folder is never read: an app that owns its folder could otherwise hand
+    Mediaplane another app's key. Jellyfin's, which its setup can find by signing in, is
+    a warning, and only while the admin password is to be generated too.
+- **The admin password can't be recovered:** the apps keep only a hash of it. When the
+  one Mediaplane generated went with the store, while the apps still hold their keys,
+  `plan` warns (`secrets.admin-password-lost`), and apply generates another and sets it
+  in each app through the app's key (§6.1: "plan reports it"). A password of your own
+  (`admin.password: { file: … }`) is kept.
+- **Name-based re-adoption** (§6.3) is Slice 3b's `adopt`, for every kind of resource
+  (probed): after a rebuild, each is found by the name Mediaplane gave it, and recorded,
+  with the same id in its app. Seerr's and Plex's `setUp` record goes with the store, so
+  each is set up again, unpublished, and checked to be Mediaplane's (Slices 6 and 7).
+- **A key changed at its source** (§6.3, the last row).
+  - **Re-apply puts it back:** a key file may say how to write its key back (`write`).
+    `plan` lists each key whose app keeps it in a file of its own that holds another key,
+    or none (`Keys to put back in their apps' own files`, `secrets.restore`), and the app
+    as `restart`. The start step stops the app, writes the key into the file, as Keep
+    mine writes `stack.yaml` (no link, no other names, the file's own user and group, its
+    mode kept), and `up` starts it, whatever the write did; a failed write then fails the
+    step. A guest of an app that restarts restarts too (Gluetun's qBittorrent).
+    qBittorrent's web UI rotates its key into its file (probed), so this puts it back
+    there. Sonarr, Radarr, Prowlarr and Seerr take their key from their environment at
+    every start, and their web UIs can't change it then (probed: Seerr's regenerate gives
+    back the same key while `API_KEY` is set, correcting Slice 6's note): only their
+    files need it, after a hand edit, or from before Slice 3a.
+  - **Installs from before Slice 3a** are put right this way (§11, Slice 3a): a
+    `config.xml` without `ApiKey` (the arrs don't write their environment's key into it,
+    probed), a `qBittorrent.conf` without `WebUI\APIKey`, or a Gluetun file without
+    Mediaplane's role (written whole, after your own roles) gets the key, and the app
+    restarts. `<app>.not-seeded` remains for a file Mediaplane can't write so
+    (`keys.restore`).
+  - **Keep mine reads the new key:** `mediaplane keep <app>.<key>` takes the key the
+    app's own file holds, once `plan` finds the app refusing Mediaplane's and the app
+    takes that one, into `state/secrets.json`, and names each resource that holds the old
+    one (`holders`, an optional field within `mediaplane.keep/v1`). The next apply gives
+    it to them, as a secret their app refuses: keep, like drift, writes to no app. It
+    writes nothing in `stack.yaml`, so it works with `managed_by: external` too. An app
+    Mediaplane can't ask with the key (Gluetun's control server) can't be kept.
+  - **Jellyfin's key,** refused while its setup is done (deleted in its dashboard), is
+    made again: `plan` lists its setup, published, and apply's bootstrap step signs in as
+    the shared admin, takes the newest key named `Mediaplane` or makes one, and saves it;
+    the arrs' connections take it in the wire step (§11, Slice 5's step by hand).
+- **A failed first-run setup no longer stops the wiring** (§5.1). The bootstrap step
+  fails, as before, but the wire step still runs, skipping that app's resources and what
+  requires them (`<app>'s first-run setup failed`); verify is skipped. A failure to reach
+  or publish the apps still stops it.
+- **Rotating the admin password:** `plan --rotate admin.password` and
+  `apply --rotate admin.password` generate it anew, as after a lost store. A password of
+  your own is refused (`rotate.yours`): change its file. A secret apply generates is
+  taken as a change, unchecked: no app holds it yet, so no sign-in is sent with it, and
+  none counts towards qBittorrent's ban.
+- **The setups' contract** (§3.2): a setup gets only the keys you give that an app's API
+  takes (`BootstrapContext.given`: your Plex token), never `state/secrets.json`'s;
+  `Bootstrap.firstStart` takes no stack; `AppLoginKind`'s own login is `{ own: 'Plex' }`;
+  `{ comingIn }` stays for apps to come, as `mediaplane.credentials/v1` keeps `not-yet`.
+- **Plex on a rebuilt host** comes back through Slice 7's setups: Plex, with its
+  `Preferences.xml`, and Seerr are asked whose account they are, through plex.tv. That
+  is unit-tested, not end to end on every pull request, which can't reach a real
+  plex.tv account.
+- **No new Docker API call:** recovery reads files in the home, a key put back is a file
+  written there between `compose stop` and `up`, which apply already makes (§7.2(2)).

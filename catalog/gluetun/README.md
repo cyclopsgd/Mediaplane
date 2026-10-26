@@ -131,24 +131,12 @@ Nothing for Gluetun itself. See the [roadmap](../../docs/plans/m1-roadmap.md).
   ```
 
   - If `appdata/gluetun/auth/config.toml` was there already, without Mediaplane's role
-    (`name = "mediaplane"`), `plan` stops with `gluetun.not-seeded`, even if your own
-    roles have keys. To fix it, stop Gluetun, move the file aside, and apply again:
-    Mediaplane writes a new one, starts Gluetun again, and restarts qBittorrent, which
-    shares Gluetun's network and loses it when Gluetun stops.
+    (`name = "mediaplane"`), `plan` lists `gluetun.controlApiKey` under
+    `Keys to put back in their apps' own files`, and Gluetun and qBittorrent as
+    `> restart`: `apply` stops them, adds Mediaplane's role after your own, which stay as
+    they are, and starts them again. A role named `mediaplane` with another key is
+    written again whole. If Mediaplane can't write the file (`keys.restore`), the
+    [rebuilding a host runbook](../../docs/runbooks/rebuilding-a-host.md) says what to do.
 
-    ```bash
-    docker stop mediaplane-gluetun-1
-    file=/opt/mediaplane/appdata/gluetun/auth/config.toml
-    mv "$file" "$file.before-3a"
-    mediaplane apply
-    ```
-
-    Use your own home, and the container names `docker ps` shows. If `mv` is refused,
-    use `sudo mv`. The old file keeps your own roles: add them again below Mediaplane's
-    in the new file, then restart Gluetun and qBittorrent as above.
-
-  - If `apply` then fails with `cannot create … (EACCES)`, the `auth` folder doesn't
-    belong to the user Mediaplane runs as (`MEDIAPLANE_UID` in its container). Give it to
-    that user, with `sudo chown <uid>:<gid> /opt/mediaplane/appdata/gluetun/auth` and the
-    ids from `deploy/.env`, then apply again. Gluetun runs as root, so it still reads the
-    file.
+- **Its key after a lost `state/`** is read back from Mediaplane's role in
+  `auth/config.toml`, before anything is generated.

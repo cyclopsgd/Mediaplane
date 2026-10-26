@@ -2,8 +2,8 @@
 
 **Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md)
 
-M1 is too large for one implementation plan, so it is delivered in 15 vertical
-slices: S1, S2 in three parts, S3 in four, and S4 to S10. Each slice:
+M1 is too large for one implementation plan, so it is delivered in 16 vertical
+slices: S1, S2 in three parts, S3 in four, S4 to S9, and S10 in two. Each slice:
 
 - ends with working, tested software and a green CI;
 - gets its **own detailed plan**, written when the previous slice has landed, so
@@ -25,15 +25,16 @@ Detailed plans so far:
 - Slice 7: [`m1-s7-plex.md`](m1-s7-plex.md) (done).
 - Slice 8: [`m1-s8-drift.md`](m1-s8-drift.md) (done).
 - Slice 9: [`m1-s9-releases.md`](m1-s9-releases.md) (done).
+- Slice 10a: [`m1-s10a-recovery.md`](m1-s10a-recovery.md) (done).
 
 Where M1 stands (the README shows the same):
 
-- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4, S5, S6, S7, S8 and S9.
+- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4, S5, S6, S7, S8, S9 and S10a.
 - **Between S7 and S8 (2026-10-17), outside the slices** by the lighter route for small
   changes (test-first, one review, CI): `hardware_transcoding` for Plex and Jellyfin,
   `init` offering the Plex sign-in and asking for your own admin password, and
   `deploy/install.sh`.
-- **Next:** S10 (recovery and automation), which completes M1.
+- **Next:** S10b (automation), which completes M1.
   [After M1](#after-m1) has what comes next.
 
 ## Slices
@@ -61,7 +62,7 @@ Where M1 stands (the README shows the same):
 | S7 | **Plex** | `plex-login` (the plex.tv PIN flow), the Plex claim through a plex.tv helper, its libraries, the arr → Plex connections, Seerr's sign-in with the Plex token, and a nightly Plex CI job | §6.1 (Plex, Seerr), §6.2 (media-server rows), §8.1 (Plex) | Success criterion 2: Plex is wired headlessly, except for the single Plex sign-in |
 | S8 | **Drift** | The three-way drift model, `drift`, `keep` (Keep mine), a comment-preserving override writer, `unmanaged`, the "drift reported" runbook, and the S8 items below, with the owner's decisions of 2026-10-17 | §6.3 | Success criterion 4 |
 | S9 | **Releases and safe updates** | Versioned, published releases, and updating Mediaplane without touching the stack (listed below) | §8.2, §9 | Success criterion 7 |
-| S10 | **Recovery and automation** | Rebuilding a host, and running Mediaplane from automation (listed below) | §6.1 (key recovery), §6.3, §9 | M1 is done |
+| S10 | **Recovery and automation**, in two parts: S10a and S10b | Rebuilding a host, and running Mediaplane from automation (listed below) | §6.1 (key recovery), §6.3, §9 | M1 is done |
 
 **S9, releases and safe updates:**
 
@@ -106,6 +107,40 @@ leaves the stack running.
 
 It proves that a host can be rebuilt from `stack.yaml` and its appdata, by hand or by a
 playbook. That completes M1.
+
+### S10 is delivered in two parts (decided 2026-10-26)
+
+S10 is too large for one plan (about 16 tasks), so it ships as two parts, each ending
+green, as a full slice does. The cut follows what each changes: S10a, what Mediaplane
+holds on a host (its keys, and the setups that make or use them), so that a host is
+rebuilt from its files; S10b, what the stack and its users see from outside (what is
+removed when an app leaves, the Plex token's rotation, and the contract automation
+relies on, with the docs that complete M1).
+
+- **S10a: recovery** ([plan](m1-s10a-recovery.md)).
+  - Delivers: key recovery from appdata, Jellyfin's from its database; a key put back at
+    its source, installs from before S3a included; keep of an app's own key, given to
+    every holder by the next `apply`; Jellyfin's key made again; a failed first-run setup
+    no longer stopping the wiring; the setups' keys and contract leftovers; the admin
+    password rotated (`--rotate admin.password`), and set anew through the keys after a
+    lost `state/`; the "rebuilding a host" runbook.
+  - Proves: a host rebuilt from `stack.yaml` and its appdata, on real Docker: every key
+    recovered, every resource adopted by name, a new admin password set through the keys,
+    and a second `apply` with no changes; qBittorrent's key changed in its web UI, put
+    back by `apply`, then kept by `keep`.
+- **S10b: automation.**
+  - Delivers: removing what Mediaplane made when its app leaves the stack (§8.1(3) step
+    4); a new Plex token for the arrs, and Seerr signed in again with it, a Plex
+    unclaimed while it runs claimed again, Seerr's own Jellyfin key replaced, and Seerr
+    asked rather than its `settings.json` read; externally managed mode finished, with
+    `keep`'s line to add in `mediaplane.keep/v1`; the `--json` contract pinned and in the
+    generated docs, exit codes, commands that ask nothing when a script runs them, and a
+    second `apply` that changes nothing; `plan --help` and `drift --help` pointing at the
+    published docs; the "deploying with automation" guide with a short Ansible example,
+    the full README and the add-an-app guide; the test gaps and S9's review items below;
+    and which Compose versions work out a service differently.
+  - Proves: a playbook deploys a stack, removes an app from it, and rebuilds the host,
+    reading only the documented contract.
 
 ### S2 is delivered in three parts (decided 2026-10-09)
 
@@ -535,6 +570,7 @@ password, which are S3c's (and listed again below).
 - **Moved to S10 on 2026-10-25:** the items here about recovery: restoring a key at
   its source (installs from before Slice 3a), Jellyfin's key deleted by hand, and
   rotating the admin password. S8 keeps drift and Keep mine.
+  - **Done in S10a:** all three, as the items below say.
 - **Decided by the owner on 2026-10-17,** for the items below:
   - **qBittorrent's post-import category:** `plan` skips the arr's download-client test
     while that category is missing.
@@ -553,11 +589,16 @@ password, which are S3c's (and listed again below).
   - **Moved to S10:** giving Seerr a new token means signing Seerr in again, which needs
     the setup's care and plex.tv, with the recovery of a key that changed. Drift can't
     check that token with Seerr's key without a call that reaches plex.tv.
+  - **Moved to S10b:** it needs plex.tv probes with a real account, and a test that only
+    the nightly job can run; it rotates a token you give, which S10a's recovery of the
+    keys Mediaplane holds doesn't touch.
 - **The arrs keep a Plex token while Plex takes it** (S7): a new token from `plex-login`
   reaches them only once the old one is refused. Decide whether drift moves them to it.
   - **Decided in S8:** no. Secrets are checked, never compared, and one that works is
     left; the new token reaches them once Plex refuses the old one. Moving them to it is
     rotation, with S10.
+  - **Moved to S10b,** with Seerr's new token: both need to know the token changed,
+    which Mediaplane can't tell by comparing secrets.
 - **Plex's libraries are known by name** (S7), as Jellyfin's are: one renamed by hand
   is left, and the next `apply` makes `Movies` or `TV Shows` again on the same folder.
   Decide whether drift reports the renamed one. A folder added by hand is put back:
@@ -577,19 +618,26 @@ password, which are S3c's (and listed again below).
     (`key` drift); `plan` lists Plex's setup when its file holds no `PlexOnlineToken`.
     A Plex unclaimed while it runs was not probed in S8; claiming it again is recovery:
     S10.
+  - **Moved to S10b,** with the Plex token's items: it needs a real claim, through
+    plex.tv. A rebuilt host's Plex is checked again by S7's setup (S10a).
 - **Every setup gets every stored key** (S7): `BootstrapContext.keys` holds each app's,
   but Plex's and Seerr's setups read only your Plex token. Narrow it, to the keys you
   give or to the Plex token alone, when S8 changes the setups for signing in again.
   - **Moved to S10:** S8 changes no setup; S10 signs setups in again.
+  - **Done in S10a:** a setup gets only the keys you give that an app's API takes
+    (`BootstrapContext.given`): your Plex token.
 - **The setups' contract has leftovers** (S7): `Bootstrap.firstStart`'s `stack` is
   unused; `AppLoginKind`'s `{ own: string }` could be `{ own: 'Plex' }`; and no app uses
   `{ comingIn }` or the `login: 'not-yet'` of `credentials` any more. Keep `not-yet` while
   `mediaplane.credentials/v1` has it, but say it is for later slices.
   - **Moved to S10,** with the setups, for the same reason.
+  - **Done in S10a:** `firstStart` takes no stack, and the own login is
+    `{ own: 'Plex' }`; `{ comingIn }` and `not-yet` stay, for the apps to come.
 - **The fake Seerr's `/auth/me` answers a session that isn't its admin's** with the
   admin's `plexId` and `jellyfinUsername` (S7). Nothing reads them from such a session
   yet. Fix the fake when signing Seerr in again reads sessions.
   - **Moved to S10,** with signing Seerr in again.
+  - **Moved to S10b,** with signing Seerr in again.
 
 - Override field names are case-sensitive, so the managed-field comparison must
   match them exactly.
@@ -650,6 +698,8 @@ password, which are S3c's (and listed again below).
   Automate it: stop the app, add the stored key to its file, and start it ("restore
   the key at the source", spec §6.3).
   - **Moved to S10 on 2026-10-25,** with restoring a key at its source.
+  - **Done in S10a:** `apply` stops the app, puts the key in its file, and starts it
+    again; `not-seeded` remains only for a file Mediaplane can't write so.
 - **FlareSolverr's anonymous volume.** Its image declares `VOLUME /config`, and the
   catalog mounts nothing there, so every container it creates leaves an anonymous
   volume behind. Mount a folder there, or document it. (The end-to-end helpers
@@ -663,6 +713,8 @@ password, which are S3c's (and listed again below).
 - **Rotating the admin password.** There is no way to replace the generated password
   yet. Add one, which reaches every app through its API.
   - **Moved to S10 on 2026-10-25.**
+  - **Done in S10a:** `apply --rotate admin.password`, and `plan` with it, set a new one
+    through each app's key, as after a lost `state/`.
 - **A wiring network whose settings change.** Compose must make it anew then, and
   through the socket proxy it can't delete a network (S3b). The wiring failed runbook
   gives the steps by hand. Decide whether Mediaplane should do them.
@@ -685,6 +737,7 @@ password, which are S3c's (and listed again below).
   - **Done in S8:** drift reports each as still in the app, and `mediaplane keep
     <app>.<resource>` stops it. **Moved to S10:** removing them, which needs a delete
     for every kind of resource, and its own end-to-end test (spec §8.1(3) step 4).
+    **Moved to S10b:** it changes what the stack holds, not what Mediaplane recovers.
 - **Settings Mediaplane manages in Prowlarr are put back.** A link's addresses, sync
   level or categories, or the proxy's host, timeout or tags, changed in Prowlarr's web
   UI, are undone by the next `apply` (S4). Keep mine must cover them.
@@ -727,6 +780,8 @@ password, which are S3c's (and listed again below).
   take it.
   - **Moved to S10 on 2026-10-25,** with key recovery. Drift reports it, as Jellyfin
     refusing its key.
+  - **Done in S10a:** `plan` lists Jellyfin's setup again, published, while its wizard is
+    done, and `apply` signs in, makes the key, and gives it to the connections.
 - **Checking Jellyfin's admin password signs in** (S5), and Jellyfin's activity log keeps
   three lines for each check. Drift every 15 minutes (M2) would add about 300 a day.
   Decide whether drift checks it less often.
@@ -754,6 +809,8 @@ password, which are S3c's (and listed again below).
   this for a setup that waits (Seerr's, while Jellyfin refuses the shared admin), whose
   app's resources are skipped; a failed one still stops the wiring.
   - **Moved to S10:** it changes apply's steps, not drift.
+  - **Done in S10a:** the wire step runs past it, skipping that app's resources and what
+    requires them; verify doesn't run.
 - **Seerr's checks log a line when they fail** (S6, probed): Seerr's own test of a
   server, and its list of Jellyfin's users that checks its Jellyfin key, log an error in
   Seerr's log, and a refused key one in the arr's. Decide how often scheduled drift may
@@ -772,12 +829,16 @@ password, which are S3c's (and listed again below).
   whether drift should replace it, and remove the one Seerr made.
   - **Decided in S8:** drift never writes to an app. Replacing it is rotation: moved to
     S10.
+  - **Moved to S10b,** with the other rotations of what Seerr holds.
 - **A Seerr whose `settings.json` Mediaplane can't read** is set up again, unpublished,
   on every `apply` (S6): two recreates each time, with a warning, and `apply` fails at
   verify (exit 1) each time, until the file is readable. Decide whether drift reports
   it, or asks Seerr over the wiring network instead.
   - **Decided in S8:** drift warns as `plan` does. Asking Seerr over the wiring network
     instead changes its setup: moved to S10.
+  - **Moved to S10b,** with Seerr signed in again. S10a reads its key from that file
+    too, and a file it can't read stops `plan` (`keys.unrecoverable`) when the store
+    lacks the key.
 - **Seerr's libraries are enabled by name, from Seerr's last sync** (S6). A library made
   anew in Jellyfin has a new id; `plan` reads Seerr's last sync, which `apply` refreshes
   only when the libraries differ. Decide whether drift syncs them, which writes to Seerr.
@@ -804,6 +865,7 @@ password, which are S3c's (and listed again below).
   gaps.
   - **Settled in S9,** each as the item says below. `main`'s protection is the owner's
     to set: the S9 plan gives the settings for light and strict, and recommends strict.
+  - **S10's are S10b's** (split on 2026-10-26): S10a settles none of the items below.
 - **Decided by the owner on 2026-10-17:**
   - the licence is GPL-3.0-or-later (**done in S9:** every `package.json`'s `license`,
     the image's label, the README and the spec);
@@ -925,14 +987,14 @@ password, which are S3c's (and listed again below).
     revoked or wrong token fails the job, with no fallback; removing the secrets goes back
     to anonymous pulls, and with only one of the two a job warns and pulls anonymously.
     GHCR's and lscr.io's pulls stay anonymous, and apply's own pull retries stay.
-- **Which Compose versions work out a service differently (open, for S10).** Updating
+- **Which Compose versions work out a service differently (open, for S10b).** Updating
   Mediaplane never touches the stack, but a later `apply` runs the image's own Docker
   Compose, and Compose 5.5.1 recreated containers made by 2.38.2 from an unchanged file.
   So the first `apply` after an update that changed the bundled Compose may recreate every
   app container (a restart, keeping their data). S9 says so in the deploy guide and in
   the guidance for a release's notes. S10: probe which pairs of Compose versions differ,
   and say so in Renovate's pull request for a Compose bump.
-- **From S9's reviews, for S10.** None hides a fault in S9's releases:
+- **From S9's reviews, for S10b.** None hides a fault in S9's releases:
   - a test that Renovate can read the tag of each image pinned outside the catalog
     (busybox, Trivy, gitleaks, actionlint, Node, Docker, the socket proxy, BuildKit,
     BuildKit's SBOM scanner, the registry), as
@@ -946,7 +1008,7 @@ password, which are S3c's (and listed again below).
     them too;
   - the indexers end-to-end test could check that `appdata/flaresolverr` is owned by
     the stack's user and group (1000), replayed on both Composes.
-- **Before the first real migration** of `stack.yaml` (none is planned, S10 included;
+- **Before the first real migration** of `stack.yaml` (none is planned, S10a and S10b included;
   spec §11, Slice 9): make the commands that only read `stack.yaml` (`credentials`,
   `vpn-check`, `plex-login`) give the old-version warning, which they drop today; and
   make `keep` refuse an older-version file, saying to run `migrate` first, rather than
@@ -995,7 +1057,7 @@ password, which are S3c's (and listed again below).
     media paths to `/data`, taking over its libraries by name rather than adding
     `Movies` and `TV Shows` beside them, an "adopted" mode for the open-settings check
     (allowed networks may be set on purpose), and the same for any existing Sonarr and
-    Radarr. It builds on S10's re-adoption by name and key recovery from appdata.
+    Radarr. It builds on S10a's re-adoption by name and key recovery from appdata.
 - **NVIDIA hardware transcoding.** `hardware_transcoding` gives the media server
   `/dev/dri`, which covers Intel Quick Sync and AMD. NVIDIA needs Docker's NVIDIA
   runtime instead: a later `gpu: nvidia` style option, tested on a host with the

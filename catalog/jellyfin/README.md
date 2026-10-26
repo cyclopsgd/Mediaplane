@@ -176,10 +176,15 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
   then remove `appdata/jellyfin`, then run `apply`. That loses its database and settings,
   but not your media.
 - **Its key deleted in Jellyfin's dashboard** (API Keys). `plan` warns that Jellyfin
-  refuses Mediaplane's API key. Remove the `jellyfin` entry under `apps` from
-  `state/secrets.json`, keeping the file valid JSON, and apply: Mediaplane signs in as the
-  admin, makes a new key, and gives it to Sonarr and Radarr. Slice 10 does this for you.
-  The [wiring failed runbook](../../docs/runbooks/wiring-failed.md) has the details.
+  refuses Mediaplane's API key, and lists its first-run setup again, published: `apply`
+  signs in as the admin, makes a new key, and gives it to Sonarr and Radarr. The
+  [wiring failed runbook](../../docs/runbooks/wiring-failed.md) has the details.
+- **Its key after a lost `state/`** is read back from Jellyfin's database
+  (`appdata/jellyfin/data/data/jellyfin.db`): the newest key named `Mediaplane`, read
+  without changing anything, while Jellyfin runs. So a rebuilt host needs no sign-in to
+  Jellyfin, and a generated admin password, lost with `state/`, is set again through the
+  key. The [rebuilding a host runbook](../../docs/runbooks/rebuilding-a-host.md) has
+  what to do when the database can't be read.
 - **Its `appdata/` emptied by hand.** Jellyfin starts its wizard again. Stop Jellyfin
   first (`docker stop mediaplane-jellyfin-1`), then remove `appdata/jellyfin`, then run
   `apply`: it finds no `system.xml` saying the wizard is done, starts Jellyfin
