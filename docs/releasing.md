@@ -36,16 +36,17 @@ push to main
    which may open the pull request only once the repository allows GitHub Actions to
    create pull requests (Settings, Actions, General, Workflow permissions; the owner's
    step). Even then GitHub starts no workflow for that pull request, so close it and open
-   it again: that starts CI.
+   it again: that starts CI. Until one of the two is done, release-please can't open its
+   pull request, and the Release workflow fails on each push to `main`.
 3. **Merging it cuts the release.** release-please tags the commit `v<version>` and
    writes the GitHub release, with the changelog, at once: the tag and the release page
    exist from the merge, before CI has passed on it.
 4. **In the same run, the release workflow publishes it,** once CI's last job,
    `All checks passed`, has passed on that commit (it waits up to 90 minutes). CI runs on
    every commit on `main`, none cancelled or queued behind another, so the release's
-   commit always gets a run of its own. Each job that builds from the tree (the images,
-   the tag and the deploy files) checks out the release's tag, and checks that it is still
-   the commit CI passed:
+   commit always gets a run of its own. Each job that checks out the release's tag (the
+   wait for CI, the images, the tag and the deploy files) checks that it is still the
+   commit release-please tagged, the one CI passed:
    - on an amd64 runner and an arm64 runner, natively, it builds the image, with its
      SBOM and build provenance, scans it with Trivy, and pushes the image it scanned by
      digest, checking that what it pushed is what it scanned;
@@ -147,7 +148,10 @@ activity: if the weekly run stops, turn it on again in the repository's Actions 
 
 ## If a release stops halfway
 
-Re-run the failed jobs from the workflow run's page. Each step can run again:
+Re-run the failed jobs from the workflow run's page, within 7 days: the jobs pass the
+digests pushed and the deploy files on to the next as the run's files, which GitHub keeps
+7 days. After that, re-run the image jobs, which re-runs the jobs after them too: they
+build another index digest, and so other deploy files, as above. Each step can run again:
 
 - before the images are pushed, nothing is published but the tag and the release page,
   which release-please made at the merge;
@@ -157,7 +161,11 @@ Re-run the failed jobs from the workflow run's page. Each step can run again:
 - an image pushed by digest but not tagged is an untagged version in the package, which
   the next run tags or leaves;
 - the deploy files are uploaded with `--clobber`, and the notes are written from the
-  release's own, the tested app versions taking the place of those a run added before.
+  release's own, the tested app versions taking the place of those a run added before;
+- a release run can show as cancelled before it started: while one run is in progress,
+  GitHub cancels a run queued behind it when a newer one queues. If that was the merge's
+  run, the next push's run cuts the release (its release-please tags the merged pull
+  request), or re-run the cancelled one.
 
 If CI fails on the release's commit, nothing else is published: no image and no deploy
 files, so the release page has none, and the deploy guide's commands find nothing for

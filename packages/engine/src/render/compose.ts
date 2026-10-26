@@ -40,8 +40,10 @@ export const PROJECT_NAME = 'mediaplane';
  * The stack's wiring network (ADR 0011): internal, so it has no route out. Every app
  * whose API Mediaplane calls joins it, and so does Mediaplane's own container while it
  * wires them. Compose names it "<project>_wiring". Its settings never change in an
- * update: Compose would have to make it anew, and through the socket proxy it can delete
- * no network. A release that must change them brings its own step, in its notes.
+ * update. If they ever differed from the network's, Compose would stop every app on it
+ * to make it anew, then fail to remove it, since the socket proxy deletes no network,
+ * leaving those apps stopped. compose.test.ts's "the wiring network" tests pin them; a
+ * release that must change them brings its own step, in its notes.
  */
 export const WIRING_NETWORK = 'wiring';
 

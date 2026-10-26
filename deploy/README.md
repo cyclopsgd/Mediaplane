@@ -116,11 +116,11 @@ you only a home it has just created, never a folder that was already there. With
   the one image it takes unpinned: the one it builds from a checkout.
 - **Only Mediaplane's own project:** it runs Compose on `mediaplane.compose.yaml` only,
   always as `-p mediaplane-system`, and gives Compose exactly the image it checked. It
-  clears the shell's `COMPOSE_*` settings that choose the project, file, profiles or `.env`,
-  and names the project and the file itself, so
-  neither the shell's nor `deploy/.env`'s can move it to another project or file, and
-  none can change the image. It pulls the image and the socket proxy's before it recreates
-  anything; Docker checks everything it pulls against the digest.
+  clears the shell's `COMPOSE_*` settings that choose the project, file, profiles or
+  `.env`, and names the project and the file itself, so neither the shell's nor
+  `deploy/.env`'s can move it to another project or file, and none can change the image.
+  It pulls the image and the socket proxy's before it recreates anything; Docker checks
+  everything it pulls against the digest.
 - **If `mediaplane` then runs something else** in your shell, `type -a mediaplane` shows
   what, such as an old alias.
 
@@ -346,19 +346,24 @@ host
 
 ## Updating
 
-Updating Mediaplane recreates Mediaplane's own container, and nothing else. It never
+Updating Mediaplane recreates Mediaplane's own project, `mediaplane-system`: its
+container, and the socket proxy too when the release changed the proxy's pin. It never
 restarts, recreates or pulls an app of your stack, and leaves the stack's networks, its
 volumes and `generated/` as they are: an end-to-end test checks each container's id,
-start time, restarts and mounts, every file in `generated/` and `state/` but its lock, and
-that Docker
-pulls only Mediaplane's image and the proxy's, across an update and back. Afterwards,
-`mediaplane plan` shows what the new version would change, if anything, and only `apply`
-changes it, when you run it. That is not a promise that the next `apply` changes nothing:
-see the note on Compose below.
+start time, restarts and mounts, every file in `generated/` and `state/` but its lock,
+and that Docker pulls only Mediaplane's image and the proxy's, across an update and back.
+That test runs `pull` and `up -d` itself, as below; the installer's own calls are checked
+by its sandbox tests. Afterwards, `mediaplane plan` shows what the new version would
+change, if anything, and only `apply` changes it, when you run it. That is not a promise
+that the next `apply` changes nothing: see the note on Compose below.
+
+Don't update while a `mediaplane` command runs: recreating the container stops it
+partway. The next `apply` finishes the job.
 
 **From a release** (from the first one): unpack the next release's deploy files over the
 old ones, in the same folder, then run its installer. It keeps your `deploy/.env`, pulls
-the new image, then recreates Mediaplane's container:
+the new image, then recreates Mediaplane's container (and the proxy's, if its pin
+changed):
 
 ```bash
 version=0.2.0
@@ -386,7 +391,7 @@ too leaves the stack as it is. One thing can stop it: an older Mediaplane refuse
 `state/resources.json` that `drift` has written to (see the drift item below).
 
 **From a checkout:** pull, then run the installer again. It rebuilds the image and
-recreates Mediaplane's container:
+recreates Mediaplane's container (and the proxy's, if its pin changed):
 
 ```bash
 git pull

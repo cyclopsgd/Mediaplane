@@ -932,6 +932,24 @@ password, which are S3c's (and listed again below).
   app container (a restart, keeping their data). S9 says so in the deploy guide and in
   the guidance for a release's notes. S10: probe which pairs of Compose versions differ,
   and say so in Renovate's pull request for a Compose bump.
+- **From S9's reviews, for S10.** None hides a fault in S9's releases:
+  - a test that Renovate can read the tag of each image pinned outside the catalog
+    (busybox, Trivy, gitleaks, actionlint, Node, Docker, the socket proxy), as
+    `scripts/supply-chain.test.ts` does for the catalog's and WireGuard's;
+  - `install.sh` clears the shell's `COMPOSE_*` settings, but not `DOCKER_HOST` or
+    `DOCKER_CONTEXT`, so a shell that sets one points Compose at another daemon than
+    the socket the installer checked. Unsetting them or refusing them is a choice to
+    make;
+  - `plan`, `apply` and `drift` read `stack.yaml` with a plain read, so a named pipe in
+    its place makes them wait. `migrate` refuses one, and its file check could serve
+    them too;
+  - the indexers end-to-end test could check that `appdata/flaresolverr` is owned by
+    the stack's user and group (1000), replayed on both Composes.
+- **Before the first real migration** of `stack.yaml` (none is planned, S10 included;
+  spec §11, Slice 9): make the commands that only read `stack.yaml` (`credentials`,
+  `vpn-check`, `plex-login`) give the old-version warning, which they drop today; and
+  make `keep` refuse an older-version file, saying to run `migrate` first, rather than
+  write overrides in the old version's shape.
 
 **The panel (not scheduled since 2026-10-25):**
 

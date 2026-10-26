@@ -134,10 +134,11 @@ breaking change (`feat!:`) the minor one. [Releasing](docs/releasing.md) has the
 
 Every image is pinned by tag and digest, and every Action by commit SHA with its
 version in a comment; `scripts/supply-chain.test.ts` checks both. Once the Renovate app
-is installed (an owner's step), Renovate keeps them current (`renovate.json`). A pinned image goes in a file Renovate reads: a catalog
-`app.ts`, the `Dockerfile`, `deploy/mediaplane.compose.yaml`, a workflow, the pre-commit
-hook, a script in `scripts/ci/` or an end-to-end test. A bump of an app's pin changes its
-README's facts: run `pnpm docs:generate` on its branch.
+is installed (an owner's step), Renovate keeps them current (`renovate.json`). A pinned
+image goes in a file Renovate reads: a catalog `app.ts`, the `Dockerfile`,
+`deploy/mediaplane.compose.yaml`, a workflow, the pre-commit hook, a script in
+`scripts/ci/` or an end-to-end test. A bump of an app's pin changes its README's facts:
+run `pnpm docs:generate` on its branch.
 
 ## Never commit real secrets
 

@@ -2026,10 +2026,15 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 - **Updating** (§4.4) is `pull` then `up -d` on `mediaplane-system`, as §4.4 says, with
   the next release's `mediaplane.compose.yaml`: its image is pinned, so the file is the
   update, and `pull` with the old one changes nothing. `install.sh` does the same. It
-  recreates only Mediaplane's container: an end-to-end test checks every container of the
+  recreates only Mediaplane's own project: its container, and the socket proxy too when
+  the release changed the proxy's pin. An end-to-end test checks every container of the
   stack (its id, image, state, start time, restarts and mounts), its networks, and every
   file in `generated/` and `state/` but the lock, and that Docker pulls only Mediaplane's
   image and the proxy's, across an update, a `plan` (which pulls nothing), and going back.
+  That test runs `compose pull` and `up -d` itself; the installer's own calls are checked
+  by its sandbox tests (`deploy/deploy.test.ts`). A `mediaplane` command running during
+  an update is stopped partway, as its container is recreated; the next `apply` finishes
+  the job.
   A later `apply` runs the image's own Docker Compose, though, and different Compose
   versions can work out a service's configuration differently: Compose 5.5.1 recreated
   containers made by 2.38.2 from an unchanged file. So the first `apply` after an update
@@ -2059,13 +2064,17 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   linked one) has nothing to migrate, and `migrate` exits 0. With
   `managed_by: external` it writes nothing and gives the file as it should be, on
   standard output and as `text` in `mediaplane.migrate/v1`. No migration exists yet, so
-  `migrate` has nothing to do; the machinery is tested with a made-up version 0.
+  `migrate` has nothing to do; the machinery is tested with a made-up version 0. The
+  first real migration must also make the commands that only read `stack.yaml`
+  (`credentials`, `vpn-check`, `plex-login`) give the old-version warning, which they
+  drop today, and make `keep` refuse an older-version file, saying to run `migrate`
+  first, rather than write overrides in the old version's shape.
 - **Renovate** (§7.2(7), §8.2) bumps, once its app is installed (an owner's step), each
   catalog pin, tag and digest, through a custom manager, with a versioning rule for each
   linuxserver.io tag, and the images pinned outside the catalog, npm packages and the
-  Actions' commits. Nothing merges itself. The hosted Renovate can't run `pnpm
-  docs:generate`, so CI's docs check fails an app's bump until it is run on the branch, as
-  Renovate's pull request says.
+  Actions' commits. Nothing merges itself. The hosted Renovate can't run
+  `pnpm docs:generate`, so CI's docs check fails an app's bump until it is run on the
+  branch, as Renovate's pull request says.
 - **CI** (§7.2(7), §8.2) also, on every pull request that changes code and weekly: scans
   every catalog image with Trivy on both architectures, failing on a critical finding
   with a fix unless `scripts/ci/catalog-ignore.yaml` lists it, with the app it is in, and

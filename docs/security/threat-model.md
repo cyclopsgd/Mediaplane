@@ -542,8 +542,9 @@ What remains:
 - The audit and the Node check need the npm registry and nodejs.org at CI time.
 - If the owner adds one, a Docker Hub access token with the permission "Public Repo
   Read-only", in the repository's secrets, reaches every job that pulls images on the
-  repository's own branches. It can read public images only. A revoked or wrong token fails those jobs;
-  nothing falls back to anonymous pulls, and removing the secrets goes back to them.
+  repository's own branches. It can read public images only. A revoked or wrong token
+  fails those jobs; nothing falls back to anonymous pulls, and removing the secrets goes
+  back to them.
 
 ### T18. The release workflow publishes something it shouldn't
 
@@ -556,14 +557,18 @@ Controls today:
 - No workflow runs a pull request's code with secrets: there is no `pull_request_target`,
   and no secret reaches a script but through its environment.
 - A release publishes its image and deploy files only for a commit whose CI passed. CI
-  runs for every commit on `main`, so the release's commit has a run of its own; each job
-  that builds from the tree checks out the tag and checks that it is that commit. The image
-  pushed is the one Trivy scanned, checked by digest.
+  runs for every commit on `main`, so the release's commit has a run of its own. Each job
+  that checks out the tag, the one that waits for CI first, checks that it is that
+  commit. The image pushed is the one Trivy scanned, checked by digest.
 
 What remains:
 
 - Whoever can push to `main`, or merge the release pull request, can publish a release.
   Protecting `main` (an owner's step) narrows that.
+- `scripts/release/ci-passed.sh` accepts any GitHub Actions run of "All checks passed"
+  on the release's commit: a pull request's run on the same tree too, whose `changes`
+  job chose which jobs ran from the pull request's diff. It doesn't wait for the run on
+  `main`.
 - The tag and the release page exist from the merge, before CI has passed: release-please
   makes them. If CI then fails on that commit, nothing else is published, and the page
   stays without files until it is deleted (`docs/releasing.md` gives the command).

@@ -869,13 +869,15 @@ pass, down or leak
   `install.sh` refuses an image that isn't pinned, but for the one it builds, and runs
   Compose only on Mediaplane's own project, with the image it checked.
 - **Updating** is `pull`, then `up -d`, on Mediaplane's own project with the next
-  release's files. Only Mediaplane's container is recreated:
+  release's files. Only that project is recreated: its container, and the socket proxy
+  too when the release changed the proxy's pin:
 
 ```text
 update
  ├─ mediaplane-system
  │  ├─ mediaplane: recreated
- │  └─ socket-proxy: as it was
+ │  └─ socket-proxy: recreated
+ │     only if its pin changed
  └─ mediaplane (your stack)
     as it was: containers,
     networks, volumes and
