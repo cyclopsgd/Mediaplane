@@ -1,0 +1,106 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Keeps every pin current: the catalog's app images, the images outside it, npm dependencies and the Actions' commit SHAs (spec §7.2(7), §8.2). Nothing merges itself.",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "ignorePaths": ["**/node_modules/**"],
+  "semanticCommits": "enabled",
+  "automerge": false,
+  "labels": ["dependencies"],
+  "docker-compose": {
+    "description": "Mediaplane's own deployment, whose name the default patterns miss",
+    "managerFilePatterns": ["/(^|/)mediaplane\\.compose\\.yaml$/"]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The catalog's app images, pinned by tag and digest in catalog/<app>/app.ts",
+      "managerFilePatterns": ["/^catalog/[^/]+/app\\.ts$/"],
+      "matchStrings": [
+        "image: \\{\\s*repo: '(?<depName>[^']+)',\\s*tag: '(?<currentValue>[^']+)',\\s*digest: '(?<currentDigest>sha256:[0-9a-f]{64})'"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Images pinned by tag and digest in the workflows, the pre-commit hook, the CI scripts and the end-to-end tests",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.yml$/",
+        "/^\\.githooks/pre-commit$/",
+        "/^scripts/ci/[^/]+\\.sh$/",
+        "/^test/e2e/[^/]+\\.ts$/"
+      ],
+      "matchStrings": [
+        "(?<depName>[a-z0-9][a-z0-9._/-]*):(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*)@(?<currentDigest>sha256:[0-9a-f]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "An app pin is the tested set (spec §4.3, §8.2): its bump runs the full end-to-end suite, and is never merged automatically",
+      "matchFileNames": ["catalog/*/app.ts"],
+      "automerge": false,
+      "labels": ["app-pin"],
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "catalog",
+      "prBodyNotes": [
+        "Each app's README shows its pin: run `pnpm docs:generate` on this branch and commit what it writes, or CI's docs check fails. CI runs the full end-to-end suite on amd64 and arm64 before this can merge."
+      ]
+    },
+    {
+      "description": "linuxserver.io's Servarr tags: <version>.<build>-ls<revision>",
+      "matchDepNames": [
+        "lscr.io/linuxserver/sonarr",
+        "lscr.io/linuxserver/radarr",
+        "lscr.io/linuxserver/prowlarr"
+      ],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)\\.(?<build>\\d+)-ls(?<revision>\\d+)$"
+    },
+    {
+      "description": "linuxserver.io's Jellyfin tags: <version>ubu<release>-ls<revision>",
+      "matchDepNames": ["lscr.io/linuxserver/jellyfin"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)(?:\\.(?<patch>\\d+))?(?<compatibility>ubu\\d+)-ls(?<revision>\\d+)$"
+    },
+    {
+      "description": "linuxserver.io's Plex tags: <version>.<build>-<commit>-ls<revision>",
+      "matchDepNames": ["lscr.io/linuxserver/plex"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)\\.(?<build>\\d+)-[0-9a-f]+-ls(?<revision>\\d+)$"
+    },
+    {
+      "description": "linuxserver.io's qBittorrent tags: <version>_v<libtorrent>-ls<revision>",
+      "matchDepNames": ["lscr.io/linuxserver/qbittorrent"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)_v\\d+\\.\\d+\\.\\d+-ls(?<revision>\\d+)$"
+    },
+    {
+      "description": "linuxserver.io's WireGuard tags (the kill-switch test's server): <version>-r<release>-ls<revision>",
+      "matchDepNames": ["lscr.io/linuxserver/wireguard"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-r(?<build>\\d+)-ls(?<revision>\\d+)$"
+    },
+    {
+      "description": "Node stays on its 24 LTS line (spec §3.3); a bump of the image's Node is a fix, since it can close a vulnerability in Node itself",
+      "matchDepNames": ["node"],
+      "matchFileNames": ["Dockerfile"],
+      "allowedVersions": "<25",
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "image"
+    },
+    {
+      "description": "The image's Docker CLI and Compose, and its socket proxy, are part of the image: a fix",
+      "matchFileNames": ["Dockerfile", "deploy/mediaplane.compose.yaml"],
+      "matchDepNames": ["docker", "wollomatic/socket-proxy"],
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "image"
+    },
+    {
+      "description": "Node's types follow the Node line the project runs",
+      "matchPackageNames": ["@types/node"],
+      "allowedVersions": "<25"
+    },
+    {
+      "description": "The Docker Engine floor CI tests stays the floor (Engine 24)",
+      "matchFileNames": ["scripts/ci/engine-floor.sh"],
+      "matchDepNames": ["docker"],
+      "allowedVersions": "<25"
+    }
+  ]
+}
