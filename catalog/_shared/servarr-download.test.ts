@@ -204,7 +204,7 @@ describe('servarrDownloadClient', () => {
     });
   });
 
-  it('is removed by its id once the stack has no qBittorrent, and a new one never takes that id', async () => {
+  it('is removed by its id once the stack has no qBittorrent, and is then gone', async () => {
     const { api, app, state } = await sonarr();
     await client.create(api, wanted());
     const observed = await client.observe(api, undefined);

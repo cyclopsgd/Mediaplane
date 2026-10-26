@@ -139,7 +139,7 @@ export function fakeProviders<P extends FakeProviderBase>(
     if (held.some((p) => p.name === sent.name)) return taken();
     const failed = testedOnCreate?.(sent) === false ? undefined : test(sent, keyOf(sent));
     if (failed !== undefined) return failed;
-    // A removed provider's id isn't given again.
+    // No two providers share an id: after a removal the highest one may be given again.
     const made = { ...sent, id: Math.max(0, ...held.map((p) => p.id)) + 1 };
     held.push(made);
     return { status: 201, body: maskedProvider(made) };

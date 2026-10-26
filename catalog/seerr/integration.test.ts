@@ -5,6 +5,7 @@ import {
   type DesiredResource,
   type ResourceSpec,
   type WiringContext,
+  whyItStays,
 } from '@mediaplane/engine';
 import {
   claimFakePlex,
@@ -648,6 +649,35 @@ describe.each([
     expect(state.seerr[arr]).toEqual([]);
     // Seerr answers 500 for one it doesn't hold, as the real one does: never sent blind.
     await expect(spec.remove?.(api, observed)).rejects.toThrow(AppApiError);
+  });
+
+  it('leaves a server of yours that Seerr gave the id of the one it removed, under its own name', async () => {
+    const { api, state } = await seerr();
+    const desired =
+      (await spec.resolve?.(api, wanted(spec), contextOf())) ?? wanted(spec);
+    await spec.create(api, desired);
+    const made = await spec.observe(api, undefined, desired);
+    if (made === undefined) throw new Error('observed');
+    const record = {
+      id: made.id,
+      name: made.name,
+      fields: desired.fields,
+      secrets: ['apiKey'],
+      appliedAt: '2026-10-16T12:00:00.000Z',
+    };
+    const { id: _id, ...held } = state.seerr[arr][0] ?? { id: -1 };
+    await spec.remove?.(api, made);
+    // Seerr gives the next server the id it gave the last: yours, made in its web UI,
+    // now holds it.
+    await api.submit('POST', `/api/v1/settings/${arr}`, { ...held, name: 'Mine' });
+    expect(state.seerr[arr].map((s) => [s.id, s.name])).toEqual([[0, 'Mine']]);
+    const observed = await spec.observe(api, record, desired);
+    expect([observed?.id, observed?.name]).toEqual([0, 'Mine']);
+    if (observed === undefined) throw new Error('observed');
+    expect(await whyItStays(spec, api, observed, record)).toContain(
+      'no longer as Mediaplane made it',
+    );
+    expect(state.seerr[arr]).toHaveLength(1);
   });
 
   it("finds a refused key by testing again with the stack's, sets it with the server sent back whole, and says when Seerr can't reach the arr", async () => {

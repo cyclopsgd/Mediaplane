@@ -24,6 +24,9 @@ const PORTS = { prowlarr: 9696, qbittorrent: 8080, seerr: 5055 } as const;
 /** A torrent of no real content: a made-up hash, added stopped, never started. */
 const TORRENT = '0123456789abcdef0123456789abcdef01234567';
 
+/** The apps' secrets, once the first apply has made them: no output may hold one. */
+let secrets: readonly string[] = [];
+
 /**
  * `mediaplane <args>` as a script runs it (spec §5.2): from source, without a terminal, so
  * it asks nothing; only its exit code and its --json are read.
@@ -47,6 +50,8 @@ async function mediaplane(...args: string[]): Promise<{ code: number; json: unkn
       `mediaplane ${args[0] ?? ''} --json printed no JSON (exit ${String(result.code)}, ${String(result.stdout.length)} characters)`,
     );
   }
+  // Every output is checked: a yes or no per secret, which never prints either.
+  expectNoSecret(`mediaplane ${args[0] ?? ''}'s JSON`, result.stdout, secrets);
   return { code: result.code, json };
 }
 
@@ -86,6 +91,7 @@ function expectNoSecret(what: string, text: string, secrets: readonly string[]):
 describe('an app removed from the stack, by a script (spec §8.1(3) step 4)', () => {
   it('takes its container and what Mediaplane made for it in the other apps, keeps its appdata and what is yours, and changes nothing after', async () => {
     const home = await makeHome();
+    secrets = [];
     const removeAll = () =>
       runTeardown([
         async () => {
@@ -108,10 +114,12 @@ describe('an app removed from the stack, by a script (spec §8.1(3) step 4)', ()
 
       const store = await readSecretStore(home);
       const key = (app: string) => store.apps[app]?.apiKey ?? '';
-      const secrets = [
+      secrets = [
         ...Object.values(store.apps).flatMap((s) => Object.values(s)),
         store.shared?.adminPassword ?? '',
       ];
+      // The first two outputs came before the secrets were known.
+      expectNoSecret("apply's JSON", JSON.stringify([first.json, again.json]), secrets);
       // A torrent of yours, filed under Radarr's category: it keeps the category.
       await qbittorrentForm(
         PORTS.qbittorrent,
@@ -155,7 +163,6 @@ describe('an app removed from the stack, by a script (spec §8.1(3) step 4)', ()
       const result = applied.json as Applied;
       expect(result.outcome).toBe('success');
       expect(removed(result)).toEqual(toRemove(planned));
-      expectNoSecret("apply's JSON", JSON.stringify(applied.json), secrets);
 
       // Gone from the apps, as each app's own API says; the rest stays.
       const keyed = (app: keyof typeof PORTS) => ({ 'X-Api-Key': key(app) });
@@ -165,16 +172,19 @@ describe('an app removed from the stack, by a script (spec §8.1(3) step 4)', ()
         keyed('prowlarr'),
       );
       expect(links.map((l) => l.name)).toEqual(['Sonarr (Mediaplane)']);
-      expect(
-        await getJson<unknown[]>(
-          PORTS.prowlarr,
-          '/api/v1/indexerproxy',
-          keyed('prowlarr'),
-        ),
-      ).toEqual([]);
-      expect(
-        await getJson<unknown[]>(PORTS.seerr, '/api/v1/settings/radarr', keyed('seerr')),
-      ).toEqual([]);
+      // Names only: Seerr's server holds the arr's key, which no failure may print.
+      const proxies = await getJson<{ name: string }[]>(
+        PORTS.prowlarr,
+        '/api/v1/indexerproxy',
+        keyed('prowlarr'),
+      );
+      expect(proxies.map((p) => p.name)).toEqual([]);
+      const servers = await getJson<{ name: string }[]>(
+        PORTS.seerr,
+        '/api/v1/settings/radarr',
+        keyed('seerr'),
+      );
+      expect(servers.map((s) => s.name)).toEqual([]);
       const categories = () =>
         getJson<Record<string, unknown>>(
           PORTS.qbittorrent,
@@ -201,6 +211,8 @@ describe('an app removed from the stack, by a script (spec §8.1(3) step 4)', ()
         await readFile(join(home, 'state', 'resources.json'), 'utf8'),
       ) as { resources: Record<string, unknown> };
       expect(Object.keys(known.resources)).toContain('qbittorrent.category_movies');
+      // Radarr's own records stay with its appdata.
+      expect(Object.keys(known.resources)).toContain('radarr.download_client');
       for (const resource of toRemove(planned)) {
         expect(Object.keys(known.resources)).not.toContain(resource);
       }

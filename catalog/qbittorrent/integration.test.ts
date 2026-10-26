@@ -396,6 +396,30 @@ apps:
       expect(state.torrents.map((t) => t.category)).toEqual(['tv', 'tv']);
     });
 
+    it("fails closed when qBittorrent can't say what a category holds, or answers with something else", async () => {
+      const observed = { id: 'movies', name: 'movies', fields: {} };
+      const asked = async (reply: { status: number; body: unknown }) => {
+        const app = await fakeHttpApp(() => reply);
+        const api = createAppApi({
+          name: 'qBittorrent',
+          service: 'gluetun',
+          port: 8080,
+          endpoint: { host: '127.0.0.1', port: app.port },
+          key: { scheme: 'bearer', value: KEY },
+          secrets: [KEY, PASSWORD],
+          retry: { deadlineMs: 0 },
+        });
+        return movies.cannotRemove?.(api, observed);
+      };
+      // No answer to the question is never "it holds none": the removal fails.
+      await expect(asked({ status: 500, body: 'Internal Server Error' })).rejects.toThrow(
+        AppApiError,
+      );
+      await expect(asked({ status: 200, body: { torrents: [] } })).rejects.toThrow(
+        AppApiError,
+      );
+    });
+
     it("says qBittorrent's own words when it refuses", async () => {
       const { api } = await qbittorrent({ categories: { tv: '/data/torrents/tv' } });
       const desired = tv.desired(contextOf());
