@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { catalog } from '@mediaplane/catalog';
 import { afterAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { pinnedDeployment, pinnedInstaller } from '../scripts/release/pin';
 
 const FILE = fileURLToPath(new URL('./mediaplane.compose.yaml', import.meta.url));
 const SHIM = fileURLToPath(new URL('./mediaplane', import.meta.url));
@@ -66,6 +67,8 @@ const allowed = (method: string, path: string): boolean =>
   (rules.get(method) ?? []).some((rule) => rule.test(decodeURIComponent(path)));
 
 const ID = 'f'.repeat(64);
+/** A release's image, as the release workflow pins it in that release's deploy files. */
+const RELEASE = `ghcr.io/cyclopsgd/mediaplane:0.1.0@sha256:${'1'.repeat(64)}`;
 /** CI's Docker 28 speaks API 1.51; Docker 29.8 speaks 1.56. */
 const V = '/v1.51';
 
@@ -249,6 +252,8 @@ describe('the socket proxy allow-list', () => {
     'registry.example:5000/team/mediaplane:0.1.0',
     'mediaplane:local',
     `sha256:${ID}`,
+    // A release's image, as its own mediaplane.compose.yaml names it.
+    `ghcr.io/cyclopsgd/mediaplane:0.1.0@sha256:${ID}`,
   ])('allows inspecting the image %s', (reference) => {
     expect(allowed('GET', `${V}/images/${reference}/json`)).toBe(true);
   });
@@ -339,6 +344,9 @@ describe('the installer', () => {
     rootless?: boolean;
     uid?: string;
     buildFails?: boolean;
+    pullFails?: boolean;
+    /** A release's own deploy files (pinned to RELEASE), with no checkout around them. */
+    release?: boolean;
     /** deploy/.env's text, when one is already there. */
     env?: string;
     /** MEDIAPLANE_HOME for the run: the sandbox's home by default, null for unset. */
@@ -370,6 +378,19 @@ describe('the installer', () => {
         join(deploy, name),
       );
     }
+    if (options.release === true) {
+      // As the release workflow writes them: its image, pinned, in both files.
+      writeFileSync(
+        join(deploy, 'install.sh'),
+        pinnedInstaller(readFileSync(INSTALL, 'utf8'), RELEASE),
+      );
+      writeFileSync(
+        join(deploy, 'mediaplane.compose.yaml'),
+        pinnedDeployment(readFileSync(FILE, 'utf8'), RELEASE),
+      );
+    } else {
+      writeFileSync(join(top, 'checkout', 'Dockerfile'), 'FROM scratch\n');
+    }
     chmodSync(join(deploy, 'install.sh'), 0o755);
     chmodSync(join(deploy, 'mediaplane'), 0o755);
     if (options.env !== undefined) writeFileSync(join(deploy, '.env'), options.env);
@@ -389,6 +410,7 @@ case "$*" in
   'compose version --short') echo '${options.compose ?? '2.38.2'}' ;;
   'info --format {{.SecurityOptions}}') echo '${security}' ;;
   build*) exit ${options.buildFails === true ? '1' : '0'} ;;
+  *' pull'*) exit ${options.pullFails === true ? '1' : '0'} ;;
 esac
 exit 0
 `,
@@ -416,7 +438,8 @@ exit 0
       ),
     );
     const homeVar = options.homeVar === undefined ? home : options.homeVar;
-    const run = () => {
+    /** install.sh, with `extra` added to its environment, after the sandbox's own. */
+    const run = (extra: NodeJS.ProcessEnv = {}) => {
       const result = spawnSync(join(deploy, 'install.sh'), [], {
         encoding: 'utf8',
         env: {
@@ -425,6 +448,7 @@ exit 0
           ...(homeVar === null ? {} : { MEDIAPLANE_HOME: homeVar }),
           MEDIAPLANE_TEST_BIN_DIR: commands,
           MEDIAPLANE_TEST_DOCKER_SOCKET: socketPath,
+          ...extra,
         },
       });
       return {
@@ -454,7 +478,7 @@ exit 0
     }
   };
   const changedNothing = (box: Sandbox, calls: string[]) => {
-    expect(calls.some((call) => / build | up -d/.test(` ${call}`))).toBe(false);
+    expect(calls.some((call) => / build | pull| up -d/.test(` ${call}`))).toBe(false);
     expect(calls.some((call) => call.startsWith('sudo'))).toBe(false);
     expect(existsSync(join(box.deploy, '.env'))).toBe(false);
   };
@@ -550,12 +574,18 @@ exit 0
     }),
   );
 
-  it.runIf(asYou)('reads a deploy/.env home with Windows line ends as Compose does', () =>
+  it.runIf(asYou)('reads a deploy/.env with Windows line ends as Compose does', () =>
     inSandbox({ homeVar: null }, (box) => {
-      writeFileSync(join(box.deploy, '.env'), `MEDIAPLANE_HOME=${box.home}\r\n`);
+      writeFileSync(
+        join(box.deploy, '.env'),
+        `MEDIAPLANE_IMAGE=mediaplane:local\r\nMEDIAPLANE_HOME=${box.home}\r\n`,
+      );
       const result = box.run();
       expect(result.code, result.err).toBe(0);
       expect(statSync(box.home).isDirectory()).toBe(true);
+      expect(result.calls).toContain(
+        `docker build --tag mediaplane:local ${join(box.top, 'checkout')}`,
+      );
     }),
   );
 
@@ -613,6 +643,166 @@ exit 0
       expect(box.run().code).toBe(0);
     }),
   );
+
+  it.runIf(asYou)(
+    'from a release: pulls its image, pinned by digest, before it starts it, and builds nothing',
+    () =>
+      inSandbox({ release: true }, (box) => {
+        const result = box.run();
+        expect(result.code, result.err).toBe(0);
+        const file = join(box.deploy, 'mediaplane.compose.yaml');
+        const pull = result.calls.indexOf(`docker compose -f ${file} pull`);
+        const up = result.calls.indexOf(`docker compose -f ${file} up -d`);
+        expect(pull).toBeGreaterThanOrEqual(0);
+        expect(up).toBeGreaterThan(pull);
+        expect(result.calls.some((call) => call.startsWith('docker build'))).toBe(false);
+        // mediaplane.compose.yaml names the release's image, so deploy/.env doesn't: the
+        // next release's file names the next one.
+        const env = readFileSync(join(box.deploy, '.env'), 'utf8');
+        expect(env).not.toContain('MEDIAPLANE_IMAGE');
+        expect(result.out).toContain(`Pulling ${RELEASE}`);
+      }),
+  );
+
+  it.runIf(asYou)(
+    'updates by running again: keeps deploy/.env, and pulls the new image before up',
+    () =>
+      inSandbox({ release: true, homeVar: null }, (box) => {
+        const kept = `MEDIAPLANE_UID=1000\nTZ=Etc/UTC\nMEDIAPLANE_HOME=${box.home}\n`;
+        writeFileSync(join(box.deploy, '.env'), kept);
+        mkdirSync(box.home);
+        writeFileSync(join(box.home, 'stack.yaml'), 'version: 1\n');
+        const result = box.run();
+        expect(result.code, result.err).toBe(0);
+        expect(readFileSync(join(box.deploy, '.env'), 'utf8')).toBe(kept);
+        const file = join(box.deploy, 'mediaplane.compose.yaml');
+        expect(result.calls.filter((call) => call.startsWith('docker compose'))).toEqual([
+          'docker compose version --short',
+          `docker compose -f ${file} pull`,
+          `docker compose -f ${file} up -d`,
+        ]);
+      }),
+  );
+
+  it.runIf(asYou)(
+    "never touches the stack: Docker is asked only about Mediaplane's own",
+    () =>
+      inSandbox({ release: true }, (box) => {
+        const result = box.run();
+        expect(result.code, result.err).toBe(0);
+        const file = join(box.deploy, 'mediaplane.compose.yaml');
+        for (const call of result.calls.filter((c) => c.startsWith('docker '))) {
+          expect(call).toMatch(
+            new RegExp(
+              `^docker (version --format \\S+|info( --format \\S+)?|compose version --short|compose -f ${file} (pull|up -d))$`,
+            ),
+          );
+        }
+      }),
+  );
+
+  it.runIf(asYou)(
+    "keeps an image deploy/.env names, and says how to run the release's instead",
+    () =>
+      inSandbox({ release: true, homeVar: null }, (box) => {
+        const own = `registry.example/team/mediaplane:0.0.9@sha256:${'2'.repeat(64)}`;
+        writeFileSync(
+          join(box.deploy, '.env'),
+          `MEDIAPLANE_IMAGE=${own}\nMEDIAPLANE_HOME=${box.home}\n`,
+        );
+        const result = box.run();
+        expect(result.code, result.err).toBe(0);
+        expect(result.out).toContain(`deploy/.env names MEDIAPLANE_IMAGE=${own}`);
+        expect(result.out).toContain('remove that line from deploy/.env');
+      }),
+  );
+
+  it.each([
+    [{ release: true }, 'registry.example/team/mediaplane:0.1.0'],
+    [{}, 'registry.example/team/mediaplane:0.1.0'],
+    [{}, `registry.example/team/mediaplane@sha256:${'2'.repeat(63)}`],
+  ] as const)(
+    'refuses an image not pinned by digest, before it changes anything: %o %s',
+    (options, image) =>
+      inSandbox(options, (box) => {
+        const result = box.run({ MEDIAPLANE_IMAGE: image });
+        expect(result.code).toBe(1);
+        expect(result.err).toContain(`MEDIAPLANE_IMAGE=${image} isn't pinned by digest`);
+        expect(result.err).toContain('@sha256:');
+        expect(result.calls).toEqual([]);
+      }),
+  );
+
+  it('refuses an unpinned image deploy/.env names', () =>
+    inSandbox(
+      {
+        env: 'MEDIAPLANE_IMAGE=registry.example/team/mediaplane:latest\n',
+        homeVar: null,
+      },
+      (box) => {
+        const result = box.run();
+        expect(result.code).toBe(1);
+        expect(result.err).toContain(
+          "MEDIAPLANE_IMAGE=registry.example/team/mediaplane:latest isn't pinned by digest",
+        );
+        expect(result.calls).toEqual([]);
+      },
+    ));
+
+  it.runIf(asYou)(
+    'pulls an image of your own pinned by digest, and keeps it in deploy/.env',
+    () =>
+      inSandbox({}, (box) => {
+        const own = `registry.example/team/mediaplane:0.1.0@sha256:${'2'.repeat(64)}`;
+        const result = box.run({ MEDIAPLANE_IMAGE: own });
+        expect(result.code, result.err).toBe(0);
+        expect(readFileSync(join(box.deploy, '.env'), 'utf8')).toContain(
+          `MEDIAPLANE_IMAGE=${own}\n`,
+        );
+        expect(result.calls).toContain(
+          `docker compose -f ${join(box.deploy, 'mediaplane.compose.yaml')} pull`,
+        );
+        expect(result.calls.some((call) => call.startsWith('docker build'))).toBe(false);
+      }),
+  );
+
+  it.runIf(asYou)('stops at a pull that fails, before the container', () =>
+    inSandbox({ release: true, pullFails: true }, (box) => {
+      const result = box.run();
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(`couldn't pull Mediaplane's images`);
+      expect(result.calls.some((call) => call.includes('up -d'))).toBe(false);
+    }),
+  );
+
+  it('refuses a MEDIAPLANE_IMAGE that differs from the image deploy/.env keeps', () =>
+    inSandbox(
+      {
+        env: `MEDIAPLANE_IMAGE=mediaplane:local\nMEDIAPLANE_HOME=/srv/fake-x\n`,
+        homeVar: null,
+      },
+      (box) => {
+        const result = box.run({ MEDIAPLANE_IMAGE: RELEASE });
+        expect(result.code).toBe(1);
+        expect(result.err).toContain(
+          `deploy/.env says the image is mediaplane:local, but MEDIAPLANE_IMAGE says ${RELEASE}`,
+        );
+        expect(result.calls).toEqual([]);
+      },
+    ));
+
+  it('refuses to build mediaplane:local where there is no checkout to build', () =>
+    inSandbox(
+      { release: true, env: 'MEDIAPLANE_IMAGE=mediaplane:local\n', homeVar: null },
+      (box) => {
+        const result = box.run();
+        expect(result.code).toBe(1);
+        expect(result.err).toContain('mediaplane:local is built from a checkout');
+        expect(result.calls.some((call) => / build | up -d/.test(` ${call}`))).toBe(
+          false,
+        );
+      },
+    ));
 
   it.runIf(asYou)(
     'stops, with the command to run, at a home that is not yours to write',

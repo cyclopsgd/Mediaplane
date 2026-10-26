@@ -3,7 +3,8 @@
 # Mediaplane manages (the "mediaplane" project), so apply can never recreate or remove it.
 #
 # Settings, from a .env file next to this one or from the environment:
-#   MEDIAPLANE_IMAGE  the Mediaplane image to run (required: none is published yet)
+#   MEDIAPLANE_IMAGE  the Mediaplane image to run: a release's own copy of this file runs
+#                     that release's, pinned by digest; from a checkout, set it
 #   DOCKER_GID        the group that owns the Docker socket: stat -L -c %g /var/run/docker.sock
 #   MEDIAPLANE_HOME   the Mediaplane home, mounted at the same path (default /opt/mediaplane)
 #   MEDIAPLANE_UID    the user that owns the home (default 1000)

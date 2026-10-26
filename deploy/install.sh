@@ -1,11 +1,12 @@
 #!/bin/sh
-# Mediaplane's installer (deploy/README.md): from a checkout, run ./deploy/install.sh as
-# your normal user. It checks Docker, builds the image, makes the home, writes
+# Mediaplane's installer (deploy/README.md): run ./deploy/install.sh as your normal user.
+# From a release's own deploy files it pulls that release's image, pinned by digest;
+# from a checkout it builds the image. It checks Docker, makes the home, writes
 # deploy/.env, starts Mediaplane's container and installs the `mediaplane` command. It
 # uses sudo only for what it can't do as you: to create the home under a folder that
-# isn't yours, and to install the command in /usr/local/bin. Run it again after
-# `git pull` to update: it keeps your deploy/.env, home included, and never touches your
-# stack.
+# isn't yours, and to install the command in /usr/local/bin. Run it again to update, from
+# the next release's deploy files or after `git pull`: it keeps your deploy/.env, home
+# included, and never touches your stack.
 set -eu
 
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -15,11 +16,22 @@ env_file=$here/.env
 # deployment itself always mounts /var/run/docker.sock).
 bindir=${MEDIAPLANE_TEST_BIN_DIR:-/usr/local/bin}
 socket=${MEDIAPLANE_TEST_DOCKER_SOCKET:-/var/run/docker.sock}
+# The image a release runs, pinned by digest. A release's own copy of this file names it,
+# as its mediaplane.compose.yaml does (scripts/release/pin.ts writes both). A checkout's
+# is empty: the installer builds the image there instead.
+release_image=''
 
 say() { printf '%s\n' "$*"; }
 fail() {
   printf 'error: %s\n' "$*" >&2
   exit 1
+}
+# Whether image $1 is pinned by digest: <name>@sha256:<64 hex digits>.
+pinned() {
+  case $1 in *@sha256:*) ;; *) return 1 ;; esac
+  digest=${1##*@sha256:}
+  [ ${#digest} -eq 64 ] || return 1
+  case $digest in *[!0-9a-f]*) return 1 ;; esac
 }
 # Whether version $1 (such as 2.38.2 or v2.38.2) is at least major $2, minor $3.
 at_least() {
@@ -61,8 +73,28 @@ case $home in
   / | *[\"\'\$\#\\\`]* | *[[:space:]] | *[[:cntrl:]]* | *'
 '*) fail "the home \"$home\" won't do: use a folder below /, with no quotes, \$, #, \\ or backquotes in its name" ;;
 esac
-image=$(from_env_file MEDIAPLANE_IMAGE)
-image=${image:-${MEDIAPLANE_IMAGE:-mediaplane:local}}
+# The image: the one deploy/.env names once it exists, so a re-run keeps yours; else a
+# release's own; else, in a checkout, the one it builds.
+kept_image=$(from_env_file MEDIAPLANE_IMAGE)
+if [ -e "$env_file" ]; then
+  image=${kept_image:-$release_image}
+  [ -n "$image" ] ||
+    fail "deploy/.env names no MEDIAPLANE_IMAGE: add MEDIAPLANE_IMAGE=mediaplane:local to it to build the image from this checkout, then run this again"
+  if [ -n "${MEDIAPLANE_IMAGE:-}" ] && [ "$MEDIAPLANE_IMAGE" != "$image" ]; then
+    fail "deploy/.env says the image is $image, but MEDIAPLANE_IMAGE says $MEDIAPLANE_IMAGE: unset MEDIAPLANE_IMAGE, or change deploy/.env, then run this again"
+  fi
+else
+  image=${MEDIAPLANE_IMAGE:-$release_image}
+  image=${image:-mediaplane:local}
+fi
+# Every run starts the image that was checked: one from a registry is pinned by digest,
+# which Docker verifies as it pulls it. mediaplane:local is built from the checkout.
+if [ "$image" != mediaplane:local ] && ! pinned "$image"; then
+  fail "MEDIAPLANE_IMAGE=$image isn't pinned by digest: name it as <name>:<tag>@sha256:<digest>, as a release's deploy files do (docker buildx imagetools inspect <name>:<tag> shows the digest), or as mediaplane:local to build it from a checkout"
+fi
+if [ "$image" = mediaplane:local ] && [ ! -f "$root/Dockerfile" ]; then
+  fail "mediaplane:local is built from a checkout, and $root isn't one: remove MEDIAPLANE_IMAGE from deploy/.env to run this release's image, then run this again"
+fi
 
 [ "$(id -u)" != 0 ] ||
   fail "run this as your normal user, not root: Mediaplane's container must not run as root, and the installer asks for sudo only where it needs it"
@@ -111,7 +143,9 @@ else
   tz=$(timedatectl show --property=Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null || true)
   # Whole or not at all: an interrupted write leaves no half deploy/.env to keep.
   {
-    say "MEDIAPLANE_IMAGE=$image"
+    # A release's image goes unnamed: its mediaplane.compose.yaml names it, and the next
+    # release's names the next one.
+    if [ "$image" != "$release_image" ]; then say "MEDIAPLANE_IMAGE=$image"; fi
     say "MEDIAPLANE_UID=$(id -u)"
     say "MEDIAPLANE_GID=$(id -g)"
     say "DOCKER_GID=$(stat -L -c %g "$socket")"
@@ -122,11 +156,26 @@ else
   say "Wrote deploy/.env."
 fi
 
-# deploy/.env decides: the same names exported in this shell would override it.
-(
-  unset MEDIAPLANE_IMAGE MEDIAPLANE_UID MEDIAPLANE_GID DOCKER_GID TZ MEDIAPLANE_HOME
-  docker compose -f "$here/mediaplane.compose.yaml" up -d
+if [ -n "$release_image" ] && [ "$image" != "$release_image" ]; then
+  say "Note: deploy/.env names MEDIAPLANE_IMAGE=$image, so this release's image, $release_image, isn't the one that runs: to run it, remove that line from deploy/.env, then run this again."
+fi
+
+# Mediaplane's own deployment, and nothing else: never the stack. deploy/.env decides:
+# the same names exported in this shell would override it. Compose's own would move it to
+# another project or file.
+system() (
+  unset MEDIAPLANE_IMAGE MEDIAPLANE_UID MEDIAPLANE_GID DOCKER_GID TZ MEDIAPLANE_HOME \
+    COMPOSE_PROJECT_NAME COMPOSE_FILE COMPOSE_PROFILES
+  docker compose -f "$here/mediaplane.compose.yaml" "$@"
 )
+# Pulled before anything is recreated, so a pull that fails leaves Mediaplane as it was.
+if [ "$image" = mediaplane:local ]; then
+  system pull socket-proxy || fail "couldn't pull Mediaplane's images: the lines above say why"
+else
+  say "Pulling $image and the socket proxy..."
+  system pull || fail "couldn't pull Mediaplane's images: the lines above say why"
+fi
+system up -d
 
 if ! cmp -s "$here/mediaplane" "$bindir/mediaplane"; then
   if ! install -m 0755 "$here/mediaplane" "$bindir/mediaplane" 2>/dev/null; then
