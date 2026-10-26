@@ -329,11 +329,17 @@ Controls today:
   when it exits.
 - Mediaplane writes an app's pre-start files only inside its `appdata/<app>` folder. It
   refuses a path that leaves the folder, and a link on the way that leads outside it.
-- Mediaplane reads an app's key from its appdata only when `state/secrets.json` lacks it,
-  and never through a link that leads out of the app's folder: a compromised app could
-  otherwise plant a link to another app's file, and have Mediaplane take that app's key
-  as its own, and send it there. A key put back in an app's file is written only there,
-  never through a link, nor over a file with other names, or of another user or group.
+- Mediaplane reads an app's key from its appdata when `state/secrets.json` lacks it, and
+  to compare it with the stored one (a key to put back, or one `keep` is asked for). It
+  never reads through a link, nor a file that leads out of the app's folder, nor one
+  larger than 1 MiB: a compromised app could otherwise plant a link to another app's
+  file, and have Mediaplane take that app's key as its own, and send it there. A key
+  that is another app's is refused as the app's own. A key put back in an app's file is
+  written only there, never through a link, nor over a file with other names, or of
+  another user or group.
+- Jellyfin's database is opened by Mediaplane, checked, and given to SQLite open, read
+  only; never with a link in place of its write-ahead log or index (`-wal`, `-shm`),
+  through which SQLite could write.
 
 - An app's answers to Mediaplane are read at most 5 MiB at a time, checked against what
   Mediaplane expects, and never run or shown whole: only the app's own message about a
@@ -348,6 +354,13 @@ What remains:
   answers only the address the name `mediaplane` has there.
 - A compromised app can answer Mediaplane's calls with anything it likes, such as a
   setting that looks right but isn't.
+- SQLite opens the database by the name of the file Mediaplane holds open, not by that
+  open file. A compromised Jellyfin that puts another file, or a named pipe, at that
+  name in the instant between SQLite looking it up and opening it can make SQLite read
+  that one, or wait on the pipe, which hangs `plan`. Mediaplane checks again once SQLite
+  has the file, so another file is refused, unless it was swapped back as quickly; a
+  pipe can't be checked before the wait. Nothing is written either way. A file swapped
+  in at any other time is never what SQLite opens.
 - Sonarr and Radarr hold qBittorrent's key, as their download client needs, so a
   compromised one can drive qBittorrent: add a torrent, or change its settings.
 - Prowlarr holds Sonarr's and Radarr's keys, as its links need, so a compromised Prowlarr

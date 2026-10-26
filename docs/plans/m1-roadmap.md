@@ -699,13 +699,15 @@ password, which are S3c's (and listed again below).
   the key at the source", spec §6.3).
   - **Moved to S10 on 2026-10-25,** with restoring a key at its source.
   - **Done in S10a:** `apply` stops the app, puts the key in its file, and starts it
-    again. A file Mediaplane can't write so is `keys.restore` (an error when the file holds
-    no key, a warning when it holds another); `not-seeded` remains only for a pre-start
-    file whose app has no writable key file.
+    again. A file Mediaplane can't write so is `keys.restore` (an error when the file
+    holds no key, a warning when it holds another, and a warning when Mediaplane can't
+    read the file, a link included, so can't tell); `not-seeded` remains only for a
+    pre-start file whose app has no writable key file.
   - **Also in S10a:** a first-run setup that would sign in with an admin password its app
     has never had is held (`bootstrap.needs-password`), and `shared.adminPasswordNotIn`
-    in `state/secrets.json` lists those apps, by id, until they have it. The spec's §11
-    has the details.
+    in `state/secrets.json` lists, by id, every app that lacks a newly generated
+    password, from the write that saves it until the run gives it to the app. The
+    state files keep the fields they don't know. The spec's §11 has the details.
 - **FlareSolverr's anonymous volume.** Its image declares `VOLUME /config`, and the
   catalog mounts nothing there, so every container it creates leaves an anonymous
   volume behind. Mount a folder there, or document it. (The end-to-end helpers
@@ -1014,11 +1016,11 @@ password, which are S3c's (and listed again below).
     them too;
   - the indexers end-to-end test could check that `appdata/flaresolverr` is owned by
     the stack's user and group (1000), replayed on both Composes.
-- **Before the first real migration** of `stack.yaml` (none is planned, S10a and S10b included;
-  spec §11, Slice 9): make the commands that only read `stack.yaml` (`credentials`,
-  `vpn-check`, `plex-login`) give the old-version warning, which they drop today; and
-  make `keep` refuse an older-version file, saying to run `migrate` first, rather than
-  write overrides in the old version's shape.
+- **Before the first real migration** of `stack.yaml` (none is planned, S10a and S10b
+  included; spec §11, Slice 9): make the commands that only read `stack.yaml`
+  (`credentials`, `vpn-check`, `plex-login`) give the old-version warning, which they
+  drop today; and make `keep` refuse an older-version file, saying to run `migrate`
+  first, rather than write overrides in the old version's shape.
 
 **The panel (not scheduled since 2026-10-25):**
 

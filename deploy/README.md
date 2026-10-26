@@ -387,8 +387,13 @@ release's image by digest, so `pull` with the old file changes nothing: the next
 release's file is the update.
 
 **Going back to an earlier release** is the same, with that release's deploy files. It
-too leaves the stack as it is. One thing can stop it: an older Mediaplane refuses a
-`state/resources.json` that `drift` has written to (see the drift item below).
+too leaves the stack as it is. Each release reads the state a later one wrote
+(`state/secrets.json`, `state/resources.json`, the history records), keeps the fields it
+doesn't know as they are, and doesn't act on them. So an earlier release may do once
+what a later one knows not to: one that doesn't know `shared.adminPasswordNotIn` (the
+apps that lack a new admin password) doesn't hold a Jellyfin listed there, and signs in
+to it with the new password, which Jellyfin refuses, once, in its activity log. Back on
+the later release, the list is as it was.
 
 **From a checkout:** pull, then run the installer again. It rebuilds the image and
 recreates Mediaplane's container (and the proxy's, if its pin changed):
@@ -427,23 +432,23 @@ An update that brings Slice 10a (recovery) changes three things you may see:
 
 - **A key file from before Slice 3a, or edited by hand, restarts its app.** A Sonarr,
   Radarr or Prowlarr `config.xml` without `ApiKey`, a `qBittorrent.conf` without
-  `WebUI\APIKey`, a Gluetun `auth/config.toml` without Mediaplane's role, or a key file
-  that holds another key than Mediaplane's, used to stop `plan` (`<app>.not-seeded`). Now
-  `plan` lists the key under `Keys to put back in their apps' own files`, and the next
-  `apply` stops the app, writes the key there, and starts it once more. Gluetun's
-  restart restarts qBittorrent too. A file Mediaplane can't write is `keys.restore`; the
-  [rebuilding a host runbook](../docs/runbooks/rebuilding-a-host.md) says what to do.
+  `WebUI\APIKey`, or a Gluetun `auth/config.toml` without Mediaplane's role used to stop
+  `plan` (`<app>.not-seeded`); a key file that holds another key than Mediaplane's was
+  left as it was. Now `plan` lists the key under `Keys to put back in their apps' own
+files`, and the next `apply` stops the app, writes the key there, and starts it once
+  more. Gluetun's restart restarts qBittorrent too. A file Mediaplane can't write is
+  `keys.restore`; the [rebuilding a host runbook](../docs/runbooks/rebuilding-a-host.md)
+  says what to do.
 - **A Jellyfin key deleted in its dashboard is made again.** `plan` lists Jellyfin's
   first-run setup again, published, and the next `apply` signs in as the shared admin and
   makes a new key named `Mediaplane`. Before, you edited `state/secrets.json` by hand.
-- **Going back to an older image after an `apply` of this version** can't read its
-  history records: each carries `recover` and `restore` lists that an older version's
-  schema refuses, so `mediaplane history` and `status` list them as unreadable. The
-  records stay where they are, and this version reads them again. Nothing else reads
-  them. `state/resources.json` reads as before. So does `state/secrets.json`, unless it
-  has a `shared.adminPasswordNotIn` list (apps' ids only), which `apply` writes only while
-  an app waits for the admin password after a lost `state/`: an older version refuses the
-  file then, and the list has to come out of it, keeping the file valid JSON.
+- **Going back to an older image after an `apply` of this version** keeps what this
+  version wrote, as "Going back to an earlier release" says. An image built before this
+  version, from a checkout, can't read the history record of an `apply` that recovered a
+  key or put one back: the record carries a `recover` or `restore` list, which that
+  image's schema refuses. `mediaplane history` lists such a record as unreadable, and
+  `status` shows the newest record it can read as the last apply. The records stay where
+  they are, and this version reads them again. Nothing else reads them.
 
 An update that brings Seerr's wiring treats a Seerr you set up by hand before it as one
 Mediaplane has no record of. The next `apply` recreates it once, unpublished, and checks

@@ -364,13 +364,19 @@ name, and adopted
 - **Key recovery.** Each app says where it keeps its keys (`keyFiles` in the catalog):
   `config.xml` for Sonarr, Radarr and Prowlarr, `qBittorrent.conf`, Seerr's
   `settings.json`, Gluetun's `auth/config.toml`, and Jellyfin's database, opened
-  read-only with Node's own SQLite. A key file that is there but can't be read stops
-  `plan` (`keys.unrecoverable`): a new key would lock Mediaplane out of an app that still
-  holds the old one.
+  read-only with Node's own SQLite. A key file that is there but can't be read, or holds
+  another app's key, stops `plan` (`keys.unrecoverable`): a new key would lock Mediaplane
+  out of an app that still holds the old one.
 - **The admin password can't be read back:** the apps keep a hash. When the one
   Mediaplane generated went with `state/`, apply generates another, and sets it in each
   app through the app's key. `apply --rotate admin.password` does the same on purpose.
-  A secret apply generates is never checked by `plan`: no app holds it yet.
+  A secret apply generates is never checked by `plan`: no app holds it yet. The apps
+  that lack it are saved with it (`shared.adminPasswordNotIn`), each until the run gives
+  it the password, so a run that stops part-way never leaves one to be signed in to
+  with a password it doesn't have.
+- **The state files keep what they don't know:** a later release's fields, in
+  `state/secrets.json`, `state/resources.json` and the history records, are kept as they
+  were, so going back one release never stops at them.
 - **Re-adoption.** Every resource Mediaplane makes has a name of its own, by which it is
   found when `state/resources.json` lacks its id (`adopt`).
 - **A key changed at its source.** An app that keeps its key in a file of its own

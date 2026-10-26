@@ -61,43 +61,70 @@ the app's key, which it recovered. `mediaplane credentials` shows the new one on
   is the shared admin and its Jellyfin the stack's, and publishes it only then. On a Plex
   stack, Plex and Seerr are asked the same way, through plex.tv, whose account they are.
 
-- **`keys.unrecoverable`, an error:** a key file is there, but Mediaplane can't read it,
-  or it holds the key in a form Mediaplane can't keep. `plan` stops, and nothing is
-  generated: a new key would lock Mediaplane out of the app, which still holds the old
-  one. A file that leads out of the app's own appdata folder, through a link, is never
-  read.
-- **`keys.unrecoverable`, a warning, for Jellyfin:** its database can't give its key,
-  and the admin password is to be generated too. `apply` can't sign in to Jellyfin to find
-  the key: Jellyfin has never had the new password. It doesn't try, holds Jellyfin's
-  first-run setup and its resources (Seerr's setup, which signs in through Jellyfin, with
-  them), and, if Jellyfin's appdata doesn't say its setup is done, starts it without its
-  ports. `apply` then exits 1, through its verify step. Only this warning is shown for
-  Jellyfin, not `bootstrap.needs-password` too.
+- **`keys.unrecoverable`, an error:** a key file is there, but Mediaplane can't read it
+  (a file larger than 1 MiB included), or it holds the key in a form Mediaplane can't
+  keep. `plan` stops, and nothing is generated: a new key would lock Mediaplane out of the
+  app, which still holds the old one. A file that leads out of the app's own appdata
+  folder, through a link, is never read. It is an error too when the key a file holds is
+  another app's, as the store holds it or as it is found: an app can hold another app's
+  key (Prowlarr holds the arrs'), but never as its own.
+- **`keys.unrecoverable`, a warning, for Jellyfin:** its database is there but can't
+  give its key, and the admin password is to be generated too. `apply` can't sign in to
+  Jellyfin to find the key: Jellyfin has never had the new password. It doesn't try:
+  it holds Jellyfin's first-run setup and its resources, and, if Jellyfin's appdata
+  can't say whether its setup is done, starts it without its ports. `apply` then exits 1,
+  through its verify step. Only this warning is shown for Jellyfin, not
+  `bootstrap.needs-password` too. Nothing is said while Jellyfin's appdata says its
+  startup wizard is still open: its setup makes the admin with the new password, then
+  the key.
 - **`bootstrap.needs-password`:** an app takes no key Mediaplane holds, only its first-run
   setup can find one, by signing in as the shared admin, and the app has never had the
   admin password Mediaplane holds. Today that is Jellyfin, when its database can't give
-  its key.
-  - After a lost `state/`, it is a warning on a later `plan`, when the first `apply` has
-    generated a password Jellyfin never had. `apply` signs in to nothing, holds the
-    setup, and skips the app's resources. Mediaplane writes the app's id to
-    `shared.adminPasswordNotIn` in `state/secrets.json` (ids only, never a secret), and
-    every `plan` after holds the app the same way, until it has the password: its admin
-    update goes through its key, or its setup signs in.
+  its key, or when it refuses the key the store holds (deleted by hand) while it is
+  listed as lacking the password.
+  - After a lost `state/`, it is a warning. When Jellyfin's database isn't there at all,
+    the first `plan` shows it; when the database is there but gives no key, the first
+    `plan` shows `keys.unrecoverable` instead, and later ones show this. `apply` signs in
+    to nothing, holds the setup, and skips the app's resources.
   - Under `--rotate admin.password`, it is an error for an app that has the password
     Mediaplane holds: `plan` stops, and nothing is generated or saved. Run `apply`
     without `--rotate` first (see "Rotating the admin password").
-  - A setup that signs in through a held app (Seerr, through Jellyfin) is held too.
+  - **Seerr,** whose first-run setup signs in through Jellyfin. If Seerr's own appdata
+    says its setup is done, it signs in through nothing: it is checked with its own key,
+    as above, published, and wired but for what needs Jellyfin's resources. If not, it
+    is held too, without its port, while Jellyfin is held, or hasn't the new password
+    yet, with a `bootstrap.needs-password` warning of its own that names Jellyfin. The
+    `apply` after Jellyfin has the password sets Seerr up.
 
-  There are two ways out. Then run `apply` again.
+  Whenever `apply` generates the admin password (after a lost `state/`, or with
+  `--rotate`), it saves, in the same write, the ids of every app that holds the shared
+  admin password as `shared.adminPasswordNotIn` in `state/secrets.json` (ids only, never
+  a secret). Each app leaves the list as the run gives it the password: qBittorrent once
+  it has started with the file that holds it, Jellyfin once its setup has made its admin
+  with it, any app once its admin is set through its key. A run that stops part-way
+  leaves listed the apps it didn't reach. Every `plan` after sets a listed app's admin
+  through its key, never signing in to it with the new password, and holds a listed
+  Jellyfin's sign-in, until the app has it.
+
+  There are three ways out. Then run `apply` again.
 
   1. Make an API key named `Mediaplane` in the app: in Jellyfin, the dashboard's API Keys.
      The next `plan` recovers it from the database, and `apply` sets the password through
-     it.
+     it. This needs a database Mediaplane can read (see "Jellyfin's key" below). When
+     the store holds a key Jellyfin refuses, `plan` doesn't look for another: run
+     `mediaplane keep jellyfin.apiKey`, which reads the new key from the database, asks
+     Jellyfin with it, and keeps it.
   2. Set `admin.password` to a file holding the password the app's admin has. A password
      of your own clears the whole list.
+  3. When nobody knows that password, and the database can't be read: reset the admin's
+     password with Jellyfin's own "Forgot password", on its sign-in page, then use way
+     out 2 with the new one. Or move `appdata/jellyfin` aside to start Jellyfin afresh,
+     losing its settings: its setup makes the admin with Mediaplane's password.
 
 - **`keys.restore`:** an app keeps its key in a file of its own that holds another key,
-  or none, and Mediaplane can't write the file safely (see "A key changed at its source").
+  or none, and Mediaplane can't write the file safely; or, a warning, Mediaplane can't
+  read the file, so it can't tell whether the file holds its key (see "A key changed at
+  its source").
 
 ## Checks
 
@@ -152,7 +179,8 @@ Its key is made by Jellyfin, so it isn't in a file Mediaplane writes. Make
 dashboard (API Keys), which the next `plan` recovers; or give Mediaplane the password
 Jellyfin's admin has: put it in a file in the home, set `admin.password: { file: … }` to
 it, and run `apply`, which signs in to Jellyfin and finds, or makes, its key named
-`Mediaplane`.
+`Mediaplane`. When the store already holds a key Jellyfin refuses, keep the new one with
+`mediaplane keep jellyfin.apiKey`. When none of these can be done, see way out 3 above.
 
 ### A key changed at its source
 
@@ -175,8 +203,12 @@ key deleted in its dashboard is made again by the next `apply`, which signs in t
 Jellyfin as the shared admin while it stays published.
 
 `keys.restore`, a warning: the file holds another key, but Mediaplane won't write it:
-it is a link, has other names, or belongs to another user or group. Fix that, then run
-`apply`; or keep the app's key, as above.
+it has other names, or belongs to another user or group. Fix that, then run `apply`; or
+keep the app's key, as above.
+
+`keys.restore`, a warning that Mediaplane can't tell whether the file holds its key: it
+can't read the file, or the file is a link, which Mediaplane never reads or writes
+through. Make it a regular file Mediaplane's user may read, then run `plan` again.
 
 `keys.restore`, an error: the file holds no key, as one from before Mediaplane seeded the
 app does, and Mediaplane can't write it. Stop the app, move the file aside, and run
@@ -187,7 +219,9 @@ app does, and Mediaplane can't write it. Stop the app, move the file aside, and 
 `mediaplane apply --rotate admin.password` generates a new one, and sets it in each app
 through the app's key, as after a lost `state/`. `mediaplane plan --rotate admin.password`
 shows it first. A password of your own is rotated in its file instead: put another in it,
-and run `apply`.
+and run `apply`. On a store that holds no password, after a lost `state/`, `--rotate`
+changes nothing: the password is generated as without it, and
+`secrets.admin-password-lost` says so.
 
 An app that takes no key Mediaplane holds, and has the password Mediaplane holds, stops
 the rotation, with `bootstrap.needs-password`, an error: only its first-run setup can find
@@ -195,9 +229,9 @@ its key, by signing in with the password it has, and the new one would shut that
 `apply` without `--rotate` first, which finds the app's key; then rotate. Nothing is
 generated or saved when `plan` stops so.
 
-A new password is used to sign in to an app only once the app has it (it got it in this
-run, or its setup made the admin with it). Until then, Mediaplane sets the app's
-resources through the app's key.
+A new password is used to sign in to an app only once the app has it. Until then the app
+is listed in `shared.adminPasswordNotIn`, as above, and Mediaplane sets the app's
+resources through the app's key, in this run and any later one.
 
 ## Prevention
 

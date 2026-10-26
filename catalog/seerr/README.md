@@ -49,6 +49,13 @@ With Jellyfin as the media server (with Plex, see below):
   `admin.username` names and its Jellyfin is `jellyfin:8096`, with no URL base and no
   TLS; then it is recorded and published. Otherwise it stays unpublished, and the
   [runbook](../../docs/runbooks/wiring-failed.md) has the ways out.
+- **After a lost `state/`,** its record went too. A Seerr whose `settings.json` says it
+  is set up is checked with its key, as above, and published, whatever Jellyfin holds:
+  that signs in through nothing. One whose setup is open stays unpublished, and isn't
+  signed in through Jellyfin, until Jellyfin has the admin password Mediaplane gives the
+  apps (`bootstrap.needs-password`, a warning that names Jellyfin); the next `apply`
+  then sets it up. The
+  [rebuilding a host runbook](../../docs/runbooks/rebuilding-a-host.md) has the details.
 - **Its login** is Jellyfin's: on Seerr's sign-in page, choose Jellyfin and use the
   shared admin login (`mediaplane credentials`). It follows Jellyfin's, so a change of
   `admin.password` reaches Seerr once it reaches Jellyfin. Seerr makes a user for anyone
