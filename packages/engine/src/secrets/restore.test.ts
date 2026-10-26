@@ -77,19 +77,30 @@ describe('planKeyRestores', () => {
     }
   });
 
-  it('says nothing of a file that is not there, or that it may not read', async () => {
+  it('says nothing of a file that is not there', async () => {
     const home = await tempDir('mediaplane-restore-');
     expect(await planKeyRestores(stackIn(home), STORE)).toEqual({
       restore: [],
       diagnostics: [],
     });
+  });
+
+  it("warns of a file it may not read, that it can't tell whether it holds the key", async () => {
     if (process.getuid?.() === 0) return;
-    const { home: closed, path } = await homeWith('[main]\nport=1\n');
+    const { home, path } = await homeWith(`[main]\nkey=${KEY}\n`);
     await chmod(path, 0o000);
-    expect(await planKeyRestores(stackIn(closed), STORE)).toEqual({
-      restore: [],
-      diagnostics: [],
-    });
+    const planned = await planKeyRestores(stackIn(home), STORE);
+    expect(planned.restore).toEqual([]);
+    expect(planned.diagnostics).toEqual([
+      {
+        severity: 'warning',
+        code: 'keys.restore',
+        message:
+          "Mediaplane can't tell whether appdata/sonarr/app.conf holds Mediaplane's key for sonarr (sonarr.apiKey): it could not be read (EACCES)",
+        hint: expect.stringContaining('run plan again') as string,
+      },
+    ]);
+    expect(JSON.stringify(planned)).not.toContain(KEY);
   });
 
   it('puts back no key Mediaplane holds none of', async () => {
@@ -129,7 +140,7 @@ describe('planKeyRestores', () => {
     expect(JSON.stringify([other, unplaced])).not.toContain(KEY);
   });
 
-  it('never writes a file through a link, nor in a folder that leads out of the app folder', async () => {
+  it("writes nothing for a key file that is a link, and warns it can't tell", async () => {
     const { home, path } = await homeWith('[main]\n');
     await writeFile(join(home, 'elsewhere.conf'), '[main]\n');
     await symlink(
@@ -150,10 +161,18 @@ describe('planKeyRestores', () => {
       home,
     );
     if (result.stack === undefined) throw new Error('the stack did not resolve');
-    // readKeyFile refuses it as leading outside: plan can't tell, so says nothing.
+    // readKeyFile refuses a link at the file: plan can't tell, so puts nothing back and warns.
     expect(await planKeyRestores(result.stack, STORE)).toEqual({
       restore: [],
-      diagnostics: [],
+      diagnostics: [
+        {
+          severity: 'warning',
+          code: 'keys.restore',
+          message:
+            "Mediaplane can't tell whether appdata/sonarr/linked holds Mediaplane's key for sonarr (sonarr.apiKey): it is a link, which is never followed",
+          hint: expect.stringContaining('run plan again') as string,
+        },
+      ],
     });
     expect(await readFile(path, 'utf8')).toBe('[main]\n');
   });

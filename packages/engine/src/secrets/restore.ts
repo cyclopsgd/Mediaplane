@@ -73,8 +73,8 @@ async function openKeyFile(
  * source"): each key of the store's (`store`, with those apply generates) that its app
  * keeps in a file of its own that Mediaplane can write, which holds another key, or none,
  * as one from before Slice 3a does. The app reads the file when it starts, so apply stops
- * it first. A file Mediaplane can't read says nothing: it can't tell. One it can read but
- * not rewrite safely is an error for a file without the key, which the app can't work
+ * it first. A file that is not there says nothing; one Mediaplane can't read is a warning
+ * that it can't tell whether it holds the key. One it can read but not rewrite safely is an error for a file without the key, which the app can't work
  * with, and a warning for one with another, which `mediaplane keep` can keep. Reads only.
  */
 export async function planKeyRestores(
@@ -89,10 +89,23 @@ export async function planKeyRestores(
       const value = store.apps[id]?.[name];
       if (value === undefined) continue;
       const found = await readKeyFile(stack.home, id, file);
-      if (found.found === 'absent' || found.found === 'unreadable') continue;
-      if (found.found === 'key' && found.value === value) continue;
+      if (found.found === 'absent') continue;
       const key = `${id}.${name}`;
       const path = keyFilePath(id, file);
+      if (found.found === 'unreadable') {
+        // Never the file's content nor the reader's message: its short reason alone.
+        diagnostics.push(
+          warning(
+            'keys.restore',
+            `Mediaplane can't tell whether ${path} holds Mediaplane's key for ${appName} (${key}): ${found.why}`,
+            {
+              hint: `make ${path} a regular file that Mediaplane may read, then run plan again; see ${REBUILD_RUNBOOK}`,
+            },
+          ),
+        );
+        continue;
+      }
+      if (found.found === 'key' && found.value === value) continue;
       const opened = await openKeyFile(stack.home, id, file);
       const placed = opened.ok ? file.write(opened.file.text, value) : undefined;
       if (opened.ok && placed !== undefined) {
