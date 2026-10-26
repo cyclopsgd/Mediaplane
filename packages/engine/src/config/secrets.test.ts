@@ -6,7 +6,13 @@ import type { StackConfig } from './schema';
 import type { Catalog } from '../catalog/types';
 import type { Diagnostic } from '../diagnostics';
 import { fixtureApp } from '../testing/fixtures';
-import { adminPasswordFloor, checkSecretRefs, readSecret, secretRefs } from './secrets';
+import {
+  ADMIN_PASSWORD_MIN_LENGTH,
+  adminPasswordFloor,
+  checkSecretRefs,
+  readSecret,
+  secretRefs,
+} from './secrets';
 import { tempDir } from '../testing/temp';
 
 async function homeWith(files: Record<string, string>): Promise<string> {
@@ -18,7 +24,7 @@ async function homeWith(files: Record<string, string>): Promise<string> {
   return home;
 }
 
-/** qBittorrent takes no password shorter than 6 characters; the other apps take any. */
+/** qBittorrent takes no password shorter than 6 characters, the fewest Mediaplane takes. */
 const catalog: Catalog = [
   fixtureApp({ id: 'qbittorrent', name: 'qBittorrent', adminPasswordMinLength: 6 }),
   fixtureApp({ id: 'sonarr', name: 'Sonarr' }),
@@ -179,8 +185,27 @@ describe('the admin password', () => {
     expect(JSON.stringify(diagnostics)).not.toContain('11');
   });
 
-  it('may be one character, when no app in the stack needs more', async () => {
-    expect((await check(config, 'x')).map((d) => [d.severity, d.code])).toEqual([
+  it('is refused below 6 characters in any stack, never showing the password or its length', async () => {
+    // A stack without qBittorrent: the 6 is Mediaplane's own, not an app's.
+    expect(ADMIN_PASSWORD_MIN_LENGTH).toBe(6);
+    for (const password of ['x', 'fake1']) {
+      const diagnostics = await check(config, password);
+      expect(diagnostics).toEqual([
+        {
+          severity: 'error',
+          code: 'admin.password-too-short',
+          message:
+            'admin.password is shorter than 6 characters, the fewest Mediaplane takes',
+          path: 'admin.password',
+          hint: 'use 6 characters or more, or leave admin.password out and Mediaplane generates one',
+        },
+      ]);
+      expect(JSON.stringify(diagnostics)).not.toContain(password);
+    }
+  });
+
+  it('may be exactly 6 characters, with the 12-character warning', async () => {
+    expect((await check(config, 'fake12')).map((d) => [d.severity, d.code])).toEqual([
       ['warning', 'admin.password-short'],
     ]);
   });
@@ -193,53 +218,67 @@ describe('the admin password', () => {
     expect((await check(config, '  ')).map((d) => d.code)).toEqual(['secret.missing']);
   });
 
-  describe('with an app that takes no fewer than its own minimum', () => {
+  describe('with qBittorrent in the stack', () => {
     const withQbittorrent = configWith(
       'admin: { password: { env: FAKE_ADMIN_PASSWORD } }\napps:\n  qbittorrent: {}\n  sonarr: {}\n',
     );
 
-    it('is an error below that minimum, naming the app, and not the password', async () => {
+    it('is refused below 6 characters, as everywhere', async () => {
       const diagnostics = await check(withQbittorrent, 'fake1');
-      expect(diagnostics).toEqual([
-        {
-          severity: 'error',
-          code: 'admin.password-too-short',
-          message: 'qBittorrent takes a password of at least 6 characters',
-          path: 'admin.password',
-          hint: 'use a longer password, or leave admin.password out and Mediaplane generates one',
-        },
-      ]);
+      expect(diagnostics.map((d) => d.code)).toEqual(['admin.password-too-short']);
+      expect(diagnostics[0]?.message).toBe(
+        'admin.password is shorter than 6 characters, the fewest Mediaplane takes',
+      );
       expect(JSON.stringify(diagnostics)).not.toContain('fake1');
     });
 
-    it('is only the 12-character warning from that minimum up', async () => {
+    it('is only the 12-character warning from 6 characters up', async () => {
       expect((await check(withQbittorrent, 'fake12')).map((d) => d.code)).toEqual([
         'admin.password-short',
       ]);
       expect(await check(withQbittorrent, 'fake-twelve1')).toEqual([]);
     });
+  });
 
-    it('names the app with the higher minimum when two have one', async () => {
-      const both: Catalog = [
-        fixtureApp({ id: 'qbittorrent', name: 'qBittorrent', adminPasswordMinLength: 6 }),
-        fixtureApp({ id: 'sonarr', name: 'Sonarr', adminPasswordMinLength: 8 }),
-      ];
-      expect((await check(withQbittorrent, 'fake1', both))[0]?.message).toBe(
-        'Sonarr takes a password of at least 8 characters',
-      );
-      expect((await check(withQbittorrent, 'fake123', both))[0]?.message).toBe(
-        'Sonarr takes a password of at least 8 characters',
-      );
+  describe('with an app that needs more than 6 characters', () => {
+    const needs8: Catalog = [
+      fixtureApp({ id: 'qbittorrent', name: 'qBittorrent', adminPasswordMinLength: 6 }),
+      fixtureApp({ id: 'sonarr', name: 'Sonarr', adminPasswordMinLength: 8 }),
+    ];
+    const withSonarr = configWith(
+      'admin: { password: { env: FAKE_ADMIN_PASSWORD } }\napps:\n  qbittorrent: {}\n  sonarr: {}\n',
+    );
+
+    it('names that app, below its minimum, and not the password', async () => {
+      for (const password of ['fake1', 'fake123']) {
+        const diagnostics = await check(withSonarr, password, needs8);
+        expect(diagnostics).toEqual([
+          {
+            severity: 'error',
+            code: 'admin.password-too-short',
+            message: 'Sonarr takes a password of at least 8 characters',
+            path: 'admin.password',
+            hint: 'use 8 characters or more, or leave admin.password out and Mediaplane generates one',
+          },
+        ]);
+        expect(JSON.stringify(diagnostics)).not.toContain(password);
+      }
+    });
+
+    it('is only the 12-character warning from that minimum up', async () => {
+      expect((await check(withSonarr, 'fake1234', needs8)).map((d) => d.code)).toEqual([
+        'admin.password-short',
+      ]);
     });
 
     it('ignores an app that is not in the stack, or is disabled', async () => {
       const without = configWith(
-        'admin: { password: { env: FAKE_ADMIN_PASSWORD } }\napps:\n  qbittorrent: { enabled: false }\n  sonarr: {}\n',
+        'admin: { password: { env: FAKE_ADMIN_PASSWORD } }\napps:\n  sonarr: { enabled: false }\n',
       );
-      expect((await check(without, 'fake1')).map((d) => d.code)).toEqual([
+      expect((await check(without, 'fake123', needs8)).map((d) => d.code)).toEqual([
         'admin.password-short',
       ]);
-      expect((await check(config, 'fake1')).map((d) => d.code)).toEqual([
+      expect((await check(config, 'fake123', needs8)).map((d) => d.code)).toEqual([
         'admin.password-short',
       ]);
     });
@@ -247,12 +286,26 @@ describe('the admin password', () => {
 });
 
 describe('adminPasswordFloor', () => {
-  it('is the strictest minimum among the apps given, with its app', () => {
-    expect(adminPasswordFloor(['sonarr', 'qbittorrent'], catalog)).toEqual({
-      name: 'qBittorrent',
-      min: 6,
+  it('is 6 characters, with no app named, when no app needs more', () => {
+    expect(adminPasswordFloor(['sonarr', 'qbittorrent'], catalog)).toEqual({ min: 6 });
+    expect(adminPasswordFloor(['sonarr'], catalog)).toEqual({ min: 6 });
+    expect(adminPasswordFloor([], catalog)).toEqual({ min: 6 });
+  });
+
+  it('is the strictest minimum above 6 among the apps given, with its app', () => {
+    const catalogOf: Catalog = [
+      fixtureApp({ id: 'qbittorrent', name: 'qBittorrent', adminPasswordMinLength: 6 }),
+      fixtureApp({ id: 'sonarr', name: 'Sonarr', adminPasswordMinLength: 8 }),
+      fixtureApp({ id: 'radarr', name: 'Radarr', adminPasswordMinLength: 10 }),
+    ];
+    expect(adminPasswordFloor(['sonarr', 'qbittorrent'], catalogOf)).toEqual({
+      name: 'Sonarr',
+      min: 8,
     });
-    expect(adminPasswordFloor(['sonarr'], catalog)).toBeUndefined();
-    expect(adminPasswordFloor([], catalog)).toBeUndefined();
+    expect(adminPasswordFloor(['sonarr', 'radarr'], catalogOf)).toEqual({
+      name: 'Radarr',
+      min: 10,
+    });
+    expect(adminPasswordFloor(['qbittorrent'], catalogOf)).toEqual({ min: 6 });
   });
 });

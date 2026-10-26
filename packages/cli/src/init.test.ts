@@ -274,7 +274,7 @@ describe('mediaplane init', () => {
       },
     });
     expect(term.stdout()).toContain(
-      `Put your admin password, 12 characters or more advised, in ${join(home, 'secrets', 'my-admin-password')}.`,
+      `Put your admin password, 6 characters or more, 12 or more advised, in ${join(home, 'secrets', 'my-admin-password')}.`,
     );
   });
 
@@ -987,7 +987,7 @@ describe('mediaplane init: what each question is for', () => {
       expect(line.length, line).toBeLessThanOrEqual(60);
     }
     for (const note of [NOTES.ownPassword, NOTES.passwordFile]) {
-      expect(note.join(' ')).toContain('12 characters or more advised');
+      expect(note.join(' ')).toContain('6 characters or more, 12 or more advised');
       expect(note.join(' ')).not.toContain('at least');
     }
   });
@@ -1126,10 +1126,10 @@ describe('mediaplane init: your own admin password', () => {
     expect(term.shown()).toContain(`${NOTES.ownPassword.join('\n')}\n${ASKED}`);
   });
 
-  it("asks again for one below an app's own minimum, or two that differ", async () => {
+  it('asks again for one below 6 characters, or two that differ', async () => {
     const home = await newHome();
     const term = capture(['', 'n'], {}, [
-      'fake',
+      'fake1',
       ` ${PASSWORD}`,
       PASSWORD,
       'fake-something-else',
@@ -1139,7 +1139,7 @@ describe('mediaplane init: your own admin password', () => {
     expect(await run(['init', '--home', home, ...FLAGS], term.io, deps())).toBe(0);
     expect(term.hidden).toEqual([ASKED, ASKED, ASKED, AGAIN, ASKED, AGAIN]);
     expect(term.stderr()).toBe(
-      'qBittorrent takes a password of at least 6 characters.\n' +
+      'That has fewer than 6 characters, the fewest Mediaplane takes.\n' +
         'That starts or ends with a space, which the apps would never see.\n' +
         "Those don't match. Type your password again.\n",
     );
@@ -1147,6 +1147,19 @@ describe('mediaplane init: your own admin password', () => {
       `${PASSWORD}\n`,
     );
     expect(term.shown()).not.toContain(PASSWORD);
+  });
+
+  it('refuses 5 characters, whatever is in the stack, and asks again', async () => {
+    const home = await newHome();
+    const term = capture(['', 'n'], {}, ['fake1', PASSWORD, PASSWORD]);
+    expect(await run(['init', '--home', home, ...FLAGS], term.io, deps())).toBe(0);
+    expect(term.hidden).toEqual([ASKED, ASKED, AGAIN]);
+    // Refused outright: no "Use it anyway?" for it, and the password is never shown.
+    expect(term.stderr()).toBe(
+      'That has fewer than 6 characters, the fewest Mediaplane takes.\n',
+    );
+    expect(term.questions).not.toContain('Use it anyway? [y/N] ');
+    expect(term.shown()).not.toContain('fake1');
   });
 
   describe('shorter than 12 characters', () => {
@@ -1199,7 +1212,7 @@ describe('mediaplane init: your own admin password', () => {
       const flags = [...FLAGS, '--admin-password-file', 'secrets/my-password'];
       expect(await run(['init', '--home', home, ...flags], term.io, deps())).toBe(0);
       expect(term.stdout()).toContain(
-        `Put your admin password, 12 characters or more advised, in ${join(home, 'secrets', 'my-password')}.`,
+        `Put your admin password, 6 characters or more, 12 or more advised, in ${join(home, 'secrets', 'my-password')}.`,
       );
     });
   });
@@ -1213,7 +1226,7 @@ describe('mediaplane init: your own admin password', () => {
       'File holding your password, inside the Mediaplane home [secrets/admin-password]: ',
     );
     expect(term.stdout()).toContain(
-      `Put your admin password, 12 characters or more advised, in ${join(home, 'secrets', 'admin-password')}.`,
+      `Put your admin password, 6 characters or more, 12 or more advised, in ${join(home, 'secrets', 'admin-password')}.`,
     );
   });
 

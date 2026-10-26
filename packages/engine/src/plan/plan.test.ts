@@ -339,14 +339,15 @@ describe('plan', () => {
       expect(JSON.stringify(result)).not.toContain('fake-short1');
     });
 
-    it("fails when it is shorter than an app's own minimum", async () => {
-      const result = await planWith('fake');
+    it('fails when it is shorter than 6 characters, the fewest Mediaplane takes', async () => {
+      const result = await planWith('fake1');
       expect(result.ok).toBe(false);
       expect(result.diagnostics).toEqual([
         expect.objectContaining({
           severity: 'error',
           code: 'admin.password-too-short',
-          message: 'qbittorrent takes a password of at least 6 characters',
+          message:
+            'admin.password is shorter than 6 characters, the fewest Mediaplane takes',
         }),
       ]);
     });

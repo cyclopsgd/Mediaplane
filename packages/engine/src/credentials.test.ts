@@ -223,7 +223,7 @@ describe('credentials', () => {
     });
   });
 
-  it("reports your password file when it is missing or shorter than an app's minimum", async () => {
+  it('reports your password file when it is missing or shorter than 6 characters', async () => {
     const home = await homeWith({ stack: YOURS, stored: false });
     expect(await loginFor(home)).toMatchObject({
       ok: false,

@@ -221,7 +221,7 @@ const stackShape = {
       password: secretRefSchema
         .optional()
         .describe(
-          'The admin password, as a secret reference. 12 characters or more is advised: a shorter one only warns, unless an app in the stack takes no fewer (plan says which). Left out, Mediaplane generates one; "mediaplane credentials" shows it.',
+          'The admin password, as a secret reference. 6 characters or more is required, and 12 or more is advised: from 6 to 11 only warns. An app in the stack that needs more than 6 is named by plan. Left out, Mediaplane generates one; "mediaplane credentials" shows it.',
         ),
     })
     .default({ username: 'admin' })

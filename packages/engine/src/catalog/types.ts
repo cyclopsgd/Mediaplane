@@ -272,8 +272,9 @@ export interface AppDefinition<Options = Record<string, unknown>> {
   keyFiles?: Readonly<Record<string, KeyFile>>;
   /**
    * The fewest characters it takes in the shared admin password, when that is more than
-   * one (probed on its pinned image): a shorter password is refused at plan, naming the
-   * app. Left out, it takes any password that is not empty.
+   * Mediaplane's own minimum (`ADMIN_PASSWORD_MIN_LENGTH`, 6; probed on its pinned image):
+   * a shorter password is refused at plan, naming the app. Left out, it takes any password
+   * of Mediaplane's minimum or more.
    */
   adminPasswordMinLength?: number;
   credentials: CredentialStep[];

@@ -3,6 +3,7 @@ import { isAbsolute, join, normalize, resolve } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
   ADMIN_PASSWORD_ADVISED_LENGTH,
+  ADMIN_PASSWORD_MIN_LENGTH,
   adminPasswordFloor,
   inSubnet,
   invokingUser,
@@ -124,7 +125,7 @@ export async function init(
     ...(answers.adminPasswordFile === undefined || savedPassword || adminPasswordFound
       ? []
       : [
-          `Put your admin password, ${String(ADMIN_PASSWORD_ADVISED_LENGTH)} characters or more advised, in ${join(home, answers.adminPasswordFile)}.`,
+          `Put your admin password, ${String(ADMIN_PASSWORD_MIN_LENGTH)} characters or more, ${String(ADMIN_PASSWORD_ADVISED_LENGTH)} or more advised, in ${join(home, answers.adminPasswordFile)}.`,
         ]),
     ...dataSteps(answers.dataPath, data, answers.user),
     'Run "mediaplane plan" to check everything, then "mediaplane apply".',
@@ -416,9 +417,9 @@ async function gatherAnswers(
 
 /**
  * Your own admin password, typed twice with nothing shown, or undefined on Enter (put it in
- * a file yourself). One shorter than an app of the stack takes asks again, naming the app.
- * One shorter than 12 characters is allowed after a warning and a yes. A mismatch asks
- * again. It is never printed.
+ * a file yourself). One shorter than 6 characters, or than an app of the stack takes, asks
+ * again (naming the app, when it is the app's minimum). One shorter than 12 characters is
+ * allowed after a warning and a yes. A mismatch asks again. It is never printed.
  */
 async function askPassword(
   ask: Ask,
@@ -437,9 +438,11 @@ async function askPassword(
       io.stderr('That starts or ends with a space, which the apps would never see.\n');
       continue;
     }
-    if (floor !== undefined && first.length < floor.min) {
+    if (first.length < floor.min) {
       io.stderr(
-        `${floor.name} takes a password of at least ${String(floor.min)} characters.\n`,
+        floor.name === undefined
+          ? `That has fewer than ${String(floor.min)} characters, the fewest Mediaplane takes.\n`
+          : `${floor.name} takes a password of at least ${String(floor.min)} characters.\n`,
       );
       continue;
     }
@@ -501,12 +504,13 @@ export const NOTES = {
     'any browser, and it saves your Plex token for apply.',
   ],
   ownPassword: [
-    'Your password: 12 characters or more advised, typed twice;',
-    'nothing shows. Saved for you only in secrets/admin-password.',
+    'Your password: 6 characters or more, 12 or more advised,',
+    'typed twice; nothing shows. Saved for you only in',
+    'secrets/admin-password.',
   ],
   passwordFile: [
-    'Your password file: 12 characters or more advised. Put it',
-    'there before you run plan.',
+    'Your password file: 6 characters or more, 12 or more',
+    'advised. Put it there before you run plan.',
   ],
 } as const satisfies Record<string, readonly string[]>;
 

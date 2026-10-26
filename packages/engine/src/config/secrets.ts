@@ -7,9 +7,16 @@ import type { SecretRef, StackConfig } from './schema';
 
 /**
  * The length Mediaplane advises for your own admin password (spec §6.1). A shorter one
- * only warns: the shortest it refuses is what an app in the stack needs.
+ * only warns, down to `ADMIN_PASSWORD_MIN_LENGTH`.
  */
 export const ADMIN_PASSWORD_ADVISED_LENGTH = 12;
+
+/**
+ * The fewest characters Mediaplane takes in your own admin password, for any stack. It is
+ * also qBittorrent's own minimum, so no app in the catalog takes fewer. An app that needs
+ * more says so in the catalog (`adminPasswordMinLength`).
+ */
+export const ADMIN_PASSWORD_MIN_LENGTH = 6;
 
 /** How stack.yaml, plan, apply and the change records name the shared admin password. */
 export const ADMIN_PASSWORD_PATH = 'admin.password';
@@ -25,19 +32,20 @@ function appsInStack(config: StackConfig): string[] {
 }
 
 /**
- * The app among `appIds` that needs the longest admin password, when any needs more than
- * one character: its name and the fewest characters it takes (the catalog's
- * `adminPasswordMinLength`). Only the apps given count.
+ * The fewest characters the admin password takes for the apps given: the higher of
+ * `ADMIN_PASSWORD_MIN_LENGTH` and any app's catalog `adminPasswordMinLength`. `name` is
+ * the app that needs more than Mediaplane's own minimum, when one does. Only the apps
+ * given count.
  */
 export function adminPasswordFloor(
   appIds: readonly string[],
   catalog: Catalog,
-): { name: string; min: number } | undefined {
-  let floor: { name: string; min: number } | undefined;
+): { name?: string; min: number } {
+  let floor: { name?: string; min: number } = { min: ADMIN_PASSWORD_MIN_LENGTH };
   for (const app of catalog) {
     const min = app.adminPasswordMinLength;
     if (min === undefined || !appIds.includes(app.id)) continue;
-    if (floor === undefined || min > floor.min) floor = { name: app.name, min };
+    if (min > floor.min) floor = { name: app.name, min };
   }
   return floor;
 }
@@ -102,14 +110,17 @@ export async function checkSecretRefs(
       );
     } else if (path === ADMIN_PASSWORD_PATH) {
       const floor = adminPasswordFloor(appsInStack(config), catalog);
-      if (floor !== undefined && value.length < floor.min) {
+      if (value.length < floor.min) {
+        // Never the password, nor how long it is: the minimum only.
         diagnostics.push(
           error(
             'admin.password-too-short',
-            `${floor.name} takes a password of at least ${String(floor.min)} characters`,
+            floor.name === undefined
+              ? `admin.password is shorter than ${String(floor.min)} characters, the fewest Mediaplane takes`
+              : `${floor.name} takes a password of at least ${String(floor.min)} characters`,
             {
               path,
-              hint: 'use a longer password, or leave admin.password out and Mediaplane generates one',
+              hint: `use ${String(floor.min)} characters or more, or leave admin.password out and Mediaplane generates one`,
             },
           ),
         );

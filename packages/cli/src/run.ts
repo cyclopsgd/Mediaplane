@@ -612,7 +612,7 @@ export function createProgram(
     .option('--admin-user <name>', 'the admin user name for the apps (default admin)')
     .option(
       '--admin-password-file <path>',
-      'a file inside the home holding your own admin password, 12 characters or more advised (default: Mediaplane generates one)',
+      'a file inside the home holding your own admin password, 6 characters or more, 12 or more advised (default: Mediaplane generates one)',
     )
     .addOption(
       new Option('--timezone <zone>', 'timezone, e.g. Europe/London').default(

@@ -102,7 +102,7 @@
           "pattern": "^[A-Za-z0-9._-]{3,32}$"
         },
         "password": {
-          "description": "The admin password, as a secret reference. 12 characters or more is advised: a shorter one only warns, unless an app in the stack takes no fewer (plan says which). Left out, Mediaplane generates one; \"mediaplane credentials\" shows it.",
+          "description": "The admin password, as a secret reference. 6 characters or more is required, and 12 or more is advised: from 6 to 11 only warns. An app in the stack that needs more than 6 is named by plan. Left out, Mediaplane generates one; \"mediaplane credentials\" shows it.",
           "anyOf": [
             {
               "type": "object",
