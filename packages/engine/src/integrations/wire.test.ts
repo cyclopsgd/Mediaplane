@@ -1106,6 +1106,59 @@ describe('wire', () => {
     ]);
   });
 
+  it('says what the plan listed for removal that now stays, keeping it and its record, and says nothing of what it never listed', async () => {
+    const holding = `it holds 2 torrents, ${PASSWORD}`;
+    const left = leftOver({ 7: 'gone', 8: 'mine' }, undefined, (_api, observed) =>
+      Promise.resolve(observed.id === 7 ? holding : undefined),
+    );
+    const known = {
+      ...RECORDED,
+      'sonarr.gone': made(7, 'gone'),
+      'sonarr.renamed': made(8, 'renamed'),
+    };
+    const planned = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const listed = await wireWith(planned, {
+      stack: left.stack,
+      known,
+      planned: [
+        { resource: 'sonarr.gone', action: 'remove' },
+        { resource: 'sonarr.renamed', action: 'remove' },
+      ],
+    });
+    expect(await listed.run).toEqual([]);
+    expect(left.removed).toEqual([]);
+    expect(listed.actions).toEqual([
+      { step: 'wire', resource: 'sonarr.login', result: 'done', detail: 'unchanged' },
+      {
+        step: 'wire',
+        resource: 'sonarr.gone',
+        result: 'skipped',
+        detail: 'it holds 2 torrents, ***',
+      },
+      {
+        step: 'wire',
+        resource: 'sonarr.renamed',
+        result: 'skipped',
+        detail:
+          "it is no longer as Mediaplane made it (its name or its id in the app has changed), so it may be yours: Mediaplane doesn't remove it",
+      },
+    ]);
+    expect(Object.keys(await readResources(listed.home))).toEqual([
+      'sonarr.gone',
+      'sonarr.login',
+      'sonarr.renamed',
+    ]);
+    // Never listed by the plan: apply leaves it as plan and drift said, without a word.
+    const unlisted = await wireWith(
+      await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD }),
+      { stack: left.stack, known },
+    );
+    expect(await unlisted.run).toEqual([]);
+    expect(unlisted.actions).toEqual([
+      { step: 'wire', resource: 'sonarr.login', result: 'done', detail: 'unchanged' },
+    ]);
+  });
+
   it('fails a removal the app refuses, keeping its record, and each the plan named in an app it cannot reach', async () => {
     const refusal = new AppApiError('Sonarr at http://sonarr:8989 refused it', {
       kind: 'rejected',
@@ -1155,6 +1208,7 @@ function made(id: number, name: string): KnownResource {
 function leftOver(
   held: Record<number, string>,
   remove?: ResourceSpec['remove'],
+  cannotRemove?: ResourceSpec['cannotRemove'],
 ): { stack: ReturnType<typeof stackOf>; removed: number[] } {
   const removed: number[] = [];
   const holds = new Map(Object.entries(held).map(([id, name]) => [Number(id), name]));
@@ -1169,6 +1223,7 @@ function leftOver(
         holding === undefined ? undefined : { id, name: holding, fields: {} },
       );
     },
+    ...(cannotRemove === undefined ? {} : { cannotRemove }),
     remove:
       remove ??
       ((_api, observed) => {

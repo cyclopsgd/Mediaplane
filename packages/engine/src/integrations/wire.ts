@@ -405,10 +405,26 @@ export async function wire(options: WireOptions): Promise<string[]> {
       if (spec.remove === undefined) continue;
       try {
         const observed = await spec.observe(client.api, record);
-        // Gone already, or one apply leaves, as plan said why.
+        // Gone already: nothing to remove.
         if (observed === undefined) continue;
-        if ((await whyItStays(spec, client.api, observed, record)) !== undefined)
+        const stays = await whyItStays(spec, client.api, observed, record);
+        if (stays !== undefined) {
+          // One apply leaves, as plan and drift say why. If the plan listed it for
+          // removal, it has changed since: say so, redacted, and keep it and its record.
+          if (
+            options.planned?.some(
+              (change) => change.resource === address && change.action === 'remove',
+            ) === true
+          ) {
+            options.record({
+              step: 'wire',
+              resource: address,
+              result: 'skipped',
+              detail: redact(stays, redacting()),
+            });
+          }
           continue;
+        }
         await spec.remove(client.api, observed);
       } catch (cause) {
         if (!(cause instanceof AppApiError)) throw stop([address], cause);
