@@ -18,9 +18,15 @@ export const TEARDOWN_MS = 120_000;
 /** The repository root: the image's build context. */
 export const REPO = fileURLToPath(new URL('../..', import.meta.url));
 
-/** Build the Mediaplane image from this checkout as `tag`. The first build takes minutes. */
-export async function buildImage(tag: string): Promise<void> {
-  const result = await nodeExec('docker', ['build', '--tag', tag, REPO], {
+/**
+ * Build the Mediaplane image from this checkout as `tag`, with `args` added to `docker
+ * build`'s (such as a label, for a second build to differ). The first build takes minutes.
+ */
+export async function buildImage(
+  tag: string,
+  args: readonly string[] = [],
+): Promise<void> {
+  const result = await nodeExec('docker', ['build', '--tag', tag, ...args, REPO], {
     cwd: '/',
     timeoutMs: 900_000,
   });

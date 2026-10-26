@@ -1,11 +1,16 @@
 #!/bin/sh
 # Mediaplane's image as a release builds it (spec §8.2), for one architecture, natively:
 #
-#   scripts/ci/build-image.sh <amd64|arm64> <out-dir>
+#   scripts/ci/build-image.sh <amd64|arm64> <out-dir> [--push <name>]
 #
 # BuildKit is pinned, the image gets an SBOM and build provenance, and its times come
 # from the commit, so the same commit builds the same image. It writes the image as an
 # OCI layout in <out-dir>/oci, for Trivy, and its manifest's digest in <out-dir>/digest.
+#
+# With --push and a name, such as ghcr.io/cyclopsgd/mediaplane, it pushes the image built
+# and scanned before in <out-dir>, by digest with no tag: it builds it again, from the
+# builder's cache, checks that the manifest it pushed is <out-dir>/digest's, and writes
+# what it pushed, an index of the image and its attestations, in <out-dir>/pushed.
 set -eu
 
 BUILDKIT=moby/buildkit:v0.34.0@sha256:b059f8d7226d0b326bc871af489a5dddf65e36af4d20d14251b072974d9ee87c
@@ -16,9 +21,15 @@ fail() {
   printf 'error: %s\n' "$*" >&2
   exit 1
 }
-[ $# -eq 2 ] || fail "usage: $0 <amd64|arm64> <out-dir>"
+usage="usage: $0 <amd64|arm64> <out-dir> [--push <name>]"
+[ $# -eq 2 ] || [ $# -eq 4 ] || fail "$usage"
 arch=$1
 out=$2
+name=
+if [ $# -eq 4 ]; then
+  [ "$3" = --push ] || fail "$usage"
+  name=$4
+fi
 case $arch in
   amd64 | arm64) ;;
   *) fail "the architecture is amd64 or arm64, not \"$arch\"" ;;
@@ -47,10 +58,25 @@ image_in() {
      | if length == 1 then .[0].digest else error("not one linux/\($arch) image") end'
 }
 
-mkdir -p "$out"
-rm -rf "$out/oci" "$out/digest"
-build "$out/oci.json" "type=oci,dest=$out/oci,tar=false,rewrite-timestamp=true"
-index=$(jq -er '.manifests[0].digest' "$out/oci/index.json")
-digest=$(image_in <"$out/oci/blobs/sha256/${index#sha256:}")
-printf '%s\n' "$digest" >"$out/digest"
-echo "Built linux/$arch: $digest"
+if [ -z "$name" ]; then
+  mkdir -p "$out"
+  rm -rf "$out/oci" "$out/digest"
+  build "$out/oci.json" "type=oci,dest=$out/oci,tar=false,rewrite-timestamp=true"
+  index=$(jq -er '.manifests[0].digest' "$out/oci/index.json")
+  digest=$(image_in <"$out/oci/blobs/sha256/${index#sha256:}")
+  printf '%s\n' "$digest" >"$out/digest"
+  echo "Built linux/$arch: $digest"
+  exit 0
+fi
+
+[ -s "$out/digest" ] || fail "nothing built in $out: build it and scan it first"
+digest=$(cat "$out/digest")
+rm -f "$out/pushed"
+build "$out/push.json" \
+  "type=image,name=$name,push-by-digest=true,name-canonical=true,push=true,rewrite-timestamp=true"
+pushed=$(jq -er '."containerimage.digest"' "$out/push.json")
+again=$(docker buildx imagetools inspect --builder "$BUILDER" --raw "$name@$pushed" | image_in)
+[ "$again" = "$digest" ] ||
+  fail "pushed linux/$arch as $again, not the image scanned, $digest: nothing is tagged"
+printf '%s\n' "$pushed" >"$out/pushed"
+echo "Pushed linux/$arch, $digest, as $name@$pushed"

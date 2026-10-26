@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { RELEASE_JOB_PERMISSIONS } from './release/permissions';
 import { ROOT } from './root';
 
 const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
@@ -43,6 +44,7 @@ const workflow = (path: string): Workflow => parse(read(path)) as Workflow;
 const JOB_PERMISSIONS: Record<string, Record<string, unknown>> = {
   '.github/workflows/ci.yml': { gate: {} },
   '.github/workflows/plex.yml': {},
+  '.github/workflows/release.yml': RELEASE_JOB_PERMISSIONS,
 };
 
 /** An image pinned by tag and digest, as every image outside the catalog is written. */
