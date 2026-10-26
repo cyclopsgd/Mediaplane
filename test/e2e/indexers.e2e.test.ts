@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import {
   api,
   composeDown,
+  docker,
   expectWiringRemoved,
   getJson,
   jsonBody,
@@ -387,6 +388,20 @@ describe('indexers, through Prowlarr', () => {
           .filter((c) => c.service === 'byparr' || c.service === 'flaresolverr')
           .map((c) => `${c.service} ${c.state} ${c.health}`),
       ).toEqual(['flaresolverr running healthy']);
+      // Its image declares a volume at /config: a folder of its own is mounted there, so
+      // no container of it leaves an anonymous volume behind.
+      const mounts = JSON.parse(
+        await docker(
+          'inspect',
+          '--format',
+          '{{json .Mounts}}',
+          `${PROJECT}-flaresolverr-1`,
+        ),
+      ) as { Type: string; Source: string; Destination: string }[];
+      expect(mounts.filter((m) => m.Type !== 'bind')).toEqual([]);
+      expect(mounts.find((m) => m.Destination === '/config')?.Source).toBe(
+        join(home, 'appdata', 'flaresolverr'),
+      );
       expect(await expectLinks(prowlarr, 'flaresolverr')).toBe(cloudflare);
       const visits = await indexer.browserVisits();
       const second = await addIndexer(

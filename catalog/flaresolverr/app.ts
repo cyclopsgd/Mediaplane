@@ -11,8 +11,12 @@ export default defineApp({
   },
   arch: ['amd64', 'arm64'],
   ports: [{ name: 'api', container: 8191, publish: false }],
-  volumes: {},
-  runAs: 'image-default',
+  // Its image declares a volume at /config, and keeps nothing there (probed: its code
+  // never reads or writes it). A folder of its own is mounted there, so that no container
+  // of it leaves an anonymous volume behind when it is removed. The image runs as uid
+  // 1000, so the folder is that user's.
+  volumes: { appdata: '/config' },
+  runAs: 'fixed:1000',
   provides: ['cloudflare-solver'],
   requires: [],
   exclusive: ['cloudflare-solver'],

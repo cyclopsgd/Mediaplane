@@ -361,6 +361,13 @@ apps:
     ).toEqual(['plex']);
   });
 
+  it("mounts a folder of FlareSolverr's own where its image declares a volume, as the image's user", () => {
+    // Without it, every FlareSolverr container leaves an anonymous volume when removed.
+    const flaresolverr = catalog.find((app) => app.id === 'flaresolverr');
+    expect(flaresolverr?.volumes).toEqual({ appdata: '/config' });
+    expect(flaresolverr?.runAs).toBe('fixed:1000');
+  });
+
   it("gives each Cloudflare solver a health check, and its API on the port Prowlarr's proxy names", () => {
     // Prowlarr tests a new indexer proxy as it saves it: up --wait must wait until the
     // solver answers, or the wire step's create would race its start.

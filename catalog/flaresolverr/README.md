@@ -12,8 +12,8 @@ Prowlarr's indexers. Mediaplane runs the upstream image, unmodified, when you li
 - **Digest:** `sha256:c80ae007ce2ccdcd217a12426e4f039ef763ff90738c808d38810c3e59323767`
 - **Architectures:** amd64, arm64
 - **Ports:** 8191/tcp (api), inside the stack only
-- **Volumes:** none
-- **Runs as:** the image's own user
+- **Volumes:** `<home>/appdata/flaresolverr` → `/config`
+- **Runs as:** uid 1000, fixed by the image. Mediaplane gives `<home>/appdata/flaresolverr` to 1000:1000 before the app starts
 - **Health check:** `curl -fsS -o /dev/null http://127.0.0.1:8191/health`, every 30s (timeout 10s, 5 retries, 60s to start)
 - **Secrets:** none
 - **API:** none over the wiring network
