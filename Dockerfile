@@ -37,7 +37,7 @@ ENV MEDIAPLANE_HOME=/opt/mediaplane
 LABEL org.opencontainers.image.title="Mediaplane" \
       org.opencontainers.image.description="Deploys and wires a self-hosted media stack from one stack.yaml" \
       org.opencontainers.image.source="https://github.com/cyclopsgd/Mediaplane" \
-      org.opencontainers.image.licenses="GPL-3.0"
+      org.opencontainers.image.licenses="GPL-3.0-or-later"
 # The node user. mediaplane.compose.yaml runs it as the user that owns the home instead.
 USER 1000:1000
 ENTRYPOINT []

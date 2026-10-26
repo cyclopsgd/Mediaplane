@@ -1,2 +1,2 @@
-/** Kept in step with packages/cli/package.json (release tooling bumps both). */
-export const VERSION = '0.0.0';
+/** Kept in step with packages/cli/package.json: release-please bumps both, at its marker. */
+export const VERSION = '0.0.0'; // x-release-please-version
