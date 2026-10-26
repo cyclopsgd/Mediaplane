@@ -21,6 +21,15 @@ runs:
         USERNAME: ${{ inputs.username }}
         TOKEN: ${{ inputs.token }}
       run: printf '%s' "$TOKEN" | docker login --username "$USERNAME" --password-stdin
-    - if: inputs.username == '' || inputs.token == ''
+    - if: inputs.username == '' && inputs.token == ''
       shell: bash
       run: echo "No Docker Hub token here, so images are pulled anonymously."
+    # Only one of the two: a mistake in the repository's secrets, which a warning shows.
+    - if: >-
+        (inputs.username == '' && inputs.token != '') ||
+        (inputs.username != '' && inputs.token == '')
+      shell: bash
+      env:
+        MISSING: ${{ inputs.username == '' && 'username' || 'token' }}
+      run: |
+        echo "::warning title=Docker Hub login::The Docker Hub $MISSING is empty (DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are both needed), so images are pulled anonymously."

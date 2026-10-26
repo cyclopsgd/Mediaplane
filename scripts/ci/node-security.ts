@@ -62,16 +62,47 @@ export function missedSecurityReleases(
     .sort((a, b) => (newer(parts(a), parts(b)) ? 1 : -1));
 }
 
+const SHAPE = `Node's release index is not a list of { version: string, security: boolean }: ${NODE_INDEX} changed`;
+
+/**
+ * Node's index as the check reads it: a list of releases that each have a version and a
+ * `security` flag. Any other shape is refused, since an index that stopped carrying the
+ * flag would read as "no security release" and pass forever. Other fields are ignored.
+ */
+export function parseIndex(json: unknown): NodeRelease[] {
+  if (!Array.isArray(json)) throw new Error(SHAPE);
+  return json.map((item: unknown) => {
+    const release = item as Partial<Record<keyof NodeRelease, unknown>> | null;
+    if (
+      typeof release !== 'object' ||
+      release === null ||
+      typeof release.version !== 'string' ||
+      !/^v\d+\.\d+\.\d+$/.test(release.version) ||
+      typeof release.security !== 'boolean'
+    ) {
+      throw new Error(SHAPE);
+    }
+    return { version: release.version, security: release.security };
+  });
+}
+
 /** Node's index, tried three times, 5 and 15 seconds apart, 30 seconds each. */
-async function fetchIndex(): Promise<NodeRelease[]> {
+export async function fetchIndex(
+  fetchJson: typeof fetch = fetch,
+  waits: readonly number[] = [0, 5_000, 15_000],
+): Promise<NodeRelease[]> {
   let last: unknown;
-  for (const wait of [0, 5_000, 15_000]) {
+  for (const wait of waits) {
     await sleep(wait);
     try {
-      const response = await fetch(NODE_INDEX, { signal: AbortSignal.timeout(30_000) });
+      const response = await fetchJson(NODE_INDEX, {
+        signal: AbortSignal.timeout(30_000),
+      });
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
-      return (await response.json()) as NodeRelease[];
+      // A wrong shape is rethrown below: trying again would not change it.
+      return parseIndex(await response.json());
     } catch (cause) {
+      if (cause instanceof Error && cause.message === SHAPE) throw cause;
       last = cause;
     }
   }

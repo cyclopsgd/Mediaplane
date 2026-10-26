@@ -26,7 +26,10 @@ cleanup() {
   docker network rm "$name" >/dev/null 2>&1 || true
   rm -rf "$project"
 }
+# A signal exits too, so that the EXIT trap runs: under sh, it doesn't on its own.
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
   exit 1

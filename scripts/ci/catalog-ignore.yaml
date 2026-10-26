@@ -4,6 +4,10 @@
 # a fix arrives as Renovate's bump of the pin, once upstream ships it, and its entry
 # goes then. An entry past its date no longer counts, so CI fails until the pin is
 # bumped or the entry is renewed with a new date and the reason. Found on 2026-10-25.
+#
+# An entry counts only in the app its statement names: the text after the first " in "
+# must name the app as the catalog does (scripts/ci/catalog-images.ts gives each image
+# only the entries of its own app). An id is never ignored in another app's image.
 vulnerabilities:
   - id: CVE-2026-106195
     statement: Chromium in FlareSolverr v3.5.2

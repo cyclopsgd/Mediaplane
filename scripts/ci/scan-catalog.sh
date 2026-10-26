@@ -2,6 +2,8 @@
 # Trivy on every image the catalog pins, from its registry, for one architecture (spec
 # §7.2(7)). It fails on a critical vulnerability that has a fix, but for those listed in
 # scripts/ci/catalog-ignore.yaml until each entry's date: only upstream can fix them.
+# Each image gets an ignore file of its own, with the entries that name its app, so an
+# entry hides a finding in that app and no other (catalog-images.ts ignore <image>).
 #
 #   scripts/ci/scan-catalog.sh <amd64|arm64>
 set -eu
@@ -19,12 +21,16 @@ images=$(cd "$root" && pnpm --silent exec tsx scripts/ci/catalog-images.ts "$arc
   echo "error: no catalog images for $arch" >&2
   exit 1
 }
-# One vulnerability database for every scan, in a folder of this run's own.
+# One vulnerability database for every scan, and each scan's ignore file, in folders of
+# this run's own.
 cache=$(mktemp -d)
-trap 'rm -rf "$cache"' EXIT
+ignores=$(mktemp -d)
+trap 'rm -rf "$cache" "$ignores"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 # Pulled with Docker's login, when there is one (CI logs in to Docker Hub when it can).
 set -- --rm --user "$(id -u):$(id -g)" --env HOME=/home/trivy \
-  --volume "$cache:/cache" --volume "$root/scripts/ci/catalog-ignore.yaml:/ignore.yaml:ro"
+  --volume "$cache:/cache" --volume "$ignores/ignore.yaml:/ignore.yaml:ro"
 if [ -f "$HOME/.docker/config.json" ]; then
   set -- "$@" --volume "$HOME/.docker/config.json:/home/trivy/.docker/config.json:ro"
 fi
@@ -32,6 +38,9 @@ found=
 unscanned=
 for image in $images; do
   echo "--- $image (linux/$arch)"
+  # Under set -e, an image the catalog doesn't know (or a failure here) stops the run.
+  (cd "$root" && pnpm --silent exec tsx scripts/ci/catalog-images.ts ignore "$image") \
+    >"$ignores/ignore.yaml"
   # Trivy exits 3 on a finding, and 1 when it couldn't scan, such as when the registry
   # asks it to slow down: that is tried again, after 15 and 45 seconds.
   for wait in 0 15 45; do
