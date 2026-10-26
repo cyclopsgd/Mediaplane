@@ -520,7 +520,10 @@ Controls today:
     It fails on a critical vulnerability that has a fix.
   - Trivy scans every catalog image, on both architectures. A finding that only upstream
     can fix passes while `scripts/ci/catalog-ignore.yaml` lists it, with the app it is in,
-    until the date beside it; after that date it fails again.
+    until the date beside it; after that date it fails again. Each image is scanned with
+    only the entries whose statement names its app (the text after the statement's first
+    " in " holds a catalog app's name), so an entry hides nothing in another app. One that
+    names no catalog app hides nothing, and a unit test fails on it.
   - Node's own security releases: a check fails while Node has published one for the
     image's line that the image lacks. Neither scan sees Node, a binary in the base.
   - `pnpm audit` checks the CLI's production npm dependencies, which are bundled into one
@@ -537,8 +540,10 @@ What remains:
 - The scans see known vulnerabilities only, and the catalog's listed findings run until
   upstream ships a fix and Renovate's bump of the pin is merged.
 - The audit and the Node check need the npm registry and nodejs.org at CI time.
-- A read-only Docker Hub token in the repository's secrets reaches every job that pulls
-  images on the repository's own branches. It can read public images only.
+- A Docker Hub access token with the permission "Public Repo Read-only", in the
+  repository's secrets, reaches every job that pulls images on the repository's own
+  branches. It can read public images only. A revoked or wrong token fails those jobs;
+  nothing falls back to anonymous pulls, and removing the secrets goes back to them.
 
 ### T18. The release workflow publishes something it shouldn't
 
@@ -550,8 +555,10 @@ Controls today:
   them). The one job that installs npm packages has a read-only token and no secret.
 - No workflow runs a pull request's code with secrets: there is no `pull_request_target`,
   and no secret reaches a script but through its environment.
-- A release publishes its image and deploy files only for a commit whose CI passed,
-  builds from its tag, and pushes the image Trivy scanned, checked by digest.
+- A release publishes its image and deploy files only for a commit whose CI passed. CI
+  runs for every commit on `main`, so the release's commit has a run of its own; each job
+  that builds or ships checks out the tag and checks that it is that commit. The image
+  pushed is the one Trivy scanned, checked by digest.
 
 What remains:
 

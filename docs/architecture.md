@@ -852,18 +852,22 @@ pass, down or leak
 ## Releases and updates
 
 - **Versions.** release-please keeps a release pull request, with the next version and
-  `CHANGELOG.md`, from the Conventional Commits on `main`. Merging it tags the release.
+  `CHANGELOG.md`, from the Conventional Commits on `main` (the first release is 0.1.0).
+  Merging it tags the release.
   [Releasing](releasing.md) has the whole process.
 - **The image.** From the first release, `ghcr.io/cyclopsgd/mediaplane:<version>` is
   one index of two images,
   amd64 and arm64, each built natively on its own runner, with an SBOM and build
   provenance attached, and a signed attestation of its provenance beside it. Its times
-  come from the commit, so one commit builds one image. Each image is scanned by Trivy
-  before it is pushed, and the release checks that it pushed the image it scanned. CI
-  makes the same build on every pull request, and pushes nothing.
+  come from the commit, so one commit builds the same image for an architecture each
+  time; the index of both is not reproducible, as its digest covers the attestations,
+  which hold the build's times. Each image is scanned by Trivy before it is pushed, and
+  the release checks that it pushed the image it scanned. CI makes the same build on every
+  pull request, and pushes nothing.
 - **Deploy files.** A release's `install.sh` and `mediaplane.compose.yaml` name its
   image by digest. In the repository both leave it out, and a checkout builds its own.
-  `install.sh` refuses an image that isn't pinned, but for the one it builds.
+  `install.sh` refuses an image that isn't pinned, but for the one it builds, and runs
+  Compose only on Mediaplane's own project, with the image it checked.
 - **Updating** is `pull`, then `up -d`, on Mediaplane's own project with the next
   release's files. Only Mediaplane's container is recreated:
 
@@ -877,6 +881,10 @@ update
     networks, volumes and
     generated/
 ```
+
+A later `apply` runs the image's own Compose, and Compose versions can differ in a
+service's configuration: the first `apply` after an update that changed the bundled
+Compose may recreate every app container (a restart, keeping their data).
 
 - **`stack.yaml`'s version.** This Mediaplane reads version 1. One that changes the format
   will read an older file through a migration, in memory, with a warning, and

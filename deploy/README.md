@@ -109,11 +109,17 @@ you only a home it has just created, never a folder that was already there. With
   [Updating](#updating)). It keeps your `deploy/.env` as it is, and never touches your
   stack.
 - **An image of your own:** set `MEDIAPLANE_IMAGE` for the first run, pinned by digest
-  (`<name>:<tag>@sha256:<digest>`), and it pulls that and builds nothing. It refuses one
-  that isn't pinned, so that every run starts the image you checked;
-  `docker buildx imagetools inspect <name>:<tag>` shows the digest. Later runs take the
-  image from `deploy/.env`, so change it there. `mediaplane:local` is the one image it
-  takes unpinned: the one it builds from a checkout.
+  (`<name>:<tag>@sha256:<64 hex digits>`), and it pulls that and builds nothing. It takes
+  no other form, and refuses an image that isn't pinned, so that every run starts the
+  image you checked; `docker buildx imagetools inspect <name>:<tag>` shows the digest.
+  Later runs take the image from `deploy/.env`, so change it there. `mediaplane:local` is
+  the one image it takes unpinned: the one it builds from a checkout.
+- **Only Mediaplane's own project:** it runs Compose on `mediaplane.compose.yaml` only,
+  always as `-p mediaplane-system`, and gives Compose exactly the image it checked. It
+  clears the shell's `COMPOSE_*` settings and names the project and the file itself, so
+  neither the shell's nor `deploy/.env`'s can move it to another project or file, and
+  none can change the image. It pulls the image and the socket proxy's before it recreates
+  anything; Docker checks everything it pulls against the digest.
 - **If `mediaplane` then runs something else** in your shell, `type -a mediaplane` shows
   what, such as an old alias.
 
@@ -345,7 +351,8 @@ volumes and `generated/` as they are: an end-to-end test checks each container's
 start time, restarts and mounts, every file in `generated/` and `state/`, and that Docker
 pulls only Mediaplane's image and the proxy's, across an update and back. Afterwards,
 `mediaplane plan` shows what the new version would change, if anything, and only `apply`
-changes it, when you run it.
+changes it, when you run it. That is not a promise that the next `apply` changes nothing:
+see the note on Compose below.
 
 **From a release** (from the first one): unpack the next release's deploy files over the
 old ones, in the same folder, then run its installer. It keeps your `deploy/.env`, pulls
@@ -401,7 +408,11 @@ An update can bring a new version of Compose inside the image. Compose versions 
 compute a container's configuration hash differently
 ([ADR 0010](../docs/adr/0010-predict-container-changes-with-compose-hashes.md)). If that
 happens, the next `mediaplane plan` shows most apps as `recreate`, and the next `apply`
-recreates them once. Their data stays where it is.
+recreates them once. Their data stays where it is. This has happened: Compose 5.5.1
+recreated containers that Compose 2.38.2 had made, from a file that had not changed. So
+the first `apply` after an update that changed the Compose in the image may recreate every
+app container, a restart that keeps their data and settings. A release's notes say when
+it changes Compose.
 
 An update that brings Seerr's wiring treats a Seerr you set up by hand before it as one
 Mediaplane has no record of. The next `apply` recreates it once, unpublished, and checks

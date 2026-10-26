@@ -920,9 +920,18 @@ password, which are S3c's (and listed again below).
   secret (never given to fork PRs), or through a pull-through cache, for the e2e and
   image jobs. S6 adds no image: each e2e file pulls only what is missing.
   - **Done in S9:** with the secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (the
-    owner's, read-only), the jobs that pull images log in to Docker Hub; without them, as
-    in a fork's pull request, they pull anonymously. GHCR's and lscr.io's pulls stay
-    anonymous, and apply's own pull retries stay.
+    owner's, a "Public Repo Read-only" access token), the jobs that pull images log in to
+    Docker Hub; without them, as in a fork's pull request, they pull anonymously. A
+    revoked or wrong token fails the job, with no fallback; removing the secrets goes back
+    to anonymous pulls, and with only one of the two a job warns and pulls anonymously.
+    GHCR's and lscr.io's pulls stay anonymous, and apply's own pull retries stay.
+- **Which Compose versions work out a service differently (open, for S10).** Updating
+  Mediaplane never touches the stack, but a later `apply` runs the image's own Docker
+  Compose, and Compose 5.5.1 recreated containers made by 2.38.2 from an unchanged file.
+  So the first `apply` after an update that changed the bundled Compose may recreate every
+  app container (a restart, keeping their data). S9 says so in the deploy guide and in
+  the guidance for a release's notes. S10: probe which pairs of Compose versions differ,
+  and say so in Renovate's pull request for a Compose bump.
 
 **The panel (not scheduled since 2026-10-25):**
 
