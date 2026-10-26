@@ -633,13 +633,13 @@ Controls today:
 
 - The shared admin password is generated with `crypto.randomBytes`: 24 letters and
   digits, about 143 bits. It is kept in `state/secrets.json` (0600).
-- A password of your own (`admin.password`) is advised to have 12 characters or more.
-  A shorter one is allowed, with a warning from `plan` and a "Use it anyway?" from `init`:
-  the owner's choice for a stack that is reached only from the home network, decided
-  2026-10-26. An app's web page is reachable from wherever its port is published, so a
-  short password is weak the moment a port is forwarded or `network.bind` is `lan` on a
-  network that is not yours alone. Only what an app itself refuses is an error
-  (qBittorrent takes no fewer than 6 characters).
+- A password of your own (`admin.password`) takes 6 characters or more, and 12 or more
+  is advised. From 6 to 11 is allowed, with a warning from `plan` and a "Use it anyway?"
+  from `init`: the owner's choice for a stack that is reached only from the home network,
+  decided 2026-10-26. An app's web page is reachable from wherever its port is published,
+  so a short password is weak the moment a port is forwarded or `network.bind` is `lan`
+  on a network that is not yours alone. Below 6 is an error, for every stack. That is
+  qBittorrent's own minimum, so no app in the catalog takes fewer than Mediaplane does.
 - `mediaplane credentials` shows a generated password. It shows your own only with
   `--reveal`, and its `--json` output leaves either out unless you add `--reveal`.
   `plan`, `apply`, errors and change records never show it.

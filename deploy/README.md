@@ -252,12 +252,12 @@ files are written: there it only skips the sign-in. Without a terminal it asks n
 - **The admin login.** `init` asks for its user name (`--admin-user`), and whether
   Mediaplane should generate its password. Answer `n` and, on a terminal, it asks you to
   type your own twice, with nothing shown, and saves it in `secrets/admin-password`,
-  readable by you only. It advises 12 characters or more, and allows a shorter one after
-  a warning and a yes, because a stack reached only from your own network may not need
-  more; it refuses one shorter than an app takes (qBittorrent: 6 characters), naming the
-  app. `plan` warns of one shorter than 12 the same way. There is no space at either end.
-  Enter instead asks for a file in the home that you fill yourself, and a file already at
-  `secrets/admin-password` is used as it is. Without a terminal, pass
+  readable by you only. It takes 6 characters or more and advises 12 or more, and allows
+  a shorter one after a warning and a yes, because a stack reached only from your own
+  network may not need more; it refuses one shorter than 6 characters, whatever is in the
+  stack. `plan` warns of one shorter than 12 the same way. There is no space at either
+  end. Enter instead asks for a file in the home that you fill yourself, and a file
+  already at `secrets/admin-password` is used as it is. Without a terminal, pass
   `--admin-password-file secrets/admin-password`. After `apply`,
   `mediaplane credentials` shows the login and each app's address. It shows a
   password of your own only with `--reveal`, and its `--json` output leaves out either

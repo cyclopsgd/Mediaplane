@@ -1015,26 +1015,29 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   counts as seeded, because there is no way to tell. Slice 10 automates the fix, with
   the rest of "restore the key at the source" (§6.3; moved from Slice 8 on 2026-10-25).
 - **The shared admin (§6.1).** `admin.username` is 3 to 32 letters, digits, `.`, `_`
-  or `-`. A password of your own is advised to have 12 characters or more
-  (`ADMIN_PASSWORD_ADVISED_LENGTH`): a shorter one is a warning, `admin.password-short`,
+  or `-`. A password of your own takes 6 characters or more
+  (`ADMIN_PASSWORD_MIN_LENGTH`), and 12 or more is advised
+  (`ADMIN_PASSWORD_ADVISED_LENGTH`): from 6 to 11 is a warning, `admin.password-short`,
   which never shows the password or its length, and `plan` stays `ok`. Many installs
   are reached only from their own network, so a basic password is the owner's to
-  choose (decided 2026-10-26). The shortest refused is what an app in the stack takes:
-  the catalog fact `adminPasswordMinLength`, checked only for the apps in the stack
-  (the media server and each app not disabled), and an error,
-  `admin.password-too-short`, naming the app ("qBittorrent takes a password of at least
-  6 characters"). Probed on the pinned images (2026-10-26): qBittorrent's preferences
-  refuse fewer than 6 characters (400), the hash in its pre-start file takes any, and
-  the preferences set the password from then on, so its minimum is 6; Sonarr, Radarr,
-  Prowlarr and Jellyfin (wizard and password update alike) took 1 character; Mediaplane
-  sets no password in Seerr, which signs in through Jellyfin, nor in Plex. The empty
-  password is still `secret.missing`. Otherwise Mediaplane generates 24 base62 characters,
-  keeps them in `state/secrets.json` as `shared.adminPassword`, and `plan` lists
-  `admin.password` among the secrets to generate. It is generated for every stack that
-  doesn't set `admin.password`, even before an app uses it. In Slice 3a only
-  qBittorrent gets the login, through its pre-start file. Sonarr, Radarr and Prowlarr
-  get it through their API in Slice 3b, though their `config.xml` already sets
-  `AuthenticationMethod` and `AuthenticationRequired`.
+  choose (decided 2026-10-26), with 6 as the floor for every stack (the owner's change,
+  2026-10-26). Below 6 is an error, `admin.password-too-short` ("admin.password is
+  shorter than 6 characters, the fewest Mediaplane takes"). An app that needs more than
+  6 raises the floor: the catalog fact `adminPasswordMinLength`, checked only for the
+  apps in the stack (the media server and each app not disabled), and the error names
+  the app ("Sonarr takes a password of at least 8 characters"; no app does today). Probed
+  on the pinned images (2026-10-26): qBittorrent's preferences refuse fewer than 6
+  characters (400), the hash in its pre-start file takes any, and the preferences set the
+  password from then on, so its minimum is 6; Sonarr, Radarr, Prowlarr and Jellyfin
+  (wizard and password update alike) took 1 character; Mediaplane sets no password in
+  Seerr, which signs in through Jellyfin, nor in Plex. The empty password is still
+  `secret.missing`. Otherwise Mediaplane generates 24 base62 characters, keeps them in
+  `state/secrets.json` as `shared.adminPassword`, and `plan` lists `admin.password` among
+  the secrets to generate. It is generated for every stack that doesn't set
+  `admin.password`, even before an app uses it. In Slice 3a only qBittorrent gets the
+  login, through its pre-start file. Sonarr, Radarr and Prowlarr get it through their API
+  in Slice 3b, though their `config.xml` already sets `AuthenticationMethod` and
+  `AuthenticationRequired`.
 - **`credentials` (§5.2)** prints the login, and the web address of each app that has a
   login. Its human output shows a generated password, as §6.1 says. `--json`
   (`mediaplane.credentials/v1`) leaves the password `null` unless `--reveal` is given.
@@ -1251,13 +1254,14 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     `secrets/wg.key` (0600), never over an existing one. Asked not to generate the admin
     password, it takes yours the same way, typed twice, with no space at either end, into
     `secrets/admin-password` (0600); Enter asks for a file of yours instead, and one
-    already there is used as it is. A password shorter than an app of the starter stack
-    takes (qBittorrent: 6 characters) is refused, naming the app, and asked again. One
-    shorter than 12 prints "Shorter than 12 characters: fine on a home network, weak if
-    an app is reachable from the internet." and asks "Use it anyway? [y/N]": no asks for
-    the password again, yes goes on to "Type it again". Without a terminal, init never
-    sees the password (the file is yours, read by `plan`), so it only says "12 characters
-    or more advised" in its next steps, and `plan` warns.
+    already there is used as it is. A password shorter than 6 characters ("That has fewer
+    than 6 characters, the fewest Mediaplane takes."), or than an app of the stack takes,
+    is refused and asked again. One shorter than 12 prints "Shorter than 12 characters:
+    fine on a home network, weak if an app is reachable from the internet." and asks "Use
+    it anyway? [y/N]": no asks for the password again, yes goes on to "Type it again".
+    Without a terminal, init never sees the password (the file is yours, read by `plan`),
+    so it only says "6 characters or more, 12 or more advised" in its next steps, and
+    `plan` warns.
 
 ### Slice 3c: the download path (2026-10-11)
 
