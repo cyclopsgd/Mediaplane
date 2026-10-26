@@ -101,9 +101,9 @@ export interface FakeProviderKind<P extends FakeProviderBase> {
 }
 
 /**
- * One kind of provider at `path`, as Sonarr, Radarr and Prowlarr serve them: listed, read
- * and updated by id, made from `templates`, and tested by `test`, with a masked key
- * standing for the one held.
+ * One kind of provider at `path`, as Sonarr, Radarr and Prowlarr serve them: listed, read,
+ * updated and removed by id, made from `templates`, and tested by `test`, with a masked
+ * key standing for the one held.
  * - A new provider is tested as it is saved, with forceSave too (which skips only the
  *   test's warnings), unless `testedOnCreate` says no; one that fails isn't saved.
  * - An update with forceSave isn't tested.
@@ -139,7 +139,8 @@ export function fakeProviders<P extends FakeProviderBase>(
     if (held.some((p) => p.name === sent.name)) return taken();
     const failed = testedOnCreate?.(sent) === false ? undefined : test(sent, keyOf(sent));
     if (failed !== undefined) return failed;
-    const made = { ...sent, id: held.length + 1 };
+    // A removed provider's id isn't given again.
+    const made = { ...sent, id: Math.max(0, ...held.map((p) => p.id)) + 1 };
     held.push(made);
     return { status: 201, body: maskedProvider(made) };
   }
@@ -161,6 +162,11 @@ export function fakeProviders<P extends FakeProviderBase>(
   if (request.path === `${path}/test` && method === 'POST') {
     const sent = JSON.parse(request.body) as P;
     return test(sent, keyOf(sent)) ?? { status: 200, body: {} };
+  }
+  // A removal: 200, whether or not it held one of that id (probed).
+  if (one !== null && one[2] === undefined && method === 'DELETE') {
+    if (found !== undefined) held.splice(held.indexOf(found), 1);
+    return { status: 200, body: {} };
   }
   return undefined;
 }

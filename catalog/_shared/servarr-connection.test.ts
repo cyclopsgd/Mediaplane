@@ -195,6 +195,19 @@ describe("an arr's connection to Jellyfin", () => {
     });
   });
 
+  it('is removed by its id once the stack moves to Plex, which wants it no more', async () => {
+    const { api, apis, state } = await sonarr();
+    await connection.create(api, wanted());
+    const observed = await connection.observe(api, undefined);
+    if (observed === undefined) throw new Error('no connection');
+    await connection.remove?.(api, observed);
+    expect(apis.app.requests.at(-1)).toMatchObject({
+      method: 'DELETE',
+      path: '/api/v3/notification/1',
+    });
+    expect(state.connections).toEqual([]);
+  });
+
   it("refuses a trigger the arr's template lacks, saying which, before it sends anything", async () => {
     const { api, state } = await sonarr();
     const odd = servarrJellyfin([...LIBRARY_TRIGGERS, 'onFictional']);

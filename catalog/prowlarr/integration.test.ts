@@ -194,6 +194,26 @@ apps:
     });
   });
 
+  it('is removed by its id once its arr leaves the stack, and the other link stays', async () => {
+    const { api, app, state, apps } = await prowlarr();
+    const toRadarr = resource('application_radarr');
+    // Prowlarr tests a new link as it saves it: Radarr takes its key too.
+    apps.set('radarr', { ...freshAppState(), key: RADARR_KEY });
+    await toSonarr.create(api, wanted(toSonarr));
+    await toRadarr.create(api, wanted(toRadarr));
+    const observed = await toRadarr.observe(api, undefined);
+    expect(observed?.id).toBe(2);
+    if (observed === undefined) throw new Error('no link to Radarr');
+    await toRadarr.remove?.(api, observed);
+    expect(app.requests.at(-1)).toMatchObject({
+      method: 'DELETE',
+      path: '/api/v1/applications/2',
+    });
+    expect(state.applications.map((a) => a.name)).toEqual(['Sonarr (Mediaplane)']);
+    // Sent again, as after an apply cut short: Prowlarr answers 200 all the same.
+    await toRadarr.remove?.(api, observed);
+  });
+
   it("checks the arr's key with Prowlarr's own test of the link it holds: a refusal means update", async () => {
     const { api, app, state } = await prowlarr();
     const desired = wanted(toSonarr);
@@ -458,6 +478,23 @@ describe('the indexer proxy', () => {
       name: PROXY_NAME,
       fields: wanted(proxy).fields,
     });
+  });
+
+  it('is removed once the stack has no Cloudflare solver, leaving the tag, which your indexers carry', async () => {
+    const { api, app, state } = await prowlarr();
+    await proxy.create(api, wanted(proxy));
+    expect(proxy.desired(contextOf(stack('  byparr: { enabled: false }\n')))).toBe(
+      undefined,
+    );
+    const observed = await proxy.observe(api, undefined);
+    if (observed === undefined) throw new Error('no proxy');
+    await proxy.remove?.(api, observed);
+    expect(app.requests.at(-1)).toMatchObject({
+      method: 'DELETE',
+      path: '/api/v1/indexerproxy/1',
+    });
+    expect(state.proxies).toEqual([]);
+    expect(state.tags).toEqual([{ id: 1, label: 'cloudflare' }]);
   });
 
   it('keeps the tag Prowlarr has, and puts back the tags and settings it manages', async () => {

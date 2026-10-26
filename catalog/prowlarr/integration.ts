@@ -13,6 +13,7 @@ import { servarrIntegration } from '../_shared/servarr';
 import {
   createProvider,
   findProvider,
+  removeProvider,
   secretOf,
   sendsToOf,
   servarrProvider,
@@ -246,6 +247,8 @@ const indexerProxy: ResourceSpec = {
     const { settings, top } = await proxyBody(api, desired);
     await updateProvider(api, PROXIES, observed.id, settings, top);
   },
+  // Once the stack has no solver: the `cloudflare` tag stays, on your indexers too.
+  remove: (api, observed) => removeProvider(api, PROXIES, observed.id),
 };
 
 /**

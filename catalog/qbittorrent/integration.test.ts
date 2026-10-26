@@ -369,6 +369,33 @@ apps:
       expect(await tv.observe(yours.api, record)).toBeUndefined();
     });
 
+    it('removes a category its arr left, but never one that holds a torrent, which would lose it', async () => {
+      const { api, state } = await qbittorrent({
+        categories: { tv: '/data/torrents/tv', movies: '/data/torrents/movies' },
+        torrents: [
+          { hash: 'a'.repeat(40), category: 'movies', savePath: '/data/torrents/movies' },
+        ],
+      });
+      const observed = { id: 'movies', name: 'movies', fields: {} };
+      expect(await movies.cannotRemove?.(api, observed)).toBe(
+        'it holds a torrent, which removing it would move to /data/torrents: move it to another category first, or keep it',
+      );
+      state.torrents.push({
+        hash: 'b'.repeat(40),
+        category: 'movies',
+        savePath: '/data/torrents/movies',
+      });
+      expect(await movies.cannotRemove?.(api, observed)).toBe(
+        'it holds 2 torrents, which removing it would move to /data/torrents: move them to another category first, or keep it',
+      );
+      // Moved elsewhere, it holds none: it goes, and the category tv stays.
+      for (const torrent of state.torrents) torrent.category = 'tv';
+      expect(await movies.cannotRemove?.(api, observed)).toBeUndefined();
+      await movies.remove?.(api, observed);
+      expect(state.categories).toEqual({ tv: '/data/torrents/tv' });
+      expect(state.torrents.map((t) => t.category)).toEqual(['tv', 'tv']);
+    });
+
     it("says qBittorrent's own words when it refuses", async () => {
       const { api } = await qbittorrent({ categories: { tv: '/data/torrents/tv' } });
       const desired = tv.desired(contextOf());

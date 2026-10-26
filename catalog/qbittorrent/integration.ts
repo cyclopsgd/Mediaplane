@@ -28,6 +28,7 @@ export const CATEGORIES = [
 const PREFERENCES = '/api/v2/app/preferences';
 const SET_PREFERENCES = '/api/v2/app/setPreferences';
 const CATEGORIES_PATH = '/api/v2/torrents/categories';
+const TORRENTS_PATH = '/api/v2/torrents/info';
 
 /**
  * What Mediaplane reads of qBittorrent's preferences, each read with a FieldReader. They
@@ -213,7 +214,8 @@ function categoryOf(stack: ResolvedStack, arr: string, name: string): string {
  * The category `name` (spec §6.2), or the one `arr`'s download client is kept with
  * (categoryOf), with its save path under DEFAULT_SAVE_PATH, while `arr` is in the stack.
  * qBittorrent knows a category by its name: it gives it no id. One Mediaplane made before
- * under another name stays as it is, yours.
+ * under another name stays as it is, yours. Once `arr` leaves the stack, apply removes it,
+ * unless it holds a torrent.
  */
 function category(arr: string, name: string): ResourceSpec {
   const save = (api: AppApi, path: string, desired: DesiredResource) =>
@@ -251,6 +253,21 @@ function category(arr: string, name: string): ResourceSpec {
     },
     async update(api, desired) {
       await save(api, '/api/v2/torrents/editCategory', desired);
+    },
+    // Removing a category takes it from its torrents, and Automatic Torrent Management
+    // then moves their files to the default save path (probed): they are yours, so a
+    // category that holds any stays.
+    async cannotRemove(api, observed) {
+      const held = await api.get(
+        `${TORRENTS_PATH}?category=${encodeURIComponent(observed.name)}`,
+        z.array(z.unknown()),
+      );
+      if (held.length === 0) return undefined;
+      const many = held.length === 1 ? 'a torrent' : `${String(held.length)} torrents`;
+      return `it holds ${many}, which removing it would move to ${DEFAULT_SAVE_PATH}: move ${held.length === 1 ? 'it' : 'them'} to another category first, or keep it`;
+    },
+    async remove(api, observed) {
+      await api.form('/api/v2/torrents/removeCategories', { categories: observed.name });
     },
   };
 }

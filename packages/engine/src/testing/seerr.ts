@@ -754,6 +754,13 @@ function fakeSeerrServers(
     servers[index] = { ...sent, id: Number(match[2]) } as FakeSeerrServer;
     return { status: 200, body: servers[index] };
   }
+  // A removal answers with the server; one Seerr doesn't hold, 500 (probed on Radarr's).
+  if (method === 'DELETE' && match[2] !== undefined) {
+    const [removed] = index < 0 ? [] : servers.splice(index, 1);
+    return removed === undefined
+      ? { status: 500, body: '<pre>Internal Server Error</pre>' }
+      : { status: 200, body: removed };
+  }
   return undefined;
 }
 

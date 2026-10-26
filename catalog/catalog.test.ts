@@ -414,6 +414,42 @@ apps:
     ).toEqual([['qbittorrent', 6]]);
   });
 
+  it('removes each resource the stack can stop wanting while its app stays, and only those', () => {
+    // Spec §8.1(3) step 4: when an app leaves, what Mediaplane made for it in the others
+    // goes. Each of these is wanted only while another app, or a setting, is in the stack;
+    // what an app always holds while it runs (its admin, its libraries) is never left.
+    const removable = catalog.flatMap((app) =>
+      (app.integration?.resources ?? [])
+        .filter((resource) => resource.remove !== undefined)
+        .map((resource) => `${app.id}.${resource.name}`),
+    );
+    expect(removable).toEqual([
+      'prowlarr.application_sonarr',
+      'prowlarr.application_radarr',
+      'prowlarr.indexer_proxy',
+      'qbittorrent.category_tv',
+      'qbittorrent.category_movies',
+      'radarr.download_client',
+      'radarr.connection_jellyfin',
+      'radarr.connection_plex',
+      'seerr.server_sonarr',
+      'seerr.server_radarr',
+      'sonarr.download_client',
+      'sonarr.connection_jellyfin',
+      'sonarr.connection_plex',
+    ]);
+    // Seerr's media server is a setting of Seerr's, which can't be taken away: Seerr is set
+    // up again for another media server (spec §10), and drift reports the old one.
+    const seerr = catalog.find((app) => app.id === 'seerr');
+    const servers = (seerr?.integration?.resources ?? []).filter((resource) =>
+      resource.name.startsWith('media_server'),
+    );
+    expect(servers.map((resource) => resource.remove === undefined)).toEqual([
+      true,
+      true,
+    ]);
+  });
+
   it('gives an integration to the apps Mediaplane wires so far', () => {
     expect(
       catalog.filter((app) => app.integration !== undefined).map((app) => app.id),

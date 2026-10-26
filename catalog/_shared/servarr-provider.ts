@@ -183,6 +183,18 @@ export async function updateProvider(
 }
 
 /**
+ * Remove the provider with the app's id `id` (spec §8.1(3) step 4): Sonarr, Radarr and
+ * Prowlarr answer 200 whether or not they held it (probed), so it is safe to send again.
+ */
+export async function removeProvider(
+  api: AppApi,
+  kind: ProviderKind,
+  id: ObservedResource['id'],
+): Promise<void> {
+  await api.submit('DELETE', `${kind.path}/${String(id)}`);
+}
+
+/**
  * `body` with `settings` set, and those it lacks added: where a test sends a key.
  */
 function aimedAt<T extends { fields: z.infer<typeof setting>[] }>(
@@ -257,14 +269,14 @@ export interface ProviderOptions {
 }
 
 /**
- * The parts of a resource spec that a Servarr provider has in common, found, tested, made
- * and updated through the functions above: the spec adds its name, fields, secrets,
- * requirements and what it wants.
+ * The parts of a resource spec that a Servarr provider has in common, found, tested, made,
+ * updated and removed through the functions above: the spec adds its name, fields,
+ * secrets, requirements and what it wants.
  */
 export function servarrProvider(
   options: ProviderOptions,
 ): Pick<ResourceSpec, 'observe' | 'create' | 'update'> &
-  Required<Pick<ResourceSpec, 'verify'>> {
+  Required<Pick<ResourceSpec, 'verify' | 'remove'>> {
   const { kind, name, credentials, fieldsOf, settingsOf, topOf } = options;
   const onCreate = options.onCreate ?? [];
   return {
@@ -286,5 +298,6 @@ export function servarrProvider(
       ),
     update: (api, desired, observed) =>
       updateProvider(api, kind, observed.id, settingsOf(desired), topOf(desired)),
+    remove: (api, observed) => removeProvider(api, kind, observed.id),
   };
 }

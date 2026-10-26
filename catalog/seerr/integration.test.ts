@@ -635,6 +635,21 @@ describe.each([
     expect(state.seerr.errors).toEqual([]);
   });
 
+  it('is removed by its id once the stack no longer runs the arr, and only as Seerr holds it', async () => {
+    const { api, state, calls } = await seerr();
+    const desired =
+      (await spec.resolve?.(api, wanted(spec), contextOf())) ?? wanted(spec);
+    await spec.create(api, desired);
+    const observed = await spec.observe(api, undefined, desired);
+    if (observed === undefined) throw new Error('observed');
+    const before = calls().length;
+    await spec.remove?.(api, observed);
+    expect(calls(before)).toEqual([`DELETE /api/v1/settings/${arr}/0`]);
+    expect(state.seerr[arr]).toEqual([]);
+    // Seerr answers 500 for one it doesn't hold, as the real one does: never sent blind.
+    await expect(spec.remove?.(api, observed)).rejects.toThrow(AppApiError);
+  });
+
   it("finds a refused key by testing again with the stack's, sets it with the server sent back whole, and says when Seerr can't reach the arr", async () => {
     const { api, state, sonarr, radarr } = await seerr();
     const desired =

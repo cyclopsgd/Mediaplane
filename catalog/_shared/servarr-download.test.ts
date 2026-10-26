@@ -204,6 +204,20 @@ describe('servarrDownloadClient', () => {
     });
   });
 
+  it('is removed by its id once the stack has no qBittorrent, and a new one never takes that id', async () => {
+    const { api, app, state } = await sonarr();
+    await client.create(api, wanted());
+    const observed = await client.observe(api, undefined);
+    if (observed === undefined) throw new Error('no client');
+    await client.remove?.(api, observed);
+    expect(app.requests.at(-1)).toMatchObject({
+      method: 'DELETE',
+      path: '/api/v3/downloadclient/1',
+    });
+    expect(state.downloadClients).toEqual([]);
+    expect(await client.observe(api, undefined)).toBeUndefined();
+  });
+
   it("checks the key with the app's own test of the client it holds: a refusal means update", async () => {
     const { api, app, state } = await sonarr();
     const desired = wanted();

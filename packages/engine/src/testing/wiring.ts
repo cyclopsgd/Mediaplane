@@ -120,6 +120,8 @@ export interface FakeAppState {
   preferences: Record<string, string | boolean>;
   /** qBittorrent's categories: each one's save path, by name. */
   categories: Record<string, string>;
+  /** qBittorrent's torrents: each one's category ("" for none) and save path. */
+  torrents: { hash: string; category: string; savePath: string }[];
   /**
    * Its API key, or any when empty: qBittorrent takes only this one, as a Bearer token,
    * and Seerr only this one, once it has a user; Prowlarr's test of its link to Sonarr or
@@ -214,6 +216,7 @@ export function freshAppState(): FakeAppState {
       bypass_auth_subnet_whitelist: '',
     },
     categories: {},
+    torrents: [],
     key: '',
     port: 8080,
     signInFailures: 0,
@@ -382,7 +385,8 @@ function fakeServarrDownloads(
  * Radarr and Prowlarr have /ping, system/status, config/host and /login, the arrs their
  * download clients, root folders and connections (fakeServarrConnections), and Prowlarr
  * its links to them, its indexer proxies and its tags (fakeProwlarr); qBittorrent has /,
- * app/version, its sign-in (with its ban), preferences and categories, answered as
+ * app/version, its sign-in (with its ban), preferences, categories, removed too, and its
+ * torrents by category, answered as
  * qBittorrent 5.2 answers them, and is `apps`' "qbittorrent" also when reached through
  * Gluetun; Jellyfin has its startup wizard, sign-in, keys, user and libraries
  * (fakeJellyfin); Seerr its sign-in through Jellyfin, its settings and its tests of the
@@ -584,6 +588,30 @@ function fakeQbittorrent(request: FakeRequest, state: FakeAppState): FakeReply {
   if (path === '/api/v2/torrents/editCategory') {
     if (!known) return { status: 404, body: 'Category does not exist' };
     state.categories[name] = form.get('savePath') ?? '';
+    return { status: 200 };
+  }
+  const listed = /^\/api\/v2\/torrents\/info\?category=(.*)$/.exec(path);
+  if (listed !== null) {
+    const wanted = decodeURIComponent(listed[1] ?? '');
+    return {
+      status: 200,
+      body: state.torrents
+        .filter((t) => t.category === wanted)
+        .map((t) => ({ hash: t.hash, category: t.category, save_path: t.savePath })),
+    };
+  }
+  // As qBittorrent 5.2 does (probed): 200 whether or not it held them, and each torrent of
+  // one removed loses its category, and goes to the default save path (Automatic Torrent
+  // Management).
+  if (path === '/api/v2/torrents/removeCategories') {
+    const gone = (form.get('categories') ?? '').split('\n');
+    for (const removed of gone) Reflect.deleteProperty(state.categories, removed);
+    for (const torrent of state.torrents) {
+      if (gone.includes(torrent.category)) {
+        torrent.category = '';
+        torrent.savePath = String(state.preferences.save_path);
+      }
+    }
     return { status: 200 };
   }
   return { status: 404 };

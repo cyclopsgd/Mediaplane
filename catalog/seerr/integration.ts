@@ -461,6 +461,7 @@ const offered = z.looseObject({
  * - Seerr keeps a server whole, its id read-only: an update sends it back as Seerr gave
  *   it, without the id, so its other settings stay yours.
  * - It requires the arr's root folder, which it names, and Seerr comes after the arr.
+ * - Once the stack no longer runs the arr, apply removes it (spec §8.1(3) step 4).
  */
 function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
   const spec = ARRS[arr];
@@ -648,6 +649,9 @@ function seerrServer(arr: keyof typeof ARRS): ResourceSpec {
         isDefault: desired.fields.isDefault === true,
       });
     },
+    // Once the stack no longer runs the arr. Seerr answers 500 for a server it doesn't
+    // hold (probed), so it is removed only as observed, just before.
+    remove: (api, observed) => api.submit('DELETE', `${path}/${String(observed.id)}`),
   };
 }
 

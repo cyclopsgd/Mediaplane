@@ -1240,6 +1240,42 @@ describe('mediaplane apply: Prowlarr in the stack', () => {
     expect(again.stdout()).toBe('No changes.\n');
   });
 
+  it("removes Prowlarr's indexer proxy once the stack drops its Cloudflare solver, then changes nothing", async () => {
+    const home = await makeHome(WITH_PROWLARR);
+    const docker = fakeDocker(home);
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(0);
+    await writeFile(
+      join(home, 'stack.yaml'),
+      `${WITH_PROWLARR}  byparr: { enabled: false }\n`,
+    );
+    const shown = capture();
+    expect(await run(['plan', '--home', home, '--json'], shown.io, deps(docker))).toBe(2);
+    const planned = JSON.parse(shown.stdout()) as {
+      containers: { service: string; action: string }[];
+      wiring: { resource: string; action: string }[];
+    };
+    expect(planned.wiring.filter((w) => w.action === 'remove')).toEqual([
+      { resource: 'prowlarr.indexer_proxy', action: 'remove' },
+    ]);
+    expect(planned.containers).toContainEqual({ service: 'byparr', action: 'remove' });
+    const applied = capture();
+    expect(await run(['apply', '--home', home, '--yes'], applied.io, deps(docker))).toBe(
+      0,
+    );
+    expect(applied.stdout()).toContain(
+      '  done    wiring prowlarr.indexer_proxy: removed\n',
+    );
+    expect(apis.apps.get('prowlarr')?.proxies).toEqual([]);
+    expect(Object.keys(await readResources(home))).not.toContain(
+      'prowlarr.indexer_proxy',
+    );
+    const again = capture();
+    expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
+    expect(again.stdout()).toBe('No changes.\n');
+  });
+
   it("skips Prowlarr's link to Sonarr when Sonarr's admin fails, and still makes the proxy", async () => {
     const home = await makeHome(WITH_PROWLARR);
     // Sonarr never becomes ready, so nothing of it can be set: its admin fails.
