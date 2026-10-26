@@ -220,11 +220,11 @@ describe('apply', () => {
     expect((await readSecretStore(home)).apps.sonarr).toEqual({ apiKey: key });
     expect(await readFile(file, 'utf8')).toBe(`key=${key}\nuser=someone\n`);
     expect(await readFile(join(home, ENV_PATH), 'utf8')).toContain(key);
+    // `restore` names none, so the record has none: an older release reads it.
     const [record] = (await listRecords(home)).records;
     expect(record?.plan.secrets).toEqual({
       generate: ['admin.password', 'gluetun.controlApiKey'],
       recover: ['sonarr.apiKey'],
-      restore: [],
     });
   });
 

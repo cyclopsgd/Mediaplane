@@ -146,12 +146,18 @@ async function keepChecks(
     if (record === undefined) continue;
     record.checks = {
       ...record.checks,
-      [check.secret]: { verdict: check.verdict, at: when },
+      // A later release's fields of the check are kept, as everywhere in the file.
+      [check.secret]: {
+        ...record.checks?.[check.secret],
+        verdict: check.verdict,
+        at: when,
+      },
     };
     changed = true;
   }
   for (const { resource, secret = '' } of refusing) {
-    keys[`${resource}.${secret}`] = { verdict: 'refused', at: when };
+    const address = `${resource}.${secret}`;
+    keys[address] = { ...keys[address], verdict: 'refused', at: when };
     changed = true;
   }
   if (changed) await writeResources(home, known, keys);

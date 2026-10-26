@@ -350,8 +350,11 @@ export async function wire(options: WireOptions): Promise<string[]> {
         fail(address, cause.message, `wire.${cause.kind}`);
         continue;
       }
-      // At once: a crash later loses no id, and the next plan finds it as it is.
+      // At once: a crash later loses no id, and the next plan finds it as it is. Its
+      // checks go, as apply has set its secrets; a later release's fields stay.
+      const { checks: _checks, ...prior } = known[address] ?? {};
       known[address] = {
+        ...prior,
         id,
         name: result.desired.name,
         fields: managedFields(spec, result.desired),

@@ -13,83 +13,109 @@ export const CHANGE_SCHEMA = 'mediaplane.change/v1';
 /** 20261009T094312Z-a1b2c3d4 */
 const RECORD_ID = /^\d{8}T\d{6}Z-[0-9a-f]{8}$/;
 
-const actionSchema = z.strictObject({
-  /** `bootstrap` was added in Slice 5. */
-  step: z.enum([
-    'keys',
-    'files',
-    'pull',
-    'ownership',
-    'start',
-    'bootstrap',
-    'wire',
-    'verify',
-  ]),
-  /** The wire step's actions name the resource ("sonarr.admin"). Added in Slice 3b. */
-  resource: z.string().optional(),
-  result: z.enum(['done', 'failed', 'skipped']),
-  detail: z.string().optional(),
-  error: z.string().optional(),
-});
+const actionShape = (object: typeof z.strictObject) =>
+  object({
+    /** `bootstrap` was added in Slice 5. */
+    step: z.enum([
+      'keys',
+      'files',
+      'pull',
+      'ownership',
+      'start',
+      'bootstrap',
+      'wire',
+      'verify',
+    ]),
+    /** The wire step's actions name the resource ("sonarr.admin"). Added in Slice 3b. */
+    resource: z.string().optional(),
+    result: z.enum(['done', 'failed', 'skipped']),
+    detail: z.string().optional(),
+    error: z.string().optional(),
+  });
 
-/** One apply, as recorded in state/history/<id>.json. Never holds a secret value. */
-export const changeRecordSchema = z.strictObject({
-  schema: z.literal(CHANGE_SCHEMA),
-  id: z.string().regex(RECORD_ID),
-  trigger: z.literal('cli'),
-  startedAt: z.iso.datetime(),
-  finishedAt: z.iso.datetime(),
-  durationMs: z.int().min(0),
-  outcome: z.enum(['success', 'failed']),
-  stackSha256: z.string().regex(/^[0-9a-f]{64}$/),
-  plan: z.strictObject({
-    files: z.array(
-      z.strictObject({
-        path: z.string(),
-        status: z.enum(['create', 'update', 'unchanged']),
-      }),
-    ),
-    containers: z.array(
-      z.strictObject({
-        service: z.string(),
-        action: z.enum(['create', 'recreate', 'start', 'restart', 'remove', 'unchanged']),
-      }),
-    ),
-    secrets: z.strictObject({
-      generate: z.array(z.string()),
-      /** The keys recovered from the apps' appdata (spec §6.1). Added in Slice 10a. */
-      recover: z.array(z.string()).optional(),
-      /** The keys put back in their app's own file (spec §6.3). Added in Slice 10a. */
-      restore: z.array(z.string()).optional(),
-    }),
-    /** What the plan said of each managed resource. Added in Slice 3b. */
-    wiring: z
-      .array(
-        z.strictObject({
-          resource: z.string(),
+/**
+ * One apply, as recorded in state/history/<id>.json, built with `object` at every level.
+ * Never holds a secret value.
+ */
+const recordShape = (object: typeof z.strictObject) =>
+  object({
+    schema: z.literal(CHANGE_SCHEMA),
+    id: z.string().regex(RECORD_ID),
+    trigger: z.literal('cli'),
+    startedAt: z.iso.datetime(),
+    finishedAt: z.iso.datetime(),
+    durationMs: z.int().min(0),
+    outcome: z.enum(['success', 'failed']),
+    stackSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    plan: object({
+      files: z.array(
+        object({
+          path: z.string(),
+          status: z.enum(['create', 'update', 'unchanged']),
+        }),
+      ),
+      containers: z.array(
+        object({
+          service: z.string(),
           action: z.enum([
             'create',
-            'update',
-            'adopt',
+            'recreate',
+            'start',
+            'restart',
+            'remove',
             'unchanged',
-            'after-start',
-            'unknown',
           ]),
-          changes: z.array(z.string()).optional(),
-          reason: z.string().optional(),
         }),
-      )
-      .optional(),
-    /** The apps whose first-run setup the plan said apply would finish. Added in Slice 5. */
-    bootstrap: z
-      .array(z.strictObject({ app: z.string(), unpublished: z.boolean() }))
-      .optional(),
-  }),
-  actions: z.array(actionSchema),
-});
+      ),
+      secrets: object({
+        generate: z.array(z.string()),
+        /** The keys recovered from the apps' appdata (spec §6.1). Added in Slice 10a. */
+        recover: z.array(z.string()).optional(),
+        /** The keys put back in their app's own file (spec §6.3). Added in Slice 10a. */
+        restore: z.array(z.string()).optional(),
+      }),
+      /** What the plan said of each managed resource. Added in Slice 3b. */
+      wiring: z
+        .array(
+          object({
+            resource: z.string(),
+            action: z.enum([
+              'create',
+              'update',
+              'adopt',
+              'unchanged',
+              'after-start',
+              'unknown',
+            ]),
+            changes: z.array(z.string()).optional(),
+            reason: z.string().optional(),
+          }),
+        )
+        .optional(),
+      /** The apps whose first-run setup the plan said apply would finish. Added in Slice 5. */
+      bootstrap: z
+        .array(object({ app: z.string(), unpublished: z.boolean() }))
+        .optional(),
+    }),
+    actions: z.array(actionShape(object)),
+  });
+
+/**
+ * What writeRecord writes: this release's fields, and only those, so a record never holds
+ * what Mediaplane doesn't mean it to (a file's content).
+ */
+export const changeRecordSchema = recordShape(z.strictObject);
+
+/**
+ * What listRecords and readRecord read: a later release's record too, whose fields this one
+ * doesn't know, at any level, are left as they are and never acted on. A known field of
+ * another type, or another schema, is still refused. Typed as the strict one: the fields
+ * it doesn't know are never read.
+ */
+const readableRecordSchema = recordShape(z.looseObject);
 
 export type ChangeRecord = z.infer<typeof changeRecordSchema>;
-export type ActionResult = z.infer<typeof actionSchema>;
+export type ActionResult = z.infer<ReturnType<typeof actionShape>>;
 export type ApplyStep = ActionResult['step'];
 
 /** A record id that sorts by time and is unique within a second. */
@@ -175,7 +201,7 @@ async function readRecordFile(path: string): Promise<ChangeRecord | undefined> {
 
 function parseRecord(text: string): ChangeRecord | undefined {
   try {
-    const parsed = changeRecordSchema.safeParse(JSON.parse(text) as unknown);
+    const parsed = readableRecordSchema.safeParse(JSON.parse(text) as unknown);
     return parsed.success ? parsed.data : undefined;
   } catch {
     return undefined;

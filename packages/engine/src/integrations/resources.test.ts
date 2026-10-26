@@ -92,6 +92,47 @@ describe('resources.json', () => {
     );
   });
 
+  it("keeps the fields it doesn't know, at every level, and writes them back unchanged", async () => {
+    const home = await homeWith(
+      JSON.stringify({
+        schema: 'mediaplane.resources/v1',
+        resources: {
+          'sonarr.admin': {
+            ...ADMIN,
+            laterField: 'fake-later',
+            checks: { password: { verdict: 'passed', at: AT, laterCheck: 1 } },
+          },
+        },
+        keys: { 'sonarr.apiKey': { verdict: 'refused', at: AT, laterKey: true } },
+        laterTop: { nested: [1] },
+      }),
+    );
+    const { resources, keys } = await readState(home);
+    await writeResources(home, { ...resources, 'radarr.admin': ADMIN }, keys);
+    expect(JSON.parse(await readFile(join(home, RESOURCES_PATH), 'utf8'))).toEqual({
+      schema: 'mediaplane.resources/v1',
+      resources: {
+        'radarr.admin': ADMIN,
+        'sonarr.admin': {
+          ...ADMIN,
+          laterField: 'fake-later',
+          checks: { password: { verdict: 'passed', at: AT, laterCheck: 1 } },
+        },
+      },
+      keys: { 'sonarr.apiKey': { verdict: 'refused', at: AT, laterKey: true } },
+      laterTop: { nested: [1] },
+    });
+    // Still refused: a known field of the wrong type.
+    const typed = await homeWith(
+      JSON.stringify({
+        schema: 'mediaplane.resources/v1',
+        resources: { 'sonarr.admin': { ...ADMIN, secrets: 'password' } },
+        laterTop: 1,
+      }),
+    );
+    await expect(readResources(typed)).rejects.toThrow('resources.sonarr.admin.secrets:');
+  });
+
   it('refuses a file of another schema or shape, saying where', async () => {
     const other = await homeWith(
       JSON.stringify({ schema: 'mediaplane.resources/v9', resources: {} }),

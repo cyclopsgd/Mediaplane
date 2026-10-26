@@ -472,7 +472,7 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     plan: {
       files: shown.files.map(({ path, status }) => ({ path, status })),
       containers: shown.containers,
-      secrets: shown.secrets,
+      secrets: recordedSecrets(shown.secrets),
       wiring: shown.wiring,
       bootstrap: shown.bootstrap,
     },
@@ -679,6 +679,21 @@ function remaining(result: PlanResult): string {
           : `${w.resource} (${w.action})`,
       ),
   ].join(', ');
+}
+
+/**
+ * The plan's secrets, as a record keeps them: names only, and `recover` and `restore`
+ * (Slice 10a) only when they name any, so a record without them reads as it always did.
+ */
+function recordedSecrets(
+  secrets: PlanResult['secrets'],
+): ChangeRecord['plan']['secrets'] {
+  const { generate, recover, restore } = secrets;
+  return {
+    generate,
+    ...(recover.length === 0 ? {} : { recover }),
+    ...(restore.length === 0 ? {} : { restore }),
+  };
 }
 
 function stopped(

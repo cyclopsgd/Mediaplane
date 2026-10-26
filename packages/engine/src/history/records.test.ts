@@ -74,6 +74,48 @@ describe('history records', () => {
     ).toBe(0o600);
   });
 
+  it("reads a record with fields it doesn't know, at every level", async () => {
+    // A later release's record: an earlier one lists it rather than calling it unreadable.
+    const home = await tempDir('mediaplane-history-');
+    const id = '20261009T094312Z-00000003';
+    const base = record(id);
+    const later = {
+      ...base,
+      laterTop: 1,
+      plan: {
+        ...base.plan,
+        laterPlan: [],
+        files: [{ path: 'generated/compose.yaml', status: 'create', laterFile: 'x' }],
+        secrets: { generate: [], laterSecrets: ['fake-name'] },
+        bootstrap: [{ app: 'seerr', unpublished: true, laterSetup: 1 }],
+        wiring: [{ resource: 'sonarr.admin', action: 'unchanged', laterWire: 1 }],
+      },
+      actions: [{ step: 'keys', result: 'done', laterAction: 1 }],
+    };
+    await mkdir(join(home, HISTORY_DIR), { recursive: true });
+    await writeFile(join(home, HISTORY_DIR, `${id}.json`), JSON.stringify(later));
+    expect((await listRecords(home)).unreadable).toEqual([]);
+    expect((await readRecord(home, id))?.plan.secrets.generate).toEqual([]);
+    // Still refused: a known field of the wrong type.
+    await writeFile(
+      join(home, HISTORY_DIR, `${id}.json`),
+      JSON.stringify({ ...later, outcome: 'maybe' }),
+    );
+    expect((await listRecords(home)).unreadable).toEqual([`${id}.json`]);
+  });
+
+  it('never writes a field it does not know', async () => {
+    // A record is made by this release alone: a field it doesn't know is a bug, and could
+    // be a file's content.
+    const home = await tempDir('mediaplane-history-');
+    const base = record('20261009T094312Z-00000004');
+    const odd = {
+      ...base,
+      plan: { ...base.plan, files: [{ path: 'a', status: 'create', content: 'x' }] },
+    } as unknown as ChangeRecord;
+    await expect(writeRecord(home, odd)).rejects.toThrow('invalid change record');
+  });
+
   it('has no records before the first apply', async () => {
     const home = await tempDir('mediaplane-history-');
     expect(await listRecords(home)).toEqual({ records: [], unreadable: [] });

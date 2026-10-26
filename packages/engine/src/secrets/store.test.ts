@@ -157,11 +157,48 @@ describe('readSecretStore', () => {
     );
   });
 
-  it('rejects an unknown shared secret', async () => {
+  it("keeps the fields it doesn't know, at every level, and writes them back unchanged", async () => {
+    // A later release's fields: an earlier one reads its store, keeps them as they are,
+    // and never acts on them, so going back one release never stops at the store.
     const home = await homeWithStore(
-      '{"version": 1, "apps": {}, "shared": {"fake": "fake-value"}}',
+      JSON.stringify({
+        version: 1,
+        apps: { sonarr: { apiKey: '0'.repeat(32) } },
+        shared: {
+          adminPassword: 'fake-admin-password',
+          laterField: { nested: ['fake-later-value'] },
+        },
+        setUp: ['seerr'],
+        laterTop: 7,
+      }),
     );
-    await expect(readSecretStore(home)).rejects.toThrow(
+    const read = await readSecretStore(home);
+    expect(read.shared?.adminPassword).toBe('fake-admin-password');
+    await writeSecretStore(home, {
+      ...read,
+      apps: { ...read.apps, radarr: { apiKey: '1'.repeat(32) } },
+    });
+    expect(JSON.parse(await readFile(join(home, SECRETS_PATH), 'utf8'))).toEqual({
+      version: 1,
+      apps: { radarr: { apiKey: '1'.repeat(32) }, sonarr: { apiKey: '0'.repeat(32) } },
+      shared: {
+        adminPassword: 'fake-admin-password',
+        laterField: { nested: ['fake-later-value'] },
+      },
+      setUp: ['seerr'],
+      laterTop: 7,
+    });
+  });
+
+  it('still refuses a known field of the wrong type, and another version', async () => {
+    const typed = await homeWithStore(
+      '{"version": 1, "apps": {}, "shared": {"adminPasswordNotIn": "sonarr"}}',
+    );
+    await expect(readSecretStore(typed)).rejects.toThrow(
+      'is not a Mediaplane secrets file',
+    );
+    const later = await homeWithStore('{"version": 2, "apps": {}, "laterTop": 7}');
+    await expect(readSecretStore(later)).rejects.toThrow(
       'is not a Mediaplane secrets file',
     );
   });

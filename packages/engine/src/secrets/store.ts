@@ -19,7 +19,13 @@ const appSecret = z.string().regex(APP_SECRET);
 /** An app's id, as the catalog names it ("sonarr"): never shaped like a secret. */
 const APP_ID = /^[a-z][a-z0-9-]*$/;
 
-const storeSchema = z.strictObject({
+/**
+ * state/secrets.json. Each object keeps the fields it doesn't know, a later release's, and
+ * writeSecretStore writes them back as they were: going back one release never stops at
+ * the store, and the older release never acts on what it doesn't know. A known field of
+ * another type, or another version, is still refused.
+ */
+const storeSchema = z.looseObject({
   version: z.literal(1),
   apps: z.record(z.string(), z.record(z.string(), appSecret)),
   /**
@@ -27,7 +33,7 @@ const storeSchema = z.strictObject({
    * password goes into an app's file only hashed, so any characters will do.
    */
   shared: z
-    .strictObject({
+    .looseObject({
       adminPassword: z.string().min(1).optional(),
       /**
        * The apps that have never had `adminPassword`, which Mediaplane generated while it
@@ -111,14 +117,27 @@ export async function writeSecretStore(home: string, store: SecretStore): Promis
     Object.entries(sorted(store.apps)).map(([id, secrets]) => [id, sorted(secrets)]),
   );
   await ensureDir(join(home, STATE_DIR), 0o700);
-  const adminPassword = store.shared?.adminPassword;
-  const notIn = unique(store.shared?.adminPasswordNotIn ?? []).sort(compare);
+  // The fields a later release wrote, which this one doesn't know: back as they came.
+  const {
+    version: _version,
+    apps: _apps,
+    shared: storeShared,
+    setUp: storeSetUp,
+    ...later
+  } = checked.data;
+  const {
+    adminPassword,
+    adminPasswordNotIn: storeNotIn,
+    ...laterShared
+  } = storeShared ?? {};
+  const notIn = unique(storeNotIn ?? []).sort(compare);
   const shared = {
     ...(adminPassword === undefined ? {} : { adminPassword }),
     // Only when there is one, as for setUp.
     ...(notIn.length === 0 ? {} : { adminPasswordNotIn: notIn }),
+    ...laterShared,
   };
-  const setUp = unique(store.setUp ?? []).sort(compare);
+  const setUp = unique(storeSetUp ?? []).sort(compare);
   await writeFileAtomic(
     join(home, SECRETS_PATH),
     `${JSON.stringify(
@@ -128,6 +147,7 @@ export async function writeSecretStore(home: string, store: SecretStore): Promis
         ...(Object.keys(shared).length === 0 ? {} : { shared }),
         // Only when there is one, so a store without any is written as it always was.
         ...(setUp.length === 0 ? {} : { setUp }),
+        ...later,
       },
       null,
       2,

@@ -13,7 +13,7 @@ export const RESOURCES_SCHEMA = 'mediaplane.resources/v1';
  */
 export const RESOURCE_ADDRESS = /^[a-z0-9-]+\.[a-z][a-z0-9_]*$/;
 
-const knownSchema = z.strictObject({
+const knownSchema = z.looseObject({
   /** The app's id for it; null for a singleton. */
   id: z.union([z.string(), z.number(), z.null()]),
   name: z.string(),
@@ -30,7 +30,7 @@ const knownSchema = z.strictObject({
   checks: z
     .record(
       z.string(),
-      z.strictObject({
+      z.looseObject({
         verdict: z.enum(['passed', 'refused']),
         at: z.iso.datetime(),
       }),
@@ -41,7 +41,7 @@ const knownSchema = z.strictObject({
 /** "<app>.<key>": an app's own key, by the name the secrets store keeps it under. */
 export const KEY_ADDRESS = /^[a-z0-9-]+\.[A-Za-z][A-Za-z0-9_]*$/;
 
-const fileSchema = z.strictObject({
+const fileSchema = z.looseObject({
   schema: z.literal(RESOURCES_SCHEMA),
   resources: z.record(z.string().regex(RESOURCE_ADDRESS), knownSchema),
   /**
@@ -52,7 +52,7 @@ const fileSchema = z.strictObject({
   keys: z
     .record(
       z.string().regex(KEY_ADDRESS),
-      z.strictObject({ verdict: z.literal('refused'), at: z.iso.datetime() }),
+      z.looseObject({ verdict: z.literal('refused'), at: z.iso.datetime() }),
     )
     .optional(),
 });
@@ -80,11 +80,26 @@ export async function readResources(home: string): Promise<KnownResources> {
   return (await readState(home)).resources;
 }
 
-/** state/resources.json: its resources, and the apps' keys found refused (readResources). */
+/**
+ * state/resources.json: its resources, and the apps' keys found refused (readResources).
+ * Each object keeps the fields it doesn't know, a later release's, and writeResources
+ * writes them back as they were; a known field of another type, or another schema, is
+ * still refused.
+ */
 export async function readState(home: string): Promise<ResourcesState> {
+  const parsed = await readFileData(home);
+  return parsed === undefined
+    ? { resources: {}, keys: {} }
+    : { resources: parsed.resources, keys: parsed.keys ?? {} };
+}
+
+/** The whole file, as parsed, or undefined when it doesn't exist yet. */
+async function readFileData(
+  home: string,
+): Promise<z.infer<typeof fileSchema> | undefined> {
   const path = join(home, RESOURCES_PATH);
   const text = await readIfExists(path);
-  if (text === undefined) return { resources: {}, keys: {} };
+  if (text === undefined) return undefined;
   let data: unknown;
   try {
     data = JSON.parse(text) as unknown;
@@ -100,25 +115,34 @@ export async function readState(home: string): Promise<ResourcesState> {
       `${path} is not a Mediaplane resources file (${RESOURCES_SCHEMA}): ${faults.join('; ')}`,
     );
   }
-  return { resources: parsed.data.resources, keys: parsed.data.keys ?? {} };
+  return parsed.data;
 }
 
 /**
  * Save it atomically, sorted, private to its owner: state/ 0700, the file 0600. Without
- * `keys`, the apps' keys found refused that the file holds are kept as they are.
+ * `keys`, the apps' keys found refused that the file holds are kept as they are. The
+ * file's own fields that this release doesn't know are kept too.
  */
 export async function writeResources(
   home: string,
   resources: KnownResources,
   keys?: KeyChecks,
 ): Promise<void> {
-  const kept = keys ?? (await readState(home).catch(() => ({ keys: {} }))).keys;
+  const before = await readFileData(home).catch(() => undefined);
+  const kept = keys ?? before?.keys ?? {};
+  const {
+    schema: _schema,
+    resources: _resources,
+    keys: _keys,
+    ...later
+  } = before ?? { schema: RESOURCES_SCHEMA, resources: {} };
   const sorted = <T>(record: Record<string, T>) =>
     Object.fromEntries(Object.entries(record).sort(([a], [b]) => compare(a, b)));
   const checked = fileSchema.parse({
     schema: RESOURCES_SCHEMA,
     resources: sorted(resources),
     ...(Object.keys(kept).length === 0 ? {} : { keys: sorted(kept) }),
+    ...later,
   });
   await ensureDir(join(home, STATE_DIR), 0o700);
   await writeFileAtomic(
