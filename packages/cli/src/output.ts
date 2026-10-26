@@ -12,6 +12,7 @@ import {
   type Drift,
   type DriftResult,
   type KeepResult,
+  type MigrateResult,
   type PlanResult,
   type StatusResult,
   type StepEvent,
@@ -27,6 +28,7 @@ export const STATUS_JSON_SCHEMA = 'mediaplane.status/v1';
 export const HISTORY_JSON_SCHEMA = 'mediaplane.history/v1';
 export const DRIFT_JSON_SCHEMA = 'mediaplane.drift/v1';
 export const KEEP_JSON_SCHEMA = 'mediaplane.keep/v1';
+export const MIGRATE_JSON_SCHEMA = 'mediaplane.migrate/v1';
 
 /** What keep takes, where drift shows a change: the field's address, or the resource's. */
 const KEEP_HINT =
@@ -301,6 +303,38 @@ export function printKeep(result: KeepResult, options: { json: boolean }, io: Io
     result.value === 'unmanaged' && result.key.split('.').length === 2
       ? `Wrote ${result.key}: unmanaged under overrides: in stack.yaml. Mediaplane no longer manages it, and apply doesn't make it again.\n`
       : `Wrote ${overrideLine(result.key, result.value)} under overrides: in stack.yaml. apply now leaves it as the app holds it, and drift no longer reports it.\n`,
+  );
+}
+
+/** What `mediaplane migrate` rewrote, or why it didn't, with the file as it should be. */
+export function printMigrate(
+  result: MigrateResult,
+  options: { json: boolean },
+  io: Io,
+): void {
+  if (options.json) {
+    io.stdout(`${JSON.stringify({ schema: MIGRATE_JSON_SCHEMA, ...result }, null, 2)}\n`);
+    return;
+  }
+  for (const diagnostic of result.diagnostics) io.stderr(formatDiagnostic(diagnostic));
+  if (!result.ok) {
+    // The file alone on stdout, so that it can be saved as it is.
+    if (result.text !== undefined) io.stdout(result.text);
+    io.stderr(
+      result.text === undefined
+        ? '\nstack.yaml is as it was.\n'
+        : `\nstack.yaml is as it was. As version ${String(result.to)}, it reads as above, on standard output.\n`,
+    );
+    return;
+  }
+  if (!result.changed) {
+    io.stdout(
+      `stack.yaml is version ${String(result.to)}, the version this Mediaplane writes: nothing to migrate.\n`,
+    );
+    return;
+  }
+  io.stdout(
+    `Rewrote stack.yaml from version ${String(result.from)} to version ${String(result.to)}, keeping its comments:\n${result.applied.map((step) => `  - ${step}\n`).join('')}`,
   );
 }
 

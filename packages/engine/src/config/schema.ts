@@ -1,6 +1,7 @@
 import { isIPv6 } from 'node:net';
 import { z } from 'zod';
 import { isPrivateSubnet } from '../host/facts';
+import { STACK_VERSION } from './migrations';
 import { compare } from '../util/sort';
 
 export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -137,7 +138,11 @@ export const appSettingsSchema = z.looseObject({
 export type AppSettings = z.infer<typeof appSettingsSchema>;
 
 const stackShape = {
-  version: z.literal(1).describe("The version of this file's format. Always 1."),
+  version: z
+    .literal(STACK_VERSION)
+    .describe(
+      "The version of this file's format: 1, the only one so far. When a later Mediaplane changes the format, it reads an older file as it is, and mediaplane migrate rewrites it.",
+    ),
   timezone: z
     .string()
     .min(1)

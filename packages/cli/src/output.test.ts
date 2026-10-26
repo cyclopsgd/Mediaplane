@@ -2,6 +2,7 @@ import type {
   ActionResult,
   ChangeRecord,
   DriftResult,
+  MigrateResult,
   PlanResult,
 } from '@mediaplane/engine';
 import { describe, expect, it } from 'vitest';
@@ -10,6 +11,7 @@ import {
   printApply,
   printDrift,
   printHistory,
+  printMigrate,
   printPlan,
   printRecord,
   printStep,
@@ -522,5 +524,85 @@ describe('the wire step, as apply shows it', () => {
     expect(term.stdout()).toContain(
       '20261010T120000Z-0a1b2c3d  failed   1 resource wired\n',
     );
+  });
+});
+
+describe('printMigrate', () => {
+  function both() {
+    const out: string[] = [];
+    const err: string[] = [];
+    const io: Io = {
+      stdout: (text) => {
+        out.push(text);
+      },
+      stderr: (text) => {
+        err.push(text);
+      },
+      env: {},
+    };
+    return { io, stdout: () => out.join(''), stderr: () => err.join('') };
+  }
+  const CHANGED: MigrateResult = {
+    ok: true,
+    from: 0,
+    to: 1,
+    changed: true,
+    applied: ['media is now media_server'],
+    diagnostics: [],
+  };
+
+  it('says what it rewrote, step by step', () => {
+    const term = both();
+    printMigrate(CHANGED, { json: false }, term.io);
+    expect(term.stdout()).toBe(
+      'Rewrote stack.yaml from version 0 to version 1, keeping its comments:\n  - media is now media_server\n',
+    );
+  });
+
+  it('says when there was nothing to do', () => {
+    const term = both();
+    printMigrate(
+      { ok: true, from: 1, to: 1, changed: false, applied: [], diagnostics: [] },
+      { json: false },
+      term.io,
+    );
+    expect(term.stdout()).toBe(
+      'stack.yaml is version 1, the version this Mediaplane writes: nothing to migrate.\n',
+    );
+  });
+
+  it('gives the file as it should be when it may not write it, on stdout alone', () => {
+    const term = both();
+    printMigrate(
+      {
+        ...CHANGED,
+        ok: false,
+        changed: false,
+        text: 'version: 1\n',
+        diagnostics: [
+          {
+            severity: 'error',
+            code: 'migrate.external',
+            message: 'stack.yaml is managed outside Mediaplane',
+          },
+        ],
+      },
+      { json: false },
+      term.io,
+    );
+    expect(term.stdout()).toBe('version: 1\n');
+    expect(term.stderr()).toContain('error: stack.yaml is managed outside Mediaplane');
+    expect(term.stderr()).toContain(
+      'stack.yaml is as it was. As version 1, it reads as above, on standard output.\n',
+    );
+  });
+
+  it('prints mediaplane.migrate/v1 with --json', () => {
+    const term = both();
+    printMigrate(CHANGED, { json: true }, term.io);
+    expect(JSON.parse(term.stdout())).toEqual({
+      schema: 'mediaplane.migrate/v1',
+      ...CHANGED,
+    });
   });
 });

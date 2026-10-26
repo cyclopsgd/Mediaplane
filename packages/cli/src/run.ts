@@ -19,6 +19,7 @@ import {
   invokingUser,
   keep,
   listRecords,
+  migrate,
   nodeProbe,
   parseHostRequest,
   plan,
@@ -46,6 +47,7 @@ import {
   printError,
   printHistory,
   printKeep,
+  printMigrate,
   printPlan,
   printRecord,
   printStatus,
@@ -116,6 +118,11 @@ export const EXIT_CODES: Readonly<Record<string, readonly string[]>> = {
   keep: [
     '0: stack.yaml keeps what the app holds, or stops managing what was deleted',
     "1: nothing was kept: it hasn't drifted, can't be kept, or an error",
+  ],
+  migrate: [
+    '0: stack.yaml is now the version this Mediaplane writes, or already was',
+    '1: nothing was rewritten: a newer or unknown version, or an error',
+    '1: a file Mediaplane may not write, such as one with managed_by: external',
   ],
   history: ['0: the records were listed or shown', '1: an error, or no such record'],
   credentials: [
@@ -388,6 +395,20 @@ export function createProgram(
         ...(deps.wiring === undefined ? {} : { wiring: deps.wiring }),
       });
       printKeep(result, { json: options.json === true }, io);
+      setExitCode(result.ok ? 0 : 1);
+    });
+
+  program
+    .command('migrate')
+    .description(
+      'Rewrite stack.yaml to the version of its format this Mediaplane writes, keeping its comments and formatting; with managed_by: external, print the file as it should be instead. stack.yaml has only ever been version 1, so there is nothing to migrate yet',
+    )
+    .option('--home <dir>', 'Mediaplane home directory', defaultHome)
+    .option('--json', 'print machine-readable JSON')
+    .addHelpText('after', exitCodesHelp('migrate'))
+    .action(async (options: { home: string; json?: boolean }) => {
+      const result = await migrate({ home: resolve(options.home) });
+      printMigrate(result, { json: options.json === true }, io);
       setExitCode(result.ok ? 0 : 1);
     });
 

@@ -8,7 +8,7 @@
     "version": {
       "type": "number",
       "const": 1,
-      "description": "The version of this file's format. Always 1."
+      "description": "The version of this file's format: 1, the only one so far. When a later Mediaplane changes the format, it reads an older file as it is, and mediaplane migrate rewrites it."
     },
     "timezone": {
       "default": "Etc/UTC",

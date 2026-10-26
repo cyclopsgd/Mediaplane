@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Diagnostic } from '../diagnostics';
 import { loadConfigFile, parseConfig } from './load';
+import { RENAME_MEDIA } from '../testing/migrations';
 import { tempDir } from '../testing/temp';
 
 const MINIMAL = `version: 1
@@ -364,6 +365,50 @@ describe('parseConfig', () => {
     const [diagnostic] = diagnosticsOf(bomb);
     expect(diagnostic?.code).toBe('config.yaml-syntax');
     expect(diagnostic?.message).toContain('alias');
+  });
+});
+
+describe('parseConfig: versions (spec §5 step 2)', () => {
+  it('refuses a stack.yaml newer than this Mediaplane, saying so', () => {
+    expect(diagnosticsOf(MINIMAL.replace('version: 1', 'version: 2'))).toEqual([
+      {
+        severity: 'error',
+        code: 'config.newer-version',
+        message:
+          'stack.yaml is version 2, newer than this Mediaplane reads (1): it was written for a later Mediaplane',
+        path: 'version',
+        hint: 'update Mediaplane to a release that reads it, or go back to the stack.yaml this one wrote',
+      },
+    ]);
+  });
+
+  it('refuses a version no Mediaplane wrote', () => {
+    expect(diagnosticsOf(MINIMAL.replace('version: 1', 'version: 0'))).toMatchObject([
+      { code: 'config.unknown-version', path: 'version' },
+    ]);
+  });
+
+  it('reads an older version in memory, with a warning, and leaves the file to migrate', () => {
+    const old =
+      'version: 0\npaths: { data: /srv/data }\nmedia: plex\nplex: { token: { file: secrets/plex-token } }\n';
+    const result = parseConfig(old, [RENAME_MEDIA]);
+    expect(result).toMatchObject({
+      ok: true,
+      config: { version: 1, media_server: 'plex' },
+      diagnostics: [
+        {
+          severity: 'warning',
+          code: 'config.old-version',
+          message:
+            'stack.yaml is version 0: Mediaplane reads it as version 1 (media is now media_server), and leaves the file as it is',
+          hint: 'run mediaplane migrate to rewrite it, keeping its comments',
+        },
+      ],
+    });
+  });
+
+  it('gives no warning for the current version', () => {
+    expect(parseConfig(MINIMAL)).not.toHaveProperty('diagnostics');
   });
 });
 

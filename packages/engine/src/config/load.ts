@@ -1,12 +1,25 @@
 import { parseDocument } from 'yaml';
 import type { ZodError } from 'zod';
-import { error, withHint, type Diagnostic } from '../diagnostics';
+import { error, warning, withHint, type Diagnostic } from '../diagnostics';
 import { didYouMean } from '../util/did-you-mean';
 import { readIfExists } from '../util/fs';
+import { MIGRATIONS, migrateData, STACK_VERSION, type Migration } from './migrations';
 import { STACK_KEYS, stackConfigSchema, type StackConfig } from './schema';
 
 export type LoadResult =
-  { ok: true; config: StackConfig } | { ok: false; diagnostics: Diagnostic[] };
+  | {
+      ok: true;
+      config: StackConfig;
+      /** Warnings, when there are some: an older version, read in memory. */
+      diagnostics?: Diagnostic[];
+    }
+  | { ok: false; diagnostics: Diagnostic[] };
+
+const VERSION_HINTS = {
+  'config.newer-version':
+    'update Mediaplane to a release that reads it, or go back to the stack.yaml this one wrote',
+  'config.unknown-version': `set version: ${String(STACK_VERSION)}, the version this Mediaplane writes, if the rest of the file is in its format`,
+} as const;
 
 type Issue = ZodError['issues'][number];
 
@@ -25,7 +38,14 @@ export async function loadConfigFile(path: string): Promise<LoadResult> {
   return parseConfig(source);
 }
 
-export function parseConfig(source: string): LoadResult {
+/**
+ * `source`, a stack.yaml, validated. An older version is migrated in memory, with a
+ * warning: only `mediaplane migrate` rewrites the file (spec §5 step 2).
+ */
+export function parseConfig(
+  source: string,
+  migrations: readonly Migration[] = MIGRATIONS,
+): LoadResult {
   const doc = parseDocument(source, { prettyErrors: true });
   if (doc.errors.length > 0) {
     return {
@@ -43,8 +63,39 @@ export function parseConfig(source: string): LoadResult {
     const message = cause instanceof Error ? cause.message : String(cause);
     return { ok: false, diagnostics: [error('config.yaml-syntax', message)] };
   }
+  const warnings: Diagnostic[] = [];
+  if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+    const migrated = migrateData(data as Record<string, unknown>, migrations);
+    if (!migrated.ok) {
+      return {
+        ok: false,
+        diagnostics: [
+          error(migrated.code, migrated.message, {
+            path: 'version',
+            hint: VERSION_HINTS[migrated.code],
+          }),
+        ],
+      };
+    }
+    if (migrated.applied.length > 0) {
+      warnings.push(
+        warning(
+          'config.old-version',
+          `stack.yaml is version ${String(migrated.from)}: Mediaplane reads it as version ${String(STACK_VERSION)} (${migrated.applied.join('; ')}), and leaves the file as it is`,
+          { hint: 'run mediaplane migrate to rewrite it, keeping its comments' },
+        ),
+      );
+    }
+    data = migrated.data;
+  }
   const result = stackConfigSchema.safeParse(data);
-  if (result.success) return { ok: true, config: result.data };
+  if (result.success) {
+    return {
+      ok: true,
+      config: result.data,
+      ...(warnings.length === 0 ? {} : { diagnostics: warnings }),
+    };
+  }
   return { ok: false, diagnostics: result.error.issues.flatMap(toDiagnostics) };
 }
 

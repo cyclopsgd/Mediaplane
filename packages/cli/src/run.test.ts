@@ -1954,6 +1954,30 @@ describe('mediaplane keep', () => {
   });
 });
 
+describe('mediaplane migrate', () => {
+  it('has nothing to do for version 1, the only version so far, and writes nothing', async () => {
+    const home = await makeHome();
+    const term = capture();
+    expect(await run(['migrate', '--home', home], term.io, deps())).toBe(0);
+    expect(term.stdout()).toBe(
+      'stack.yaml is version 1, the version this Mediaplane writes: nothing to migrate.\n',
+    );
+    expect(await readFile(join(home, 'stack.yaml'), 'utf8')).toBe(STACK);
+  });
+
+  it('refuses a newer stack.yaml, exiting 1, in JSON too', async () => {
+    const home = await makeHome(STACK.replace('version: 1', 'version: 2'));
+    const term = capture();
+    expect(await run(['migrate', '--home', home, '--json'], term.io, deps())).toBe(1);
+    expect(JSON.parse(term.stdout())).toMatchObject({
+      schema: 'mediaplane.migrate/v1',
+      ok: false,
+      changed: false,
+      diagnostics: [{ code: 'config.newer-version' }],
+    });
+  });
+});
+
 describe('mediaplane status', () => {
   async function appliedHome() {
     const home = await makeHome();

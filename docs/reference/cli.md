@@ -84,6 +84,25 @@ Exit codes:
 - 0: stack.yaml keeps what the app holds, or stops managing what was deleted
 - 1: nothing was kept: it hasn't drifted, can't be kept, or an error
 
+## `mediaplane migrate`
+
+Rewrite stack.yaml to the version of its format this Mediaplane writes, keeping its comments and formatting; with managed_by: external, print the file as it should be instead. stack.yaml has only ever been version 1, so there is nothing to migrate yet.
+
+```text
+mediaplane migrate [options]
+```
+
+| Option         | Description                                            |
+| -------------- | ------------------------------------------------------ |
+| `--home <dir>` | Mediaplane home directory (default: "/opt/mediaplane") |
+| `--json`       | print machine-readable JSON                            |
+
+Exit codes:
+
+- 0: stack.yaml is now the version this Mediaplane writes, or already was
+- 1: nothing was rewritten: a newer or unknown version, or an error
+- 1: a file Mediaplane may not write, such as one with managed_by: external
+
 ## `mediaplane status`
 
 Show each app's container, and the last apply.

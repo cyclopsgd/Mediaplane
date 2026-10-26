@@ -16,7 +16,7 @@ A **secret reference** is `{ file: secrets/<name> }`, a file relative to the Med
 
 Each field shows its type, then `required` or its default, if it has one.
 
-- `version` (`1`; required): The version of this file's format. Always 1.
+- `version` (`1`; required): The version of this file's format: 1, the only one so far. When a later Mediaplane changes the format, it reads an older file as it is, and mediaplane migrate rewrites it.
 - `timezone` (string; default `Etc/UTC`): The timezone the apps run in, as a tz database name such as Europe/London.
 - `user` (object; default `{ uid: 1000, gid: 1000 }`): The user and group the apps run as. They must be able to write to paths.data.
 - `user.uid` (integer, at least 0; required): The user id.

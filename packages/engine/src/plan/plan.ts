@@ -137,7 +137,11 @@ export async function planStack(
   const loaded = await loadConfigFile(join(home, STACK_PATH));
   if (!loaded.ok) return failed(loaded.diagnostics);
 
-  const diagnostics = await checkSecretRefs(loaded.config, home, options.env);
+  // An older stack.yaml's warning first: the plan reads it migrated, in memory.
+  const diagnostics = [
+    ...(loaded.diagnostics ?? []),
+    ...(await checkSecretRefs(loaded.config, home, options.env)),
+  ];
   diagnostics.push(...dockerAccessWarnings(options.env));
   const hostFacts = await hostFactsOrFailure(options.host, options);
   if (!hostFacts.ok) return failed([...diagnostics, hostFacts.diagnostic]);
