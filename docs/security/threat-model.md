@@ -540,9 +540,9 @@ What remains:
 - The scans see known vulnerabilities only, and the catalog's listed findings run until
   upstream ships a fix and Renovate's bump of the pin is merged.
 - The audit and the Node check need the npm registry and nodejs.org at CI time.
-- A Docker Hub access token with the permission "Public Repo Read-only", in the
-  repository's secrets, reaches every job that pulls images on the repository's own
-  branches. It can read public images only. A revoked or wrong token fails those jobs;
+- If the owner adds one, a Docker Hub access token with the permission "Public Repo
+  Read-only", in the repository's secrets, reaches every job that pulls images on the
+  repository's own branches. It can read public images only. A revoked or wrong token fails those jobs;
   nothing falls back to anonymous pulls, and removing the secrets goes back to them.
 
 ### T18. The release workflow publishes something it shouldn't
@@ -557,7 +557,7 @@ Controls today:
   and no secret reaches a script but through its environment.
 - A release publishes its image and deploy files only for a commit whose CI passed. CI
   runs for every commit on `main`, so the release's commit has a run of its own; each job
-  that builds or ships checks out the tag and checks that it is that commit. The image
+  that builds from the tree checks out the tag and checks that it is that commit. The image
   pushed is the one Trivy scanned, checked by digest.
 
 What remains:

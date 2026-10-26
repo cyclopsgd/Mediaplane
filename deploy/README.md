@@ -116,7 +116,8 @@ you only a home it has just created, never a folder that was already there. With
   the one image it takes unpinned: the one it builds from a checkout.
 - **Only Mediaplane's own project:** it runs Compose on `mediaplane.compose.yaml` only,
   always as `-p mediaplane-system`, and gives Compose exactly the image it checked. It
-  clears the shell's `COMPOSE_*` settings and names the project and the file itself, so
+  clears the shell's `COMPOSE_*` settings that choose the project, file, profiles or `.env`,
+  and names the project and the file itself, so
   neither the shell's nor `deploy/.env`'s can move it to another project or file, and
   none can change the image. It pulls the image and the socket proxy's before it recreates
   anything; Docker checks everything it pulls against the digest.
@@ -348,7 +349,8 @@ host
 Updating Mediaplane recreates Mediaplane's own container, and nothing else. It never
 restarts, recreates or pulls an app of your stack, and leaves the stack's networks, its
 volumes and `generated/` as they are: an end-to-end test checks each container's id,
-start time, restarts and mounts, every file in `generated/` and `state/`, and that Docker
+start time, restarts and mounts, every file in `generated/` and `state/` but its lock, and
+that Docker
 pulls only Mediaplane's image and the proxy's, across an update and back. Afterwards,
 `mediaplane plan` shows what the new version would change, if anything, and only `apply`
 changes it, when you run it. That is not a promise that the next `apply` changes nothing:
@@ -411,8 +413,10 @@ happens, the next `mediaplane plan` shows most apps as `recreate`, and the next 
 recreates them once. Their data stays where it is. This has happened: Compose 5.5.1
 recreated containers that Compose 2.38.2 had made, from a file that had not changed. So
 the first `apply` after an update that changed the Compose in the image may recreate every
-app container, a restart that keeps their data and settings. A release's notes say when
-it changes Compose.
+app container, a restart that keeps their data and settings. The release's notes may
+say so, if whoever cut it added that ([Releasing](../docs/releasing.md) says how). To see
+for yourself, `docker run --rm <image> docker compose version` on the old and the new
+image shows each one's Compose.
 
 An update that brings Seerr's wiring treats a Seerr you set up by hand before it as one
 Mediaplane has no record of. The next `apply` recreates it once, unpublished, and checks
@@ -444,9 +448,9 @@ An update that brings releases (Slice 9) changes two things you may see:
 
 - **FlareSolverr gets a folder of its own,** `appdata/flaresolverr`, mounted where its
   image declares a volume. The next `plan` shows its container recreated once. The
-  empty volume Docker made for its old container stays: `docker volume ls --filter
-dangling=true` lists such volumes, and `docker volume rm <name>` removes one you have
-  checked is that one.
+  empty volume Docker made for its old container stays. This lists such volumes:
+  `docker volume ls --filter dangling=true`. And `docker volume rm <name>` removes one
+  you have checked is that one.
 - **`stack.yaml` has a version check.** A `version:` newer than this Mediaplane reads is
   refused, with what to do. `mediaplane migrate` rewrites an older one; there is none
   yet, since `stack.yaml` has only ever been version 1.

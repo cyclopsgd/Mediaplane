@@ -36,8 +36,10 @@ Compose and wires the apps together for you.**
 >   private network with no route out.
 > - **Releases:** from the first one, each release publishes Mediaplane's image for amd64
 >   and arm64, and deploy files that pin it by digest. Updating Mediaplane, or going
->   back, recreates only its own container, never the stack. There has been no release
->   yet.
+>   back, recreates only its own container, never the stack (though the first `apply`
+>   after an update that changes the image's Compose may recreate the apps once, keeping
+>   their data and settings: see [Updating](deploy/README.md#updating)). There has been
+>   no release yet.
 > - **Next:** rebuilding a host from `stack.yaml` and its appdata, and driving
 >   Mediaplane from automation.
 > - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
@@ -89,7 +91,7 @@ Mediaplane does that part for you:
 | Guided install: `install.sh`, then `init` asks for everything, Plex sign-in too   | Done    |
 | Hardware transcoding for Plex or Jellyfin (`hardware_transcoding`)                | Done    |
 | Detect manual changes and offer Re-apply or "Keep mine" (`drift`, `keep`)         | Done    |
-| Releases, and updating Mediaplane without touching the stack                      | Done    |
+| Releases, and updating Mediaplane without touching the stack (none yet)           | Done    |
 | Rebuild a host, or deploy with automation such as Ansible                         | Planned |
 
 ## The stack

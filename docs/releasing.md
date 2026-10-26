@@ -32,16 +32,20 @@ push to main
    pull request also updates `CHANGELOG.md`, the version in both `package.json` files, and
    the CLI's `mediaplane --version`.
 2. **CI runs on that pull request** at once when the repository has the
-   `RELEASE_PLEASE_TOKEN` secret. With GitHub's own token, GitHub starts no workflow for
-   it, so close the pull request and open it again: that starts CI.
+   `RELEASE_PLEASE_TOKEN` secret. Without it, release-please uses GitHub's own token,
+   which may open the pull request only once the repository allows GitHub Actions to
+   create pull requests (Settings, Actions, General, Workflow permissions; the owner's
+   step). Even then GitHub starts no workflow for that pull request, so close it and open
+   it again: that starts CI.
 3. **Merging it cuts the release.** release-please tags the commit `v<version>` and
    writes the GitHub release, with the changelog, at once: the tag and the release page
    exist from the merge, before CI has passed on it.
 4. **In the same run, the release workflow publishes it,** once CI's last job,
    `All checks passed`, has passed on that commit (it waits up to 90 minutes). CI runs on
    every commit on `main`, none cancelled or queued behind another, so the release's
-   commit always gets a run of its own. Each job that builds or ships something checks out
-   the release's tag, and checks that it is still the commit CI passed:
+   commit always gets a run of its own. Each job that builds from the tree (the images,
+   the tag and the deploy files) checks out the release's tag, and checks that it is still
+   the commit CI passed:
    - on an amd64 runner and an arm64 runner, natively, it builds the image, with its
      SBOM and build provenance, scans it with Trivy, and pushes the image it scanned by
      digest, checking that what it pushed is what it scanned;
@@ -58,6 +62,10 @@ digest also covers the attestations, which hold the times of the build, so runni
 image job again gives another index digest, and so other deploy files, which name the
 image. Those are the same bytes only for the same image and the same tools.
 
+For the first release only, once its image is published: make the package public (on
+GitHub, Packages, `mediaplane`, Package settings, Change visibility, Public). Until then
+nobody else can pull the image, so installing from a release and checking the image fail.
+
 ## What never publishes
 
 - A push to `main` that doesn't merge the release pull request publishes nothing.
@@ -67,16 +75,43 @@ image. Those are the same bytes only for the same image and the same tools.
 - No image is tagged `latest`. Each is named by its version, and a release's deploy files
   name it by its digest.
 
-## What the notes of a release must say
+## When a release changes Compose
 
 Updating Mediaplane, or going back, never recreates, restarts or pulls an app container,
 network or volume, and never changes `generated/` or `state/`. But a later `apply` runs
 the image's own Docker Compose, and different versions of Compose can work out a
 service's configuration differently: Compose 5.5.1 recreated containers that 2.38.2 had
-made, from a file that had not changed. So when a release changes the Compose in its
-image (see its `Dockerfile`), its notes must say that the first `apply` after the update
-may recreate every app container: a restart, which keeps their data and settings. They
-must not suggest that the next `apply` touches nothing.
+made, from a file that had not changed. So the first `apply` after an update that
+changed the Compose in the image may recreate every app container: a restart, which
+keeps their data and settings.
+
+Nothing writes this into a release's notes. The Compose is the one inside the `docker`
+image that the `Dockerfile` copies it from, so a change shows in the changelog as a bump
+of that image, and the `Dockerfile` names no Compose version but in a comment. Whoever
+cuts the release checks it, once the workflow has finished and the image is published:
+
+```bash
+docker run --rm ghcr.io/cyclopsgd/mediaplane:0.2.0 docker compose version
+```
+
+(`0.2.0` is an example. The image has no entrypoint, so this runs its own `docker`. The
+same command on the previous release's image gives the version to compare. Run on the
+`docker` stage's image, `docker run --rm --entrypoint docker <image> compose version`
+printed `Docker Compose version v5.5.1`.)
+
+If the versions differ, add a paragraph to the release's notes on GitHub, above "Tested
+app versions": the first `apply` after this update may recreate every app container, a
+restart that keeps their data and settings. Edit the release page, or:
+
+```bash
+gh release view v0.2.0 --repo cyclopsgd/Mediaplane --json body --jq .body > notes.md
+# add the paragraph to notes.md, above "## Tested app versions"
+gh release edit v0.2.0 --repo cyclopsgd/Mediaplane --notes-file notes.md
+```
+
+Do it after the run has finished: a re-run of the workflow keeps everything above that
+heading, and writes its own below it. The notes must not suggest that the next `apply`
+touches nothing.
 
 ## Tokens and secrets
 
