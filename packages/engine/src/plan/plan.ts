@@ -34,12 +34,17 @@ import {
 } from '../integrations/wiring';
 import { dockerAccessWarnings } from '../runtime/docker';
 import { RuntimeError, type ContainerState, type Runtime } from '../runtime/types';
-import { adminLogin, adminPasswordToGenerate } from '../secrets/admin';
+import {
+  ADMIN_PASSWORD_PATH,
+  adminLogin,
+  adminPasswordToGenerate,
+} from '../secrets/admin';
 import { withGeneratedSecrets } from '../secrets/generate';
 import { REBUILD_RUNBOOK, recoverKeys, withRecoveredKeys } from '../secrets/recover';
 import { planKeyRestores, restorableKeyFiles } from '../secrets/restore';
 import { readSecretStore, type SecretStore } from '../secrets/store';
 import {
+  missingGeneratedSecrets,
   secretsToGenerate,
   secretValues,
   stackKeys,
@@ -81,7 +86,15 @@ export interface PlanOptions {
    * its secrets.
    */
   only?: string;
+  /**
+   * The secrets Mediaplane generated to generate anew, and set in every app that holds them
+   * (ROTATABLE): `admin.password`, unless it is yours.
+   */
+  rotate?: readonly string[];
 }
+
+/** The secrets `rotate` takes. */
+export const ROTATABLE: readonly string[] = [ADMIN_PASSWORD_PATH];
 
 export interface PlanResult {
   /** False when any diagnostic is an error; files and containers are then empty. */
@@ -196,7 +209,13 @@ export async function planStack(
   if (hasErrors(diagnostics)) return failed(diagnostics);
 
   const compose = renderCompose(stack);
-  const stored = await readSecretStore(home);
+  const rotating = rotation(options.rotate ?? [], stack);
+  if (rotating.diagnostics.length > 0)
+    return failed([...diagnostics, ...rotating.diagnostics]);
+  const read = await readSecretStore(home);
+  // A secret to rotate is one to generate anew: the store, as plan and apply see it, has
+  // none. Apply saves the new one in its keys step.
+  const stored: SecretStore = rotating.password ? withoutPassword(read) : read;
   // The keys the store lacks that the apps still keep in their appdata (spec §6.1, key
   // recovery): found before anything is generated, so a lost store never locks Mediaplane
   // out of an app. From here on, the store holds them, as apply's keys step saves them.
@@ -248,6 +267,15 @@ export async function planStack(
     ...prestart.changes,
   ];
   const generate = secretsToGenerate(stack, store);
+  // What apply generates, in plan's preview of it: no app holds it yet.
+  const fresh = [
+    ...(adminPasswordToGenerate(stack.config, store)
+      ? [preview.shared?.adminPassword ?? '']
+      : []),
+    ...missingGeneratedSecrets(stack, store).map(
+      ({ app, name }) => preview.apps[app]?.[name] ?? '',
+    ),
+  ].filter((value) => value !== '');
   let predicted: PredictResult;
   try {
     predicted = await predictContainers(compose, values, options.runtime, current);
@@ -355,6 +383,7 @@ export async function planStack(
         ...(options.drift === undefined ? {} : { drift: options.drift }),
         ...(options.only === undefined ? {} : { only: options.only }),
         ...(options.wiring === undefined ? {} : { seams: options.wiring }),
+        fresh,
       });
       ({ drift, checks } = planned);
       wiring = planned.changes;
@@ -393,6 +422,45 @@ export async function planStack(
     },
     context: { stack, compose, store, stored, secrets, current },
   };
+}
+
+/** `store` without the admin password it holds: one to generate anew. */
+function withoutPassword(store: SecretStore): SecretStore {
+  const { shared: _shared, ...rest } = store;
+  return rest;
+}
+
+/**
+ * What `rotate` asks of the stack: whether to generate the admin password anew, or why
+ * not. A secret it doesn't take, and one that is yours, are refused before anything is
+ * asked or generated.
+ */
+function rotation(
+  rotate: readonly string[],
+  stack: ResolvedStack,
+): { password: boolean; diagnostics: Diagnostic[] } {
+  const diagnostics = rotate.flatMap((name) => {
+    if (!ROTATABLE.includes(name)) {
+      return [
+        error(
+          'rotate.unknown',
+          `Mediaplane doesn't rotate ${name}: it rotates ${ROTATABLE.join(', ')}`,
+        ),
+      ];
+    }
+    return stack.config.admin.password === undefined
+      ? []
+      : [
+          error(
+            'rotate.yours',
+            `${name} is yours, read from the file stack.yaml names, so Mediaplane doesn't generate it`,
+            {
+              hint: 'put another password in that file, then run apply: it sets it in every app',
+            },
+          ),
+        ];
+  });
+  return { password: rotate.includes(ADMIN_PASSWORD_PATH), diagnostics };
 }
 
 function failed(diagnostics: Diagnostic[]): { result: PlanResult; context: undefined } {

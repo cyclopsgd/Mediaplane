@@ -243,6 +243,18 @@ export function defaultDeps(env: NodeJS.ProcessEnv): CliDeps {
   };
 }
 
+/** --rotate, as plan and apply take it: the secret to generate anew. */
+const ROTATE_HELP =
+  'generate a secret Mediaplane generated anew, and set it in every app that holds it: admin.password (not one of your own)';
+
+/** What apply's options are, as Commander gives them. */
+interface ApplyFlags {
+  home: string;
+  yes?: boolean;
+  json?: boolean;
+  rotate?: string;
+}
+
 /** The CLI's commands. Each action reports its exit code through `setExitCode`. */
 export function createProgram(
   io: Io,
@@ -270,12 +282,14 @@ export function createProgram(
       "Show what apply would change; it changes nothing in the stack, but from the image it joins the stack's private wiring network, and checking a key or a password can leave a small mark in an app (see docs/security/threat-model.md)",
     )
     .option('--home <dir>', 'Mediaplane home directory', defaultHome)
+    .option('--rotate <secret>', ROTATE_HELP)
     .option('--json', 'print machine-readable JSON')
     .addHelpText('after', exitCodesHelp('plan'))
-    .action(async (options: { home: string; json?: boolean }) => {
+    .action(async (options: { home: string; json?: boolean; rotate?: string }) => {
       const home = resolve(options.home);
       const runtime = deps.runtime(home, project);
       const result = await plan({
+        ...(options.rotate === undefined ? {} : { rotate: [options.rotate] }),
         home,
         catalog,
         // Asked for by plan, so a helper that fails is a plan error, not a crash.
@@ -294,9 +308,10 @@ export function createProgram(
     .description('Make the running stack match stack.yaml')
     .option('--home <dir>', 'Mediaplane home directory', defaultHome)
     .option('--yes', 'apply without asking for confirmation')
+    .option('--rotate <secret>', ROTATE_HELP)
     .option('--json', 'print machine-readable JSON (needs --yes)')
     .addHelpText('after', exitCodesHelp('apply'))
-    .action(async (options: { home: string; yes?: boolean; json?: boolean }) => {
+    .action(async (options: ApplyFlags) => {
       const asJson = options.json === true;
       const yes = options.yes === true;
       const ask = io.ask;
@@ -312,6 +327,7 @@ export function createProgram(
       const home = resolve(options.home);
       const runtime = deps.runtime(home, project);
       const result = await apply({
+        ...(options.rotate === undefined ? {} : { rotate: [options.rotate] }),
         home,
         catalog,
         host: () => deps.host(runtime),

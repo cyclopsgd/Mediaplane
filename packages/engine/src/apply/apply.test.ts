@@ -1391,6 +1391,35 @@ describe('apply: qBittorrent behind Gluetun', () => {
   });
 });
 
+describe('apply: rotating the admin password', () => {
+  it('generates a new one, sets it in each app with its key, and the next apply changes nothing', async () => {
+    const home = await makeHome();
+    const sonarr = await fakeSonarr();
+    const docker = fakeDocker(home, { addresses: sonarr.addresses });
+    const wired = { catalog: WIRED_CATALOG, wiring: sonarr.seams };
+    expect((await apply(options(home, docker, wired))).outcome).toBe('success');
+    const before = (await readSecretStore(home)).shared?.adminPassword ?? '';
+    const signIns = () => sonarr.app.requests.filter((r) => r.path === '/login').length;
+    const signedIn = signIns();
+    const random = (size: number) => Buffer.alloc(size, 0xcd);
+    const rotated = await apply(
+      options(home, docker, { ...wired, random, rotate: ['admin.password'] }),
+    );
+    expect(rotated.outcome).toBe('success');
+    expect(rotated.actions[0]).toEqual({
+      step: 'keys',
+      result: 'done',
+      detail: 'generated admin.password',
+    });
+    const after = (await readSecretStore(home)).shared?.adminPassword ?? '';
+    expect(after !== '' && after !== before, 'a new password was saved').toBe(true);
+    expect(sonarr.state.password === after, 'Sonarr has the new password').toBe(true);
+    // One sign-in, with the new one, by verify's plan: none with a password no app had.
+    expect(signIns() - signedIn).toBe(1);
+    expect((await apply(options(home, docker, wired))).outcome).toBe('no-changes');
+  });
+});
+
 describe('apply: the wiring', () => {
   it('steps off the wiring network for up, wires each app after it, and records it', async () => {
     const home = await makeHome();

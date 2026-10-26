@@ -128,6 +128,31 @@ describe('planWiring', () => {
     ]);
   });
 
+  it('takes a secret apply generates as a change, never signing in with it: no app holds it yet', async () => {
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const fresh = 'fake-new-password';
+    const planned = await planWiring(
+      options(sonarr, {
+        known: RECORDED,
+        admin: { username: 'admin', password: fresh },
+        fresh: [fresh],
+      }),
+    );
+    expect(planned).toMatchObject({
+      changes: [{ resource: 'sonarr.login', action: 'update', changes: ['password'] }],
+      drift: [],
+      checks: [
+        {
+          resource: 'sonarr.login',
+          secret: 'password',
+          verdict: 'unchecked',
+          reason: 'apply generates it, and sets it: no app holds it yet',
+        },
+      ],
+    });
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
+  });
+
   it('checks no secret while a field differs: the update sets them all the same', async () => {
     // The password is right, but under another user name: a sign-in as the wanted user
     // would fail, and name a password that is fine.

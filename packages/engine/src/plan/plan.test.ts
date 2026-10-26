@@ -37,6 +37,9 @@ apps:
 `;
 
 const SERVICES = ['gluetun', 'jellyfin', 'qbittorrent', 'sonarr'];
+
+/** The key makeHome's store holds for Sonarr. */
+const KEY_OF_STORE = '0'.repeat(32);
 const HASHES = Object.fromEntries(SERVICES.map((s, i) => [s, String(i).repeat(64)]));
 
 /** Sonarr with one pre-start file, whose first line marks it as Mediaplane's. */
@@ -1366,5 +1369,84 @@ describe('plan: the wiring', () => {
       expect(await files()).toEqual(before);
       expect(calls.filter((call) => !reads.test(call))).toEqual([]);
     }
+  });
+});
+
+describe('plan: rotating the admin password', () => {
+  it('generates it anew, as one to set in each app, signing in to none with it', async () => {
+    const sonarr = await fakeSonarr({
+      key: KEY_OF_STORE,
+      user: 'admin',
+      password: 'fake-admin-password',
+    });
+    const home = await makeHome({ withStore: true });
+    await writeResources(home, {
+      'sonarr.login': {
+        id: null,
+        name: 'login',
+        fields: { user: 'admin' },
+        secrets: ['password'],
+        appliedAt: '2026-10-10T12:00:00.000Z',
+      },
+    });
+    const runtime = fakeRuntime({
+      hashes: { ok: true, hashes: HASHES },
+      containers: running(HASHES),
+      addresses: sonarr.addresses,
+    });
+    const result = await plan({
+      home,
+      catalog: WIRED_CATALOG,
+      host: FIXTURE_HOST,
+      env: {},
+      runtime,
+      probe: fakeProbe(),
+      wiring: sonarr.seams,
+      rotate: ['admin.password'],
+    });
+    expect(result.secrets.generate).toEqual(['admin.password']);
+    expect(result.wiring).toEqual([
+      { resource: 'sonarr.login', action: 'update', changes: ['password'] },
+    ]);
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
+    // The store is as it was: plan writes nothing.
+    expect(JSON.parse(await readFile(join(home, SECRETS_PATH), 'utf8'))).toMatchObject({
+      shared: { adminPassword: 'fake-admin-password' },
+    });
+  });
+
+  it('refuses a secret it does not rotate, and an admin password of your own', async () => {
+    const home = await makeHome({ withStore: true });
+    const unknown = await plan({
+      home,
+      catalog: fixtureCatalog,
+      host: FIXTURE_HOST,
+      env: {},
+      runtime: fakeRuntime(),
+      probe: fakeProbe(),
+      rotate: ['sonarr.apiKey'],
+    });
+    expect(unknown).toMatchObject({ ok: false });
+    expect(unknown.diagnostics.map((d) => [d.code, d.message])).toContainEqual([
+      'rotate.unknown',
+      "Mediaplane doesn't rotate sonarr.apiKey: it rotates admin.password",
+    ]);
+    await writeFile(join(home, 'secrets', 'admin'), 'fake-own-password\n');
+    await writeFile(
+      join(home, 'stack.yaml'),
+      STACK.replace('apps:', 'admin: { password: { file: secrets/admin } }\napps:'),
+    );
+    const yours = await plan({
+      home,
+      catalog: fixtureCatalog,
+      host: FIXTURE_HOST,
+      env: {},
+      runtime: fakeRuntime(),
+      probe: fakeProbe(),
+      rotate: ['admin.password'],
+    });
+    expect(yours.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'rotate.yours', severity: 'error' }),
+    );
   });
 });

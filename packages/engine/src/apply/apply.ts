@@ -364,7 +364,9 @@ async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
     }
   });
   await steps.run('verify', async () => {
-    const after = await plan(options);
+    // As it is now: the secrets rotated are generated, and saved.
+    const { rotate: _rotated, ...now } = options;
+    const after = await plan(now);
     // This plan's clients know only what they read themselves: the secrets the bootstrap
     // and wire steps found are kept out of what it says here too.
     const clean = (said: string) => redact(said, redactionValues(found.values));

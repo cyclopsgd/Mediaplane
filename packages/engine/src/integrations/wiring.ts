@@ -389,6 +389,13 @@ export interface ExamineOptions {
    * mark in both apps.
    */
   blocked?: string;
+  /**
+   * The values of the secrets apply generates (plan's preview of them, such as a rotated
+   * admin password): no app holds one yet, so a secret holding one is a change, which
+   * apply sets, and isn't checked. A check would only fail, leaving a mark in the app (a
+   * failed sign-in, which counts towards qBittorrent's ban).
+   */
+  fresh?: readonly string[];
 }
 
 /** Apply's VerifyContext, without another app: what a check gets by default. */
@@ -401,6 +408,12 @@ type Verdict = Omit<SecretCheck, 'resource' | 'secret'>;
 const WITH_REFUSED: Verdict = {
   verdict: 'unchecked',
   reason: 'apply sets it with the refused one',
+};
+
+/** Why a secret apply generates isn't checked. */
+const FRESH: Verdict = {
+  verdict: 'unchecked',
+  reason: 'apply generates it, and sets it: no app holds it yet',
 };
 
 /** Each of the resource's secrets, with its verdict. */
@@ -502,6 +515,10 @@ export async function examine(
     record === undefined
       ? []
       : fieldDrift(spec, address, compared, record, desired, observed);
+  // A secret apply generates is new to the app: a change, set with the others.
+  const fresh = spec.secrets.filter((secret) =>
+    (options.fresh ?? []).includes(desired.secrets[secret] ?? ''),
+  );
   // A field that differs makes it an update, which sets the secrets too: checking them
   // would change nothing, and could mislead. A sign-in with a user name the app doesn't
   // have yet fails as if the password were wrong.
@@ -510,9 +527,14 @@ export async function examine(
       ? []
       : changes.length > 0
         ? unchecked('a managed field differs: apply sets the secrets with it')
-        : await checkSecrets(spec, api, address, desired, observed, known, options);
+        : fresh.length > 0
+          ? eachSecret(spec, address, (secret) =>
+              fresh.includes(secret) ? FRESH : WITH_REFUSED,
+            )
+          : await checkSecrets(spec, api, address, desired, observed, known, options);
   const refused = checks.filter((check) => check.verdict === 'refused');
   changes.push(...refused.map((check) => check.secret));
+  if (changes.length === 0) changes.push(...fresh);
   if (record !== undefined) {
     drift.push(
       ...refused.map((check): Drift => ({
@@ -756,6 +778,8 @@ export interface PlanWiringOptions {
    * checking none of its secrets.
    */
   only?: string;
+  /** The values of the secrets apply generates (ExamineOptions.fresh). */
+  fresh?: readonly string[];
   seams?: WiringSeams;
 }
 
@@ -922,6 +946,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
           ...(options.drift === undefined ? {} : { drift: options.drift }),
           ...(only === undefined ? {} : { secrets: false }),
           ...(held === undefined ? {} : { blocked: held }),
+          ...(options.fresh === undefined ? {} : { fresh: options.fresh }),
         });
       } catch (cause) {
         if (!(cause instanceof AppApiError)) throw cause;

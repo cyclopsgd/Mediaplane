@@ -410,6 +410,26 @@ describe('mediaplane plan', () => {
     expect(term.stdout()).toContain('+ generated/.env (secret values, not shown)\n');
   });
 
+  it('takes --rotate, refusing a secret it does not rotate before it asks anything', async () => {
+    const term = capture();
+    const home = await makeHome();
+    expect(
+      await run(['plan', '--home', home, '--rotate', 'admin.password'], term.io, deps()),
+    ).toBe(2);
+    expect(term.stdout()).toContain('Secrets to generate: admin.password,');
+    const refused = capture();
+    expect(
+      await run(
+        ['apply', '--home', home, '--yes', '--rotate', 'sonarr.apiKey'],
+        refused.io,
+        deps(),
+      ),
+    ).toBe(1);
+    expect(refused.stderr()).toContain(
+      "error: Mediaplane doesn't rotate sonarr.apiKey: it rotates admin.password",
+    );
+  });
+
   it('prints versioned JSON without file contents', async () => {
     const term = capture();
     expect(
