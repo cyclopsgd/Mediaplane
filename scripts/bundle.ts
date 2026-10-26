@@ -53,7 +53,7 @@ export async function bundle(
   await chmod(file, 0o755);
   const packages = packagesOf(Object.keys(result.metafile.inputs));
   const notices = [
-    'Mediaplane is licensed under the GPL-3.0 (see LICENSE).',
+    'Mediaplane is licensed under the GPL-3.0-or-later (see LICENSE).',
     'Its CLI bundle includes these packages, each under its own licence:',
   ];
   for (const [name, folder] of packages) {

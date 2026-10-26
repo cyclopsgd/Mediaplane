@@ -24,6 +24,7 @@ interface ReleasePleaseConfig {
     {
       'release-type': string;
       'package-name'?: string;
+      'initial-version'?: string;
       'extra-files'?: (string | { type: string; path: string; jsonpath?: string })[];
     }
   >;
@@ -63,6 +64,13 @@ describe('versioned releases (release-please, spec §8.2)', () => {
     expect(config['bump-patch-for-minor-pre-major']).toBeUndefined();
   });
 
+  it("makes the first release 0.1.0, not release-please's default 1.0.0", () => {
+    // The manifest's 0.0.0 is not read as a previous release, so this decides it.
+    expect(root?.['initial-version']).toBe('0.1.0');
+  });
+
+  // The engine and catalog packages stay at 0.0.0 on purpose: private workspace packages
+  // that release-please never bumps.
   it('keeps every version in step: the manifest, both package.json files, the CLI', () => {
     const version = manifest['.'];
     expect(version).toMatch(/^\d+\.\d+\.\d+$/);
