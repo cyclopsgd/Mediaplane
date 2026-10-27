@@ -8,7 +8,7 @@ import { APPDATA_DIR } from '../paths';
 import { appSetupDone } from '../plan/bootstrap';
 import type { ResolvedStack } from '../resolver/resolve';
 import { runbookUrl } from '../runbooks';
-import { codeOf } from '../util/error-code';
+import { codeOf, couldNotRead } from '../util/error-code';
 import { isInside } from '../util/path';
 import { compare } from '../util/sort';
 import { queryDatabase, type DatabaseSeams } from './database';
@@ -86,8 +86,7 @@ async function databaseAt(path: string): Promise<URL | undefined> {
 
 /** Why a failure to read a key file happened, as its code, without its message. */
 function because(cause: unknown): string {
-  const code = codeOf(cause);
-  return code === undefined ? 'it could not be read' : `it could not be read (${code})`;
+  return couldNotRead(codeOf(cause));
 }
 
 /** What a key file that is a link, a pipe or a folder gives: nothing, said. */

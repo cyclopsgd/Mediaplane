@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { codeOf } from './error-code';
+import { codeOf, couldNotRead } from './error-code';
 
 describe('codeOf', () => {
   it('is the code of a system error', () => {
@@ -18,5 +18,15 @@ describe('codeOf', () => {
     expect(codeOf({ code: 'ENOENT' })).toBeUndefined();
     expect(codeOf('ENOENT')).toBeUndefined();
     expect(codeOf(undefined)).toBeUndefined();
+  });
+});
+
+describe('couldNotRead', () => {
+  it('says why a read failed by its code alone', () => {
+    expect(couldNotRead('ENOENT')).toBe('it could not be read (ENOENT)');
+  });
+
+  it('says only that it could not be read without a code', () => {
+    expect(couldNotRead(undefined)).toBe('it could not be read');
   });
 });

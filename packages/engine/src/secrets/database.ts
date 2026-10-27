@@ -1,5 +1,6 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { z } from 'zod';
+import { codeOf, couldNotRead } from '../util/error-code';
 
 /** How long the database read may take, in ms, before its process is killed. */
 export const DATABASE_DEADLINE_MS = 10_000;
@@ -53,8 +54,12 @@ export interface DatabaseSeams {
   deadlineMs?: number;
   /** The program the child process runs, DATABASE_PROGRAM by default. */
   program?: string;
-  /** Called as the child process is started, and once it has answered. */
-  started?: () => void;
+  /**
+   * Called as the child process starts, with its pid, before it is sent its request; not
+   * called when it can't be started. And `answered`: once it has exited having answered
+   * (not when it was stopped at its deadline, or for printing too much).
+   */
+  started?: (pid: number | undefined) => void;
   answered?: () => void;
 }
 
@@ -63,7 +68,7 @@ function failure(code: string | null, message: string | null): string {
   if (code === 'ERR_SQLITE_ERROR' && message !== null) {
     return `it could not be read as a database (${message})`;
   }
-  return code === null ? 'it could not be read' : `it could not be read (${code})`;
+  return couldNotRead(code ?? undefined);
 }
 
 /**
@@ -87,53 +92,71 @@ export function queryDatabase(
   const deadlineMs = seams.deadlineMs ?? DATABASE_DEADLINE_MS;
   return new Promise((resolvePromise) => {
     let settled = false;
+    let child: ChildProcess | undefined;
     const settle = (result: DatabaseAnswer) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      child.kill('SIGKILL');
+      child?.stdout?.destroy();
+      // Only a process that was started has a pid: kill() on one that wasn't, as when
+      // descriptors ran out, would signal pid 0, which is Mediaplane's own process group.
+      if (child?.pid !== undefined) child.kill('SIGKILL');
       resolvePromise(result);
     };
-    seams.started?.();
-    const child = spawn(
-      process.execPath,
-      [
-        '--no-warnings',
-        '--input-type=module',
-        '--eval',
-        seams.program ?? DATABASE_PROGRAM,
-      ],
-      { stdio: ['pipe', 'pipe', 'ignore', fd], env: {} },
-    );
     const timer = setTimeout(() => {
       settle({
         found: 'failed',
         why: `it was not read within ${String(deadlineMs / 1000)} seconds, so its read was stopped`,
       });
     }, deadlineMs);
+    try {
+      child = spawn(
+        process.execPath,
+        [
+          '--no-warnings',
+          '--input-type=module',
+          '--eval',
+          seams.program ?? DATABASE_PROGRAM,
+        ],
+        { stdio: ['pipe', 'pipe', 'ignore', fd], env: {} },
+      );
+    } catch (cause) {
+      // Thrown at once, as for a descriptor that isn't open.
+      settle({ found: 'failed', why: failure(codeOf(cause) ?? null, null) });
+      return;
+    }
+    // First of all: a process that can't be started (no descriptors left) says so on the
+    // next tick, and an error nobody listens to would end Mediaplane.
+    child.on('error', (cause: unknown) => {
+      settle({ found: 'failed', why: failure(codeOf(cause) ?? null, null) });
+    });
+    seams.started?.(child.pid);
     const { stdin, stdout } = child;
-    // Both are pipes, as `stdio` asks: only a guard.
-    if (stdin === null || stdout === null) {
+    // Both are pipes, as `stdio` asks, but undefined when the process wasn't started.
+    if (stdin == null || stdout == null) {
       settle({ found: 'failed', why: 'its read could not be started' });
       return;
     }
-    let output = '';
-    stdout.setEncoding('utf8');
-    stdout.on('data', (chunk: string) => {
-      output += chunk;
-      if (output.length > ANSWER_LIMIT) {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    stdout.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size > ANSWER_LIMIT) {
         settle({ found: 'failed', why: 'its read gave more than one row would' });
       }
     });
-    child.on('error', (cause: NodeJS.ErrnoException) => {
-      settle({ found: 'failed', why: failure(cause.code ?? null, null) });
+    stdout.on('error', (cause: unknown) => {
+      settle({ found: 'failed', why: failure(codeOf(cause) ?? null, null) });
     });
     child.on('close', () => {
+      // Already settled: stopped, or it printed too much.
+      if (settled) return;
       seams.answered?.();
       let parsed: z.infer<typeof answer>;
       try {
         // Never the answer's own text in a message: it holds the key.
-        parsed = answer.parse(JSON.parse(output));
+        parsed = answer.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
       } catch {
         settle({
           found: 'failed',

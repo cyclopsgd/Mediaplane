@@ -328,21 +328,35 @@ describe('readKeyFile', () => {
     }
   });
 
-  it('stops a read that never answers, as one hung on a pipe would, and takes nothing from it', async () => {
+  it('stops a read that never answers, as one hung on a pipe would, kills it, and takes nothing from it', async () => {
     const home = await homeWithDatabase([
       { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:09:30.4' },
     ]);
+    let child: number | undefined;
+    const answered = vi.fn();
     const before = Date.now();
     expect(
       await readKeyFile(home, 'jellyfin', DATABASE, {
         program: 'setInterval(() => {}, 1000)',
         deadlineMs: 1_000,
+        started: (pid) => {
+          child = pid;
+        },
+        answered,
       }),
     ).toEqual({
       found: 'unreadable',
       why: 'it was not read within 1 seconds, so its read was stopped',
     });
     expect(Date.now() - before).toBeLessThan(5_000);
+    // Gone, not left running: signal 0 only asks whether the process exists.
+    expect(child).toBeTypeOf('number');
+    await vi.waitFor(() => {
+      expect(() => process.kill(child ?? 0, 0)).toThrow(/ESRCH/);
+    });
+    // Nor does a stopped read count as an answer.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(answered).not.toHaveBeenCalled();
   });
 
   it('takes nothing from a read that gives no answer it understands, or too long a one', async () => {
@@ -369,17 +383,40 @@ describe('readKeyFile', () => {
       found: 'unreadable',
       why: 'its read gave more than one row would',
     });
+    // 30 000 characters, but 90 000 bytes: the cap is in bytes.
+    expect(await read(`process.stdout.write('\u20ac'.repeat(30000))`)).toEqual({
+      found: 'unreadable',
+      why: 'its read gave more than one row would',
+    });
   });
 
-  it('reads in a process with no environment of its own, and the key goes nowhere but its answer', async () => {
+  it('reads in a process with no environment of its own, and the query and the database are on no command line', async () => {
     const home = await homeWithDatabase([
       { name: 'Mediaplane', token: KEY, created: '2026-10-26 06:09:30.4' },
     ]);
-    // A program that answers with what its environment holds, as a key.
-    const program = `process.stdout.write(JSON.stringify({ ok: true, row: { value: Object.keys(process.env).join(',') || 'none' } }))`;
-    expect(
-      await readKeyFile(home, 'jellyfin', DATABASE, { program, deadlineMs: 5_000 }),
-    ).toEqual({ found: 'key', value: 'none' });
+    // A program that answers with its environment's names and its command line, as a key.
+    const program = `process.stdout.write(JSON.stringify({ ok: true, row: { value: JSON.stringify({ env: Object.keys(process.env), args: [...process.execArgv, ...process.argv] }) } }))`;
+    const read = await readKeyFile(home, 'jellyfin', DATABASE, {
+      program,
+      deadlineMs: 5_000,
+    });
+    expect(read.found).toBe('key');
+    const value = read.found === 'key' ? read.value : '';
+    const { env, args } = JSON.parse(value) as { env: string[]; args: string[] };
+    expect(env).toEqual([]);
+    // Real arguments, so the check below means something.
+    expect(args).toContain('--eval');
+    const command = args.join('\n');
+    for (const secret of [
+      DATABASE.sqlite.query,
+      'ApiKeys',
+      'app.db',
+      'proc/self/fd',
+      home,
+    ]) {
+      expect(secret).not.toBe('');
+      expect(command).not.toContain(secret);
+    }
   });
 
   it('says a database that went, or left the folder, once open is unreadable, with no path', async () => {
