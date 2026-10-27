@@ -457,9 +457,9 @@ up --wait again
   asked itself, with that warning: it stays as it is when it says its setup is done, and
   is set up again, unpublished, when it says it is open, or can't be asked. One with no
   record starts unpublished, and is set up again. An app that runs published while its
-  setup is to be done, as a Plex signed out of its account while it ran, has `plan` warn
-  (`bootstrap.open-published`): whoever reaches it may finish the setup first, until
-  `apply` starts it again without its ports. An app with a setup can't run inside another
+  setup is to be done, or held, as a Plex signed out of its account while it ran, has
+  `plan` warn (`bootstrap.open-published`): whoever reaches it may finish the setup
+  first, until `apply` starts it again without its ports. An app with a setup can't run inside another
   app's network, which would publish its ports: `plan` fails with
   `bootstrap.network-via`.
 - **Plex** (spec §6.4). Its first start gets `PLEX_CLAIM`: a claim token of your plex.tv

@@ -366,12 +366,13 @@ What remains:
   - A pipe put in place of its write-ahead log (`-wal`) after Mediaplane checked it makes
     SQLite refuse the read (`disk I/O error`, probed).
 
-  It is never a read or a write through the pipe. Another file put at the database's name in that instant can be read
-  instead, unless Mediaplane's check once the read has answered sees it, and then what
-  was read is dropped; and a folder on the way swapped for a link and back as quickly can
-  do the same. Such a read is bounded by the fixed `ApiKeys` query, and a key that is
-  another app's is refused. Nothing is written either way. A file swapped in at the
-  database's path at any other time is never what SQLite opens.
+  It is never a read or a write through the pipe. Another file put at the database's
+  name in that instant can be read instead, unless Mediaplane's check once the read has
+  answered sees it, and then what was read is dropped; and a folder on the way swapped
+  for a link and back as quickly can do the same. Such a read is bounded by the fixed
+  `ApiKeys` query, and a key that is another app's is refused. Nothing is written either
+  way. A file swapped in at the database's path at any other time is never what SQLite
+  opens.
 
 - Sonarr and Radarr hold qBittorrent's key, as their download client needs, so a
   compromised one can drive qBittorrent: add a torrent, or change its settings.
@@ -686,10 +687,9 @@ What remains:
   through each app's key. A password of your own is rotated in its file.
 - A new Plex token, from `plex-login --force`, reaches the apps that hold the old one
   with `mediaplane apply --rotate plex.token`: the arrs' connections to Plex, and Seerr,
-  which signs in again with it, once your account is shown to be Seerr's admin (Slice
-  10b).
-  Only then can you sign the old one out at plex.tv without breaking them. A token of
-  another account, which Plex refuses, is given to no app.
+  which signs in again with it, once your account is shown to be Seerr's admin
+  (Slice 10b). Only then can you sign the old one out at plex.tv without breaking them.
+  A token of another account, which Plex refuses, is given to no app.
 
 ### T11. Something on the stack's network uses Gluetun's control server
 

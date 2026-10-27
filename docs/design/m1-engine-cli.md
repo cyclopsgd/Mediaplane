@@ -2353,7 +2353,7 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   client.
 - **Seerr is asked when its `settings.json` can't be read** (§6.4). A Seerr whose setup
   Mediaplane recorded (`setUp`) is asked itself, as plan reaches it (`Bootstrap.open`,
-  without its key): one that says its setup is done stays as it is, published; one that
+  needing no key): one that says its setup is done stays as it is, published; one that
   says it is open, or can't be asked, is set up again, unpublished (fail closed). So such
   an `apply` no longer fails at verify each time.
 - **A new Plex token** (§6.1, §10). The arrs keep a token Plex takes, and Seerr the one
@@ -2379,8 +2379,8 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     as `PLEX_CLAIM` on first start, and the image ignores it once Plex is signed out. So
     Plex is claimed through its API instead. A first start is unchanged.
   - `plan` lists its setup, and warns that it runs published (`bootstrap.open-published`,
-    for any app whose setup is to be done and which publishes ports now; it names Plex
-    only for Plex).
+    for any app whose setup is to be done, or held, and which publishes ports now; it
+    names Plex only for Plex).
   - Apply starts it unpublished, and Plex's setup claims it itself, while it is
     unclaimed: a claim token from plex.tv, with your token, posted to Plex over the
     wiring network, to its address (`POST /myplex/claim`; Plex's DNS-rebinding check

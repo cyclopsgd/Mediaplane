@@ -177,6 +177,24 @@ S10 was first planned as two parts, S10a and S10b; S10b was split again on 2026-
     the add-an-app guide; the test gaps below, CI's end-to-end pulls made robust against a
     temporary registry error, S9's review items, which Compose versions work out a
     service differently, and the nightly Plex job's items.
+  - What the contract must pin from S10b (all additive within v1, but a script with an
+    exhaustive switch must know them):
+    - `mediaplane.plan/v1` and `mediaplane.change/v1`: `wiring[].action` `remove`;
+      `drift[].stays` (left entries only); `bootstrap[].again`, present only when true,
+      published or not.
+    - An older release lists a change record holding `remove` as one it can't read.
+    - `mediaplane.apply/v1`: a wire action with `detail: 'removed'`; a `skipped` wire
+      action whose `detail` says why a planned removal stays (only `detail` tells it
+      from a held or waiting skip); the bootstrap detail `signed in again to <app>`.
+    - `mediaplane.keep/v1`: `line` and `written`, only once keep reaches the line; with
+      `managed_by: external`, exit 0 and the `keep.external` warning; the error
+      `keep.record`.
+    - The new diagnostic codes: `bootstrap.open-published`, `rotate.no-plex`,
+      `keep.record`.
+    - `given` (names only) in `state/resources.json` records.
+  - The nightly Plex job's items from S10b:
+    - `plex.e2e` checks `writtenFiles(home)` and `.env` after the reclaim.
+    - `plex.e2e` pins the claim-token count (2) after the reclaim.
   - Proves: a playbook deploys a stack, removes an app from it, and rebuilds the host,
     reading only the documented contract.
 

@@ -122,14 +122,22 @@ Plex token, before its port is published, and links to Plex.
   settings lets a client in without a sign-in. Plex's setup asks Plex without your
   token: the one read of its settings, once plex.tv has said it is yours, is the first
   call that carries it.
-- **`plan` warns `bootstrap.open-published`** (`Plex runs published, though its
-first-run setup isn't shown to be done`): Plex was signed out of your plex.tv account
-  while it ran, as its web UI's sign-out does, and anyone who reaches it can claim it now. Run
-  `apply` at once: it starts Plex again without its ports, claims it for your account
-  through Plex's own API (its image doesn't claim a Plex signed out so), and publishes it
-  once it is shown to be yours. If that fails with
-  `was signed out of its plex.tv account, and Mediaplane couldn't get a claim token`,
-  Plex stays unpublished: check your token, as below, and run `apply` again.
+- **`plan` warns `bootstrap.open-published`**
+  (`Plex runs published, though its first-run setup isn't shown to be done`): Plex was
+  signed out of your plex.tv account while it ran, as its web UI's sign-out does, and
+  anyone who reaches it can claim it now. Run `apply` at once: it starts Plex again
+  without its ports, claims it for your account through Plex's own API (its image
+  doesn't claim a Plex signed out so), and publishes it once it is shown to be yours.
+  `apply` gives the same warning as it starts, and puts it right. An app whose setup is
+  held (`bootstrap.needs-password`) gets it too: `apply` starts that app without its
+  ports, and keeps it so until its setup can run.
+  - If that fails with
+    `was signed out of its plex.tv account, and Mediaplane couldn't get a claim token`,
+    Plex stays unpublished: check your token, as below, and run `apply` again.
+  - If it fails with
+    `was signed out of its plex.tv account, and refused the claim Mediaplane sent`,
+    Plex stays unpublished: its claim token ran out or was used, so run `apply` again,
+    which gets a new one. If Plex didn't answer, check that it runs first.
 - **Sonarr, Radarr and Seerr still hold your old Plex token** after
   `mediaplane plex-login --force`: they keep one that works. Run
   `mediaplane apply --rotate plex.token`: it gives the new token to both arrs'
@@ -138,7 +146,7 @@ first-run setup isn't shown to be done`): Plex was signed out of your plex.tv ac
   sign-in fails with `has an admin of another plex.tv account than your new Plex token's`,
   still holding its old token: put back a token of its admin's account (run
   `plex-login --force`, signing in as that account), and run `apply --rotate plex.token`
-  again.
+  again. Last, if you did not set that Seerr up, start it afresh, as below.
 - **`apply` stops at the same step** with a setup that reported success. Before
   publishing an app, Mediaplane asks it once more whether its setup is still open, and
   publishes it only if it is not. Jellyfin's key is already kept. The error:
