@@ -956,7 +956,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       }
       continue;
     }
-    // Whether its first-run setup is open, as it says itself, without its key: asked
+    // Whether its first-run setup is open, as it says itself, needing no key: asked
     // first, since an app whose setup is open takes no key.
     const setup = app.def.bootstrap;
     if (setup !== undefined && options.ask?.includes(app.def.id) === true) {

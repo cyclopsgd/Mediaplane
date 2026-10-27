@@ -15,8 +15,10 @@ export interface BootstrapChange {
    */
   unpublished: boolean;
   /**
-   * Its setup is done, and it signs in again, published, with what you gave anew
-   * (`--rotate plex.token`: Seerr, with your new Plex token). Added in Slice 10b.
+   * The setup signs in with what you rotated (`--rotate plex.token`: Seerr, with your new
+   * Plex token). Published when its setup is done: then it only signs in again, once it
+   * has shown the app is Mediaplane's. Unpublished when it is set up afresh, signing in
+   * with the new one (or, found set up, signing in again). Added in Slice 10b.
    */
   again?: boolean;
 }
@@ -32,9 +34,9 @@ export interface BootstrapPlan {
   held: BootstrapChange[];
   /**
    * The apps with a setup that makes no key, which Mediaplane set up (`setUp`), whose file
-   * that says the setup is done it can't read: plan asks the app itself (`Bootstrap.open`)
-   * once it reaches it, and sets it up again, unpublished, only when the app says its
-   * setup is open, or can't be asked. Left out when there are none.
+   * that says the setup is done it can't read: plan asks the app itself (`Bootstrap.open`,
+   * a question needing no key) once it reaches it, and sets it up again, unpublished, only
+   * when the app says its setup is open, or can't be asked. Left out when there are none.
    */
   ask?: string[];
   diagnostics: Diagnostic[];

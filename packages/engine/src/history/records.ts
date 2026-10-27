@@ -98,7 +98,9 @@ const recordShape = (object: typeof z.strictObject) =>
         .optional(),
       /**
        * The apps whose first-run setup the plan said apply would finish. Added in Slice 5;
-       * `again`, a setup done that signs in again (--rotate plex.token), in Slice 10b.
+       * `again`, a setup that signs in with what you rotated (--rotate plex.token), in
+       * Slice 10b: published when its setup is done (it only signs in again), unpublished
+       * when it is set up afresh.
        */
       bootstrap: z
         .array(

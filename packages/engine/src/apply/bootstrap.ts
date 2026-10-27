@@ -131,7 +131,7 @@ function withSecret(
 }
 
 /** Whether the change only signs the app in again (`again`, published), its setup done. */
-function signsInAgain(change: BootstrapChange | undefined): boolean {
+function onlySignsInAgain(change: BootstrapChange | undefined): boolean {
   return change?.again === true && !change.unpublished;
 }
 
@@ -176,7 +176,7 @@ export async function bootstrapApps(options: BootstrapOptions): Promise<Bootstra
     (app) =>
       app.def.bootstrap?.secret === undefined &&
       (store.setUp ?? []).includes(app.def.id) &&
-      !signsInAgain(options.pending.find((p) => p.app === app.def.id)),
+      !onlySignsInAgain(options.pending.find((p) => p.app === app.def.id)),
   );
   if (stale.length > 0) {
     const dropped = stale.map((app) => app.def.id);
@@ -334,7 +334,7 @@ export async function bootstrapApps(options: BootstrapOptions): Promise<Bootstra
   const waits = waiting.map((w) => `${w.app} waits: ${w.reason}`);
   const done = apps.filter((app) => !unfinished.includes(app)).map((a) => a.def.id);
   const signedInAgain = (id: string) =>
-    signsInAgain(options.pending.find((p) => p.app === id));
+    onlySignsInAgain(options.pending.find((p) => p.app === id));
   const finished = done.filter((id) => !signedInAgain(id));
   const again = done.filter(signedInAgain);
   const published = unpublished.filter((app) => !stillOpen.includes(app));

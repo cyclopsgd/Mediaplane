@@ -179,8 +179,10 @@ export interface BootstrapContext {
   /** plex.tv: called directly from source, through the plex.tv helper in the image. */
   plexTv: PlexTv;
   /**
-   * The setup is done, and signs in again with what you gave anew (`--rotate plex.token`:
-   * Seerr, with your new Plex token), once it has shown the app is Mediaplane's.
+   * The setup signs in with what you rotated (`--rotate plex.token`: Seerr, with your new
+   * Plex token). With the app published, its setup is done, and it only signs in again,
+   * once it has shown the app is Mediaplane's; unpublished, it is set up afresh, and an
+   * app it finds set up is shown to be Mediaplane's, then signed in to again.
    */
   again?: boolean;
 }
@@ -209,9 +211,12 @@ export interface Bootstrap {
   open(api: AppApi): Promise<boolean>;
   /**
    * The secrets you give that the setup signs in with, by their path in stack.yaml
-   * (`plex.token`, Seerr's on a Plex stack): rotating one (`--rotate`) has the setup, done
-   * already, run again, published, with `again` (BootstrapContext), so that the app takes
-   * the new one. The app keeps the one it signed in with, and can't be asked which.
+   * (`plex.token`, Seerr's on a Plex stack): rotating one (`--rotate`) has the setup run
+   * again with `again` (BootstrapContext), so that the app takes the new one: published
+   * when its setup is done (it only signs in again), unpublished when it is set up afresh.
+   * The app keeps the one it signed in with, and can't be asked which. Such a setup must
+   * never sign in with a secret Mediaplane generates: it goes through plan's held checks
+   * as every setup does, but they hold only a setup that signs in to find a key.
    */
   signsInWith?: readonly string[];
   /**

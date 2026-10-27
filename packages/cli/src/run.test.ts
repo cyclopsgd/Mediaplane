@@ -1952,8 +1952,11 @@ apps:
       '+ plex (with no port published until it is done)\n',
     );
     expect(shown.stderr()).toContain(
-      "warning: Plex runs published, though its first-run setup isn't shown to be done: whoever reaches it may finish the setup before Mediaplane does, as anyone can claim a Plex signed out of its plex.tv account\n",
+      "warning: Plex runs published, though its first-run setup isn't shown to be done: whoever reaches it may finish the setup before Mediaplane does, as anyone can claim a Plex signed out of its plex.tv account\n  hint: apply starts Plex again without its ports first, and finishes the setup before it publishes it\n",
     );
+    // plan claims nothing: Plex is still signed out, and plex.tv gave no claim token.
+    expect(plex.owner).toBeNull();
+    const claims = plexTv.state.claims.length;
     docker.calls.length = 0;
     const applied = capture();
     expect(await run(['apply', '--home', home, '--yes'], applied.io, deps(docker))).toBe(
@@ -1966,7 +1969,27 @@ apps:
       'up',
     ]);
     expect([plex.owner, plex.machineId]).toEqual([FAKE_PLEX_ACCOUNT.id, machineId]);
-    expectNoSecrets(applied.stdout() + applied.stderr(), plexSecrets());
+    // Two claim tokens more: PLEX_CLAIM's, which the image left unused, and the claim's.
+    expect(plexTv.state.claims.slice(claims).map((claim) => claim.used)).toEqual([
+      false,
+      true,
+    ]);
+    // The token the claim gave Plex, as well as yours and every claim token, said nowhere:
+    // not in what apply printed, nor in a file it wrote.
+    expect(plex.serverToken).not.toBe('');
+    expect(plex.serverToken).not.toBe(FAKE_SERVER_TOKEN);
+    const secrets = [...plexSecrets(), plex.serverToken];
+    const history = await readdir(join(home, 'state', 'history'));
+    const written = await Promise.all(
+      [
+        COMPOSE_PATH,
+        ENV_PATH,
+        RESOURCES_PATH,
+        join('state', 'secrets.json'),
+        ...history.map((name) => join('state', 'history', name)),
+      ].map((path) => readFile(join(home, path), 'utf8')),
+    );
+    expectNoSecrets(applied.stdout() + applied.stderr() + written.join(''), secrets);
     const again = capture();
     expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
   });

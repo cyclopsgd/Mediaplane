@@ -501,10 +501,22 @@ export async function planStack(
       signsInAgain(app.def.id) &&
       ![...bootstrap, ...held].some((b) => b.app === app.def.id),
   );
-  bootstrap = [
-    ...bootstrap,
-    ...signingInAgain.map((app) => ({ app: app.def.id, unpublished: false })),
-  ];
+  // Held like any other setup: one that signs in with what you rotate never signs in
+  // with a password apply is yet to generate (Seerr's Plex sign-in takes plex.token only).
+  const signing = await withoutSignInsToCome(
+    stack,
+    signingInAgain.map((app) => ({ app: app.def.id, unpublished: false })),
+    toCome,
+  );
+  const signingThrough = await heldThrough(
+    stack,
+    signing.changes,
+    [...held, ...signing.held],
+    toCome,
+  );
+  bootstrap = [...bootstrap, ...signingThrough.changes];
+  held.push(...signing.held, ...signingThrough.held);
+  diagnostics.push(...signing.diagnostics, ...signingThrough.diagnostics);
   // An app whose appdata can't say whether its setup is done, asked itself: set up again,
   // unpublished, unless it said its setup is done (fail closed: one that couldn't be asked
   // is too). Its wiring is then checked after the start, as for any app set up first. Held
@@ -549,8 +561,11 @@ export async function planStack(
   );
   // An app to set up first that runs published now, as a Plex signed out of its account
   // while it ran: until apply starts it again without its ports, whoever reaches it may
-  // finish its setup first (spec §6.4). Said, as apply puts it right.
-  for (const change of bootstrap.filter((b) => b.unpublished)) {
+  // finish its setup first (spec §6.4). Said, as apply puts it right; a held one too, which
+  // apply starts without its ports and doesn't set up. Worded to be true in apply's own
+  // output as well as in plan's.
+  const isHeld = new Set(held.map((h) => h.app));
+  for (const change of [...bootstrap, ...held].filter((b) => b.unpublished)) {
     const published = current.some(
       (c) => c.service === change.app && c.state === 'running' && c.published.length > 0,
     );
@@ -565,7 +580,9 @@ export async function planStack(
             : ''
         }`,
         {
-          hint: `run apply now: it starts ${name} again without its ports, and finishes the setup first`,
+          hint: isHeld.has(change.app)
+            ? `apply starts ${name} again without its ports first, and keeps it so while its setup is held`
+            : `apply starts ${name} again without its ports first, and finishes the setup before it publishes it`,
         },
       ),
     );
