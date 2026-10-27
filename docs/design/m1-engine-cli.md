@@ -803,9 +803,9 @@ full threat model goes in `docs/security/threat-model.md`.
      IP with the host's (§11, Slice 3d).
 7. **Supply chain.**
    - Images are pinned by tag and digest, and Renovate bumps both.
-   - CI runs Trivy (failing on critical vulnerabilities that have a fix in
-     Mediaplane's image, and reporting them in the catalog's images, §11, "CI: the catalog scan reports"),
-     gitleaks and `pnpm audit`.
+   - CI runs Trivy, gitleaks and `pnpm audit`. Trivy fails on a critical
+     vulnerability that has a fix in Mediaplane's image, and reports one in the
+     catalog's images (§11, "CI: the catalog scan reports").
    - The Mediaplane image is published with an SBOM and build provenance.
    - GitHub Actions are pinned by SHA.
    - `SECURITY.md` explains private vulnerability reporting through GitHub.
@@ -2105,8 +2105,8 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   every catalog image with Trivy on both architectures, reporting a critical finding
   with a fix (a warning for the image, and the step summary) unless
   `scripts/ci/catalog-ignore.yaml` lists it, with the app it is in, and its date has not
-  passed (Mediaplane never patches an app's image, §1.4(1)). It reported, not failed, from
-  the owner's decision of 2026-10-27; to fail on it again, change `CATALOG_SCAN: report`
+  passed (Mediaplane never patches an app's image, §1.4(1)). It has reported, not failed,
+  since the owner's decision of 2026-10-27; to fail on it again, change `CATALOG_SCAN: report`
   to `CATALOG_SCAN: fail` on the `catalog-images` job in `.github/workflows/ci.yml`. A scan
   that couldn't run still fails the job. Mediaplane's own image still fails. Each image
   is scanned with only the entries whose statement names its app (the text after the

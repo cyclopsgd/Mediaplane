@@ -5,8 +5,8 @@ on:
     branches: [main]
   pull_request:
   # Weekly too, so that a vulnerability found in an image, Node or a catalog app since
-  # the last push still shows in a run that someone sees (it fails the run, but for a
-  # catalog app's image, which is reported: see the catalog-images job).
+  # the last push still shows in a run that someone sees (a catalog app's image is
+  # reported, not failed: see the catalog-images job).
   schedule:
     - cron: '41 4 * * 1'
 

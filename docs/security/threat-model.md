@@ -575,11 +575,11 @@ Controls today:
     on a finding again, change `CATALOG_SCAN: report` to `CATALOG_SCAN: fail` on the
     `catalog-images` job in `.github/workflows/ci.yml`. A finding that
     `scripts/ci/catalog-ignore.yaml` lists, with the app it is in, is hidden until the
-    date beside it; after that date it is reported again (or fails, in `fail` mode). Each
-    image is scanned with
-    only the entries whose statement names its app (the text after the statement's first
-    " in " holds a catalog app's name), so an entry hides nothing in another app. One that
-    names no catalog app hides nothing, and a unit test fails on it.
+    date beside it; after that date it is reported again (or fails, in `fail` mode).
+    Each image is scanned with only the entries whose statement names its app (the text
+    after the statement's first " in " holds a catalog app's name), so an entry hides
+    nothing in another app. One that names no catalog app hides nothing, and a unit
+    test fails on it.
   - Node's own security releases: a check fails while Node has published one for the
     image's line that the image lacks. Neither scan sees Node, a binary in the base.
   - `pnpm audit` checks the CLI's production npm dependencies, which are bundled into one
