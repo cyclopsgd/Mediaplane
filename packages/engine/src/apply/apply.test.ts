@@ -3563,6 +3563,36 @@ describe('apply: a first-run setup that makes no key, after another', () => {
     expect((await planned()).bootstrap).toEqual([{ app: 'sonarr', unpublished: true }]);
   });
 
+  it("holds a setup that makes no key, found open when asked, while the app it signs in through hasn't the admin password, as any setup is held", async () => {
+    const { home, setup, run, planned } = await signInStack();
+    setup.signIn.done = true;
+    setup.signIn.owner = 'admin';
+    await mkdir(join(home, 'appdata', 'sonarr', 'signed-in.txt'), { recursive: true });
+    expect((await run()).outcome).toBe('success');
+    const store = await readSecretStore(home);
+    expect(store.setUp).toEqual(['sonarr']);
+    // Jellyfin lacks the admin password Mediaplane holds; Sonarr's setup reads as open.
+    await writeSecretStore(home, {
+      ...store,
+      shared: { ...store.shared, adminPasswordNotIn: ['jellyfin'] },
+    });
+    setup.signIn.done = false;
+    setup.signIn.owner = undefined;
+    const signedInBefore = setup.signIn.signedIn.length;
+    const held = await planned();
+    expect(held.bootstrap).toEqual([]);
+    expect(held.diagnostics.map((d) => [d.code, d.message])).toContainEqual([
+      'bootstrap.needs-password',
+      "sonarr's first-run setup signs in through jellyfin, which doesn't have the admin password Mediaplane gives the apps yet: it is held, and waits until jellyfin has it",
+    ]);
+    expect(held.containers.find((c) => c.service === 'sonarr')?.action).toBe('recreate');
+    // Held, it is not signed in to.
+    const result = await run();
+    expect(result.plan.bootstrap).toEqual([]);
+    expect(setup.signIn.signedIn.length).toBe(signedInBefore);
+    expect(result.actions.find((a) => a.resource === 'sonarr')?.result).toBe('skipped');
+  });
+
   it('keeps unpublished, and fails, an app with a setup but no API to finish it through', async () => {
     const catalog = SET_UP_CATALOG.map((def) =>
       def.id === 'jellyfin' ? { ...def, api: undefined } : def,

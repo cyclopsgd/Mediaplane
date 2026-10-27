@@ -178,6 +178,22 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
   return (await planStack(options)).result;
 }
 
+/**
+ * `containers` with each app in `apps` that already exists recreated: an app whose setup
+ * is open (or held, as it would have started, or asked and found so) starts again without
+ * its ports, whatever it runs now.
+ */
+function recreating(
+  containers: readonly ContainerChange[],
+  apps: ReadonlySet<string>,
+): ContainerChange[] {
+  return containers.map((change) =>
+    apps.has(change.service) && change.action !== 'create'
+      ? { ...change, action: 'recreate' }
+      : change,
+  );
+}
+
 /** plan(), plus the context apply builds on (undefined whenever the plan failed). */
 export async function planStack(
   options: PlanOptions,
@@ -344,11 +360,7 @@ export async function planStack(
   const unpublished = new Set(
     [...bootstrap, ...held].filter((b) => b.unpublished).map((b) => b.app),
   );
-  containers = containers.map((change) =>
-    unpublished.has(change.service) && change.action !== 'create'
-      ? { ...change, action: 'recreate' }
-      : change,
-  );
+  containers = recreating(containers, unpublished);
   // An app whose key goes back in its file restarts: it reads the file as it starts.
   const restarting = new Set(restore.map((key) => splitKey(key).app));
   containers = containers.map((change) =>
@@ -464,17 +476,29 @@ export async function planStack(
   }
   // An app whose appdata can't say whether its setup is done, asked itself: set up again,
   // unpublished, unless it said its setup is done (fail closed: one that couldn't be asked
-  // is too). Its wiring is then checked after the start, as for any app set up first.
+  // is too). Its wiring is then checked after the start, as for any app set up first. Held
+  // like any other setup, if it would sign in with a password never given, or through an
+  // app that lacks it.
   const reopened = (setups.ask ?? []).filter((app) => open[app] !== false);
   if (reopened.length > 0) {
     const theirs = (resource: string) =>
       reopened.some((app) => resource === app || resource.startsWith(`${app}.`));
-    bootstrap = [...bootstrap, ...reopened.map((app) => ({ app, unpublished: true }))];
-    containers = containers.map((change) =>
-      reopened.includes(change.service) && change.action !== 'create'
-        ? { ...change, action: 'recreate' }
-        : change,
+    const again = await withoutSignInsToCome(
+      stack,
+      reopened.map((app) => ({ app, unpublished: true })),
+      toCome,
     );
+    const through = await heldThrough(
+      stack,
+      again.changes,
+      [...held, ...again.held],
+      toCome,
+    );
+    bootstrap = [...bootstrap, ...through.changes];
+    held.push(...again.held, ...through.held);
+    diagnostics.push(...again.diagnostics, ...through.diagnostics);
+    if (hasErrors(diagnostics)) return failed(diagnostics);
+    containers = recreating(containers, new Set(reopened));
     wiring = wiring.map((change) =>
       theirs(change.resource)
         ? { resource: change.resource, action: 'after-start' }
