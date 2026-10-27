@@ -344,6 +344,14 @@ export function fakeJellyfin(request: FakeRequest, state: FakeAppState): FakeRep
     makeApiKey(state, app);
     return { status: 204 };
   }
+  // A key removed by its value, as Jellyfin's dashboard does: 204 (probed), and refused
+  // at once from then on.
+  const removing = /^\/Auth\/Keys\/([^/]+)$/.exec(path);
+  if (removing !== null && method === 'DELETE') {
+    const gone = decodeURIComponent(removing[1] ?? '');
+    state.apiKeys = state.apiKeys.filter((k) => k.AccessToken !== gone);
+    return { status: 204 };
+  }
   return fakeJellyfinLibrary(request, url, state, body) ?? { status: 404 };
 }
 

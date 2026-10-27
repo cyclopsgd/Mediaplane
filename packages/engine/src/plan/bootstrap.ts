@@ -25,6 +25,13 @@ export interface BootstrapPlan {
    * still started without its ports.
    */
   held: BootstrapChange[];
+  /**
+   * The apps with a setup that makes no key, which Mediaplane set up (`setUp`), whose file
+   * that says the setup is done it can't read: plan asks the app itself (`Bootstrap.open`)
+   * once it reaches it, and sets it up again, unpublished, only when the app says its
+   * setup is open, or can't be asked. Left out when there are none.
+   */
+  ask?: string[];
   diagnostics: Diagnostic[];
 }
 
@@ -50,8 +57,9 @@ export interface PasswordsToCome {
  * appdata was emptied starts its wizard again). It starts unpublished unless its appdata
  * says the setup is done, when nobody can claim it any more. A file Mediaplane can't read
  * says nothing, so the stored key decides, with a warning that it can't tell; for a setup
- * that makes no key (Seerr's), there is none to decide, so the app starts unpublished and
- * is set up again, with that warning. A setup that makes no key counts as done only when
+ * that makes no key (Seerr's), there is none to decide: the app itself is asked (`ask`)
+ * when the store names it, and otherwise it starts unpublished and is set up again, with
+ * that warning. A setup that makes no key counts as done only when
  * its file says so and the store names the app (`setUp`): an app set up by someone else,
  * or before Mediaplane knew, starts unpublished, and its setup checks it is Mediaplane's.
  * An app with a setup that runs inside another app's network is an error: that app
@@ -65,6 +73,7 @@ export async function inspectBootstrap(
   toCome: PasswordsToCome = {},
 ): Promise<BootstrapPlan> {
   const changes: BootstrapChange[] = [];
+  const ask: string[] = [];
   const diagnostics: Diagnostic[] = [];
   for (const app of stack.apps) {
     const setup = app.def.bootstrap;
@@ -84,10 +93,16 @@ export async function inspectBootstrap(
     const made =
       setup.secret !== undefined && store.apps[app.def.id]?.[setup.secret] !== undefined;
     const done = await appSetupDone(stack.home, app);
+    // Set up by Mediaplane, as its record says: the app itself is asked, once plan
+    // reaches it, rather than set up again every time.
+    const known = store.setUp?.includes(app.def.id) === true;
+    const asked = setup.secret === undefined && done === undefined && known;
     if (done === undefined && (made || setup.secret === undefined)) {
       const decides = made
         ? 'the stored key decides'
-        : `${app.def.name} starts unpublished, and is set up again, until it can`;
+        : asked
+          ? `Mediaplane asks ${app.def.name} itself, and sets it up again, unpublished, only if it says its setup is open, or can't be asked`
+          : `${app.def.name} starts unpublished, and is set up again, until it can`;
       diagnostics.push(
         warning(
           'bootstrap.unreadable',
@@ -99,8 +114,11 @@ export async function inspectBootstrap(
     // Set up already: its key made, and its file not saying otherwise; or, for a setup
     // that makes no key, its file saying so and Mediaplane knowing the setup is its own
     // (the store names it): a file alone doesn't say who set the app up.
-    const known = store.setUp?.includes(app.def.id) === true;
     if (setup.secret === undefined ? done === true && known : made && done !== false) {
+      continue;
+    }
+    if (asked) {
+      ask.push(app.def.id);
       continue;
     }
     changes.push({
@@ -115,6 +133,7 @@ export async function inspectBootstrap(
   return {
     changes: through.changes,
     held: [...kept.held, ...through.held],
+    ...(ask.length === 0 ? {} : { ask }),
     diagnostics: [...diagnostics, ...kept.diagnostics, ...through.diagnostics],
   };
 }

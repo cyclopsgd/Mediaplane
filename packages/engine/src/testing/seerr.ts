@@ -57,6 +57,8 @@ export interface FakeSeerr {
     libraries: FakeSeerrLibrary[];
     [setting: string]: unknown;
   };
+  /** The key it made in Jellyfin as it first signed in through it, named Seerr. */
+  madeKey?: string;
   /** Its users who signed in through Plex, by plex.tv account id: the first is its admin. */
   plexUsers: number[];
   /** The plex.tv token each Plex user last signed in with: what Seerr reaches Plex with. */
@@ -569,7 +571,8 @@ function signIn(
     seerr.jellyfin.port = Number(at.port);
     seerr.jellyfin.useSsl = at.useSsl === true;
     seerr.jellyfin.urlBase = typeof at.urlBase === 'string' ? at.urlBase : '';
-    seerr.jellyfin.apiKey = makeApiKey(jellyfin, 'Seerr');
+    seerr.madeKey = makeApiKey(jellyfin, 'Seerr');
+    seerr.jellyfin.apiKey = seerr.madeKey;
   }
   if (!seerr.users.includes(sent.username)) seerr.users.push(sent.username);
   seerr.signIns += 1;

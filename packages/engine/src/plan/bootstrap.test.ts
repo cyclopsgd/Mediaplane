@@ -218,6 +218,19 @@ describe('planBootstrap: a setup that makes no key', () => {
       hint: 'check the permissions of appdata/sonarr',
     });
   });
+
+  it('leaves one Mediaplane set up to be asked of the app itself, saying so, when it cannot read the file', async () => {
+    const found = await signInStack('unreadable', RECORDED);
+    expect([found.changes, found.ask]).toEqual([[], ['sonarr']]);
+    expect(found.diagnostics).toEqual([
+      expect.objectContaining({
+        severity: 'warning',
+        code: 'bootstrap.unreadable',
+        message:
+          "Mediaplane can't read the file in sonarr's appdata that says whether its first-run setup is done, so it can't tell whether the setup is open; Mediaplane asks sonarr itself, and sets it up again, unpublished, only if it says its setup is open, or can't be asked",
+      }),
+    ]);
+  });
 });
 
 describe('setupsToMakeKeys', () => {

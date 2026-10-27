@@ -15,7 +15,9 @@ import {
 import { describe, expect, it } from 'vitest';
 import {
   api,
+  BUSYBOX,
   composeDown,
+  docker as dockerCli,
   expectWiringRemoved,
   getJson,
   jsonBody,
@@ -223,8 +225,9 @@ describe('the whole stack, wired with no clicking', () => {
         WIRED.map((resource) => ({ resource, action: 'after-start' })),
       );
       expect(wired(first.actions).slice(-4)).toEqual([
-        // Its first sign-in set Jellyfin as its media server, with no library yet.
-        ['seerr.media_server', 'updated libraries'],
+        // Its first sign-in set Jellyfin as its media server, with no library yet, and a
+        // key Seerr made itself, which Mediaplane's replaces (Slice 10b).
+        ['seerr.media_server', 'updated libraries, apiKey'],
         ['seerr.server_sonarr', 'created'],
         ['seerr.server_radarr', 'created'],
         ['seerr.setup', 'updated initialized'],
@@ -239,6 +242,28 @@ describe('the whole stack, wired with no clicking', () => {
         'Seerr recorded as set up by Mediaplane',
       ).toBe(true);
       expect((await plan(options)).bootstrap).toEqual([]);
+      // Its settings.json made unreadable, as root, to every user but root: Seerr is
+      // asked itself, says its setup is done, and stays as it is (Slice 10b).
+      const chmod = (mode: string) =>
+        dockerCli(
+          'run',
+          '--rm',
+          '-v',
+          `${join(home, 'appdata', 'seerr')}:/seerr`,
+          BUSYBOX,
+          'chmod',
+          mode,
+          '/seerr/settings.json',
+        );
+      await chmod('000');
+      try {
+        const asked = await plan(options);
+        expect(asked.bootstrap).toEqual([]);
+        expect(asked.changed).toBe(false);
+        expect(asked.diagnostics.map((d) => d.code)).toContain('bootstrap.unreadable');
+      } finally {
+        await chmod('644');
+      }
       const keyOf = (app: string) => store.apps[app]?.apiKey ?? '';
       const password = store.shared?.adminPassword ?? '';
       // Seerr's key is the one Mediaplane made, as its own settings.json keeps it. The
@@ -266,18 +291,26 @@ describe('the whole stack, wired with no clicking', () => {
       const jellyfinHeader = {
         Authorization: `MediaBrowser Client="Mediaplane e2e", Device="e2e", DeviceId="mediaplane-e2e", Version="1", Token="${keyOf('jellyfin')}"`,
       };
-      // The key Seerr made itself in Jellyfin, as it signed in: a secret too.
+      // Seerr made itself a key in Jellyfin as it signed in; Mediaplane gave it its own
+      // in its place, and removed Seerr's: Jellyfin holds Mediaplane's alone, which Seerr
+      // holds (it shows its Jellyfin key, compared here, yes or no).
       const keys = await getJson<{ Items: { AccessToken: string; AppName: string }[] }>(
         JELLYFIN,
         '/Auth/Keys',
         jellyfinHeader,
       );
-      const seerrsOwn = keys.Items.find((k) => k.AppName === 'Seerr')?.AccessToken ?? '';
-      expect(seerrsOwn !== '', 'Seerr made itself a key in Jellyfin').toBe(true);
+      expect(keys.Items.map((k) => k.AppName)).toEqual(['Mediaplane']);
+      const held = await getJson<{ apiKey: string }>(
+        SEERR,
+        '/api/v1/settings/jellyfin',
+        seerrKey,
+      );
+      expect(held.apiKey === keyOf('jellyfin'), "Seerr holds Mediaplane's key").toBe(
+        true,
+      );
       const secrets = [
-        ...Object.values(store.apps).flatMap((held) => Object.values(held)),
+        ...Object.values(store.apps).flatMap((value) => Object.values(value)),
         password,
-        seerrsOwn,
       ];
       const resourcesFile = join(home, 'state', 'resources.json');
       expectNoSecret('resources.json', await readFile(resourcesFile, 'utf8'), secrets);

@@ -1297,9 +1297,7 @@ describe('mediaplane apply: Seerr in the stack', () => {
 
   /** The key Seerr made itself in the fake Jellyfin, which Seerr shows in clear. */
   function seerrsOwn(): string {
-    const own = apis.apps
-      .get('jellyfin')
-      ?.apiKeys.find((k) => k.AppName === 'Seerr')?.AccessToken;
+    const own = apis.apps.get('seerr')?.seerr.madeKey;
     if (own === undefined) throw new Error('Seerr made no key in Jellyfin');
     return own;
   }
@@ -1325,7 +1323,7 @@ describe('mediaplane apply: Seerr in the stack', () => {
       '  done    first-run setup: set up jellyfin, seerr and saved jellyfin.apiKey; published jellyfin, seerr\n',
     );
     for (const line of [
-      'seerr.media_server: updated libraries',
+      'seerr.media_server: updated libraries, apiKey',
       'seerr.server_sonarr: created',
       'seerr.setup: updated initialized',
     ]) {
@@ -1338,6 +1336,14 @@ describe('mediaplane apply: Seerr in the stack', () => {
       sessions: [],
       jellyfin: { ip: 'jellyfin', port: 8096 },
     });
+    // Seerr holds Mediaplane's Jellyfin key now, and the one it made is gone from Jellyfin.
+    const jellyfinKey = (await readSecretStore(home)).apps.jellyfin?.apiKey;
+    expect(seerr?.jellyfin.apiKey === jellyfinKey, "Seerr holds Mediaplane's key").toBe(
+      true,
+    );
+    expect(apis.apps.get('jellyfin')?.apiKeys.map((k) => k.AppName)).toEqual([
+      'Mediaplane',
+    ]);
     expect(seerr?.sonarr).toMatchObject([
       { name: 'Sonarr (Mediaplane)', hostname: 'sonarr', activeProfileName: 'HD-1080p' },
     ]);

@@ -473,7 +473,7 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
       ['sonarr.download_client', 'created'],
       ['sonarr.root_folder', 'created'],
       ['sonarr.connection_jellyfin', 'created'],
-      ['seerr.media_server', 'updated libraries'],
+      ['seerr.media_server', 'updated libraries, apiKey'],
       ['seerr.server_sonarr', 'created'],
       ['seerr.setup', 'updated initialized'],
     ]);

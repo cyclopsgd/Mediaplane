@@ -175,6 +175,34 @@ async function saveJellyfin(api: AppApi, desired: DesiredResource): Promise<void
   });
 }
 
+/** The name Seerr gives the key it makes in Jellyfin as it first signs in (probed). */
+const SEERR_KEY_NAME = 'Seerr';
+
+const jellyfinKeys = z.looseObject({
+  Items: z.array(z.looseObject({ AccessToken: z.string(), AppName: z.unknown() })),
+});
+
+/**
+ * Remove from Jellyfin the key Seerr held (`held`) before Mediaplane gave it the stack's
+ * (`given`): only one Jellyfin lists under the name Seerr gives the key it makes, which
+ * Seerr no longer holds. Asked of Jellyfin with Mediaplane's key; nothing when Jellyfin
+ * can't be asked, or the key was the stack's. Every key Jellyfin lists is kept out of
+ * what the run says. Throws AppApiError.
+ */
+async function retireOwnKey(
+  jellyfin: AppApi | undefined,
+  held: string,
+  given: string,
+): Promise<void> {
+  if (jellyfin === undefined || held === '' || held === given) return;
+  const { Items } = await jellyfin.get('/Auth/Keys', jellyfinKeys);
+  for (const key of Items) jellyfin.addSecret(key.AccessToken);
+  if (!Items.some((key) => key.AccessToken === held && key.AppName === SEERR_KEY_NAME)) {
+    return;
+  }
+  await jellyfin.submit('DELETE', `/Auth/Keys/${encodeURIComponent(held)}`);
+}
+
 /**
  * Whether Seerr holds the stack's own address for the media server (`sendsTo`), where
  * the key it holds goes when Seerr asks it: as observed, TLS and a URL base folded into
@@ -221,9 +249,11 @@ async function enableLibraries(
  * URL base and no TLS, and its Movies and Shows libraries enabled.
  * - Seerr's first sign-in sets it (bootstrap.ts), with a key Seerr makes itself in
  *   Jellyfin ("Seerr"), which Seerr shows in clear: once read, it is kept out of what
- *   the run says. That key stays while it works: the secret is checked by using it
- *   (Seerr's list of Jellyfin's users), never compared. Mediaplane gives Seerr its own
- *   Jellyfin key only when Seerr's is refused, or Jellyfin moves.
+ *   the run says. The first time Mediaplane records the link (`adoptSets`), it gives Seerr
+ *   its own Jellyfin key in its place, and removes Seerr's from Jellyfin, so that one key,
+ *   Mediaplane's, is the one to rotate. From then on the secret is checked by using it
+ *   (Seerr's list of Jellyfin's users), never compared, and given again when refused, or
+ *   when Jellyfin moves.
  * - `libraries` lists which of Mediaplane's are enabled; a library you enable is yours.
  * - Seerr sends the key it holds to the address it holds: its host and port are fixed
  *   (SENDS_A_KEY), Mediaplane saves only the stack's own (`sendsTo`), and asks Seerr's
@@ -236,6 +266,7 @@ const mediaServer: ResourceSpec = {
   lists: ['libraries'],
   locked: { hostname: SENDS_A_KEY, port: SENDS_A_KEY },
   secrets: ['apiKey'],
+  adoptSets: ['apiKey'],
   requires: ['jellyfin.admin', 'jellyfin.library_movies', 'jellyfin.library_shows'],
   desired: (ctx) => {
     const at = stackApp(ctx, 'jellyfin');
@@ -280,13 +311,17 @@ const mediaServer: ResourceSpec = {
     await enableLibraries(api, librariesIn(desired, WANTED));
     return { id: null };
   },
-  async update(api, desired, observed, changes = []) {
+  async update(api, desired, observed, changes = [], ctx) {
     const moved = !atStack(desired, observed);
     // A key the check found refused is given at once: each check that fails logs a line
     // in Seerr's log, so one is enough (the owner's decision of 2026-10-17). One left
-    // unchecked, because a field differs, is checked here, once.
+    // unchecked, because a field differs, is checked here, once. So is the one Seerr made
+    // itself at its first sign-in (`adoptSets`), which then goes from Jellyfin.
     if (moved || changes.includes('apiKey') || !(await heldKeyWorks(api))) {
+      const held = (await api.get(`${SETTINGS}/jellyfin`, heldJellyfinSettings)).apiKey;
+      api.addSecret(held);
       await saveJellyfin(api, desired);
+      await retireOwnKey(ctx?.peer('jellyfin'), held, secretOf(desired, 'apiKey'));
     }
     // Another Jellyfin has other library ids, though the names match: sync them again.
     if (moved || observed.fields.libraries !== desired.fields.libraries) {

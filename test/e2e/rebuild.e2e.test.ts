@@ -190,7 +190,12 @@ describe('a host rebuilt from stack.yaml and its appdata (spec §6.1, §6.3, §1
       // Each admin gets the new password through its app's key; everything else Mediaplane
       // made is found by name, and adopted as it is.
       expect(wired(rebuilt.actions).filter(([, detail]) => detail !== 'adopted')).toEqual(
-        ADMINS.map((resource) => [resource, 'updated password']),
+        [
+          ...ADMINS.map((resource) => [resource, 'updated password']),
+          // Its record gone, Seerr's Jellyfin key is given again, as the first time: the
+          // one it holds, Mediaplane's, so nothing goes from Jellyfin (Slice 10b).
+          ['seerr.media_server', 'updated apiKey'],
+        ],
       );
       const after = await readSecretStore(home);
       // Each app has the new password now: none is left listed as lacking it.

@@ -436,6 +436,12 @@ const LACKED: Verdict = {
   reason: 'the app has never had it: apply sets it',
 };
 
+/** Why a secret the app made itself at its first-run setup isn't checked. */
+const REPLACED: Verdict = {
+  verdict: 'unchecked',
+  reason: "the app made its own at its first-run setup: apply gives it the stack's",
+};
+
 /** Why a secret beside a new one (FRESH, LACKED) isn't checked. */
 const WITH_NEW: Verdict = {
   verdict: 'unchecked',
@@ -550,20 +556,31 @@ export async function examine(
     return (options.lacks ?? []).includes(value) ? LACKED : undefined;
   };
   const fresh = spec.secrets.filter((secret) => newVerdict(secret) !== undefined);
+  // A secret the app made itself at its first-run setup, replaced with the stack's until
+  // the record says Mediaplane gave it (`adoptSets`, the record's `given`): a change,
+  // never checked.
+  const replacing = (spec.adoptSets ?? []).filter(
+    (secret) => spec.secrets.includes(secret) && !(record?.given ?? []).includes(secret),
+  );
   // A field that differs makes it an update, which sets the secrets too: checking them
   // would change nothing, and could mislead. A sign-in with a user name the app doesn't
   // have yet fails as if the password were wrong.
   const checks =
     spec.secrets.length === 0
       ? []
-      : changes.length > 0
-        ? unchecked('a managed field differs: apply sets the secrets with it')
-        : fresh.length > 0
-          ? eachSecret(spec, address, (secret) => newVerdict(secret) ?? WITH_NEW)
-          : await checkSecrets(spec, api, address, desired, observed, known, options);
+      : replacing.length > 0
+        ? eachSecret(spec, address, (secret) =>
+            replacing.includes(secret) ? REPLACED : WITH_NEW,
+          )
+        : changes.length > 0
+          ? unchecked('a managed field differs: apply sets the secrets with it')
+          : fresh.length > 0
+            ? eachSecret(spec, address, (secret) => newVerdict(secret) ?? WITH_NEW)
+            : await checkSecrets(spec, api, address, desired, observed, known, options);
   const refused = checks.filter((check) => check.verdict === 'refused');
   changes.push(...refused.map((check) => check.secret));
   if (changes.length === 0) changes.push(...fresh);
+  changes.push(...replacing.filter((secret) => !changes.includes(secret)));
   if (record !== undefined) {
     drift.push(
       ...refused.map((check): Drift => ({
@@ -811,6 +828,11 @@ export interface PlanWiringOptions {
   fresh?: readonly string[];
   /** By app, the values it has never had (ExamineOptions.lacks). */
   lacking?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * The apps whose first-run setup plan asks the app itself about (BootstrapPlan.ask), as
+   * it reaches each: `open` gives the answers.
+   */
+  ask?: readonly string[];
   seams?: WiringSeams;
 }
 
@@ -822,6 +844,11 @@ export interface PlannedWiring {
   drift: Drift[];
   /** How each secret of each resource it looked at was checked. */
   checks: SecretCheck[];
+  /**
+   * Of `ask`, by app, whether its first-run setup is open (Bootstrap.open), as the app
+   * itself said; one it couldn't ask isn't here.
+   */
+  open?: Record<string, boolean>;
 }
 
 /**
@@ -845,6 +872,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
   const diagnostics: Diagnostic[] = [];
   const drift: Drift[] = [];
   const checks: SecretCheck[] = [];
+  const open: Record<string, boolean> = {};
   /** The apps that took Mediaplane's key: what a check may ask of another app. */
   const checked = new Map<string, AppApi>();
   const context: VerifyContext = {
@@ -909,6 +937,21 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
         if (options.drift !== undefined || removable(ctx, change.resource)) add(change);
       }
       continue;
+    }
+    // Whether its first-run setup is open, as it says itself, without its key: asked
+    // first, since an app whose setup is open takes no key.
+    const setup = app.def.bootstrap;
+    if (setup !== undefined && options.ask?.includes(app.def.id) === true) {
+      try {
+        open[app.def.id] = await setup.open(client.api);
+      } catch (cause) {
+        if (!(cause instanceof AppApiError)) throw cause;
+      }
+      // Open, it takes no key, and is set up first: its wiring is checked after that.
+      if (open[app.def.id] === true) {
+        for (const resource of targets) add({ resource, action: 'after-start' });
+        continue;
+      }
     }
     const name = app.def.api?.key.secret;
     const key = name === undefined ? undefined : options.keys[app.def.id]?.[name];
@@ -1056,10 +1099,11 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
       for (const change of left.changes) add(change);
     }
   }
-  return redacted({ changes, diagnostics, drift, checks }, [
+  const planned = redacted({ changes, diagnostics, drift, checks }, [
     ...options.secrets,
     ...found.values,
   ]);
+  return options.ask === undefined ? planned : { ...planned, open };
 }
 
 /**

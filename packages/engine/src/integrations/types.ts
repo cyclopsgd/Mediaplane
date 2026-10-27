@@ -106,6 +106,13 @@ export interface ResourceSpec {
   /** The secrets it holds, by name: applied and checked with verify, never compared. */
   secrets: readonly string[];
   /**
+   * Secrets the app makes for itself at its first-run setup, such as the Jellyfin key
+   * Seerr makes as it first signs in: apply gives the app the stack's in their place the
+   * first time it records the resource, rather than check what the app holds, so that the
+   * stack's own key is the one to rotate (an update naming them).
+   */
+  adoptSets?: readonly string[];
+  /**
    * Whether it is the app's own login as the shared admin, whose `password` is the shared
    * admin password (`<app>.admin`): once apply has made it, or updated it, the app has
    * that password (`shared.adminPasswordNotIn` no longer names the app). A resource that
@@ -169,13 +176,15 @@ export interface ResourceSpec {
    * Make what the app holds match: the managed fields and the secrets, always both, since
    * the secrets go unchecked when a field differs. Idempotent. `changes` names what
    * differs, fields and secrets, as plan says it: a secret named there was found refused,
-   * and needs no other check.
+   * or is one to give in place of the app's own (`adoptSets`), and needs no other check.
+   * `ctx` is apply's VerifyContext: the other apps it may ask.
    */
   update(
     api: AppApi,
     desired: DesiredResource,
     observed: ObservedResource,
     changes?: readonly string[],
+    ctx?: VerifyContext,
   ): Promise<void>;
   /**
    * Why apply won't remove what the app holds (`observed`), though the stack no longer

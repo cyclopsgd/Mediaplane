@@ -371,6 +371,8 @@ export async function planStack(
   let wiring: WiringChange[] = [];
   let drift: Drift[] = [];
   let checks: SecretCheck[] = [];
+  /** What the apps asked about their own setup said (PlannedWiring.open). */
+  let open: Record<string, boolean> = {};
   // In memory: the secrets apply would generate, so that a first plan can say what it
   // would set. Apply sets the ones it saves. Read before the join, so that a failure to
   // read the admin login doesn't come after the join (wiringAddresses can still fail
@@ -431,9 +433,11 @@ export async function planStack(
         fresh,
         // Their resources' admin password is a change, unchecked: a sign-in would fail.
         lacking: Object.fromEntries(notIn.map((app) => [app, [admin.password]])),
+        ...(setups.ask === undefined ? {} : { ask: setups.ask }),
       });
       ({ drift, checks } = planned);
       wiring = planned.changes;
+      open = planned.open ?? {};
       diagnostics.push(...planned.diagnostics);
       // An app that refuses the key its setup made has the setup run again, signed in:
       // never with a password apply is yet to generate.
@@ -457,6 +461,27 @@ export async function planStack(
     }
     // A rotation that would leave an app with a password nobody holds.
     if (hasErrors(diagnostics)) return failed(diagnostics);
+  }
+  // An app whose appdata can't say whether its setup is done, asked itself: set up again,
+  // unpublished, unless it said its setup is done (fail closed: one that couldn't be asked
+  // is too). Its wiring is then checked after the start, as for any app set up first.
+  const reopened = (setups.ask ?? []).filter((app) => open[app] !== false);
+  if (reopened.length > 0) {
+    const theirs = (resource: string) =>
+      reopened.some((app) => resource === app || resource.startsWith(`${app}.`));
+    bootstrap = [...bootstrap, ...reopened.map((app) => ({ app, unpublished: true }))];
+    containers = containers.map((change) =>
+      reopened.includes(change.service) && change.action !== 'create'
+        ? { ...change, action: 'recreate' }
+        : change,
+    );
+    wiring = wiring.map((change) =>
+      theirs(change.resource)
+        ? { resource: change.resource, action: 'after-start' }
+        : change,
+    );
+    drift = drift.filter((entry) => !theirs(entry.resource));
+    checks = checks.filter((check) => !theirs(check.resource));
   }
   return {
     result: {

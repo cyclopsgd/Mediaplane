@@ -319,6 +319,55 @@ describe("Seerr's media server", () => {
     expect(state.seerr.errors).toEqual([]);
   });
 
+  it("gives Seerr Mediaplane's Jellyfin key in place of the one it made, and removes that one from Jellyfin", async () => {
+    const { api, apis, state, jellyfin, calls } = await seerr();
+    // Given the first time Mediaplane records the link, rather than checked.
+    expect(spec.adoptSets).toEqual(['apiKey']);
+    const desired = wanted(spec);
+    const own = state.seerr.madeKey;
+    expect(jellyfin.apiKeys.map((k) => k.AppName)).toEqual(['Mediaplane', 'Seerr']);
+    const observed = await spec.observe(api, undefined, desired);
+    if (observed === undefined) throw new Error('observed');
+    // Jellyfin as apply's wire step reached it, with Mediaplane's key.
+    const toJellyfin = createAppApi({
+      name: 'Jellyfin',
+      service: 'jellyfin',
+      port: 8096,
+      endpoint: { host: '127.0.0.1', port: apis.app.port },
+      key: { scheme: 'mediabrowser', value: JELLYFIN_KEY },
+      secrets: [JELLYFIN_KEY],
+      retry: { deadlineMs: 0 },
+    });
+    const ctx = {
+      readOnly: false,
+      peer: (app: string) => (app === 'jellyfin' ? toJellyfin : undefined),
+    };
+    const before = calls().length;
+    await spec.update(api, desired, observed, ['apiKey'], ctx);
+    expect(calls(before).slice(0, 4)).toEqual([
+      'GET /api/v1/settings/jellyfin',
+      'POST /api/v1/settings/jellyfin',
+      'GET /Auth/Keys',
+      `DELETE /Auth/Keys/${own ?? ''}`,
+    ]);
+    expect(state.seerr.jellyfin.apiKey).toBe(JELLYFIN_KEY);
+    expect(jellyfin.apiKeys.map((k) => k.AppName)).toEqual(['Mediaplane']);
+    // Given again later, as when Seerr's is refused: Mediaplane's own key is never removed.
+    await spec.update(api, desired, observed, ['apiKey'], ctx);
+    expect(jellyfin.apiKeys.map((k) => k.AppName)).toEqual(['Mediaplane']);
+  });
+
+  it("leaves in Jellyfin a key Seerr held that isn't one it made, or when Jellyfin can't be asked", async () => {
+    const { api, state, jellyfin } = await seerr();
+    const desired = wanted(spec);
+    const observed = await spec.observe(api, undefined, desired);
+    if (observed === undefined) throw new Error('observed');
+    // No Jellyfin to ask: Seerr gets Mediaplane's key, and its own stays in Jellyfin.
+    await spec.update(api, desired, observed, ['apiKey']);
+    expect(state.seerr.jellyfin.apiKey).toBe(JELLYFIN_KEY);
+    expect(jellyfin.apiKeys.map((k) => k.AppName)).toEqual(['Mediaplane', 'Seerr']);
+  });
+
   it('enables only the libraries an override names, and leaves the others to you', async () => {
     const { api, state } = await seerr();
     const kept = {

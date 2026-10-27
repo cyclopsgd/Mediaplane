@@ -190,6 +190,8 @@ export interface FakeSignInState {
   claimant: boolean;
   /** Answer /ready with 503, as an app that is slow to start does. */
   notReady: boolean;
+  /** Answer /signed-in with 500, as an app that can't say whether its setup is open. */
+  unsure?: boolean;
   /** Who the app belongs to (its admin, the first user): undefined until it is set up. */
   owner?: string;
   /** Its sessions' cookies, until signed out. */
@@ -209,7 +211,11 @@ function fakeSignInApp(
 ): FakeReply {
   const { method, path, headers } = request;
   if (path === '/ready') return { status: state.notReady ? 503 : 200 };
-  if (path === '/signed-in') return { status: 200, body: { done: state.done } };
+  if (path === '/signed-in') {
+    return state.unsure === true
+      ? { status: 500, body: 'fake failure' }
+      : { status: 200, body: { done: state.done } };
+  }
   if (path === '/signed-in/own') {
     // Asked with the app's key, as the setup of an app that is set up already is.
     if (headers['x-api-key'] === undefined) return { status: 401 };

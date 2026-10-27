@@ -294,8 +294,9 @@ describe('apply against real Docker', () => {
         ['prowlarr.application_sonarr', 'created'],
         ['prowlarr.application_radarr', 'created'],
         ['prowlarr.indexer_proxy', 'created'],
-        // Seerr's first sign-in set Jellyfin as its media server, with no library yet.
-        ['seerr.media_server', 'updated libraries'],
+        // Seerr's first sign-in set Jellyfin as its media server, with no library yet,
+        // and a key of its own, which Mediaplane's replaces.
+        ['seerr.media_server', 'updated libraries, apiKey'],
         ['seerr.server_sonarr', 'created'],
         ['seerr.server_radarr', 'created'],
         ['seerr.setup', 'updated initialized'],
@@ -319,12 +320,18 @@ describe('apply against real Docker', () => {
         resources.includes(qbittorrentKey),
         "resources.json holds qBittorrent's key",
       ).toBe(false);
-      // Lost state: apply adopts what the apps hold, by name, and changes none of it.
+      // Lost state: apply adopts what the apps hold, by name, and changes none of it, but
+      // for giving Seerr its Jellyfin key again, as the first time (Slice 10b): the one
+      // Seerr holds already.
       await rm(join(home, 'state', 'resources.json'));
       const adopted = await apply(options);
       expect(adopted.outcome).toBe('success');
       expect(adopted.plan.wiring.filter((w) => w.action !== 'unchanged')).toEqual(
-        WIRED.map((resource) => ({ resource, action: 'adopt' })),
+        WIRED.map((resource) =>
+          resource === 'seerr.media_server'
+            ? { resource, action: 'update', changes: ['apiKey'] }
+            : { resource, action: 'adopt' },
+        ),
       );
       expect(adopted.plan.containers.every((c) => c.action === 'unchanged')).toBe(true);
       expect((await apply(options)).outcome).toBe('no-changes');

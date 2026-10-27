@@ -3167,7 +3167,8 @@ describe('apply: a first-run setup that makes no key, after another', () => {
       },
     };
     const run = () => apply(options(home, runtime, { catalog, wiring: setup.seams }));
-    return { home, setup, ups, run };
+    const planned = () => plan(options(home, runtime, { catalog, wiring: setup.seams }));
+    return { home, setup, ups, run, planned };
   }
 
   it('sets it up after the app it signs in through, keeps no key for it, signs out, and publishes both', async () => {
@@ -3518,28 +3519,48 @@ describe('apply: a first-run setup that makes no key, after another', () => {
     ]);
   });
 
-  it("fails every apply at verify while a setup that makes no key can't read its file", async () => {
-    const { home, setup, ups, run } = await signInStack();
+  it("asks a setup that makes no key, which Mediaplane set up, itself while its file can't be read, and sets it up again only if it says it is open", async () => {
+    const { home, setup, ups, run, planned } = await signInStack();
     // The app says it is set up, by the shared admin; its file can't be read to say so.
     setup.signIn.done = true;
     setup.signIn.owner = 'admin';
     await mkdir(join(home, 'appdata', 'sonarr', 'signed-in.txt'), { recursive: true });
-    for (const attempt of [1, 2]) {
-      const result = await run();
-      expect(result.outcome, `apply ${String(attempt)}`).toBe('failed');
-      expect(result.diagnostics).toContainEqual(
-        expect.objectContaining({ code: 'bootstrap.unreadable', severity: 'warning' }),
-      );
-      expect(result.diagnostics.at(-1)?.message).toContain('sonarr (first-run setup)');
-    }
-    // Started unpublished on each apply, and published only once its setup has shown it
-    // is Mediaplane's (its owner is the shared admin).
+    // Nothing records it as Mediaplane's yet: set up unpublished, as before, and recorded.
+    const first = await run();
+    expect(first.outcome).toBe('success');
+    expect((await readSecretStore(home)).setUp).toEqual(['sonarr']);
+    // From then on Sonarr is asked itself: its setup is done, so it stays as it is, and the
+    // plan, verify's too, is done, with the warning that the file can't be read.
+    const second = await run();
+    expect(second.outcome).toBe('no-changes');
+    expect(second.plan.bootstrap).toEqual([]);
+    expect(second.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'bootstrap.unreadable',
+        message:
+          "Mediaplane can't read the file in sonarr's appdata that says whether its first-run setup is done, so it can't tell whether the setup is open; Mediaplane asks sonarr itself, and sets it up again, unpublished, only if it says its setup is open, or can't be asked",
+      }),
+    );
     expect(ups).toEqual([
       'jellyfin sonarr unpublished; jellyfin open, sonarr done',
       'all published; jellyfin done, sonarr done',
-      'sonarr unpublished; jellyfin done, sonarr done',
-      'all published; jellyfin done, sonarr done',
     ]);
+    // Open again, as after its appdata was reset by hand: set up again, unpublished.
+    setup.signIn.done = false;
+    setup.signIn.owner = undefined;
+    const reopened = await planned();
+    expect(reopened.bootstrap).toEqual([{ app: 'sonarr', unpublished: true }]);
+    expect(reopened.containers.find((c) => c.service === 'sonarr')?.action).toBe(
+      'recreate',
+    );
+    // Its wiring is checked once it is set up, as any app's whose setup is open.
+    expect(reopened.wiring.filter((w) => w.resource.startsWith('sonarr'))).toEqual([
+      { resource: 'sonarr', action: 'after-start' },
+    ]);
+    // Done, but it can't say so: unsure is open (fail closed).
+    setup.signIn.done = true;
+    setup.signIn.unsure = true;
+    expect((await planned()).bootstrap).toEqual([{ app: 'sonarr', unpublished: true }]);
   });
 
   it('keeps unpublished, and fails, an app with a setup but no API to finish it through', async () => {

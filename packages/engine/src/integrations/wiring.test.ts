@@ -1774,6 +1774,102 @@ describe('planWiring: what drift adds (spec §6.3)', () => {
     expect(unsure.drift).toEqual([]);
   });
 
+  it('gives in place of a secret the app made itself, unchecked, the first time it records the resource', async () => {
+    let verified = 0;
+    const own: ResourceSpec = {
+      ...FAKE_LOGIN,
+      adoptSets: ['password'],
+      verify: () => {
+        verified++;
+        return Promise.resolve(true);
+      },
+    };
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const first = await planWiring(options(sonarr, { stack: sonarrWith([own]) }));
+    expect(first.changes).toEqual([
+      { resource: 'sonarr.login', action: 'update', changes: ['password'] },
+    ]);
+    expect(first.checks).toEqual([
+      {
+        resource: 'sonarr.login',
+        secret: 'password',
+        verdict: 'unchecked',
+        reason: "the app made its own at its first-run setup: apply gives it the stack's",
+      },
+    ]);
+    expect(verified).toBe(0);
+    // Recorded by a release before, which gave none: given once, all the same.
+    const older = await planWiring(
+      options(sonarr, { stack: sonarrWith([own]), known: RECORDED }),
+    );
+    expect(older.changes).toEqual([
+      { resource: 'sonarr.login', action: 'update', changes: ['password'] },
+    ]);
+    // Given since, as the record says: checked by using it, as any secret.
+    const given = {
+      'sonarr.login': {
+        ...(RECORDED['sonarr.login'] as KnownResource),
+        given: ['password'],
+      },
+    };
+    const after = await planWiring(
+      options(sonarr, { stack: sonarrWith([own]), known: given }),
+    );
+    expect(after.changes).toEqual([{ resource: 'sonarr.login', action: 'unchanged' }]);
+    expect(verified).toBe(1);
+  });
+
+  it('asks an app itself whether its setup is open, before its key, when plan is told to', async () => {
+    const asking = (open: () => Promise<boolean>) =>
+      stackOf(
+        WIRED_CATALOG.map((def) =>
+          def.id === 'sonarr'
+            ? {
+                ...def,
+                bootstrap: {
+                  done: { path: 'setup.txt', pattern: /done/ },
+                  open,
+                  run: () => Promise.resolve(undefined),
+                },
+              }
+            : def,
+        ),
+      );
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const done = await planWiring(
+      options(sonarr, {
+        stack: asking(() => Promise.resolve(false)),
+        ask: ['sonarr'],
+        known: RECORDED,
+      }),
+    );
+    expect([done.open, done.changes]).toEqual([
+      { sonarr: false },
+      [{ resource: 'sonarr.login', action: 'unchanged' }],
+    ]);
+    // Open: it takes no key yet, and is set up first, so it is checked after that.
+    const before = sonarr.app.requests.length;
+    const open = await planWiring(
+      options(sonarr, { stack: asking(() => Promise.resolve(true)), ask: ['sonarr'] }),
+    );
+    expect([open.open, open.changes]).toEqual([
+      { sonarr: true },
+      [{ resource: 'sonarr.login', action: 'after-start' }],
+    ]);
+    expect(sonarr.app.requests.slice(before)).toEqual([]);
+    // One that can't say is not in `open`: plan sets it up again (fail closed).
+    const unsure = await planWiring(
+      options(sonarr, {
+        stack: asking(() => Promise.reject(new AppApiError('no', { kind: 'server' }))),
+        ask: ['sonarr'],
+        known: RECORDED,
+      }),
+    );
+    expect(unsure.open).toEqual({});
+    // Not told to ask: no answer at all.
+    expect((await planWiring(options(sonarr))).open).toBeUndefined();
+  });
+
   it('says what apply may remove once an app that is not settled has started, and only that', async () => {
     const sonarr = await fakeSonarr({ key: KEY });
     const record = (name: string) =>

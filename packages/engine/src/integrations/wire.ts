@@ -8,6 +8,7 @@ import { adminLogin } from '../secrets/admin';
 import type { SecretStore } from '../secrets/store';
 import { stackKeys } from '../secrets/values';
 import { foundSecrets, redact, type FoundSecrets } from '../util/redact';
+import { compare } from '../util/sort';
 import { desiredOf } from './overrides';
 import {
   readState,
@@ -364,7 +365,13 @@ export async function wire(options: WireOptions): Promise<string[]> {
         if (result.action === 'create') {
           ({ id } = await spec.create(client.api, result.desired));
         } else if (result.action === 'update' && result.observed !== undefined) {
-          await spec.update(client.api, result.desired, result.observed, result.changes);
+          await spec.update(
+            client.api,
+            result.desired,
+            result.observed,
+            result.changes,
+            context,
+          );
         }
       } catch (cause) {
         if (!(cause instanceof AppApiError)) throw stop([address], cause);
@@ -374,6 +381,10 @@ export async function wire(options: WireOptions): Promise<string[]> {
       // At once: a crash later loses no id, and the next plan finds it as it is. Its
       // checks go, as apply has set its secrets; a later release's fields stay.
       const { checks: _checks, ...prior } = known[address] ?? {};
+      // The secrets Mediaplane gave in place of the app's own (`adoptSets`), by name.
+      const gave = (spec.adoptSets ?? []).filter(
+        (secret) => result.action === 'create' || result.changes.includes(secret),
+      );
       known[address] = {
         ...prior,
         id,
@@ -381,6 +392,13 @@ export async function wire(options: WireOptions): Promise<string[]> {
         fields: managedFields(spec, result.desired),
         secrets: [...spec.secrets],
         appliedAt: options.now().toISOString(),
+        ...(gave.length === 0
+          ? {}
+          : {
+              given: [...new Set([...(known[address]?.given ?? []), ...gave])].sort(
+                compare,
+              ),
+            }),
       };
       try {
         await writeResources(options.home, known, keys);

@@ -21,6 +21,12 @@ const knownSchema = z.looseObject({
   fields: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
   /** The names of the secrets it holds: never their values, nor a hash of them. */
   secrets: z.array(z.string()),
+  /**
+   * The names of the secrets Mediaplane gave the app in place of ones the app made itself
+   * (a resource's `adoptSets`: Seerr's Jellyfin key), so that it gives them only once.
+   * Added in Slice 10b; an older release keeps it as a field it doesn't know.
+   */
+  given: z.array(z.string()).optional(),
   appliedAt: z.iso.datetime(),
   /**
    * What `mediaplane drift` found of each secret when it last checked it, by name: its

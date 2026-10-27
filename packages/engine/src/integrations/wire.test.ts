@@ -1079,6 +1079,29 @@ describe('wire', () => {
     expect(sonarr.state).toMatchObject({ user: 'admin', password: PASSWORD });
   });
 
+  it('gives the stack its own secret in place of one the app made itself, once, and records that it did', async () => {
+    const own: ResourceSpec = { ...FAKE_LOGIN, adoptSets: ['password'] };
+    const stack = stackOf(
+      WIRED_CATALOG.map((def) =>
+        def.id === 'sonarr'
+          ? { ...def, integration: { after: [], resources: [own] } }
+          : def,
+      ),
+    );
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: 'its-own' });
+    const first = await wireWith(sonarr, { stack, known: RECORDED });
+    expect(await first.run).toEqual(['sonarr.login updated password']);
+    expect(sonarr.state.password).toBe(PASSWORD);
+    expect((await readResources(first.home))['sonarr.login']?.given).toEqual([
+      'password',
+    ]);
+    const again = await wireWith(sonarr, {
+      stack,
+      known: await readResources(first.home),
+    });
+    expect(await again.run).toEqual([]);
+  });
+
   it('removes what Mediaplane made that the stack no longer wants, while still as made, and forgets its record', async () => {
     const left = leftOver({ 7: 'gone', 8: 'mine' });
     const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
