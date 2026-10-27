@@ -1,4 +1,4 @@
-import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
@@ -1590,7 +1590,11 @@ apps:
    * as its image does: trading its PLEX_CLAIM at plex.tv as it first starts, unless
    * `claims` is false.
    */
-  async function plexHome(token = FAKE_PLEX_ACCOUNT.token, claims = true) {
+  async function plexHome(
+    token = FAKE_PLEX_ACCOUNT.token,
+    claims = true,
+    afterUp: () => void = () => undefined,
+  ) {
     const home = await makeHome(PLEX_STACK);
     await writeFile(join(home, 'secrets', 'plex-token'), `${token}\n`);
     const plex = freshAppState();
@@ -1599,6 +1603,7 @@ apps:
     const docker = fakeDocker(home, {
       onUp: (_unpublished, startEnv) => {
         if (claims) claimFakePlex(plex.plex, startEnv.plex?.PLEX_CLAIM, plexTv.state);
+        afterUp();
       },
     });
     return { home, plex: plex.plex, docker };
@@ -1753,6 +1758,17 @@ apps:
     expect(planned.bootstrap).toEqual([
       { app: 'seerr', unpublished: false, again: true },
     ]);
+    const text = capture();
+    expect(
+      await run(
+        ['plan', '--home', home, '--rotate', 'plex.token'],
+        text.io,
+        deps(docker),
+      ),
+    ).toBe(2);
+    expect(text.stdout()).toContain(
+      '  + seerr (signing in again, with what you rotated)\n',
+    );
     const applied = capture();
     expect(
       await run(
@@ -1774,7 +1790,14 @@ apps:
     expect(seerr.seerr.plexTokens[FAKE_PLEX_ACCOUNT.id]).toBe(renewed);
     expect(seerr.seerr.sessions).toEqual([]);
     expect((await readSecretStore(home)).setUp).toEqual(['plex', 'seerr']);
-    expectNoSecrets(applied.stdout() + applied.stderr(), [...plexSecrets(), renewed]);
+    // Neither the output, nor the resources it keeps, nor the change record has either token.
+    const tokens = [...plexSecrets(), renewed];
+    expectNoSecrets(applied.stdout() + applied.stderr(), tokens);
+    expectNoSecrets(await readFile(join(home, RESOURCES_PATH), 'utf8'), tokens);
+    const id = /Change record: (\S+)/.exec(applied.stdout())?.[1] ?? '';
+    const record = capture();
+    expect(await run(['history', id, '--home', home], record.io, deps(docker))).toBe(0);
+    expectNoSecrets(record.stdout() + record.stderr(), tokens);
     const again = capture();
     expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
   });
@@ -1800,14 +1823,95 @@ apps:
       ),
     ).toBe(1);
     expect(applied.stdout() + applied.stderr()).toContain(
-      'was set up with another plex.tv account or another Plex',
+      "has an admin of another plex.tv account than your new Plex token's",
     );
+    expect(applied.stdout() + applied.stderr()).not.toContain('afresh');
     // Sonarr's connection and Seerr keep the token that works; Seerr stays recorded.
     expect(apis.apps.get('sonarr')?.connections[0]?.fields).toContainEqual({
       name: 'authToken',
       value: FAKE_PLEX_ACCOUNT.token,
     });
     expect(seerr.seerr.plexTokens[FAKE_PLEX_ACCOUNT.id]).toBe(FAKE_PLEX_ACCOUNT.token);
+    expect((await readSecretStore(home)).setUp).toEqual(['plex', 'seerr']);
+  });
+
+  /** A home of the Plex stack with Seerr, applied once, and your new token of the same account. */
+  async function rotatedSeerrHome(afterUp?: () => void) {
+    const set = await plexHome(FAKE_PLEX_ACCOUNT.token, true, afterUp);
+    await writeFile(join(set.home, 'stack.yaml'), `${PLEX_STACK}  seerr: {}\n`);
+    const seerr = freshAppState();
+    seerr.seerr.configDir = join(set.home, 'appdata', 'seerr');
+    apis.apps.set('seerr', seerr);
+    expect(
+      await run(['apply', '--home', set.home, '--yes'], capture().io, deps(set.docker)),
+    ).toBe(0);
+    const renewed = 'fake-plex-token-0002';
+    plexTv.state.accounts.push({ id: FAKE_PLEX_ACCOUNT.id, token: renewed });
+    await writeFile(join(set.home, 'secrets', 'plex-token'), `${renewed}\n`);
+    return { ...set, seerr, renewed };
+  }
+
+  it('signs in again a Seerr whose setup is in the plan for another reason, found set up when apply asks it', async () => {
+    // Seerr's file can't be read, and Seerr can't be asked, when plan looks: it is set up
+    // afresh, unpublished. Once started, it answers: it is set up, so it signs in again.
+    let armed = false;
+    const set = await rotatedSeerrHome(() => {
+      if (armed) set.seerr.seerr.failing = [];
+    });
+    const { home, docker, renewed, seerr } = set;
+    const dir = join(home, 'appdata', 'seerr');
+    seerr.seerr.configDir = undefined;
+    await rm(join(dir, 'settings.json'));
+    await mkdir(join(dir, 'settings.json'));
+    seerr.seerr.failing = ['/api/v1/settings/public'];
+    armed = true;
+    const shown = capture();
+    expect(
+      await run(
+        ['plan', '--home', home, '--rotate', 'plex.token', '--json'],
+        shown.io,
+        deps(docker),
+      ),
+    ).toBe(2);
+    const planned = JSON.parse(shown.stdout()) as { bootstrap: unknown[] };
+    expect(planned.bootstrap).toEqual([{ app: 'seerr', unpublished: true, again: true }]);
+    const applied = capture();
+    expect(
+      await run(
+        ['apply', '--home', home, '--yes', '--rotate', 'plex.token'],
+        applied.io,
+        deps(docker),
+      ),
+    ).toBe(0);
+    expect(seerr.seerr.plexTokens[FAKE_PLEX_ACCOUNT.id]).toBe(renewed);
+    expect((await readSecretStore(home)).setUp).toEqual(['plex', 'seerr']);
+  });
+
+  it("keeps the sign-in again on a Seerr that is set up, though nothing records it as Mediaplane's", async () => {
+    const { home, docker, seerr, renewed } = await rotatedSeerrHome();
+    const store = await readSecretStore(home);
+    await writeSecretStore(home, {
+      ...store,
+      setUp: (store.setUp ?? []).filter((id) => id !== 'seerr'),
+    });
+    const shown = capture();
+    expect(
+      await run(
+        ['plan', '--home', home, '--rotate', 'plex.token', '--json'],
+        shown.io,
+        deps(docker),
+      ),
+    ).toBe(2);
+    const planned = JSON.parse(shown.stdout()) as { bootstrap: unknown[] };
+    expect(planned.bootstrap).toEqual([{ app: 'seerr', unpublished: true, again: true }]);
+    expect(
+      await run(
+        ['apply', '--home', home, '--yes', '--rotate', 'plex.token'],
+        capture().io,
+        deps(docker),
+      ),
+    ).toBe(0);
+    expect(seerr.seerr.plexTokens[FAKE_PLEX_ACCOUNT.id]).toBe(renewed);
     expect((await readSecretStore(home)).setUp).toEqual(['plex', 'seerr']);
   });
 

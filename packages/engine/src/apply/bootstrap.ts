@@ -130,6 +130,11 @@ function withSecret(
   };
 }
 
+/** Whether the change only signs the app in again (`again`, published), its setup done. */
+function signsInAgain(change: BootstrapChange | undefined): boolean {
+  return change?.again === true && !change.unpublished;
+}
+
 /**
  * Apply's bootstrap step (spec §5 step 9, §6.4): for each app the plan names, reach it
  * over the wiring network, without a key, and finish its first-run setup as the shared
@@ -165,12 +170,13 @@ export async function bootstrapApps(options: BootstrapOptions): Promise<Bootstra
   // it is done (appdata was reset), or Mediaplane can't read it. The record is dropped
   // before the app is set up again, and made again only when the setup succeeds, so an
   // app claimed meanwhile isn't taken as Mediaplane's by the next plan. One that only
-  // signs in again (`again`) is done, and stays recorded whatever its sign-in does.
+  // signs in again (`again`, published) is done, and stays recorded whatever its sign-in
+  // does; one set up afresh (unpublished) is not.
   const stale = apps.filter(
     (app) =>
       app.def.bootstrap?.secret === undefined &&
       (store.setUp ?? []).includes(app.def.id) &&
-      options.pending.find((p) => p.app === app.def.id)?.again !== true,
+      !signsInAgain(options.pending.find((p) => p.app === app.def.id)),
   );
   if (stale.length > 0) {
     const dropped = stale.map((app) => app.def.id);
@@ -328,7 +334,7 @@ export async function bootstrapApps(options: BootstrapOptions): Promise<Bootstra
   const waits = waiting.map((w) => `${w.app} waits: ${w.reason}`);
   const done = apps.filter((app) => !unfinished.includes(app)).map((a) => a.def.id);
   const signedInAgain = (id: string) =>
-    options.pending.some((p) => p.app === id && p.again === true);
+    signsInAgain(options.pending.find((p) => p.app === id));
   const finished = done.filter((id) => !signedInAgain(id));
   const again = done.filter(signedInAgain);
   const published = unpublished.filter((app) => !stillOpen.includes(app));

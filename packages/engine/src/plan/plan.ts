@@ -488,15 +488,22 @@ export async function planStack(
   // A setup that signs in with what you rotate signs in again, published, once it is shown
   // to be Mediaplane's: Seerr keeps the Plex token it signed in with (spec §6.1), and
   // can't be asked which, so it takes the new one only so.
-  const again = stack.apps.filter(
+  const signsInAgain = (id: string): boolean =>
+    stack.apps.some(
+      (app) =>
+        app.def.id === id &&
+        (options.rotate ?? []).some((name) =>
+          (app.def.bootstrap?.signsInWith ?? []).includes(name),
+        ),
+    );
+  const signingInAgain = stack.apps.filter(
     (app) =>
-      (options.rotate ?? []).some((name) =>
-        (app.def.bootstrap?.signsInWith ?? []).includes(name),
-      ) && ![...bootstrap, ...held].some((b) => b.app === app.def.id),
+      signsInAgain(app.def.id) &&
+      ![...bootstrap, ...held].some((b) => b.app === app.def.id),
   );
   bootstrap = [
     ...bootstrap,
-    ...again.map((app) => ({ app: app.def.id, unpublished: false, again: true })),
+    ...signingInAgain.map((app) => ({ app: app.def.id, unpublished: false })),
   ];
   // An app whose appdata can't say whether its setup is done, asked itself: set up again,
   // unpublished, unless it said its setup is done (fail closed: one that couldn't be asked
@@ -518,7 +525,7 @@ export async function planStack(
       [...held, ...again.held],
       toCome,
     );
-    // Set up afresh, unpublished: its sign-in again, if it had one, is that setup's.
+    // Set up afresh, unpublished: Seerr, found set up when it is, signs in again.
     bootstrap = [
       ...bootstrap.filter((b) => !reopened.includes(b.app)),
       ...through.changes,
@@ -535,6 +542,11 @@ export async function planStack(
     drift = drift.filter((entry) => !theirs(entry.resource));
     checks = checks.filter((check) => !theirs(check.resource));
   }
+  // Whatever else its setup is for, the app signs in again with what you rotate, whether
+  // it is found set up (it keeps the old token else) or open (it signs in with the new).
+  bootstrap = bootstrap.map((change) =>
+    signsInAgain(change.app) ? { ...change, again: true } : change,
+  );
   return {
     result: {
       ok: true,
@@ -598,9 +610,10 @@ function withoutPassword(store: SecretStore): SecretStore {
 }
 
 /**
- * What `rotate` asks of the stack: whether to generate the admin password anew, or why
- * not. A secret it doesn't take, and one that is yours, are refused before anything is
- * asked or generated.
+ * What `rotate` asks of the stack: whether to generate the admin password anew, whether
+ * to give the apps your new Plex token, or why not. A secret it doesn't take, an admin
+ * password that is yours (`rotate.yours`) and a Plex token on a stack with no Plex
+ * (`rotate.no-plex`) are refused before anything is asked or generated.
  */
 function rotation(
   rotate: readonly string[],

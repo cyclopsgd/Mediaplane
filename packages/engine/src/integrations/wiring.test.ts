@@ -1976,6 +1976,59 @@ describe('planWiring: what drift adds (spec §6.3)', () => {
     ]);
   });
 
+  it("doesn't take a secret you rotated as a change where its own app refuses it: the holder stays as it was", async () => {
+    // qBittorrent's resource holds Sonarr's key; Sonarr refuses it, and the key is rotated.
+    const holds: ResourceSpec = {
+      ...FAKE_LOGIN,
+      name: 'link',
+      desired: (ctx) => ({
+        name: 'link',
+        fields: { user: 'admin' },
+        secrets: { password: ctx.keys.sonarr?.apiKey ?? '' },
+      }),
+      resolve: (_api, desired) => Promise.resolve(desired),
+      verify: () => Promise.reject(new Error('never checked while the key is refused')),
+    };
+    const catalog: Catalog = WIRED_CATALOG.map((def) =>
+      def.id === 'qbittorrent'
+        ? {
+            ...def,
+            api: FIXTURE_API,
+            integration: { after: ['sonarr'], resources: [holds] },
+          }
+        : def,
+    );
+    const QBT = '7'.repeat(32);
+    const sonarr = await fakeSonarr({ key: QBT, user: 'admin', password: PASSWORD });
+    const planned = await planWiring(
+      options(
+        {
+          ...sonarr,
+          addresses: { ...sonarr.addresses, 'fake-gluetun': '127.0.0.1' },
+        },
+        {
+          stack: stackOf(catalog),
+          keys: { sonarr: { apiKey: KEY }, qbittorrent: { apiKey: QBT } },
+          secrets: [KEY, QBT, PASSWORD],
+          known: RECORDED,
+          refusedKeys: { 'sonarr.apiKey': { verdict: 'refused', at: AT } },
+          rotated: [KEY],
+        },
+      ),
+    );
+    expect(planned.checks).toEqual([
+      {
+        resource: 'qbittorrent.link',
+        secret: 'password',
+        verdict: 'unchecked',
+        reason: `sonarr refuses its own key, which this holds, so neither is checked until the key is put back, as ${WIRING_RUNBOOK} shows`,
+      },
+    ]);
+    expect(
+      planned.changes.filter((c) => c.resource === 'qbittorrent.link'),
+    ).not.toContainEqual(expect.objectContaining({ action: 'update' }));
+  });
+
   it('asks nothing only the app can say of a resource with a secret found refused, until apply', async () => {
     let resolved = 0;
     const asks: ResourceSpec = {

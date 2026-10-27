@@ -201,6 +201,13 @@ async function ownPlexSetup(
   }
   // Mediaplane's own sign-in leaves Seerr's Plex unset: its wire step sets it.
   const atPlex = settings.ip === '' || atStackPlex(settings, plex);
+  // Rotating: Seerr is Mediaplane's, so it is the new token that is wrong.
+  if (ctx.again === true && held.plexId !== account) {
+    throw new AppApiError(
+      `${api.name} at ${api.where} has an admin of another plex.tv account than your new Plex token's (GET /api/v1/auth/me), and still holds its old token. Put back a token of its admin's account: run "mediaplane plex-login --force" and sign in as that account, then run apply --rotate plex.token again`,
+      { kind: 'auth' },
+    );
+  }
   if (held.plexId !== account || !atPlex) {
     throw new AppApiError(
       `${api.name} at ${api.where} was set up with another plex.tv account or another Plex (GET /api/v1/auth/me, GET /api/v1/settings/plex)`,

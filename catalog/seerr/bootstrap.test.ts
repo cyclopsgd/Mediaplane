@@ -784,6 +784,30 @@ describe("Seerr's first-run setup, with Plex", () => {
     expect(state.seerr.plexTokens[FAKE_PLEX_ACCOUNT.id]).toBe(TOKEN);
   });
 
+  it("says it is the new token that is wrong, when it is of another account than Seerr's admin", async () => {
+    const other = 'fake-plex-token-0003';
+    const { api, state, calls, ctx, stack, plexTv } = await plexSeerrOf(SIGNED_IN);
+    plexTv.state.accounts.push({ id: SOMEONE.id, token: other });
+    const refused = await thrown(
+      seerrBootstrap.run(api, ADMIN, stack, {
+        ...ctx,
+        given: { plex: { token: other } },
+        again: true,
+      }),
+    );
+    expect(refused).toMatchObject({ kind: 'auth', unsure: false });
+    const said = (refused as Error).message;
+    expect(said).toContain(
+      'has an admin of another plex.tv account than your new Plex token',
+    );
+    expect(said).toContain('Put back a token of its admin');
+    expect(said).not.toContain('afresh');
+    expect(said).not.toContain(other);
+    // Your new token never went to that Seerr, which keeps its old one.
+    expect(calls()).not.toContain('POST /api/v1/auth/plex');
+    expect(state.seerr.plexTokens[FAKE_PLEX_ACCOUNT.id]).toBe(TOKEN);
+  });
+
   it('refuses a Seerr set up with another plex.tv account, or another Plex, as claimed', async () => {
     for (const seerr of [
       { ...SIGNED_IN, plexUsers: [SOMEONE.id] },

@@ -588,6 +588,16 @@ describe.skipIf(PLEX_TOKEN_FILE === undefined)(
           ...secrets,
           ...claims,
         ]);
+        // Neither the files it wrote, change record included, nor .env hold either token.
+        expectNoSecret('what the rotation wrote', await writtenFiles(home), [
+          ...secrets,
+          ...plexSecrets,
+        ]);
+        expectNoSecret(
+          '.env after the rotation',
+          await writtenFiles(home, { env: true }),
+          [...plexSecrets],
+        );
         expect((await apply(options)).outcome).toBe('no-changes');
         await saveToken(home, token);
       } catch (failure) {
