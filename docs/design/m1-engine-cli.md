@@ -803,7 +803,8 @@ full threat model goes in `docs/security/threat-model.md`.
      IP with the host's (§11, Slice 3d).
 7. **Supply chain.**
    - Images are pinned by tag and digest, and Renovate bumps both.
-   - CI runs Trivy (failing on critical vulnerabilities that have a fix),
+   - CI runs Trivy (failing on critical vulnerabilities that have a fix in
+     Mediaplane's image, and reporting them in the catalog's images, §11, "CI: the catalog scan reports"),
      gitleaks and `pnpm audit`.
    - The Mediaplane image is published with an SBOM and build provenance.
    - GitHub Actions are pinned by SHA.
@@ -2101,9 +2102,13 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   `pnpm docs:generate`, so CI's docs check fails an app's bump until it is run on the
   branch, as Renovate's pull request says.
 - **CI** (§7.2(7), §8.2) also, on every pull request that changes code and weekly: scans
-  every catalog image with Trivy on both architectures, failing on a critical finding
-  with a fix unless `scripts/ci/catalog-ignore.yaml` lists it, with the app it is in, and
-  its date has not passed (Mediaplane never patches an app's image, §1.4(1)). Each image
+  every catalog image with Trivy on both architectures, reporting a critical finding
+  with a fix (a warning for the image, and the step summary) unless
+  `scripts/ci/catalog-ignore.yaml` lists it, with the app it is in, and its date has not
+  passed (Mediaplane never patches an app's image, §1.4(1)). It reported, not failed, from
+  the owner's decision of 2026-10-27; to fail on it again, change `CATALOG_SCAN: report`
+  to `CATALOG_SCAN: fail` on the `catalog-images` job in `.github/workflows/ci.yml`. A scan
+  that couldn't run still fails the job. Mediaplane's own image still fails. Each image
   is scanned with only the entries whose statement names its app (the text after the
   statement's first " in " holds a catalog app's name), so an entry hides nothing in
   another app; one that names no catalog app hides nothing, and a unit test fails on it.
@@ -2388,3 +2393,26 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     the same server, its new token your account's.
 - **No new Docker API call:** the removals, the claim and Seerr's sign-in are the apps'
   APIs over the wiring network; the database read is a local process (§7.2(2)).
+
+### CI: the catalog scan reports (2026-10-27)
+
+- **The catalog's image scan reports a finding, and no longer fails CI on it** (the
+  owner's decision, 2026-10-27; §7.2(7), §8.2). Only upstream can fix what Trivy finds in
+  an app's image, so a finding there is something to see, not a reason to block a pull
+  request.
+  - One switch decides it: `CATALOG_SCAN` on the `catalog-images` job in
+    `.github/workflows/ci.yml`, `report` now. `scripts/ci/scan-catalog.sh` reads it:
+    `report` or `fail`; unset means `fail`, so a run by hand is as strict as CI was; any
+    other value is an error, so that a typo never turns the scan off.
+  - **To make a finding fail CI again,** change `CATALOG_SCAN: report` to
+    `CATALOG_SCAN: fail`. Nothing else changes.
+  - In `report` mode a finding is a `::warning::` line for its image and architecture,
+    and a list in the job's step summary, so it shows on the pull request. The job passes.
+  - **A scan that couldn't run still fails,** in both modes (Trivy's exit 1, after its
+    three tries): report-only never means that the scanner silently stopped working.
+  - `scripts/ci/catalog-ignore.yaml` and its dates work as before in both modes: a
+    listed finding is hidden until its date, then reported (or failed, in `fail` mode).
+  - Mediaplane's own image scan (`scan-image.sh`) is unchanged, and fails on a critical
+    vulnerability with a fix: those are ours to fix.
+  - A test pins that `ci.yml` sets `report` on that job and that no other job has the
+    switch.

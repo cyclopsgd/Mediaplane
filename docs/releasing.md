@@ -146,6 +146,12 @@ CI also runs weekly, to find new vulnerabilities and Node security releases with
 push. GitHub turns off scheduled workflows in a public repository after 60 days without
 activity: if the weekly run stops, turn it on again in the repository's Actions tab.
 
+A critical vulnerability with a fix in an image of the catalog's apps is reported in the
+run (a warning and the step summary), not failed, because only the app's maker can fix
+it; Mediaplane's own image still fails CI. To fail on the apps' images again, change
+`CATALOG_SCAN: report` to `CATALOG_SCAN: fail` on the `catalog-images` job in
+`.github/workflows/ci.yml`.
+
 ## If a release stops halfway
 
 Re-run the failed jobs from the workflow run's page, within 7 days: the jobs pass the

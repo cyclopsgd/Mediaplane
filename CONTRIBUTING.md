@@ -112,6 +112,10 @@ CI runs these jobs:
 - the end-to-end tests, natively on amd64 and on arm64 runners;
 - an image build on each of the two, scanned with Trivy (its Alpine packages and its Go
   binaries), which fails on a critical vulnerability that has a fix;
+- a Trivy scan of every image the catalog pins, which reports a critical vulnerability
+  that has a fix, and does not fail on it (only the app's maker can fix it): to fail on
+  it, change `CATALOG_SCAN: report` to `fail` on the `catalog-images` job in
+  `.github/workflows/ci.yml`;
 - gitleaks, over the full history.
 
 Apart from these, the nightly Plex job (above) runs on `main` only.

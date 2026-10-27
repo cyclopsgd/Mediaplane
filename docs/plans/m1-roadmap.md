@@ -302,7 +302,9 @@ repositories, and the repo is public, so from S2c (owner, 2026-10-09):
   job builds each architecture as a release does (SBOM, provenance, an OCI layout) and
   scans that; the release workflow pushes both and tags one index of them. The
   `engine-floor` job checks the image's Docker CLI and Compose against Docker Engine 24,
-  and `catalog-images` scans the apps' images.
+  and `catalog-images` scans the apps' images. It reports a finding rather than failing
+  on it (the owner's decision of 2026-10-27; spec §11, "CI: the catalog scan reports"): to fail again, change
+  `CATALOG_SCAN: report` to `fail` on that job.
 
 Each slice that adds end-to-end tests still runs them locally on the aarch64 dev box
 before merging.

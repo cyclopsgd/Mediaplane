@@ -564,13 +564,19 @@ Controls today:
 - Once the Renovate app is installed (an owner's step), Renovate opens a pull request
   for every newer pin: an app's runs the full end-to-end suite, and none is merged
   automatically.
-- CI's checks that fail the build, on every pull request and weekly:
+- CI's checks, which fail the build (but for the catalog image scan, which reports), on
+  every pull request and weekly:
   - Trivy scans Mediaplane's image on amd64 and arm64, built as a release builds it:
     its Alpine packages, the Docker CLI's Go standard library and Compose's Go modules.
     It fails on a critical vulnerability that has a fix.
-  - Trivy scans every catalog image, on both architectures. A finding that only upstream
-    can fix passes while `scripts/ci/catalog-ignore.yaml` lists it, with the app it is in,
-    until the date beside it; after that date it fails again. Each image is scanned with
+  - Trivy scans every catalog image, on both architectures. Only upstream can fix a
+    finding there, so since the owner's decision of 2026-10-27 CI reports it (a warning
+    and the step summary) and does not fail. A scan that couldn't run still fails. To fail
+    on a finding again, change `CATALOG_SCAN: report` to `CATALOG_SCAN: fail` on the
+    `catalog-images` job in `.github/workflows/ci.yml`. A finding that
+    `scripts/ci/catalog-ignore.yaml` lists, with the app it is in, is hidden until the
+    date beside it; after that date it is reported again (or fails, in `fail` mode). Each
+    image is scanned with
     only the entries whose statement names its app (the text after the statement's first
     " in " holds a catalog app's name), so an entry hides nothing in another app. One that
     names no catalog app hides nothing, and a unit test fails on it.
