@@ -559,7 +559,11 @@ export async function planStack(
     diagnostics.push(
       warning(
         'bootstrap.open-published',
-        `${name} runs published, though its first-run setup isn't shown to be done: whoever reaches it may finish the setup before Mediaplane does, as anyone can claim a Plex signed out of its plex.tv account`,
+        `${name} runs published, though its first-run setup isn't shown to be done: whoever reaches it may finish the setup before Mediaplane does${
+          change.app === 'plex'
+            ? ', as anyone can claim a Plex signed out of its plex.tv account'
+            : ''
+        }`,
         {
           hint: `run apply now: it starts ${name} again without its ports, and finishes the setup first`,
         },

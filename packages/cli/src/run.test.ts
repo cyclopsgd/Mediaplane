@@ -1888,6 +1888,25 @@ apps:
     expect((await readSecretStore(home)).setUp).toEqual(['plex', 'seerr']);
   });
 
+  it('warns of a Seerr that runs published and is set up afresh, without a word of Plex', async () => {
+    const { home, docker, seerr } = await rotatedSeerrHome();
+    const dir = join(home, 'appdata', 'seerr');
+    seerr.seerr.configDir = undefined;
+    await rm(join(dir, 'settings.json'));
+    await mkdir(join(dir, 'settings.json'));
+    seerr.seerr.failing = ['/api/v1/settings/public'];
+    const shown = capture();
+    expect(await run(['plan', '--home', home], shown.io, deps(docker))).toBe(2);
+    expect(shown.stdout()).toContain(
+      '+ seerr (with no port published until it is done)\n',
+    );
+    expect(shown.stderr()).toContain(
+      "warning: Seerr runs published, though its first-run setup isn't shown to be done: whoever reaches it may finish the setup before Mediaplane does\n",
+    );
+    expect(shown.stderr()).not.toContain('Plex runs published');
+    expect(shown.stderr()).not.toMatch(/Seerr runs published[^\n]*Plex/);
+  });
+
   it("keeps the sign-in again on a Seerr that is set up, though nothing records it as Mediaplane's", async () => {
     const { home, docker, seerr, renewed } = await rotatedSeerrHome();
     const store = await readSecretStore(home);
