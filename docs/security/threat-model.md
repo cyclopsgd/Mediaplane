@@ -357,13 +357,16 @@ What remains:
 - A compromised Jellyfin can still make `plan`, `drift` or `keep` wait while they read
   its database's key, with a named pipe put at the database's own name in the instant
   between SQLite looking up the file Mediaplane holds open and opening it by that name:
-  SQLite's open waits on a pipe (probed). The read runs in a process of its own, Node
-  with an empty environment, the database handed to it open, which Mediaplane stops
-  after 10 seconds: the read is then a key file that couldn't be read, never a key (Slice
-  10b). So is a process that fails to start, or answers with more than 64 KiB (counted
-  in bytes): the read never throws. A pipe put in place of its write-ahead log (`-wal`) after Mediaplane checked it
-  makes SQLite refuse the read (`disk I/O error`, probed). It is never a read or a write
-  through the pipe. Another file put at the database's name in that instant can be read
+  SQLite's open waits on a pipe (probed).
+  - The read runs in a process of its own (Slice 10b): Node with an empty environment,
+    the database handed to it open. Mediaplane stops it after 10 seconds. The read is
+    then a key file that couldn't be read, never a key.
+  - So is a process that fails to start, or answers with more than 64 KiB (counted in
+    bytes). The read never throws.
+  - A pipe put in place of its write-ahead log (`-wal`) after Mediaplane checked it makes
+    SQLite refuse the read (`disk I/O error`, probed).
+
+  It is never a read or a write through the pipe. Another file put at the database's name in that instant can be read
   instead, unless Mediaplane's check once the read has answered sees it, and then what
   was read is dropped; and a folder on the way swapped for a link and back as quickly can
   do the same. Such a read is bounded by the fixed `ApiKeys` query, and a key that is
@@ -441,13 +444,13 @@ Controls today:
   keeps or shows them. The key Seerr made itself in Jellyfin as it first signed in, which
   it also shows in clear, is replaced the first time Mediaplane records Seerr's link to
   Jellyfin: Mediaplane gives Seerr the Jellyfin key it holds itself, in a request body,
-  as it gives the arrs, then removes from Jellyfin the key Seerr held, only one Jellyfin
-  lists under the name Seerr gives its own (Slice 10b). So no second admin key of
-  Jellyfin's lingers, unless its removal fails, which `apply` reports: then remove it in
-  Jellyfin's dashboard (API Keys). The one Seerr held is never kept, nor sent anywhere
-  but in that removal to Jellyfin, and it is replaced with `***` in every message once read. When
-  Jellyfin refuses the key Seerr holds, or Jellyfin moves, Mediaplane gives it its own
-  again.
+  as it gives the arrs. It then removes from Jellyfin the key Seerr held, but only one
+  Jellyfin lists under the name Seerr gives its own (Slice 10b). So no second admin key
+  of Jellyfin's lingers, unless its removal fails, which `apply` reports. Then remove it
+  in Jellyfin's dashboard (API Keys). The one Seerr held is never kept, nor sent anywhere
+  but in that removal to Jellyfin. It is replaced with `***` in every message once read.
+  When Jellyfin refuses the key Seerr holds, or Jellyfin moves, Mediaplane gives it its
+  own again.
 - The admin password goes to Seerr only once, in its first sign-in's request body,
   which Seerr passes to Jellyfin to check. The session cookie it answers with stays in
   Mediaplane's memory, kept out of every message, for the one call that signs out at
@@ -683,7 +686,8 @@ What remains:
   through each app's key. A password of your own is rotated in its file.
 - A new Plex token, from `plex-login --force`, reaches the apps that hold the old one
   with `mediaplane apply --rotate plex.token`: the arrs' connections to Plex, and Seerr,
-  which signs in again with it, once it is shown to be your account's Seerr (Slice 10b).
+  which signs in again with it, once your account is shown to be Seerr's admin (Slice
+  10b).
   Only then can you sign the old one out at plex.tv without breaking them. A token of
   another account, which Plex refuses, is given to no app.
 

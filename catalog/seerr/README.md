@@ -72,12 +72,12 @@ With Jellyfin as the media server (with Plex, see below):
   one key is the one to rotate, unless that removal fails, which `apply` reports: then
   remove the key in Jellyfin's dashboard (API Keys). A Seerr set up before then gets
   Mediaplane's key at its next `apply` too, and the key it held goes from Jellyfin if
-  Jellyfin lists it as Seerr's. From then on Mediaplane checks that the key works, and gives it again when
-  Jellyfin refuses it, or Jellyfin moves, when Seerr's libraries are synced again too.
-  Seerr shows its key in clear: Mediaplane keeps it out of all it prints and records.
-  Seerr sets Jellyfin's id (`serverId`) at
-  its first sign-in and on each link it saves: a link with an empty id reads as not
-  linked, and `apply` links it again.
+  Jellyfin lists it as Seerr's. From then on Mediaplane checks that the key works. It
+  gives the key again when Jellyfin refuses it, or Jellyfin moves, when Seerr's
+  libraries are synced again too. Seerr shows its key in clear: Mediaplane keeps it out
+  of all it prints and records. Seerr sets Jellyfin's id (`serverId`) at its first
+  sign-in and on each link it saves: a link with an empty id reads as not linked, and
+  `apply` links it again.
 - **Its Sonarr and Radarr servers** (`seerr.server_sonarr`, `seerr.server_radarr`), each
   while the stack runs the arr, named `Sonarr (Mediaplane)` and `Radarr (Mediaplane)`: the
   arr at its service and port, with its key, its root folder, a quality profile, and set
@@ -160,8 +160,6 @@ With Jellyfin as the media server (with Plex, see below):
 - **Its `settings.json` unreadable** (say, its mode changed by hand): a Seerr Mediaplane
   set up is asked itself whether its setup is done, and stays as it is when it says so,
   with a warning (`bootstrap.unreadable`).
-
-See the [roadmap](../../docs/plans/m1-roadmap.md).
 
 ## Changing it
 

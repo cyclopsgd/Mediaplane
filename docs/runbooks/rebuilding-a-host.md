@@ -60,8 +60,8 @@ the app's key, which it recovered. `mediaplane credentials` shows the new one on
   Mediaplane's went with `state/`: the setup asks Seerr, with its key, whether its admin
   is the shared admin and its Jellyfin the stack's, and publishes it only then. On a Plex
   stack, Plex and Seerr are asked the same way, through plex.tv, whose account they are.
-  `apply` then also gives Seerr Mediaplane's Jellyfin key again (`seerr.media_server
-updated apiKey`), as the first time: the record that it did went with `state/`, and
+  `apply` then also gives Seerr Mediaplane's Jellyfin key again, as the first time
+  (`seerr.media_server updated apiKey`). The record that it did went with `state/`, and
   the key Seerr holds is that one already, so nothing goes from Jellyfin.
 
 - **`keys.unrecoverable`, an error:** a key file is there, but Mediaplane can't read it

@@ -186,8 +186,8 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
   `mediaplane apply --rotate plex.token`.** Sonarr and Radarr keep the token they hold
   while Plex takes it, and Seerr keeps the one its admin signed in with, so a plain
   `apply` changes nothing. With `--rotate plex.token`, `apply` gives the new one to both
-  arrs' connections, and signs Seerr in again with it, once it has asked plex.tv that
-  Seerr's admin is the new token's account; then you can sign the old one out at
+  arrs' connections, and signs Seerr in again with it. Before that, it asks plex.tv
+  whether Seerr's admin is the new token's account. Then you can sign the old one out at
   plex.tv. A token of another account, which Plex refuses, is given to no app.
   `plex-login` says so when it saves a token in place of another.
 - **Signed out of your account while it runs** (its web UI's sign-out), Plex is

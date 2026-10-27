@@ -499,10 +499,11 @@ up --wait again
   which makes your plex.tv account its admin, and Plex its media server type; then it
   signs out. A Seerr set up already is checked with its key: its admin's plex.tv account
   must be the one plex.tv says your token is, and its Plex unset or the stack's, without
-  TLS. It is never signed in to, which would give your token to whoever set it up, but
-  for a rotation: Seerr keeps the token its admin signed in with, and reaches Plex with
-  it, so `apply --rotate plex.token` signs it in again with the new one, once those
-  checks show it is yours (`First-run setup:` lists it, published, "signing in again").
+  TLS. It is never signed in to, which would give your token to whoever set it up. A
+  rotation is the exception. Seerr keeps the token its admin signed in with, and reaches
+  Plex with it. So `apply --rotate plex.token` signs it in again with the new one, once
+  those checks show it is yours (`First-run setup:` lists it, published, "signing in
+  again").
   Every Seerr setup in the plan signs in again, one set up afresh included. When the new
   token is of another plex.tv account than Seerr's admin, the error says so, and to put
   back a token of that account (`plex-login --force`), and Seerr keeps its old one.

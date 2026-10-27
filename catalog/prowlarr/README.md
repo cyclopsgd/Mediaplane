@@ -112,9 +112,10 @@ to the solver only when the site answers with a Cloudflare challenge.
   internet: drift reads Prowlarr's own health check, which tests it every six hours, and
   warns (`drift.health`) when it says the proxy is unavailable. `apply` can't put that
   right: check the Cloudflare solver.
-- **A link to an arr taken out of the stack** stays in Prowlarr, with that arr's key, and
-  drift reports it as still in the app. Remove it in Prowlarr, or stop the report with
-  `mediaplane keep prowlarr.application_sonarr` (or `_radarr`).
+- **A link to an arr taken out of the stack** goes at the next `apply`, with that arr's
+  key. One renamed in Prowlarr stays, as it may be yours now, and drift reports it as
+  still in the app. To keep a link, run `mediaplane keep prowlarr.application_sonarr`
+  (or `_radarr`) before that `apply`: it keeps the link as yours, and stops the report.
 
 ## Changing it
 

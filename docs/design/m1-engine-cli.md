@@ -2375,12 +2375,16 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   UI's sign-out (`DELETE /myplex/account`) unclaims it at once, published, and its
   `Preferences.xml` keeps `PlexOnlineToken=""`, so its image never uses `PLEX_CLAIM`: its
   claim step looks only for that attribute's name (probed: "Server already claimed").
-  `plan` lists its setup, and warns that it runs published (`bootstrap.open-published`,
-  for any app whose setup is to be done and which publishes ports now; it names Plex
-  only for Plex). Apply starts it
-  unpublished, and Plex's setup claims it itself, while it is unclaimed: a claim token
-  from plex.tv, with your token, posted to Plex over the wiring network, to its address
-  (`POST /myplex/claim`; Plex's DNS-rebinding check refuses one sent to a name, probed);
-  then the checks of a first start. The same server, its new token your account's.
+  - **This departs from §6.1,** for a signed-out Plex only: §6.1 passes the claim token
+    as `PLEX_CLAIM` on first start, and the image ignores it once Plex is signed out. So
+    Plex is claimed through its API instead. A first start is unchanged.
+  - `plan` lists its setup, and warns that it runs published (`bootstrap.open-published`,
+    for any app whose setup is to be done and which publishes ports now; it names Plex
+    only for Plex).
+  - Apply starts it unpublished, and Plex's setup claims it itself, while it is
+    unclaimed: a claim token from plex.tv, with your token, posted to Plex over the
+    wiring network, to its address (`POST /myplex/claim`; Plex's DNS-rebinding check
+    refuses one sent to a name, probed). Then come the checks of a first start. It is
+    the same server, its new token your account's.
 - **No new Docker API call:** the removals, the claim and Seerr's sign-in are the apps'
   APIs over the wiring network; the database read is a local process (§7.2(2)).

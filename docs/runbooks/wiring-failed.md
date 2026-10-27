@@ -123,8 +123,8 @@ Plex token, before its port is published, and links to Plex.
   token: the one read of its settings, once plex.tv has said it is yours, is the first
   call that carries it.
 - **`plan` warns `bootstrap.open-published`** (`Plex runs published, though its
-first-run setup isn't shown to be done`): Plex was signed out of your plex.tv account while it
-  ran, as its web UI's sign-out does, and anyone who reaches it can claim it now. Run
+first-run setup isn't shown to be done`): Plex was signed out of your plex.tv account
+  while it ran, as its web UI's sign-out does, and anyone who reaches it can claim it now. Run
   `apply` at once: it starts Plex again without its ports, claims it for your account
   through Plex's own API (its image doesn't claim a Plex signed out so), and publishes it
   once it is shown to be yours. If that fails with
@@ -136,8 +136,9 @@ first-run setup isn't shown to be done`): Plex was signed out of your plex.tv ac
   connections, and signs Seerr in again with it (`First-run setup:` lists Seerr,
   "signing in again"). A token of another plex.tv account is given to no app, and Seerr's
   sign-in fails with `has an admin of another plex.tv account than your new Plex token's`,
-  still holding its old token: put back a token of its admin's account (`plex-login
---force`, signing in as that account), and run `apply --rotate plex.token` again.
+  still holding its old token: put back a token of its admin's account (run
+  `plex-login --force`, signing in as that account), and run `apply --rotate plex.token`
+  again.
 - **`apply` stops at the same step** with a setup that reported success. Before
   publishing an app, Mediaplane asks it once more whether its setup is still open, and
   publishes it only if it is not. Jellyfin's key is already kept. The error:
