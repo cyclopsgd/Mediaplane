@@ -112,12 +112,13 @@ playbook. That completes M1.
 
 ### S10 is delivered in three parts (decided 2026-10-26)
 
-S10 is too large for one plan (about 16 tasks), so it ships as two parts, each ending
+S10 is too large for one plan (about 16 tasks), so it ships as three parts, each ending
 green, as a full slice does. The cut follows what each changes: S10a, what Mediaplane
 holds on a host (its keys, and the setups that make or use them), so that a host is
-rebuilt from its files; S10b, what the stack and its users see from outside (what is
-removed when an app leaves, the Plex token's rotation, and the contract automation
-relies on, with the docs that complete M1).
+rebuilt from its files; S10b, what the stack does when it changes (what is removed when
+an app leaves, the Plex token's rotation, and a Plex signed out of its account); S10c,
+what a script reads (the contract automation relies on), with the docs that complete M1.
+S10 was first planned as two parts, S10a and S10b; S10b was split again on 2026-10-26.
 
 - **S10a: recovery** ([plan](m1-s10a-recovery.md)).
   - Delivers: key recovery from appdata, Jellyfin's from its database; a key put back at

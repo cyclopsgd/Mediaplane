@@ -85,7 +85,8 @@ upstream LinuxServer.io image, unmodified, when `media_server` is `jellyfin`.
   [T16](../../docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)),
   and links Seerr to it with both libraries enabled (see
   [Seerr's README](../seerr/README.md)). That sign-in leaves Jellyfin a key named
-  `Seerr`, and a device of Seerr's, which Seerr uses: leave them. Seerr's sign-in page
+  `Seerr`, which Mediaplane replaces with its own key in Seerr and removes, and a device
+  of Seerr's, which Seerr uses: leave it. Seerr's sign-in page
   then checks the shared admin login against Jellyfin.
 - **A health check that waits for the server.** In the first seconds of every start,
   Jellyfin's `/health` answers `Degraded` while the server itself answers 503 to

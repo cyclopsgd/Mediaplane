@@ -69,9 +69,10 @@ With Jellyfin as the media server (with Plex, see below):
   Seerr stays yours. Seerr makes itself a key in Jellyfin as it first signs in (named
   `Seerr` in Jellyfin's dashboard); the first time Mediaplane records the link, it gives
   Seerr Mediaplane's own Jellyfin key in its place, and removes Seerr's from Jellyfin, so
-  one key is the one to rotate. A Seerr set up before then gets Mediaplane's key at its
-  next `apply` too, and the key it held goes from Jellyfin if Jellyfin lists it as
-  Seerr's. From then on Mediaplane checks that the key works, and gives it again when
+  one key is the one to rotate, unless that removal fails, which `apply` reports: then
+  remove the key in Jellyfin's dashboard (API Keys). A Seerr set up before then gets
+  Mediaplane's key at its next `apply` too, and the key it held goes from Jellyfin if
+  Jellyfin lists it as Seerr's. From then on Mediaplane checks that the key works, and gives it again when
   Jellyfin refuses it, or Jellyfin moves, when Seerr's libraries are synced again too.
   Seerr shows its key in clear: Mediaplane keeps it out of all it prints and records.
   Seerr sets Jellyfin's id (`serverId`) at
@@ -147,7 +148,7 @@ With Jellyfin as the media server (with Plex, see below):
   leaves no new line in Seerr's log, nor in the arr's. Its setup
   (`seerr.setup.initialized`) is fixed: Seerr can't be taken back to its setup wizard.
 
-## Known issues
+## When the stack or its token changes
 
 - **On a Plex stack, Seerr keeps the token it signed in with,** and reaches Plex with it.
   A new token from `plex-login --force` reaches it with
@@ -183,7 +184,9 @@ See the [roadmap](../../docs/plans/m1-roadmap.md).
 - **A failing check is logged.** `plan` and `apply` check Seerr's servers and its key for
   Jellyfin; each check that fails logs a line in Seerr's log (Settings, Logs), and one
   with a key the arr refuses, a line in the arr's.
-- **Jellyfin keeps a key named `Seerr`,** which Seerr made as it first signed in, and a
-  device of Seerr's sign-in. Both are Seerr's own: leave them.
+- **Jellyfin keeps a device of Seerr's sign-in,** which is Seerr's own: leave it. The
+  key named `Seerr` Seerr made as it first signed in goes when Mediaplane gives Seerr
+  its own; one left there, because its removal failed, is yours to remove in Jellyfin's
+  dashboard (API Keys).
 - **Removing it needs `sudo`.** `appdata/seerr` belongs to uid 1000, so unless you are
   that user, deleting it needs `sudo`.

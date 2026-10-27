@@ -51,10 +51,12 @@ address after five failed sign-ins in a row.
   `stack.yaml` that is a link, has other names, belongs to another user or to a group
   its user isn't in, and one it fails to write, and gives the line to add by hand
   instead. A file managed by automation (`managed_by: external`, checked again in the
-  file it writes) is never written: keep gives the line to add (`line` in its `--json`),
-  and succeeds (Slice 10b). It never writes a value with a control character, a line or paragraph
-  separator, or one that turns the direction of text, which an editor could show as
-  what the file doesn't hold.
+  file it writes) is never written: keep gives the line to add (`line` in its `--json`,
+  with `written: false`), and succeeds (Slice 10b), but for a resource kept as
+  `unmanaged` whose record it can't forget: it fails then (`keep.record`, exit 1, the
+  line still given), as the next `apply` would remove what is yours. It never writes a
+  value with a control character, a line or paragraph separator, or one that turns the
+  direction of text, which an editor could show as what the file doesn't hold.
 - **Only managed fields can be kept.** Each resource declares them; a few are fixed: what
   the resource is known by (a root folder's path, a library's name), what its app can't
   change (what a library holds), what Mediaplane only checks (whether an arr reaches its

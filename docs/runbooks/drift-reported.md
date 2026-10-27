@@ -217,7 +217,10 @@ write), automation owns the file, and `keep` never writes it: it succeeds, and g
 line to add where your automation keeps `stack.yaml` (`line`, with `written: false`, in
 `--json`). Until `stack.yaml` holds it, `apply` puts back what it applied, and drift still
 reports the field. A resource kept as `unmanaged` is forgotten at once instead, so
-`apply` never removes it meanwhile.
+`apply` never removes it meanwhile: it makes the resource again if the stack still wants
+it, and leaves it in the app if not. If `keep` can't forget it (`keep.record`, exit 1,
+the line still given, `written: false`), run `keep` again before the next `apply`: the
+next `apply` would remove what is yours.
 
 ## Warnings and errors of drift's and keep's own
 

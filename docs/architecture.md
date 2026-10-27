@@ -365,10 +365,12 @@ name, and adopted
   `config.xml` for Sonarr, Radarr and Prowlarr, `qBittorrent.conf`, Seerr's
   `settings.json`, Gluetun's `auth/config.toml`, and Jellyfin's database, opened
   read-only with Node's own SQLite, in a process of its own that is stopped after 10
-  seconds, so that a named pipe put in the database's place can't hang `plan`. A key
-  file that is there but can't be read, or holds
-  another app's key, stops `plan` (`keys.unrecoverable`): a new key would lock Mediaplane
-  out of an app that still holds the old one.
+  seconds, so that a named pipe put in the database's place can't hang `plan`. That
+  read never throws: a process that fails to start, runs out of time, or answers with
+  more than 64 KiB (counted in bytes) is a key file that couldn't be read. A key file
+  that is there but can't be read, or holds another app's key, stops `plan`
+  (`keys.unrecoverable`): a new key would lock Mediaplane out of an app that still holds
+  the old one.
 - **The admin password can't be read back:** the apps keep a hash. When the one
   Mediaplane generated went with `state/`, apply generates another, and sets it in each
   app through the app's key. `apply --rotate admin.password` does the same on purpose.
@@ -501,6 +503,9 @@ up --wait again
   for a rotation: Seerr keeps the token its admin signed in with, and reaches Plex with
   it, so `apply --rotate plex.token` signs it in again with the new one, once those
   checks show it is yours (`First-run setup:` lists it, published, "signing in again").
+  Every Seerr setup in the plan signs in again, one set up afresh included. When the new
+  token is of another plex.tv account than Seerr's admin, the error says so, and to put
+  back a token of that account (`plex-login --force`), and Seerr keeps its old one.
 - **Seerr's first sign-in must be its admin's,** through Jellyfin or with your Plex
   token: Mediaplane asks the session it got whose it is (`GET /api/v1/auth/me`), and
   anything but Seerr's first user means someone signed in first. Mediaplane then signs
@@ -736,7 +741,9 @@ mediaplane (the stack)
     Movies and Shows libraries enabled; a library you enable yourself stays yours. Seerr
     makes itself a key in Jellyfin as it first signs in; the first time Mediaplane records
     the link, it gives Seerr its own Jellyfin key in its place, and removes Seerr's from
-    Jellyfin, so one key, Mediaplane's, is the one to rotate. From then on the key Seerr
+    Jellyfin, so one key, Mediaplane's, is the one to rotate. If that removal fails,
+    `apply` reports it, and the key is removed by hand in Jellyfin's dashboard (API
+    Keys). From then on the key Seerr
     holds is checked with Seerr's list of Jellyfin's users, and given again when Jellyfin
     refuses it, or Jellyfin moves; on a move, Seerr's libraries are synced again too,
     since another Jellyfin has other library ids. It needs Jellyfin's admin and libraries
@@ -888,7 +895,10 @@ O ≠ L, O ≠ D: drift, changed
   `managed_by: external`, it writes no `stack.yaml`, and gives the line (`line` in its
   `--json`, with `written: false`) for your automation to add, recording nothing until
   `stack.yaml` holds it; a resource kept as `unmanaged` is forgotten at once, so that
-  `apply` never removes it meanwhile. Keeping a download client's category gives
+  `apply` never removes it meanwhile: it makes the resource again if the stack still
+  wants it, and leaves it in the app if not. If keep can't forget that record, it fails
+  (`keep.record`, exit 1, `line` still given): run it again before the next `apply`.
+  Keeping a download client's category gives
   qBittorrent's category that name: `apply` makes it, and drift is clear once it has.
 - **Keep mine of a key:** `mediaplane keep <app>.<key>` keeps an app's own key, changed
   at its source, as [Rebuilding a host](#rebuilding-a-host) says.
@@ -918,11 +928,17 @@ up again, removed, and its
 record forgotten
 ```
 
+- **Apply removes only what its plan listed** (`remove`, or `after-start` for an app not
+  settled yet), looking each up again first. One that has become one to leave, such as
+  a category a torrent has since entered, stays with its record, and `apply` records a
+  skipped wire action that says why. One the app now definitely no longer holds has its
+  record forgotten; an error, or an app that can't say, keeps the record.
 - **What goes:** Prowlarr's link to an arr that left, and its indexer proxy once the
   stack has no Cloudflare solver (the `cloudflare` tag stays, on your indexers too);
   qBittorrent's category of an arr that left; Seerr's server of an arr that left; an
   arr's download client, and its connection to a media server that left.
-- **What stays, and why, in `plan` and `drift`:** a resource renamed in its app, or
+- **What stays, and why, in `plan` and `drift`** (`?` lines; what `apply` leaves is for
+  you to remove in the app, if you want it gone): a resource renamed in its app, or
   found under its name with another id, may be yours now; a qBittorrent category with a
   torrent in it, since removing it would move the torrent's files (Automatic Torrent
   Management, probed); and Seerr's media server, a setting Seerr can't drop (switching

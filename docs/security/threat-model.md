@@ -360,7 +360,8 @@ What remains:
   SQLite's open waits on a pipe (probed). The read runs in a process of its own, Node
   with an empty environment, the database handed to it open, which Mediaplane stops
   after 10 seconds: the read is then a key file that couldn't be read, never a key (Slice
-  10b). A pipe put in place of its write-ahead log (`-wal`) after Mediaplane checked it
+  10b). So is a process that fails to start, or answers with more than 64 KiB (counted
+  in bytes): the read never throws. A pipe put in place of its write-ahead log (`-wal`) after Mediaplane checked it
   makes SQLite refuse the read (`disk I/O error`, probed). It is never a read or a write
   through the pipe. Another file put at the database's name in that instant can be read
   instead, unless Mediaplane's check once the read has answered sees it, and then what
@@ -442,8 +443,9 @@ Controls today:
   Jellyfin: Mediaplane gives Seerr the Jellyfin key it holds itself, in a request body,
   as it gives the arrs, then removes from Jellyfin the key Seerr held, only one Jellyfin
   lists under the name Seerr gives its own (Slice 10b). So no second admin key of
-  Jellyfin's lingers. The one Seerr held is never kept, nor sent anywhere but in that
-  removal to Jellyfin, and it is replaced with `***` in every message once read. When
+  Jellyfin's lingers, unless its removal fails, which `apply` reports: then remove it in
+  Jellyfin's dashboard (API Keys). The one Seerr held is never kept, nor sent anywhere
+  but in that removal to Jellyfin, and it is replaced with `***` in every message once read. When
   Jellyfin refuses the key Seerr holds, or Jellyfin moves, Mediaplane gives it its own
   again.
 - The admin password goes to Seerr only once, in its first sign-in's request body,
@@ -493,7 +495,9 @@ Controls today:
   Preferences.xml keeps an empty `PlexOnlineToken`, probed), so the setup does, while
   Plex is unpublished: a second claim token, fetched by the setup with your token, sent
   to Plex in the query of `POST /myplex/claim` over the wiring network, replaced with
-  `***` in every message, and never kept (Slice 10b).
+  `***` in every message, and never kept (Slice 10b). A reclaim still starts Plex once,
+  unpublished, with a claim token its image ignores (it takes Plex for claimed); that
+  token expires within 4 minutes.
 - Plex's own token, which its claim makes, is in Plex's `Preferences.xml`, which Plex
   writes 0600. Mediaplane reads it there only to ask plex.tv whose account it is, once
   Plex is claimed, through the plex.tv helper's standard input (from source, in the

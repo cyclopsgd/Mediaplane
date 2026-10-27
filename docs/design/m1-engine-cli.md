@@ -583,7 +583,7 @@ against current upstream source and docs.
 | Sonarr, Radarr, Prowlarr | Generated 32-hex key, set through `<APP>__AUTH__APIKEY` **and** written to `config.xml` before first start | Shared admin created with `PUT /api/v3/config/host` (Prowlarr uses `/api/v1`), `authenticationMethod: forms` | Writing the key to `config.xml` matters because an env-only key is never persisted; if the env var were ever lost, the app would silently generate a new key. Auth enum values are case-sensitive. `AUTH__ENABLED` is never set (it is a legacy flag), and auth `None` is never used |
 | qBittorrent (≥ 5.2) | Generated `qbt_` + 28 chars, written to `qBittorrent.conf` before first start | Same file: shared admin, `WebUI\Password_PBKDF2` (PBKDF2-HMAC-SHA512, 100 000 iterations, 16-byte salt, 64-byte key) | The arrs authenticate with the API key, so no auth-bypass subnet is needed for app-to-app traffic. The published and container WebUI ports must be identical, because of qBittorrent's Host-header check. A `port:` override therefore changes both, and also `WEBUI_PORT`. Ports are published on the `gluetun` service |
 | Jellyfin (≥ 12) | Cannot be chosen. Created with `POST /Auth/Keys?app=Mediaplane` after setup, read back with `GET /Auth/Keys`, then stored in `state/secrets.json` | Startup API (`POST /Startup/User`, `POST /Startup/Complete`), then `AuthenticateByName`. Uses **bootstrap-before-publish** (§6.4) | Uses `Authorization: MediaBrowser Token="…"`; the legacy token headers are disabled by default in v12 |
-| Plex | User-provided token from **`mediaplane plex-login`**, which runs the plex.tv PIN flow (prints a link, then polls until the user has signed in). Uses the long-lived legacy token, not the 7-day JWT | A claim token is fetched from plex.tv at apply time using the user's token, then passed as `PLEX_CLAIM` on first start, so the 4-minute claim expiry is never a problem | The one unavoidable interactive step. The M2 wizard reuses the same flow |
+| Plex | User-provided token from **`mediaplane plex-login`**, which runs the plex.tv PIN flow (prints a link, then polls until the user has signed in). Uses the long-lived legacy token, not the 7-day JWT | A claim token is fetched from plex.tv at apply time using the user's token, then passed as `PLEX_CLAIM` on first start, so the 4-minute claim expiry is never a problem (a Plex signed out while it runs is claimed through its API: §11, Slice 10b) | The one unavoidable interactive step. The M2 wizard reuses the same flow |
 | Seerr (≥ 3.5) | Generated, set through `API_KEY` | The key does nothing until a first user exists. Mediaplane signs in with `POST /api/v1/auth/jellyfin` as the Jellyfin admin it created, or with `POST /api/v1/auth/plex` and the user's token. It then configures Seerr through `/api/v1/settings/*` and finishes with `POST /api/v1/settings/initialize` | One media-server type per instance. `hostname` is never re-sent once the media server is configured, because doing so returns 500 |
 | Byparr / FlareSolverr | None | None | Internal only; never published |
 | Gluetun | User-provided VPN key (a secret file). A generated `controlApiKey` for its control server, written to `auth/config.toml` before first start (§11, Slice 3a) | None | `FIREWALL_OUTBOUND_SUBNETS` is set to the LAN subnet while the web UIs are published on the LAN, so the LAN can reach qBittorrent's UI |
@@ -1977,7 +1977,7 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   link, has other names (hard links), belongs to another user or to a group its user
   isn't in, is written as one `{ … }` block, or that it fails to write, giving the line
   to add instead. With `managed_by: external`, checked again in the file it writes, it
-  writes nothing and gives that line (the rest of externally managed mode is Slice 10).
+  writes nothing and gives that line (the rest of externally managed mode: §11, Slice 10b).
   It never keeps a secret, a value that holds one, one it can't read, one its field's
   rule refuses, or one with a control character, a line or paragraph separator, or a
   bidirectional control. Into `overrides: { … }` a value with a "," or a bracket is
@@ -2294,9 +2294,16 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   `mediaplane.change/v1`; an older release lists such a change record as one it can't
   read); one of an app that isn't settled yet, as checked after the start. Apply's wire
   step, after an app's wanted resources, looks each up again, removes it, and forgets its
-  record (`removed`). Drift still reports each as `left`, and says why `apply` leaves
-  one (`stays`): Mediaplane doesn't remove that kind; it is renamed in its app, or held
-  there under another id, so it may be yours; or it holds what is yours.
+  record (`removed`). With a plan given (as `apply` has), it removes only what that plan
+  listed as `remove` or `after-start`. One the plan listed that now stays (say, a
+  category a torrent has entered since) is kept with its record, and `apply` records a
+  skipped wire action with the reason. A recorded resource the stack no longer wants,
+  which the app definitely no longer holds, has its record forgotten; an error, or an
+  answer that is not sure, keeps it. Drift still reports each as `left`, and says why
+  `apply` leaves one (`stays`): Mediaplane doesn't remove that kind; it is renamed in its
+  app, or held there under another id, so it may be yours; or it holds what is yours.
+  What `apply` leaves is for you to remove in the app, if you want it gone, or to keep
+  as yours with `mediaplane keep <app>.<resource>`, which stops the report.
   - **What is removed** (probed on the pinned images): Prowlarr's link to an arr that left
     and its indexer proxy once the stack has no solver (`DELETE`, 200 whether or not
     Prowlarr held it; the `cloudflare` tag stays), an arr's download client and its
@@ -2315,8 +2322,12 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   succeeds: `mediaplane.keep/v1` gives the line to add (`line`, and `written: false`),
   with a warning (`keep.external`); a write it refuses gives the line too. It records
   nothing as applied, since `stack.yaml` doesn't hold the line yet, but forgets the record
-  of a resource kept `unmanaged`, so that `apply` never removes it meanwhile. Once
-  `stack.yaml` holds the line, `plan` adopts what the app holds.
+  of a resource kept `unmanaged`, so that `apply` never removes it meanwhile: until
+  `stack.yaml` holds the line, `apply` makes it again if the stack still wants it, and
+  leaves it in the app if not. If that record can't be forgotten, keep fails closed:
+  `ok: false`, exit 1, with `line` still given and `written: false`, and an error
+  (`keep.record`) to run keep again before the next `apply`. Once `stack.yaml` holds the
+  line, `plan` adopts what the app holds. `keep --help` says so.
 - **Jellyfin's database is read in a process of its own** (§6.1, threat model T4): Node
   itself (`process.execPath`), with a fixed program on `--eval`, no shell, an empty
   environment, the database handed to it open as its fd 3 (SQLite opens
@@ -2326,7 +2337,9 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   Jellyfin could put there in an instant. The checks that the path is still the file read
   run once it has answered, and drop what it read otherwise. A pipe at the `-wal` makes
   SQLite refuse the read (`disk I/O error`, probed). Anything it doesn't answer as
-  expected is a key file that couldn't be read.
+  expected is a key file that couldn't be read: a process that fails to start, runs
+  out of time, or answers with more than 64 KiB (counted in bytes) included; the read
+  never throws.
 - **Seerr's own Jellyfin key is replaced** (§6.1, §6.2). Seerr makes a key named `Seerr`
   in Jellyfin as it first signs in (probed). A resource may name secrets the app made
   itself (`adoptSets`): until its record says Mediaplane gave them (`given`, names only,
@@ -2334,8 +2347,10 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   So the first `apply` that records `seerr.media_server` gives Seerr Mediaplane's own
   Jellyfin key, then has Jellyfin remove the key Seerr held, when Jellyfin lists it under
   the name Seerr gives its own (probed: 204, Seerr keeps working); a Seerr set up before
-  gets it at its next `apply`. One key, Mediaplane's, is then the one to rotate. A
-  resource's `update` gets apply's VerifyContext, for Jellyfin's client.
+  gets it at its next `apply`. One key, Mediaplane's, is then the one to rotate, unless
+  the removal fails, which `apply` reports; the key is then removed in Jellyfin's
+  dashboard (API Keys). A resource's `update` gets apply's VerifyContext, for Jellyfin's
+  client.
 - **Seerr is asked when its `settings.json` can't be read** (§6.4). A Seerr whose setup
   Mediaplane recorded (`setUp`) is asked itself, as plan reaches it (`Bootstrap.open`,
   without its key): one that says its setup is done stays as it is, published; one that
@@ -2351,6 +2366,9 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   (`signsInWith`). Seerr's setup then checks, as for a Seerr set up already, that its
   admin is the new token's account, and signs in again with it (probed: Seerr keeps the
   new token as its admin's, id 1), and out; its record stays whatever the sign-in does.
+  Every Seerr setup in the plan keeps its "sign in again", one set up afresh included.
+  When the new token is of another plex.tv account than Seerr's admin, the error says
+  so, and to put back a token of that account; Seerr keeps its old token.
   `plex-login` says to run it when it saves a token in place of another. Only on a Plex
   stack (`rotate.no-plex`).
 - **A Plex signed out of its account while it ran is claimed again** (§6.4). Its web
@@ -2358,7 +2376,8 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   `Preferences.xml` keeps `PlexOnlineToken=""`, so its image never uses `PLEX_CLAIM`: its
   claim step looks only for that attribute's name (probed: "Server already claimed").
   `plan` lists its setup, and warns that it runs published (`bootstrap.open-published`,
-  for any app whose setup is to be done and which publishes ports now). Apply starts it
+  for any app whose setup is to be done and which publishes ports now; it names Plex
+  only for Plex). Apply starts it
   unpublished, and Plex's setup claims it itself, while it is unclaimed: a claim token
   from plex.tv, with your token, posted to Plex over the wiring network, to its address
   (`POST /myplex/claim`; Plex's DNS-rebinding check refuses one sent to a name, probed);
