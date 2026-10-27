@@ -59,7 +59,7 @@ export interface DatabaseSeams {
    * called when it can't be started. And `answered`: once it has exited having answered
    * (not when it was stopped at its deadline, or for printing too much).
    */
-  started?: (pid: number | undefined) => void;
+  started?: (pid: number) => void;
   answered?: () => void;
 }
 
@@ -130,7 +130,7 @@ export function queryDatabase(
     child.on('error', (cause: unknown) => {
       settle({ found: 'failed', why: failure(codeOf(cause) ?? null, null) });
     });
-    seams.started?.(child.pid);
+    if (child.pid !== undefined) seams.started?.(child.pid);
     const { stdin, stdout } = child;
     // Both are pipes, as `stdio` asks, but undefined when the process wasn't started.
     if (stdin == null || stdout == null) {

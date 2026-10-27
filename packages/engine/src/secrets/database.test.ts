@@ -1,14 +1,38 @@
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 import { buildSync } from 'esbuild';
 import { describe, expect, it } from 'vitest';
 import { tempDir } from '../testing/temp';
 import { queryDatabase } from './database';
 
-const run = promisify(execFile);
+/**
+ * What `sh -c script` prints, once it has exited (waited for, so none is left behind), run in
+ * a process group of its own: a kill aimed at the group of pid 0 can't reach the test run.
+ */
+function runApart(script: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('sh', ['-c', script], {
+      detached: true,
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+    }, 30_000);
+    let out = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      out += chunk;
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(out);
+      else reject(new Error(`the script exited with ${String(code)}`));
+    });
+  });
+}
 
 const SQLITE = { query: 'SELECT 1 AS x', column: 'x' };
 const URL_FD3 = new URL('file:///proc/self/fd/3');
@@ -45,16 +69,21 @@ try {
 } catch {
   // Out of descriptors, as meant.
 }
-const answer = await queryDatabase(fd, new URL('file:///proc/self/fd/3'), ${JSON.stringify(SQLITE)});
-console.log(JSON.stringify(answer));
+let started = false;
+const answer = await queryDatabase(fd, new URL('file:///proc/self/fd/3'), ${JSON.stringify(SQLITE)}, {
+  started: () => {
+    started = true;
+  },
+});
+console.log(JSON.stringify({ answer, started }));
 `,
     );
     // sh sets the limit for the one Node process it starts.
-    const { stdout } = await run('sh', [
-      '-c',
+    const stdout = await runApart(
       `ulimit -n 64 && exec "${process.execPath}" "${script}"`,
-    ]);
-    const answer: unknown = JSON.parse(stdout);
-    expect(answer).toMatchObject({ found: 'failed' });
+    );
+    const result: unknown = JSON.parse(stdout);
+    // No process, so none to tell about.
+    expect(result).toMatchObject({ answer: { found: 'failed' }, started: false });
   });
 });
