@@ -71,6 +71,12 @@ export interface FakePlex {
    * machine identifier, and its token once claimed. Unset: nowhere.
    */
   configDir?: string;
+  /**
+   * Signed out of its plex.tv account while it ran (`DELETE /myplex/account`, as its web
+   * UI's sign-out does): unclaimed, with `PlexOnlineToken=""` in its Preferences.xml, which
+   * the image's own claim step takes for a claim, so a PLEX_CLAIM is never used (probed).
+   */
+  signedOut?: boolean;
 }
 
 /** Where Plex keeps Preferences.xml in its appdata folder. */
@@ -120,7 +126,12 @@ function keepPreferences(plex: FakePlex): void {
   if (plex.configDir === undefined) return;
   const path = join(plex.configDir, PLEX_PREFERENCES);
   mkdirSync(dirname(path), { recursive: true });
-  const token = plex.serverToken === '' ? '' : ` PlexOnlineToken="${plex.serverToken}"`;
+  const token =
+    plex.serverToken !== ''
+      ? ` PlexOnlineToken="${plex.serverToken}"`
+      : plex.signedOut === true
+        ? ' PlexOnlineToken=""'
+        : '';
   writeFileSync(
     path,
     `<?xml version="1.0" encoding="utf-8"?>\n<Preferences MachineIdentifier="${plex.machineId}" ProcessedMachineIdentifier="${plex.machineId}"${token}/>\n`,
@@ -139,11 +150,39 @@ export function claimFakePlex(
   claim: string | undefined,
   plexTv: FakePlexTvState,
 ): boolean {
+  // The image's step looks for PlexOnlineToken's name: signed out, it skips the claim.
+  if (plex.signedOut === true) return false;
+  return claimWith(plex, claim, plexTv);
+}
+
+/**
+ * The fake Plex signed out of its plex.tv account while it runs, as its web UI's sign-out
+ * does (`DELETE /myplex/account`): unclaimed at once, and Preferences.xml rewritten with
+ * `PlexOnlineToken=""` (probed).
+ */
+export function signOutFakePlex(plex: FakePlex): void {
+  Object.assign(plex, { owner: null, serverToken: '', signedOut: true });
+  keepPreferences(plex);
+}
+
+/**
+ * A claim of the fake Plex for the account that asked plex.tv for `claim`, as Plex makes
+ * it, from the image's step or from `POST /myplex/claim`: a token plex.tv doesn't know, or
+ * one used already, or a Plex claimed already, claims nothing.
+ */
+function claimWith(
+  plex: FakePlex,
+  claim: string | undefined,
+  plexTv: FakePlexTvState,
+): boolean {
   const known = plexTv.claims.find((c) => c.token === claim && !c.used);
   if (known === undefined || plex.owner !== null) return false;
   known.used = true;
+  plex.signedOut = false;
   plex.owner = known.account;
   plex.serverToken = `fake-server-token-${String(plexTv.servers.length + 1).padStart(2, '0')}`;
+  // Claimed again, it is the same server to plex.tv, with a new token.
+  plexTv.servers = plexTv.servers.filter((s) => s.machineId !== plex.machineId);
   plexTv.servers.push({
     machineId: plex.machineId,
     owner: known.account,
@@ -266,7 +305,21 @@ export function fakePlex(
       },
     };
   }
+  // Unclaimed, it is claimed by anyone who posts a claim token of their account to its
+  // address (probed: 200; to a name, its DNS-rebinding check refuses it, 401). One that
+  // claims nothing is refused (any refusal will do: not probed).
+  if (url.pathname === '/myplex/claim' && method === 'POST' && plex.owner === null) {
+    const host = (request.headers.host ?? '').split(':')[0] ?? '';
+    if (!/^\d+(\.\d+){3}$/.test(host)) return UNAUTHORIZED;
+    return claimWith(plex, query('token'), plexTv)
+      ? { status: 200, body: { MyPlex: { signInState: 'ok' } } }
+      : BAD_REQUEST;
+  }
   if (!plexTakes(plex, request.headers['x-plex-token'], plexTv)) return UNAUTHORIZED;
+  if (url.pathname === '/myplex/account' && method === 'DELETE') {
+    signOutFakePlex(plex);
+    return { status: 200, body: { MyPlex: { signInState: 'none' } } };
+  }
   if (url.pathname === '/' && method === 'GET') {
     return {
       status: 200,

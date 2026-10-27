@@ -152,9 +152,16 @@ export interface AppApi {
   /**
    * POST or DELETE with the key, and a JSON body if given; any 2xx answer is success, and
    * its body isn't read (Jellyfin answers 204). A POST is sent again only when nothing
-   * reached the app; a DELETE, like a GET.
+   * reached the app; a DELETE, like a GET. `byAddress` sends `Host` as the address it
+   * reaches the app at, not its service's name: an unclaimed Plex takes a claim, with no
+   * key, only so (its DNS-rebinding check refuses a name, probed).
    */
-  submit(method: 'POST' | 'DELETE', path: string, body?: unknown): Promise<void>;
+  submit(
+    method: 'POST' | 'DELETE',
+    path: string,
+    body?: unknown,
+    how?: { byAddress?: boolean },
+  ): Promise<void>;
   /** POST a JSON body with the key, and the JSON answer, checked with `schema`. */
   post<T>(path: string, body: unknown, schema: z.ZodType<T>): Promise<T>;
   /**
@@ -249,6 +256,8 @@ interface Call {
   body?: { type: string; text: string };
   /** Without the API key. */
   anonymous?: boolean;
+  /** With `Host` as the endpoint's address and port, not the service's name. */
+  byAddress?: boolean;
   /** Secrets this call sends, which the options don't list: a sign-in's password. */
   secrets?: readonly string[];
 }
@@ -336,7 +345,10 @@ export function createAppApi(options: AppApiOptions): AppApi {
   function attempt(call: Call, limitMs: number): Promise<Answer> {
     return new Promise<Answer>((resolve, reject) => {
       const headers: Record<string, string> = {
-        Host: host,
+        Host:
+          call.byAddress === true
+            ? `${options.endpoint.host}:${String(options.endpoint.port)}`
+            : host,
         'User-Agent': 'Mediaplane',
         Accept: 'application/json',
       };
@@ -584,9 +596,14 @@ export function createAppApi(options: AppApiOptions): AppApi {
     async put(path, body) {
       await send({ method: 'PUT', path, body: json(body) }, true);
     },
-    async submit(method, path, body) {
+    async submit(method, path, body, how = {}) {
       await send(
-        { method, path, ...(body === undefined ? {} : { body: json(body) }) },
+        {
+          method,
+          path,
+          ...(body === undefined ? {} : { body: json(body) }),
+          ...(how.byAddress === true ? { byAddress: true } : {}),
+        },
         method === 'DELETE',
       );
     },

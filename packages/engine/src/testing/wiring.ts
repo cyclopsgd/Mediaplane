@@ -425,7 +425,9 @@ export async function fakeStackApis(plexTv: FakePlexTvState = freshPlexTv()): Pr
   const app = await fakeHttpApp((request) => {
     const { method, path, headers } = request;
     const host = (headers.host ?? '').split(':')[0] ?? '';
-    const service = host === 'gluetun' ? 'qbittorrent' : host;
+    // Every fake app is at one address: a Plex claim, which goes to an address, is Plex's.
+    const byAddress = /^\d+(\.\d+){3}$/.test(host) && path.startsWith('/myplex/claim');
+    const service = host === 'gluetun' ? 'qbittorrent' : byAddress ? 'plex' : host;
     const state = stateOf(service);
     if (service === 'qbittorrent') return fakeQbittorrent(request, state);
     if (service === 'jellyfin') return fakeJellyfin(request, state);

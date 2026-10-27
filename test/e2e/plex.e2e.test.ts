@@ -600,6 +600,43 @@ describe.skipIf(PLEX_TOKEN_FILE === undefined)(
         );
         expect((await apply(options)).outcome).toBe('no-changes');
         await saveToken(home, token);
+
+        // Signed out of your account while it runs, as its web UI's sign-out does: Plex
+        // is unclaimed at once, and still published. plan says so; apply starts it
+        // unpublished, claims it again through its API (its image never would: its
+        // Preferences.xml keeps an empty PlexOnlineToken), and publishes it (Slice 10b).
+        const out = await api(
+          PLEX,
+          '/myplex/account',
+          { Accept: 'application/json', 'X-Plex-Token': token },
+          { method: 'DELETE' },
+        );
+        expect(out.status, "Plex's sign-out").toBe(200);
+        const unclaimed = await plan(options);
+        expect(unclaimed.bootstrap).toEqual([{ app: 'plex', unpublished: true }]);
+        expect(unclaimed.diagnostics.map((d) => d.code)).toContain(
+          'bootstrap.open-published',
+        );
+        const reclaimed = await apply(options);
+        expect(reclaimed.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+        expect(reclaimed.outcome).toBe('success');
+        expect(await plexState(docker)).toBe(
+          `ports 127.0.0.1:${String(PLEX)}, claim none, claimed`,
+        );
+        // The same server, its new token your account's again.
+        const after = await preferencesIn(home);
+        mask(after.serverToken);
+        expect(after.machineId === machineId, 'the same server').toBe(true);
+        expect(
+          (await plexTv.accountId(after.serverToken)) === (await plexTv.accountId(token)),
+          'claimed again for your account',
+        ).toBe(true);
+        expectNoSecret("the claim's result", JSON.stringify(reclaimed), [
+          ...secrets,
+          ...claims,
+          after.serverToken,
+        ]);
+        expect((await apply(options)).outcome).toBe('no-changes');
       } catch (failure) {
         await removeAll().catch((also: unknown) => {
           console.error('teardown failed too:', also);

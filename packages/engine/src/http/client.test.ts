@@ -1267,6 +1267,16 @@ describe("createAppApi: Jellyfin's ways", () => {
     expect(slept).toHaveLength(1);
   });
 
+  it('sends Host as the address it reaches the app at, when asked, as an unclaimed Plex takes a claim', async () => {
+    const { api, app } = await sonarr(() => ({ status: 200 }));
+    await api.submit('POST', '/myplex/claim?token=x', undefined, { byAddress: true });
+    await api.submit('POST', '/other');
+    expect(app.requests.map((r) => r.headers.host)).toEqual([
+      `127.0.0.1:${String(app.port)}`,
+      'sonarr:8989',
+    ]);
+  });
+
   it('signs in with JSON and without the key: the answer, or nothing when refused, never the password', async () => {
     const { api, app } = await sonarr(
       (request) => {

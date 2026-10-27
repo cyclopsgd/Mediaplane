@@ -319,7 +319,19 @@ export function fakeDocker(
           hosts.set(`fake-${service}`, mode.slice('container:'.length));
       }
       const env = parseEnvFile(await readFile(join(home, ENV_PATH), 'utf8'));
-      containers = running(fakeHash(stringify(compose), env));
+      // Each publishing its ports, as compose.yaml's "<address>:<port>:<port>" gives them.
+      containers = running(fakeHash(stringify(compose), env)).map((container) => ({
+        ...container,
+        published: (
+          (compose.services[container.service]?.ports as unknown[] | undefined) ?? []
+        )
+          .map((port) => /^(.+):(\d+):\d+$/.exec(String(port)))
+          .flatMap((match) =>
+            match === null
+              ? []
+              : [{ address: match[1] ?? '', port: Number(match[2]), protocol: 'tcp' }],
+          ),
+      }));
       return result;
     },
   };

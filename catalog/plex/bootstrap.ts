@@ -173,6 +173,64 @@ async function accountOf(
   }
 }
 
+/**
+ * A Preferences.xml of a Plex signed out of its plex.tv account while it ran, as its web
+ * UI's sign-out does (`DELETE /myplex/account`, probed): it keeps the attribute, empty.
+ */
+const SIGNED_OUT = /\sPlexOnlineToken=""/;
+
+/**
+ * Whether Plex, in the stack at `home`, was signed out of its account while it ran: the
+ * image's own claim step then never uses PLEX_CLAIM, since it looks only for the
+ * attribute's name (probed: "Server already claimed"). A file that can't be read says
+ * no: the setup's own read of it says why it fails.
+ */
+async function signedOut(home: string): Promise<boolean> {
+  try {
+    return SIGNED_OUT.test(
+      await readFile(join(home, 'appdata', 'plex', PREFERENCES), 'utf8'),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Claim an unclaimed Plex for your account through its own API, as the image's claim step
+ * would: a claim token from plex.tv, with your token, posted to Plex over the wiring
+ * network while it is unpublished (`POST /myplex/claim`, which an unclaimed Plex takes
+ * from anyone, probed: 200). The claim token is a secret of the run; the setup goes on to
+ * check whose Plex is, as after its first start.
+ */
+async function claimAgain(
+  api: AppApi,
+  ctx: BootstrapContext,
+  token: string,
+): Promise<void> {
+  let claim: string;
+  try {
+    claim = await ctx.plexTv.claimToken(token);
+  } catch (cause) {
+    const why = cause instanceof PlexTvError ? cause.message : failedCall(cause);
+    throw new AppApiError(
+      `${api.name} at ${api.where} was signed out of its plex.tv account, and Mediaplane couldn't get a claim token from plex.tv to claim it again, so it stays unpublished: ${why}. ${claimHint(cause)}`,
+      cause instanceof PlexTvError && !cause.unsure
+        ? { kind: 'rejected' }
+        : { kind: 'auth', unsure: true },
+    );
+  }
+  api.addSecret(claim);
+  // By its address: Plex's DNS-rebinding check refuses a claim sent to a name (probed).
+  await api.submit(
+    'POST',
+    `/myplex/claim?token=${encodeURIComponent(claim)}`,
+    undefined,
+    {
+      byAddress: true,
+    },
+  );
+}
+
 /** What to do when plex.tv gives no claim token, failing with `cause`. */
 function claimHint(cause: unknown): string {
   if (cause instanceof PlexTvError && cause.kind === 'refused') {
@@ -240,6 +298,10 @@ export const plexBootstrap: Bootstrap = {
         `${api.name} at ${api.where} can't be claimed: Mediaplane has no Plex token (plex.token)`,
         { kind: 'rejected' },
       );
+    }
+    // Signed out of its account while it ran: claimed again here, before the wait.
+    if ((await signedOut(stack.home)) && !(await identityOf(api)).claimed) {
+      await claimAgain(api, ctx, token);
     }
     // As long as apply waits for an app, as Plex claims itself as it first starts.
     const held = (

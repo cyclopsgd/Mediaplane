@@ -547,6 +547,25 @@ export async function planStack(
   bootstrap = bootstrap.map((change) =>
     signsInAgain(change.app) ? { ...change, again: true } : change,
   );
+  // An app to set up first that runs published now, as a Plex signed out of its account
+  // while it ran: until apply starts it again without its ports, whoever reaches it may
+  // finish its setup first (spec §6.4). Said, as apply puts it right.
+  for (const change of bootstrap.filter((b) => b.unpublished)) {
+    const published = current.some(
+      (c) => c.service === change.app && c.state === 'running' && c.published.length > 0,
+    );
+    if (!published) continue;
+    const name = stack.apps.find((a) => a.def.id === change.app)?.def.name ?? change.app;
+    diagnostics.push(
+      warning(
+        'bootstrap.open-published',
+        `${name} runs published, though its first-run setup isn't shown to be done: whoever reaches it may finish the setup before Mediaplane does, as anyone can claim a Plex signed out of its plex.tv account`,
+        {
+          hint: `run apply now: it starts ${name} again without its ports, and finishes the setup first`,
+        },
+      ),
+    );
+  }
   return {
     result: {
       ok: true,

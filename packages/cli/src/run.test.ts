@@ -41,6 +41,7 @@ import {
   freshAppState,
   running,
   SET_UP_JELLYFIN,
+  signOutFakePlex,
   tempDir,
   thrown,
 } from '@mediaplane/engine/testing';
@@ -1913,6 +1914,39 @@ apps:
     ).toBe(0);
     expect(seerr.seerr.plexTokens[FAKE_PLEX_ACCOUNT.id]).toBe(renewed);
     expect((await readSecretStore(home)).setUp).toEqual(['plex', 'seerr']);
+  });
+
+  it('warns of a Plex signed out of your account while it runs, published, and claims it again before publishing it', async () => {
+    const { home, plex, docker } = await plexHome();
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(0);
+    const machineId = plex.machineId;
+    // Its web UI's sign-out (DELETE /myplex/account): unclaimed at once, still published.
+    signOutFakePlex(plex);
+    const shown = capture();
+    expect(await run(['plan', '--home', home], shown.io, deps(docker))).toBe(2);
+    expect(shown.stdout()).toContain(
+      '+ plex (with no port published until it is done)\n',
+    );
+    expect(shown.stderr()).toContain(
+      "warning: Plex runs published, though its first-run setup isn't shown to be done: whoever reaches it may finish the setup before Mediaplane does, as anyone can claim a Plex signed out of its plex.tv account\n",
+    );
+    docker.calls.length = 0;
+    const applied = capture();
+    expect(await run(['apply', '--home', home, '--yes'], applied.io, deps(docker))).toBe(
+      0,
+    );
+    // Unpublished first, claimed through its API (its image left PLEX_CLAIM unused),
+    // then published: the same server, yours.
+    expect(docker.calls.filter((call) => call.startsWith('up'))).toEqual([
+      'up unpublished plex with plex.PLEX_CLAIM',
+      'up',
+    ]);
+    expect([plex.owner, plex.machineId]).toEqual([FAKE_PLEX_ACCOUNT.id, machineId]);
+    expectNoSecrets(applied.stdout() + applied.stderr(), plexSecrets());
+    const again = capture();
+    expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
   });
 
   it('refuses --rotate plex.token on a stack with no Plex', async () => {

@@ -485,6 +485,55 @@ describe("Plex's first-run setup", () => {
     });
   });
 
+  it('claims again, through its API, a Plex signed out of your account while it ran, which its image never would', async () => {
+    const { api, state, plexTv, ctx, stack } = await plexOf(60_000);
+    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    // Signed out, as its web UI does: PlexOnlineToken="" in Preferences.xml, which the
+    // image's claim step takes for a claim, so a PLEX_CLAIM goes unused.
+    Object.assign(state.plex, { owner: null, serverToken: '', signedOut: true });
+    // Asked, it says it is open, and keeps its Preferences.xml as signed out.
+    expect(await plexBootstrap.open(api)).toBe(true);
+    expect(
+      claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state),
+    ).toBe(false);
+    expect(await plexBootstrap.run(api, ADMIN, stack, ctx)).toBeUndefined();
+    expect(state.plex.owner).toBe(FAKE_PLEX_ACCOUNT.id);
+    expect(state.plex.signedOut).toBe(false);
+    // One claim token more, for your account, used by this claim.
+    expect(plexTv.state.claims.at(-1)).toMatchObject({
+      account: FAKE_PLEX_ACCOUNT.id,
+      used: true,
+    });
+  });
+
+  it('keeps a Plex signed out of your account unpublished when plex.tv gives no claim token, and says what to do', async () => {
+    const { api, state, plexTv, stack } = await plexOf(60_000);
+    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    Object.assign(state.plex, { owner: null, serverToken: '', signedOut: true });
+    // Asked, it says it is open, and keeps its Preferences.xml as signed out.
+    expect(await plexBootstrap.open(api)).toBe(true);
+    const failed = await thrown(
+      plexBootstrap.run(api, ADMIN, stack, {
+        given: { plex: { token: 'revoked-plex-token-0' } },
+        plexTv: plexTv.client,
+      }),
+    );
+    expect(failed).toMatchObject({
+      kind: 'rejected',
+      message:
+        'Plex at http://plex:32400 (127.0.0.1) was signed out of its plex.tv account, and Mediaplane couldn\'t get a claim token from plex.tv to claim it again, so it stays unpublished: plex.tv refused the Plex token (HTTP 401) (GET /api/claim/token.json). plex.tv refused your Plex token: it was revoked, or is not one. Run "mediaplane plex-login" to sign in again, then run apply again',
+    });
+    expect(state.plex.owner).toBeNull();
+    // plex.tv not answering is unsure, never a refusal.
+    const silent = await thrown(
+      plexBootstrap.run(api, ADMIN, stack, {
+        given: { plex: { token: TOKEN } },
+        plexTv: { ...plexTv.client, claimToken: () => Promise.reject(new Error('down')) },
+      }),
+    );
+    expect(silent).toMatchObject({ kind: 'auth', unsure: true });
+  });
+
   it("keeps a Plex that didn't claim itself unpublished, saying why", async () => {
     const { api, ctx, stack } = await plexOf(60_000);
     const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));
