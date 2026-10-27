@@ -164,10 +164,13 @@ export async function bootstrapApps(options: BootstrapOptions): Promise<Bootstra
   // A setup with no key that is pending is not trusted any more: its file no longer says
   // it is done (appdata was reset), or Mediaplane can't read it. The record is dropped
   // before the app is set up again, and made again only when the setup succeeds, so an
-  // app claimed meanwhile isn't taken as Mediaplane's by the next plan.
+  // app claimed meanwhile isn't taken as Mediaplane's by the next plan. One that only
+  // signs in again (`again`) is done, and stays recorded whatever its sign-in does.
   const stale = apps.filter(
     (app) =>
-      app.def.bootstrap?.secret === undefined && (store.setUp ?? []).includes(app.def.id),
+      app.def.bootstrap?.secret === undefined &&
+      (store.setUp ?? []).includes(app.def.id) &&
+      options.pending.find((p) => p.app === app.def.id)?.again !== true,
   );
   if (stale.length > 0) {
     const dropped = stale.map((app) => app.def.id);
@@ -238,7 +241,7 @@ export async function bootstrapApps(options: BootstrapOptions): Promise<Bootstra
             container: `${options.project}-${app.def.id}-1`,
             home: options.home,
             stack,
-            ctx,
+            ctx: change?.again === true ? { ...ctx, again: true } : ctx,
           })
         : {
             waiting: `${app.def.name} waits for ${before.def.name}'s first-run setup, which isn't done`,
@@ -323,13 +326,18 @@ export async function bootstrapApps(options: BootstrapOptions): Promise<Bootstra
     await options.publish([...stillOpen, ...(options.keepUnpublished ?? [])]);
   }
   const waits = waiting.map((w) => `${w.app} waits: ${w.reason}`);
-  const finished = apps.filter((app) => !unfinished.includes(app)).map((a) => a.def.id);
+  const done = apps.filter((app) => !unfinished.includes(app)).map((a) => a.def.id);
+  const signedInAgain = (id: string) =>
+    options.pending.some((p) => p.app === id && p.again === true);
+  const finished = done.filter((id) => !signedInAgain(id));
+  const again = done.filter(signedInAgain);
   const published = unpublished.filter((app) => !stillOpen.includes(app));
   const keys = saved.length === 0 ? '' : ` and saved ${saved.join(', ')}`;
   return {
     store,
     detail: [
       ...(finished.length === 0 ? [] : [`set up ${finished.join(', ')}${keys}`]),
+      ...(again.length === 0 ? [] : [`signed in again to ${again.join(', ')}`]),
       ...(published.length === 0 ? [] : [`published ${published.join(', ')}`]),
       ...waits,
     ].join('; '),

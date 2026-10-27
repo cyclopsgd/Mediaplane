@@ -122,6 +122,11 @@ describe('mediaplane plex-login', () => {
       'new-plex-token-00002\n',
     );
     expect(forced.said).not.toContain('new-plex-token');
+    // In place of a token: the apps that hold the old one get the new one by a rotation.
+    const again = await login(home, plexTv.client, ['--force']);
+    expect(again.stdout).toContain(
+      'Signed in. Saved your Plex token in secrets/plex-token. Next: run "mediaplane apply --rotate plex.token", which gives it to the apps that hold the old one, then you can sign the old one out at plex.tv.\n',
+    );
   });
 
   it('signs in again when plex.tv refuses the saved token, and replaces it', async () => {

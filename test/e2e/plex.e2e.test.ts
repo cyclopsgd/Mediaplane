@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { catalog } from '@mediaplane/catalog';
 import {
   apply,
@@ -552,6 +553,43 @@ describe.skipIf(PLEX_TOKEN_FILE === undefined)(
         ).toEqual([]);
         expect(again.outcome).toBe('no-changes');
         expect(claims.length, 'no claim token asked for by the second apply').toBe(1);
+
+        // A new token of your account, as plex-login --force saves one: Plex's own is a
+        // token of your account too, as plex.tv said above. --rotate plex.token gives it
+        // to both arrs, and signs Seerr in again with it (Slice 10b).
+        await saveToken(home, serverToken);
+        const rotated = await apply({ ...options, rotate: ['plex.token'] });
+        expect(rotated.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+        expect(rotated.outcome).toBe('success');
+        expect(rotated.plan.bootstrap).toEqual([
+          { app: 'seerr', unpublished: false, again: true },
+        ]);
+        expect(rotated.actions.find((a) => a.step === 'bootstrap')?.detail).toBe(
+          'signed in again to seerr',
+        );
+        expect(
+          wired(rotated.actions).filter(([, detail]) => detail !== 'unchanged'),
+        ).toEqual([
+          ['radarr.connection_plex', 'updated authToken'],
+          ['sonarr.connection_plex', 'updated authToken'],
+        ]);
+        // Seerr keeps its admin's token in its own database, which its API never shows:
+        // read there, read-only, and compared as yes or no.
+        const seerrDb = new DatabaseSync(join(home, 'appdata/seerr/db/db.sqlite3'), {
+          readOnly: true,
+        });
+        try {
+          const row = seerrDb.prepare('SELECT plexToken FROM user WHERE id = 1').get();
+          expect(row?.plexToken === serverToken, 'Seerr holds the new token').toBe(true);
+        } finally {
+          seerrDb.close();
+        }
+        expectNoSecret("the rotation's result", JSON.stringify(rotated), [
+          ...secrets,
+          ...claims,
+        ]);
+        expect((await apply(options)).outcome).toBe('no-changes');
+        await saveToken(home, token);
       } catch (failure) {
         await removeAll().catch((also: unknown) => {
           console.error('teardown failed too:', also);

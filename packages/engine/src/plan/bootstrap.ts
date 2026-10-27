@@ -14,6 +14,11 @@ export interface BootstrapChange {
    * reaches it, or Mediaplane can't tell. Otherwise apply only signs in to make its key.
    */
   unpublished: boolean;
+  /**
+   * Its setup is done, and it signs in again, published, with what you gave anew
+   * (`--rotate plex.token`: Seerr, with your new Plex token). Added in Slice 10b.
+   */
+  again?: boolean;
 }
 
 /** What the plan found of first-run setups: the apps to set up, and what to tell the user. */

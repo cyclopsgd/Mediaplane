@@ -410,6 +410,12 @@ export interface ExamineOptions {
    * which apply sets, and isn't checked, since a sign-in with it could only fail.
    */
   lacks?: readonly string[];
+  /**
+   * The values of the secrets you rotated (`--rotate plex.token`: your new Plex token). As
+   * `fresh`: a change, which apply sets, and isn't checked, since the old one, which the
+   * app holds, still passes its check.
+   */
+  rotated?: readonly string[];
 }
 
 /** Apply's VerifyContext, without another app: what a check gets by default. */
@@ -434,6 +440,12 @@ const FRESH: Verdict = {
 const LACKED: Verdict = {
   verdict: 'unchecked',
   reason: 'the app has never had it: apply sets it',
+};
+
+/** Why a secret you rotated isn't checked. */
+const ROTATED: Verdict = {
+  verdict: 'unchecked',
+  reason: 'you rotated it: apply gives the app the new one',
 };
 
 /** Why a secret the app made itself at its first-run setup isn't checked. */
@@ -553,6 +565,10 @@ export async function examine(
     const value = desired.secrets[secret] ?? '';
     if (value === '') return undefined;
     if ((options.fresh ?? []).includes(value)) return FRESH;
+    // Never one the key's own app refuses (`blocked`): Plex, a token of another account.
+    if ((options.rotated ?? []).includes(value) && options.blocked === undefined) {
+      return ROTATED;
+    }
     return (options.lacks ?? []).includes(value) ? LACKED : undefined;
   };
   const fresh = spec.secrets.filter((secret) => newVerdict(secret) !== undefined);
@@ -826,6 +842,8 @@ export interface PlanWiringOptions {
   only?: string;
   /** The values of the secrets apply generates (ExamineOptions.fresh). */
   fresh?: readonly string[];
+  /** The values of the secrets you rotated (ExamineOptions.rotated). */
+  rotated?: readonly string[];
   /** By app, the values it has never had (ExamineOptions.lacks). */
   lacking?: Readonly<Record<string, readonly string[]>>;
   /**
@@ -1021,6 +1039,7 @@ export async function planWiring(options: PlanWiringOptions): Promise<PlannedWir
           ...(only === undefined ? {} : { secrets: false }),
           ...(held === undefined ? {} : { blocked: held }),
           ...(options.fresh === undefined ? {} : { fresh: options.fresh }),
+          ...(options.rotated === undefined ? {} : { rotated: options.rotated }),
           ...(options.lacking?.[app.def.id] === undefined
             ? {}
             : { lacks: options.lacking[app.def.id] }),

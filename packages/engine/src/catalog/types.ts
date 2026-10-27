@@ -178,6 +178,11 @@ export interface BootstrapContext {
   given: Readonly<Record<string, Readonly<Record<string, string>>>>;
   /** plex.tv: called directly from source, through the plex.tv helper in the image. */
   plexTv: PlexTv;
+  /**
+   * The setup is done, and signs in again with what you gave anew (`--rotate plex.token`:
+   * Seerr, with your new Plex token), once it has shown the app is Mediaplane's.
+   */
+  again?: boolean;
 }
 
 /**
@@ -202,6 +207,13 @@ export interface Bootstrap {
   done: { path: string; pattern: RegExp };
   /** Whether anyone who reaches the app can still claim it. Throws AppApiError. */
   open(api: AppApi): Promise<boolean>;
+  /**
+   * The secrets you give that the setup signs in with, by their path in stack.yaml
+   * (`plex.token`, Seerr's on a Plex stack): rotating one (`--rotate`) has the setup, done
+   * already, run again, published, with `again` (BootstrapContext), so that the app takes
+   * the new one. The app keeps the one it signed in with, and can't be asked which.
+   */
+  signsInWith?: readonly string[];
   /**
    * Environment variables for the app's start while its setup isn't done, which only
    * apply's start step gives it, with its ports unpublished: Plex's PLEX_CLAIM, a claim

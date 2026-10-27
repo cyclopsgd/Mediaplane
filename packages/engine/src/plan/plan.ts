@@ -100,14 +100,19 @@ export interface PlanOptions {
    */
   only?: string;
   /**
-   * The secrets Mediaplane generated to generate anew, and set in every app that holds them
-   * (ROTATABLE): `admin.password`, unless it is yours.
+   * The secrets to rotate, and set in every app that holds them (ROTATABLE):
+   * `admin.password`, which Mediaplane generates anew, unless it is yours; `plex.token`,
+   * the new token you put in its file (`plex-login --force`), which the arrs' connections
+   * to Plex are given, and Seerr signs in again with.
    */
   rotate?: readonly string[];
 }
 
+/** Your Plex token, as stack.yaml names it (`plex.token`). */
+export const PLEX_TOKEN_PATH = 'plex.token';
+
 /** The secrets `rotate` takes. */
-export const ROTATABLE: readonly string[] = [ADMIN_PASSWORD_PATH];
+export const ROTATABLE: readonly string[] = [ADMIN_PASSWORD_PATH, PLEX_TOKEN_PATH];
 
 export interface PlanResult {
   /** False when any diagnostic is an error; files and containers are then empty. */
@@ -394,6 +399,11 @@ export async function planStack(
   const given = await userSecrets(stack, options.env);
   const keys = stackKeys(stack, preview, given);
   const secrets = knownSecrets(values, preview, admin, given);
+  // Your new Plex token, under --rotate plex.token: each resource that holds it is given
+  // it, unchecked, as the apps hold the old one, which still works.
+  const newToken = rotating.plexToken
+    ? [given.plex?.token ?? ''].filter((value) => value !== '')
+    : [];
   // Keep mine's values (spec §6.3): an override that names nothing Mediaplane manages,
   // or can't be applied, fails the plan before any app is asked, whatever the stack runs.
   diagnostics.push(...checkOverrides(stack, options.catalog, { admin, keys }));
@@ -446,6 +456,7 @@ export async function planStack(
         // Their resources' admin password is a change, unchecked: a sign-in would fail.
         lacking: Object.fromEntries(notIn.map((app) => [app, [admin.password]])),
         ...(setups.ask === undefined ? {} : { ask: setups.ask }),
+        ...(newToken.length === 0 ? {} : { rotated: newToken }),
       });
       ({ drift, checks } = planned);
       wiring = planned.changes;
@@ -474,6 +485,19 @@ export async function planStack(
     // A rotation that would leave an app with a password nobody holds.
     if (hasErrors(diagnostics)) return failed(diagnostics);
   }
+  // A setup that signs in with what you rotate signs in again, published, once it is shown
+  // to be Mediaplane's: Seerr keeps the Plex token it signed in with (spec §6.1), and
+  // can't be asked which, so it takes the new one only so.
+  const again = stack.apps.filter(
+    (app) =>
+      (options.rotate ?? []).some((name) =>
+        (app.def.bootstrap?.signsInWith ?? []).includes(name),
+      ) && ![...bootstrap, ...held].some((b) => b.app === app.def.id),
+  );
+  bootstrap = [
+    ...bootstrap,
+    ...again.map((app) => ({ app: app.def.id, unpublished: false, again: true })),
+  ];
   // An app whose appdata can't say whether its setup is done, asked itself: set up again,
   // unpublished, unless it said its setup is done (fail closed: one that couldn't be asked
   // is too). Its wiring is then checked after the start, as for any app set up first. Held
@@ -494,7 +518,11 @@ export async function planStack(
       [...held, ...again.held],
       toCome,
     );
-    bootstrap = [...bootstrap, ...through.changes];
+    // Set up afresh, unpublished: its sign-in again, if it had one, is that setup's.
+    bootstrap = [
+      ...bootstrap.filter((b) => !reopened.includes(b.app)),
+      ...through.changes,
+    ];
     held.push(...again.held, ...through.held);
     diagnostics.push(...again.diagnostics, ...through.diagnostics);
     if (hasErrors(diagnostics)) return failed(diagnostics);
@@ -577,7 +605,7 @@ function withoutPassword(store: SecretStore): SecretStore {
 function rotation(
   rotate: readonly string[],
   stack: ResolvedStack,
-): { password: boolean; diagnostics: Diagnostic[] } {
+): { password: boolean; plexToken: boolean; diagnostics: Diagnostic[] } {
   const diagnostics = rotate.flatMap((name) => {
     if (!ROTATABLE.includes(name)) {
       return [
@@ -586,6 +614,17 @@ function rotation(
           `Mediaplane doesn't rotate ${name}: it rotates ${ROTATABLE.join(', ')}`,
         ),
       ];
+    }
+    // Yours, always: you put the new one in its file, and apply gives it to the apps.
+    if (name === PLEX_TOKEN_PATH) {
+      return stack.apps.some((app) => app.def.id === 'plex')
+        ? []
+        : [
+            error(
+              'rotate.no-plex',
+              `${name} is rotated only in a stack with Plex, which this one doesn't run`,
+            ),
+          ];
     }
     return stack.config.admin.password === undefined
       ? []
@@ -599,7 +638,11 @@ function rotation(
           ),
         ];
   });
-  return { password: rotate.includes(ADMIN_PASSWORD_PATH), diagnostics };
+  return {
+    password: rotate.includes(ADMIN_PASSWORD_PATH),
+    plexToken: rotate.includes(PLEX_TOKEN_PATH),
+    diagnostics,
+  };
 }
 
 function failed(diagnostics: Diagnostic[]): { result: PlanResult; context: undefined } {

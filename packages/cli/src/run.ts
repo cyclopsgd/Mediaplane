@@ -246,7 +246,7 @@ export function defaultDeps(env: NodeJS.ProcessEnv): CliDeps {
 
 /** --rotate, as plan and apply take it: the secret to generate anew. */
 const ROTATE_HELP =
-  'generate a secret Mediaplane generated anew, and set it in every app that holds it: admin.password (not one of your own)';
+  'set a secret anew in every app that holds it: admin.password, which Mediaplane generates anew (not one of your own), or plex.token, the new token in its file';
 
 /** What apply's options are, as Commander gives them. */
 interface ApplyFlags {

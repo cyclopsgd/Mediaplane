@@ -328,13 +328,15 @@ function answer(
     return refused(request);
   }
   if (path === '/api/v1/auth/me' && method === 'GET') {
-    const plexId = seerr.plexUsers[0];
+    // The key acts as its admin; a session, as whoever signed in, with that user's own
+    // Jellyfin login and plex.tv account.
+    const id = keyed ? 1 : (seerr.sessionIds[cookie ?? ''] ?? 1);
+    const plexId = seerr.plexUsers[id - 1];
     return {
       status: 200,
       body: {
-        // The key acts as its admin; a session, as whoever signed in.
-        id: keyed ? 1 : (seerr.sessionIds[cookie ?? ''] ?? 1),
-        jellyfinUsername: seerr.users[0] ?? null,
+        id,
+        jellyfinUsername: seerr.users[id - 1] ?? null,
         plexId: plexId ?? null,
         plexUsername: plexId === undefined ? null : 'fake-user',
         email: 'user@example.com',

@@ -121,11 +121,19 @@ export async function plexLogin(
     }
     // Whole or not at all, and 0600: the token is the key to your Plex account.
     await writeFileAtomic(path, `${token}\n`, 0o600);
+    // A token in place of another: Sonarr, Radarr and Seerr hold the old one, which only
+    // a rotation gives them the new one in place of.
+    const next =
+      options.fromInit === true
+        ? ''
+        : saved === undefined
+          ? ' Next: run "mediaplane apply".'
+          : ' Next: run "mediaplane apply --rotate plex.token", which gives it to the apps that hold the old one, then you can sign the old one out at plex.tv.';
     report(options, io, {
       saved: shown,
       signedIn: true,
       replaced: existing !== undefined,
-      said: `Signed in. Saved your Plex token in ${shown}.${options.fromInit === true ? '' : ' Next: run "mediaplane apply".'}`,
+      said: `Signed in. Saved your Plex token in ${shown}.${next}`,
     });
     return 0;
   } catch (cause) {

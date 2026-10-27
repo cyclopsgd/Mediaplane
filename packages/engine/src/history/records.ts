@@ -96,9 +96,18 @@ const recordShape = (object: typeof z.strictObject) =>
           }),
         )
         .optional(),
-      /** The apps whose first-run setup the plan said apply would finish. Added in Slice 5. */
+      /**
+       * The apps whose first-run setup the plan said apply would finish. Added in Slice 5;
+       * `again`, a setup done that signs in again (--rotate plex.token), in Slice 10b.
+       */
       bootstrap: z
-        .array(object({ app: z.string(), unpublished: z.boolean() }))
+        .array(
+          object({
+            app: z.string(),
+            unpublished: z.boolean(),
+            again: z.boolean().optional(),
+          }),
+        )
         .optional(),
     }),
     actions: z.array(actionShape(object)),

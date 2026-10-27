@@ -12,11 +12,11 @@ Show what apply would change; it changes nothing in the stack, but from the imag
 mediaplane plan [options]
 ```
 
-| Option              | Description                                                                                                              |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `--home <dir>`      | Mediaplane home directory (default: "/opt/mediaplane")                                                                   |
-| `--rotate <secret>` | generate a secret Mediaplane generated anew, and set it in every app that holds it: admin.password (not one of your own) |
-| `--json`            | print machine-readable JSON                                                                                              |
+| Option              | Description                                                                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--home <dir>`      | Mediaplane home directory (default: "/opt/mediaplane")                                                                                                        |
+| `--rotate <secret>` | set a secret anew in every app that holds it: admin.password, which Mediaplane generates anew (not one of your own), or plex.token, the new token in its file |
+| `--json`            | print machine-readable JSON                                                                                                                                   |
 
 Exit codes:
 
@@ -32,12 +32,12 @@ Make the running stack match stack.yaml.
 mediaplane apply [options]
 ```
 
-| Option              | Description                                                                                                              |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `--home <dir>`      | Mediaplane home directory (default: "/opt/mediaplane")                                                                   |
-| `--yes`             | apply without asking for confirmation                                                                                    |
-| `--rotate <secret>` | generate a secret Mediaplane generated anew, and set it in every app that holds it: admin.password (not one of your own) |
-| `--json`            | print machine-readable JSON (needs --yes)                                                                                |
+| Option              | Description                                                                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--home <dir>`      | Mediaplane home directory (default: "/opt/mediaplane")                                                                                                        |
+| `--yes`             | apply without asking for confirmation                                                                                                                         |
+| `--rotate <secret>` | set a secret anew in every app that holds it: admin.password, which Mediaplane generates anew (not one of your own), or plex.token, the new token in its file |
+| `--json`            | print machine-readable JSON (needs --yes)                                                                                                                     |
 
 Exit codes:
 

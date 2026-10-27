@@ -1774,6 +1774,25 @@ describe('planWiring: what drift adds (spec §6.3)', () => {
     expect(unsure.drift).toEqual([]);
   });
 
+  it('takes a secret you rotated as a change, unchecked: the old one the app holds still passes', async () => {
+    const sonarr = await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD });
+    const planned = await planWiring(
+      options(sonarr, { known: RECORDED, rotated: [PASSWORD] }),
+    );
+    expect(planned.changes).toEqual([
+      { resource: 'sonarr.login', action: 'update', changes: ['password'] },
+    ]);
+    expect(planned.checks).toEqual([
+      {
+        resource: 'sonarr.login',
+        secret: 'password',
+        verdict: 'unchecked',
+        reason: 'you rotated it: apply gives the app the new one',
+      },
+    ]);
+    expect(sonarr.app.requests.some((r) => r.path === '/login')).toBe(false);
+  });
+
   it('gives in place of a secret the app made itself, unchecked, the first time it records the resource', async () => {
     let verified = 0;
     const own: ResourceSpec = {

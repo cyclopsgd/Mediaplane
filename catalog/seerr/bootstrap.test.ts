@@ -736,6 +736,54 @@ describe("Seerr's first-run setup, with Plex", () => {
     }
   });
 
+  it('signs in again with your new token, once Seerr is shown to be yours, and Seerr keeps it as its admin', async () => {
+    const renewed = 'fake-plex-token-0002';
+    const { api, state, calls, ctx, stack, plexTv } = await plexSeerrOf(SIGNED_IN);
+    plexTv.state.accounts.push({ id: FAKE_PLEX_ACCOUNT.id, token: renewed });
+    const again: BootstrapContext = {
+      ...ctx,
+      given: { plex: { token: renewed } },
+      again: true,
+    };
+    expect(seerrBootstrap.signsInWith).toEqual(['plex.token']);
+    expect(await seerrBootstrap.run(api, ADMIN, stack, again)).toBeUndefined();
+    expect(state.seerr.plexTokens[FAKE_PLEX_ACCOUNT.id]).toBe(renewed);
+    expect(state.seerr.sessions).toEqual([]);
+    // Asked whose it is first, with its key; then signed in, as its admin, and out.
+    expect(calls().slice(-5)).toEqual([
+      'GET /api/v1/auth/me',
+      'GET /api/v1/settings/plex',
+      'POST /api/v1/auth/plex',
+      'GET /api/v1/auth/me',
+      'POST /api/v1/auth/logout',
+    ]);
+    // Without `again`, it signs in to nothing.
+    const before = calls().length;
+    expect(await seerrBootstrap.run(api, ADMIN, stack, ctx)).toBeUndefined();
+    expect(calls().slice(before)).not.toContain('POST /api/v1/auth/plex');
+  });
+
+  it("says Seerr keeps the old token when it can't check the new one at plex.tv", async () => {
+    const renewed = 'fake-plex-token-0002';
+    const { api, state, ctx, stack, plexTv } = await plexSeerrOf(SIGNED_IN);
+    plexTv.state.accounts.push({ id: FAKE_PLEX_ACCOUNT.id, token: renewed });
+    // Seerr's own call to plex.tv fails: plex.tv answers Mediaplane, but not Seerr.
+    state.seerr.failing = ['/api/v1/auth/plex'];
+    state.seerr.failStatus = 500;
+    const refused = await thrown(
+      seerrBootstrap.run(api, ADMIN, stack, {
+        ...ctx,
+        given: { plex: { token: renewed } },
+        again: true,
+      }),
+    );
+    expect(refused).toMatchObject({ kind: 'rejected' });
+    expect((refused as Error).message).toContain(
+      "couldn't sign in again with your new Plex token, which it checks at plex.tv",
+    );
+    expect(state.seerr.plexTokens[FAKE_PLEX_ACCOUNT.id]).toBe(TOKEN);
+  });
+
   it('refuses a Seerr set up with another plex.tv account, or another Plex, as claimed', async () => {
     for (const seerr of [
       { ...SIGNED_IN, plexUsers: [SOMEONE.id] },

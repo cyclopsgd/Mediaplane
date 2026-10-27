@@ -1499,7 +1499,7 @@ describe('plan: rotating the admin password', () => {
     expect(unknown).toMatchObject({ ok: false });
     expect(unknown.diagnostics.map((d) => [d.code, d.message])).toContainEqual([
       'rotate.unknown',
-      "Mediaplane doesn't rotate sonarr.apiKey: it rotates admin.password",
+      "Mediaplane doesn't rotate sonarr.apiKey: it rotates admin.password, plex.token",
     ]);
     await writeFile(join(home, 'secrets', 'admin'), 'fake-own-password\n');
     await writeFile(

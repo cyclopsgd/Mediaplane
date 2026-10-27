@@ -203,10 +203,12 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
   if (unhealthy.length > 0) io.stdout(`Not healthy yet: ${unhealthy.join(', ')}\n`);
   if (result.bootstrap.length > 0) {
     io.stdout('First-run setup:\n');
-    for (const { app, unpublished } of result.bootstrap) {
+    for (const { app, unpublished, again } of result.bootstrap) {
       const how = unpublished
         ? 'with no port published until it is done'
-        : 'signing in as the admin, to make its key';
+        : again === true
+          ? 'signing in again, with what you rotated'
+          : 'signing in as the admin, to make its key';
       io.stdout(`  + ${app} (${how})\n`);
     }
   }

@@ -432,7 +432,8 @@ describe('mediaplane plan', () => {
         {
           severity: 'error',
           code: 'rotate.unknown',
-          message: "Mediaplane doesn't rotate sonarr.apiKey: it rotates admin.password",
+          message:
+            "Mediaplane doesn't rotate sonarr.apiKey: it rotates admin.password, plex.token",
         },
       ],
     });
@@ -445,7 +446,7 @@ describe('mediaplane plan', () => {
       ),
     ).toBe(1);
     expect(refused.stderr()).toContain(
-      "error: Mediaplane doesn't rotate sonarr.apiKey: it rotates admin.password",
+      "error: Mediaplane doesn't rotate sonarr.apiKey: it rotates admin.password, plex.token",
     );
   });
 
@@ -1717,6 +1718,112 @@ apps:
     const again = capture();
     expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
     expect(again.stdout()).toBe('No changes.\n');
+  });
+
+  it('gives your new Plex token to the arrs, and signs Seerr in again with it, under --rotate plex.token', async () => {
+    const { home, docker } = await plexHome();
+    await writeFile(join(home, 'stack.yaml'), `${PLEX_STACK}  seerr: {}\n`);
+    const seerr = freshAppState();
+    seerr.seerr.configDir = join(home, 'appdata', 'seerr');
+    apis.apps.set('seerr', seerr);
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(0);
+    // A new token of your account, as plex-login --force saves it; the old one works too.
+    const renewed = 'fake-plex-token-0002';
+    plexTv.state.accounts.push({ id: FAKE_PLEX_ACCOUNT.id, token: renewed });
+    await writeFile(join(home, 'secrets', 'plex-token'), `${renewed}\n`);
+    const quiet = capture();
+    expect(await run(['plan', '--home', home], quiet.io, deps(docker))).toBe(0);
+    const shown = capture();
+    expect(
+      await run(
+        ['plan', '--home', home, '--rotate', 'plex.token', '--json'],
+        shown.io,
+        deps(docker),
+      ),
+    ).toBe(2);
+    const planned = JSON.parse(shown.stdout()) as {
+      wiring: { resource: string; action: string }[];
+      bootstrap: unknown[];
+    };
+    expect(planned.wiring.filter((w) => w.action !== 'unchanged')).toEqual([
+      { resource: 'sonarr.connection_plex', action: 'update', changes: ['authToken'] },
+    ]);
+    expect(planned.bootstrap).toEqual([
+      { app: 'seerr', unpublished: false, again: true },
+    ]);
+    const applied = capture();
+    expect(
+      await run(
+        ['apply', '--home', home, '--yes', '--rotate', 'plex.token'],
+        applied.io,
+        deps(docker),
+      ),
+    ).toBe(0);
+    expect(applied.stdout()).toContain(
+      '  done    first-run setup: signed in again to seerr\n',
+    );
+    expect(applied.stdout()).toContain(
+      '  done    wiring sonarr.connection_plex: updated authToken\n',
+    );
+    expect(apis.apps.get('sonarr')?.connections[0]?.fields).toContainEqual({
+      name: 'authToken',
+      value: renewed,
+    });
+    expect(seerr.seerr.plexTokens[FAKE_PLEX_ACCOUNT.id]).toBe(renewed);
+    expect(seerr.seerr.sessions).toEqual([]);
+    expect((await readSecretStore(home)).setUp).toEqual(['plex', 'seerr']);
+    expectNoSecrets(applied.stdout() + applied.stderr(), [...plexSecrets(), renewed]);
+    const again = capture();
+    expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
+  });
+
+  it("gives no app a new Plex token of another account, which Plex refuses, and Seerr's stays its own", async () => {
+    const { home, docker } = await plexHome();
+    await writeFile(join(home, 'stack.yaml'), `${PLEX_STACK}  seerr: {}\n`);
+    const seerr = freshAppState();
+    seerr.seerr.configDir = join(home, 'appdata', 'seerr');
+    apis.apps.set('seerr', seerr);
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(0);
+    const other = 'fake-plex-token-0003';
+    plexTv.state.accounts.push({ id: 7_000_002, token: other });
+    await writeFile(join(home, 'secrets', 'plex-token'), `${other}\n`);
+    const applied = capture();
+    expect(
+      await run(
+        ['apply', '--home', home, '--yes', '--rotate', 'plex.token'],
+        applied.io,
+        deps(docker),
+      ),
+    ).toBe(1);
+    expect(applied.stdout() + applied.stderr()).toContain(
+      'was set up with another plex.tv account or another Plex',
+    );
+    // Sonarr's connection and Seerr keep the token that works; Seerr stays recorded.
+    expect(apis.apps.get('sonarr')?.connections[0]?.fields).toContainEqual({
+      name: 'authToken',
+      value: FAKE_PLEX_ACCOUNT.token,
+    });
+    expect(seerr.seerr.plexTokens[FAKE_PLEX_ACCOUNT.id]).toBe(FAKE_PLEX_ACCOUNT.token);
+    expect((await readSecretStore(home)).setUp).toEqual(['plex', 'seerr']);
+  });
+
+  it('refuses --rotate plex.token on a stack with no Plex', async () => {
+    const home = await makeHome();
+    const term = capture();
+    expect(
+      await run(
+        ['plan', '--home', home, '--rotate', 'plex.token'],
+        term.io,
+        deps(fakeDocker(home)),
+      ),
+    ).toBe(1);
+    expect(term.stderr()).toContain(
+      "error: plex.token is rotated only in a stack with Plex, which this one doesn't run\n",
+    );
   });
 
   it('starts nothing when plex.tv refuses your token, and says to sign in again', async () => {

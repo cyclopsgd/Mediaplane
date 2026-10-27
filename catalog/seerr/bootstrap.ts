@@ -231,6 +231,9 @@ async function runPlex(
   }
   if (!(await openOrSetUp(api))) {
     await ownPlexSetup(api, ctx, token, plex);
+    // Yours, as your token's account is its admin: it takes your new token by signing in
+    // with it (probed: the admin's stored token is replaced, and its id stays 1).
+    if (ctx.again === true) await signInAgain(api, token);
     return;
   }
   let session: AppApi | undefined;
@@ -255,6 +258,38 @@ async function runPlex(
   if (session === undefined) {
     throw new AppApiError(
       `${api.name} at ${api.where} refused the sign-in with your Plex token (POST ${PLEX_SIGN_IN})`,
+      { kind: 'rejected' },
+    );
+  }
+  await requireAdmin(api, session);
+  await signOut(session);
+}
+
+/**
+ * Sign Seerr's admin in again with your Plex token, once Seerr is shown to be yours
+ * (`ownPlexSetup`): Seerr keeps the token its admin last signed in with, and reaches Plex
+ * with it, so a new one reaches it only so (`--rotate plex.token`). The session must be
+ * its admin's, as a first sign-in's must; then it is signed out of. Seerr checks the token
+ * at plex.tv, and answers 500 when it can't.
+ */
+async function signInAgain(api: AppApi, token: string): Promise<void> {
+  let session: AppApi | undefined;
+  try {
+    session = await api.session(PLEX_SIGN_IN, { authToken: token }, 'connect.sid', [
+      token,
+    ]);
+  } catch (cause) {
+    if (cause instanceof AppApiError && cause.status === 500) {
+      throw new AppApiError(
+        `${api.name} at ${api.where} couldn't sign in again with your new Plex token, which it checks at plex.tv: ${cause.message}. It still holds the old one; check that Seerr reaches plex.tv, then run apply --rotate plex.token again`,
+        { kind: 'rejected' },
+      );
+    }
+    throw cause;
+  }
+  if (session === undefined) {
+    throw new AppApiError(
+      `${api.name} at ${api.where} refused the sign-in with your new Plex token (POST ${PLEX_SIGN_IN})`,
       { kind: 'rejected' },
     );
   }
@@ -315,6 +350,8 @@ async function openOrSetUp(api: AppApi): Promise<boolean> {
 export const seerrBootstrap: Bootstrap = {
   done: { path: 'settings.json', pattern: /"mediaServerType":\s*[123]\b/ },
   open,
+  // On a Plex stack, with your token: rotated, Seerr signs in again with the new one.
+  signsInWith: ['plex.token'],
   claimedHint,
   async run(api, admin, stack, ctx) {
     if (stack.config.media_server === 'plex') {
