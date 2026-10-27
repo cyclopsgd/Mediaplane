@@ -5,7 +5,8 @@ on:
     branches: [main]
   pull_request:
   # Weekly too, so that a vulnerability found in an image, Node or a catalog app since
-  # the last push still fails a run that someone sees.
+  # the last push still shows in a run that someone sees (it fails the run, but for a
+  # catalog app's image, which is reported: see the catalog-images job).
   schedule:
     - cron: '41 4 * * 1'
 
@@ -179,14 +180,19 @@ jobs:
         run: df -h /
 
   # The apps' images, as the catalog pins them, from their registries: both architectures
-  # from one runner. Only upstream can fix what Trivy finds there, so a finding listed in
-  # scripts/ci/catalog-ignore.yaml passes until its date.
+  # from one runner. Only upstream can fix what Trivy finds there, so by the owner's
+  # decision of 2026-10-27 a finding is reported (a warning, and the step summary), not
+  # failed. A finding listed in scripts/ci/catalog-ignore.yaml is hidden until its date.
+  # A scan that couldn't run fails the job in both modes.
   catalog-images:
     name: Catalog images (Trivy)
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      # The switch: change report to fail to make a finding in a catalog image fail CI again.
+      CATALOG_SCAN: report
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

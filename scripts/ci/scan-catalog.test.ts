@@ -32,6 +32,10 @@ interface Options {
   ignoreFails?: boolean;
   /** mktemp makes its first folder, then fails. */
   secondTempFails?: boolean;
+  /** CATALOG_SCAN, the switch between reporting a finding and failing on it; unset when absent. */
+  mode?: string;
+  /** GITHUB_STEP_SUMMARY is a file of this run's own, which the run reads back. */
+  summary?: boolean;
 }
 
 const boxes: string[] = [];
@@ -120,12 +124,15 @@ PATH='${process.env.PATH ?? ''}' exec mktemp "$@"
       { mode: 0o755 },
     );
   }
+  const summaryFile = join(top, 'summary.md');
   const result = spawnSync(SCRIPT, args, {
     encoding: 'utf8',
     env: {
       PATH: `${bin}:${process.env.PATH ?? ''}`,
       HOME: home,
       TMPDIR: temp,
+      ...(options.mode === undefined ? {} : { CATALOG_SCAN: options.mode }),
+      ...(options.summary === true ? { GITHUB_STEP_SUMMARY: summaryFile } : {}),
     },
   });
   const calls = existsSync(log) ? readFileSync(log, 'utf8').trimEnd().split('\n') : [];
@@ -137,6 +144,7 @@ PATH='${process.env.PATH ?? ''}' exec mktemp "$@"
     runs: (image: string) => calls.filter((c) => c.startsWith(`docker-run ${image} `)),
     sleeps: calls.filter((c) => c.startsWith('sleep ')),
     leftover: readdirSync(temp),
+    summary: existsSync(summaryFile) ? readFileSync(summaryFile, 'utf8') : null,
   };
 }
 
@@ -269,5 +277,111 @@ describe('scripts/ci/scan-catalog.sh', () => {
       expect(result.err).toContain('usage:');
       expect(result.calls).toEqual([]);
     }
+  });
+
+  describe('the CATALOG_SCAN switch', () => {
+    const warning = (image: string, arch: string) =>
+      `::warning::${image} (linux/${arch}) has a critical vulnerability with a fix that scripts/ci/catalog-ignore.yaml doesn't list`;
+
+    it('reports a finding without failing, in report mode', () => {
+      const result = run(
+        { images: { [A]: ['finding'], [B]: ['ok'] }, mode: 'report', summary: true },
+        ['amd64'],
+      );
+      expect(result.code).toBe(0);
+      expect(result.out.split('\n')).toContain(warning(A, 'amd64'));
+      expect(result.out).not.toContain(`::warning::${B}`);
+      expect(result.out).not.toContain(CLEAN('amd64'));
+      expect(result.out).toContain('CATALOG_SCAN: fail');
+      expect(result.err).toBe('');
+      expect(result.runs(A)).toHaveLength(1);
+      expect(result.runs(B)).toHaveLength(1);
+      expect(result.summary).toContain(`\`${A}\` (linux/amd64)`);
+      expect(result.summary).not.toContain(B);
+      expect(result.summary).toContain('CATALOG_SCAN: fail');
+    });
+
+    it('warns once for each image with a finding, and adds to the summary', () => {
+      const result = run({
+        images: { [A]: ['finding'], [B]: ['finding'] },
+        mode: 'report',
+      });
+      expect(result.code).toBe(0);
+      expect(result.out.split('\n').filter((l) => l.startsWith('::warning::'))).toEqual([
+        warning(A, 'arm64'),
+        warning(B, 'arm64'),
+      ]);
+      const withSummary = run(
+        { images: { [A]: ['finding'] }, mode: 'report', summary: true },
+        ['arm64'],
+      );
+      expect(withSummary.summary).toContain(`\`${A}\` (linux/arm64)`);
+    });
+
+    it('needs no step summary to report, and writes none when nothing is found', () => {
+      const result = run({ images: { [A]: ['finding'] }, mode: 'report' });
+      expect(result.code).toBe(0);
+      expect(result.out).toContain('::warning::');
+      const clean = run({ images: { [A]: ['ok'] }, mode: 'report', summary: true });
+      expect(clean.code).toBe(0);
+      expect(clean.out).toContain(CLEAN('arm64'));
+      expect(clean.out).not.toContain('::warning::');
+      expect(clean.summary).toBeNull();
+    });
+
+    it('fails on a finding in fail mode, as it does when the switch is unset', () => {
+      const unset = run({ images: { [A]: ['finding'], [B]: ['ok'] }, summary: true });
+      const fail = run({
+        images: { [A]: ['finding'], [B]: ['ok'] },
+        mode: 'fail',
+        summary: true,
+      });
+      for (const result of [unset, fail]) {
+        expect(result.code).toBe(1);
+        expect(result.err).toContain("catalog-ignore.yaml doesn't list (linux/arm64):");
+        expect(result.err).toContain(`  ${A}`);
+        expect(result.out).not.toContain('::warning::');
+        expect(result.out).not.toContain(CLEAN('arm64'));
+        expect(result.summary).toBeNull();
+      }
+    });
+
+    it.each(['report', 'fail'])(
+      'fails a scan that could not run, retried as ever, in %s mode',
+      (mode) => {
+        const result = run({ images: { [A]: ['error'], [B]: ['ok'] }, mode });
+        expect(result.code).toBe(1);
+        expect(result.runs(A)).toHaveLength(3);
+        expect(result.sleeps).toEqual(['sleep 0', 'sleep 15', 'sleep 45', 'sleep 0']);
+        expect(result.err).toContain("couldn't be scanned, three times (linux/arm64):");
+        expect(result.err).toContain(`  ${A}`);
+        expect(result.out).not.toContain(CLEAN('arm64'));
+      },
+    );
+
+    it('still fails an unscanned image in report mode that has a finding elsewhere', () => {
+      const result = run({
+        images: { [A]: ['finding'], [B]: ['error'] },
+        mode: 'report',
+        summary: true,
+      });
+      expect(result.code).toBe(1);
+      expect(result.out).toContain(warning(A, 'arm64'));
+      expect(result.err).toContain("couldn't be scanned");
+      expect(result.err).toContain(`  ${B}`);
+    });
+
+    it.each(['', 'warn', 'Report', 'off', 'report '])(
+      'is an error for the value %j, and scans nothing',
+      (mode) => {
+        const result = run({ images: { [A]: ['finding'] }, mode });
+        expect(result.code).toBe(1);
+        expect(result.err).toContain('CATALOG_SCAN');
+        expect(result.err).toContain('report');
+        expect(result.err).toContain('fail');
+        expect(result.calls).toEqual([]);
+        expect(result.out).not.toContain(CLEAN('arm64'));
+      },
+    );
   });
 });
