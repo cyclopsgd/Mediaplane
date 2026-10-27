@@ -241,7 +241,7 @@ async function claimAgain(
     // Unanswered (a timeout, a 5xx, no connection) is unsure; any other answer refused it.
     const unanswered = UNANSWERED.has(cause.kind);
     throw new AppApiError(
-      `${api.name} at ${api.where} was signed out of its plex.tv account, and refused the claim Mediaplane sent to claim it again, so it stays unpublished: ${cause.message}. ${unanswered ? 'Check that Plex is running, then run apply again' : 'Its claim token may have run out, or been used already: run apply again, which gets a new one'}`,
+      `${api.name} at ${api.where} was signed out of its plex.tv account, and ${unanswered ? "didn't answer" : 'refused'} the claim Mediaplane sent to claim it again, so it stays unpublished: ${cause.message}. ${unanswered ? 'Check that Plex is running, then run apply again' : 'Its claim token may have run out, or been used already: run apply again, which gets a new one'}`,
       unanswered
         ? { kind: 'auth', unsure: true, status: cause.status }
         : { kind: 'rejected', status: cause.status },

@@ -583,7 +583,7 @@ describe("Plex's first-run setup", () => {
     );
     expect(silent).toMatchObject({ kind: 'auth', unsure: true });
     expect((silent as Error).message).toMatch(
-      /refused the claim .*: fake failure \(HTTP 500\)\. Check that Plex is running, then run apply again$/,
+      /didn't answer the claim .*: fake failure \(HTTP 500\)\. Check that Plex is running, then run apply again$/,
     );
   });
 

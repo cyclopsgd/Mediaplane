@@ -137,7 +137,9 @@ Plex token, before its port is published, and links to Plex.
   - If it fails with
     `was signed out of its plex.tv account, and refused the claim Mediaplane sent`,
     Plex stays unpublished: its claim token ran out or was used, so run `apply` again,
-    which gets a new one. If Plex didn't answer, check that it runs first.
+    which gets a new one.
+  - If it fails with `didn't answer the claim Mediaplane sent`, Plex stays unpublished:
+    check that it runs, then run `apply` again.
 - **Sonarr, Radarr and Seerr still hold your old Plex token** after
   `mediaplane plex-login --force`: they keep one that works. Run
   `mediaplane apply --rotate plex.token`: it gives the new token to both arrs'
