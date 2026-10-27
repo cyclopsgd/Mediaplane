@@ -150,14 +150,16 @@ to the solver only when the site answers with a Cloudflare challenge.
   `Unable to connect to proxy: HTTP request failed: [502:BadGateway]`; the
   [runbook](../../docs/runbooks/wiring-failed.md) says what to do. Byparr needs the
   internet anyway: its health check loads a web page.
-- **A link stays when its arr leaves the stack.** Remove Sonarr or Radarr from
-  `stack.yaml`, and Mediaplane stops managing its link, but leaves it in Prowlarr, which
-  then reports it as failing. Delete it in Prowlarr's web UI (Settings, then Apps).
-- **The indexer proxy stays when the stack drops its Cloudflare solver.** With no Byparr
-  and no FlareSolverr, Mediaplane stops managing the proxy, but leaves it in Prowlarr,
-  which still sends the challenged requests of indexers tagged `cloudflare` to it, where
-  they now fail, since the solver is gone. Delete it in Prowlarr's web UI (Settings, then
-  Indexers, under Indexer Proxies), or turn a solver on again.
+- **A link goes when its arr leaves the stack.** Remove Sonarr or Radarr from
+  `stack.yaml`, and the next `apply` removes its link from Prowlarr, which holds the arr's
+  key, once `plan` has said so (`- remove prowlarr.application_radarr`). One renamed in
+  Prowlarr stays, as it may be yours now: `plan` and `drift` say so; delete it in
+  Prowlarr's web UI (Settings, then Apps) if you don't want it.
+- **The indexer proxy goes when the stack drops its Cloudflare solver.** With no Byparr
+  and no FlareSolverr, the next `apply` removes the proxy from Prowlarr, so it no longer
+  sends the challenged requests of indexers tagged `cloudflare` to a solver that is gone.
+  The `cloudflare` tag stays, on your indexers too. To keep the proxy instead, run
+  `mediaplane keep prowlarr.indexer_proxy` before that `apply`.
 - **Set up before Slice 3a.** If Prowlarr first started before Mediaplane wrote its
   `config.xml`, the file has no API key: Prowlarr takes its key from its environment, and
   doesn't write it there. `plan` lists `prowlarr.apiKey` under

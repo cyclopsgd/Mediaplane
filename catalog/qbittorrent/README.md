@@ -129,6 +129,11 @@ holds for it`. Neither drift nor `plan` sends that key again until `apply` check
   as the arr's own test would make it, with no save path. To clear it, make the category
   in qBittorrent, or name one in the arr that qBittorrent has (and keep that), then run
   drift again.
+- **A category goes when its arr leaves the stack,** but only while no torrent is in it:
+  removing a category takes it from its torrents, and Automatic Torrent Management then
+  moves their files to `/data/torrents` (probed). So `plan` says the category stays, and
+  why; move its torrents to another category in qBittorrent, and the next `apply` removes
+  it. Or keep it with `mediaplane keep qbittorrent.category_movies`.
 
 ## Changing it
 

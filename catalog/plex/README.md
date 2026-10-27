@@ -182,10 +182,18 @@ LinuxServer.io image, unmodified, when `media_server` is `plex`.
   a token of your account: each opens your plex.tv account, and every Plex it reaches.
   Use a plex.tv account of its own for the stack if that matters to you. The
   [threat model](../../docs/security/threat-model.md#t4-an-app-is-compromised) says more.
-- **A new token from `plex-login` reaches the arrs only once the old one is refused.**
-  Sonarr and Radarr keep the token they hold while Plex takes it, and get yours at the
-  next `apply` when Plex refuses theirs. Seerr keeps the token it signed in with, and
-  Mediaplane can't give it another yet (Slice 10b).
+- **A new token from `plex-login --force` reaches the apps with
+  `mediaplane apply --rotate plex.token`.** Sonarr and Radarr keep the token they hold
+  while Plex takes it, and Seerr keeps the one its admin signed in with, so a plain
+  `apply` changes nothing. With `--rotate plex.token`, `apply` gives the new one to both
+  arrs' connections, and signs Seerr in again with it, once it has asked plex.tv that
+  Seerr's admin is the new token's account; then you can sign the old one out at
+  plex.tv. A token of another account, which Plex refuses, is given to no app.
+  `plex-login` says so when it saves a token in place of another.
+- **Signed out of your account while it runs** (its web UI's sign-out), Plex is
+  unclaimed, and still published: `plan` warns (`bootstrap.open-published`). The next
+  `apply` starts it without its ports, claims it again for your account through its own
+  API, as its image won't, and publishes it: the same server, with its libraries.
 - **A Plex claimed outside `apply`,** with another account, stays unpublished: see the
   [runbook](../../docs/runbooks/wiring-failed.md).
 - **The first `apply` needs plex.tv,** from Docker's default bridge network in the image:

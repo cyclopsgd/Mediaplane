@@ -49,9 +49,10 @@ address after five failed sign-ins in a row.
   override, or nothing is written. It keeps the file's mode and group, not an ACL. It
   reads the file once, through one handle, and replaces only that file. It refuses a
   `stack.yaml` that is a link, has other names, belongs to another user or to a group
-  its user isn't in, or is managed by automation (`managed_by: external`, checked again
-  in the file it writes), and one it fails to write, and gives the line to add by hand
-  instead. It never writes a value with a control character, a line or paragraph
+  its user isn't in, and one it fails to write, and gives the line to add by hand
+  instead. A file managed by automation (`managed_by: external`, checked again in the
+  file it writes) is never written: keep gives the line to add (`line` in its `--json`),
+  and succeeds (Slice 10b). It never writes a value with a control character, a line or paragraph
   separator, or one that turns the direction of text, which an editor could show as
   what the file doesn't hold.
 - **Only managed fields can be kept.** Each resource declares them; a few are fixed: what
@@ -108,8 +109,12 @@ address after five failed sign-ins in a row.
   aside first; the older `apply` finds what it made by name, and adopts it.
 - **Drift can't tell a secret changed in the app from one you changed in the stack:**
   either way, the app refuses the secret the stack has. Its message says both.
-- **A resource left in an app is reported, never removed.** Removing what Mediaplane made
-  when its app leaves the stack needs a delete for every kind of resource: Slice 10b.
+- **A resource left in an app is reported, and `apply` removes it** (Slice 10b, spec
+  §8.1(3) step 4): only what Mediaplane's record says it made, still as it made it (its id
+  and its name), and nothing of yours in it, such as a qBittorrent category with a
+  torrent. Drift reports it until then, and says why `apply` leaves one it won't remove;
+  `mediaplane keep <app>.<resource>` keeps one as yours. Drift itself still never writes
+  to an app.
 - **After upgrading to Slice 8, `plan` adopts each root folder once,** changing nothing
   in the apps: it now also records whether the arr reaches the folder.
 - **Drift runs only when you run it** in M1. M2 can run it on a schedule as it is: it

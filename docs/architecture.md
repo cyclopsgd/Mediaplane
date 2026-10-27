@@ -364,7 +364,9 @@ name, and adopted
 - **Key recovery.** Each app says where it keeps its keys (`keyFiles` in the catalog):
   `config.xml` for Sonarr, Radarr and Prowlarr, `qBittorrent.conf`, Seerr's
   `settings.json`, Gluetun's `auth/config.toml`, and Jellyfin's database, opened
-  read-only with Node's own SQLite. A key file that is there but can't be read, or holds
+  read-only with Node's own SQLite, in a process of its own that is stopped after 10
+  seconds, so that a named pipe put in the database's place can't hang `plan`. A key
+  file that is there but can't be read, or holds
   another app's key, stops `plan` (`keys.unrecoverable`): a new key would lock Mediaplane
   out of an app that still holds the old one.
 - **The admin password can't be read back:** the apps keep a hash. When the one
@@ -449,9 +451,13 @@ up --wait again
   `state/secrets.json`, a list of app names and no secret. A Seerr with no record, as
   one set up by hand before this slice, or by someone else, starts unpublished once and
   is checked (below). The record is dropped when a pending setup runs, and made again
-  only by a success. A file Mediaplane can't read has Seerr start unpublished, and set
-  up again, on every `apply`, with that warning, and each such `apply` fails at verify
-  (exit 1), until the file is readable. An app with a setup can't run inside another
+  only by a success. When Mediaplane can't read that file, a Seerr its record names is
+  asked itself, with that warning: it stays as it is when it says its setup is done, and
+  is set up again, unpublished, when it says it is open, or can't be asked. One with no
+  record starts unpublished, and is set up again. An app that runs published while its
+  setup is to be done, as a Plex signed out of its account while it ran, has `plan` warn
+  (`bootstrap.open-published`): whoever reaches it may finish the setup first, until
+  `apply` starts it again without its ports. An app with a setup can't run inside another
   app's network, which would publish its ports: `plan` fails with
   `bootstrap.network-via`.
 - **Plex** (spec §6.4). Its first start gets `PLEX_CLAIM`: a claim token of your plex.tv
@@ -480,11 +486,21 @@ up --wait again
   before Plex's first publish only, never on a later `apply`. Plex is set up when
   `Preferences.xml` holds a token and Mediaplane's record names it. Its setup makes no
   key: Plex's key is your token.
+- **A Plex signed out of your account while it ran** (its web UI's sign-out) is
+  unclaimed at once, keeps `PlexOnlineToken=""` in `Preferences.xml`, and stays
+  published until the next `apply`, so `plan` warns. Its image never claims it again: its
+  claim step looks only for that attribute's name (probed). So Plex's setup claims it
+  itself, unpublished, through Plex's own API: a claim token from plex.tv, with your
+  token, posted over the wiring network (`POST /myplex/claim`), then the same checks as
+  after its first start. It is the same server to plex.tv, with its libraries.
 - **Seerr on a Plex stack** signs in with your Plex token (`POST /api/v1/auth/plex`),
   which makes your plex.tv account its admin, and Plex its media server type; then it
   signs out. A Seerr set up already is checked with its key: its admin's plex.tv account
   must be the one plex.tv says your token is, and its Plex unset or the stack's, without
-  TLS. It is never signed in to, which would give your token to whoever set it up.
+  TLS. It is never signed in to, which would give your token to whoever set it up, but
+  for a rotation: Seerr keeps the token its admin signed in with, and reaches Plex with
+  it, so `apply --rotate plex.token` signs it in again with the new one, once those
+  checks show it is yours (`First-run setup:` lists it, published, "signing in again").
 - **Seerr's first sign-in must be its admin's,** through Jellyfin or with your Plex
   token: Mediaplane asks the session it got whose it is (`GET /api/v1/auth/me`), and
   anything but Seerr's first user means someone signed in first. Mediaplane then signs
@@ -689,7 +705,10 @@ mediaplane (the stack)
     (`catalog/_shared/servarr-connection.ts`). The token is checked with the arr's own
     test, never compared, and an arr's test needs a Plex library of its kind, so each
     requires that library. A connection held with TLS or a URL base reads as moved, so
-    the token is never sent to an address read from the arr.
+    the token is never sent to an address read from the arr. An old token that still
+    works passes the test, so a new one from `plex-login --force` reaches the arrs with
+    `apply --rotate plex.token`, which gives it to each connection unchecked, but for one
+    Plex refuses (a token of another account).
   - Mediaplane never sets Plex's remote access, nor the settings that let a client in
     without a sign-in (`allowedNetworks`, `enableLocalSecurity`, `DlnaEnabled`): Plex's
     defaults stay. Its first-run setup checks the second three before Plex is first
@@ -714,12 +733,17 @@ mediaplane (the stack)
     then on.
   - Its media server is Jellyfin, at `jellyfin:8096` with no URL base and no TLS (a URL
     base or TLS set in Seerr counts as Jellyfin moved, and is put back), with Mediaplane's
-    Movies and Shows libraries enabled; a library you enable yourself stays yours. The key
-    Seerr uses for Jellyfin is the one Seerr made itself as it signed in. It stays while
-    it works, which Mediaplane checks with Seerr's list of Jellyfin's users. When Jellyfin
-    refuses it, or Jellyfin moves, Mediaplane gives Seerr its own Jellyfin key; on a move,
-    Seerr's libraries are synced again too, since another Jellyfin has other library ids.
-    It needs Jellyfin's admin and libraries in place.
+    Movies and Shows libraries enabled; a library you enable yourself stays yours. Seerr
+    makes itself a key in Jellyfin as it first signs in; the first time Mediaplane records
+    the link, it gives Seerr its own Jellyfin key in its place, and removes Seerr's from
+    Jellyfin, so one key, Mediaplane's, is the one to rotate. From then on the key Seerr
+    holds is checked with Seerr's list of Jellyfin's users, and given again when Jellyfin
+    refuses it, or Jellyfin moves; on a move, Seerr's libraries are synced again too,
+    since another Jellyfin has other library ids. It needs Jellyfin's admin and libraries
+    in place.
+  - Seerr's `settings.json` says whether its setup is done. When Mediaplane can't read
+    it, Seerr itself is asked, if Mediaplane set it up before: it is set up again,
+    unpublished, only when it says its setup is open, or can't be asked.
   - Its Sonarr and Radarr servers reach each arr at its service and port, with its key,
     file into its root folder, and are the default, so requests go there. The quality
     profile is the one `apps.seerr.sonarr_profile` (or `radarr_profile`) names, else
@@ -811,16 +835,16 @@ O ≠ L, O ≠ D: drift, changed
   - an app that refuses the key Mediaplane holds for it, and each resource of another app
     that holds that key: a shared key changed at its source;
   - a resource Mediaplane made that the stack no longer wants, still in the app, looked
-    up by its record; one whose app can't say, or stopped answering, counts as not looked
-    at.
+    up by its record, which `apply` removes, or why it leaves it (`stays`); one whose app
+    can't say, or stopped answering, counts as not looked at.
 
   What an app holds, and each reason it gives, is shown without any secret the run came
   to know of, redacted once at the end of the run.
 
   `plan` shows the same drift. What puts each right is said by its kind: `apply` puts
   back a field, a resource or a secret, and a key changed at its source where the app
-  keeps it in a file of its own; what is left in an app is removed by hand, or kept,
-  until Slice 10b. Its exit code is 0 when nothing changed and every resource and secret
+  keeps it in a file of its own; and it removes what is left in an app, unless `keep`
+  keeps it first. Its exit code is 0 when nothing changed and every resource and secret
   was checked, and 2 otherwise.
 
 - **Its checks leave few marks** (the owner's decisions of 2026-10-17). A secret it finds
@@ -860,13 +884,52 @@ O ≠ L, O ≠ D: drift, changed
   `mediaplane keep <app>.<resource>` writes `unmanaged`. It never writes a secret, nor a
   value that could make the file show what it doesn't hold, and refuses a `stack.yaml`
   it can't write safely, or fails to write, giving the line to add instead
-  ([ADR 0003](adr/0003-drift-detect-and-warn-with-keep-mine.md)). Keeping a download
-  client's category gives qBittorrent's category that name: `apply` makes it, and drift
-  is clear once it has.
+  ([ADR 0003](adr/0003-drift-detect-and-warn-with-keep-mine.md)). With
+  `managed_by: external`, it writes no `stack.yaml`, and gives the line (`line` in its
+  `--json`, with `written: false`) for your automation to add, recording nothing until
+  `stack.yaml` holds it; a resource kept as `unmanaged` is forgotten at once, so that
+  `apply` never removes it meanwhile. Keeping a download client's category gives
+  qBittorrent's category that name: `apply` makes it, and drift is clear once it has.
 - **Keep mine of a key:** `mediaplane keep <app>.<key>` keeps an app's own key, changed
   at its source, as [Rebuilding a host](#rebuilding-a-host) says.
-- **Not yet:** removing what Mediaplane made when its app leaves the stack (Slice 10b);
-  drift on a schedule (M2).
+- **Not yet:** drift on a schedule (M2).
+
+## An app taken out of the stack
+
+Take an app out of `stack.yaml` (or set `enabled: false`) and `apply` removes its
+container, and what Mediaplane made for it in the other apps (spec §8.1(3) step 4). Its
+`appdata/` stays: deleting it is yours to do.
+
+```text
+plan
+  │ each resource Mediaplane
+  │ recorded that the stack
+  │ no longer wants, looked
+  │ up in its app
+  ▼
+remove, when the app holds
+it as Mediaplane made it
+(its id and its name), and
+nothing of yours is in it
+  │
+  ▼
+apply's wire step: looked
+up again, removed, and its
+record forgotten
+```
+
+- **What goes:** Prowlarr's link to an arr that left, and its indexer proxy once the
+  stack has no Cloudflare solver (the `cloudflare` tag stays, on your indexers too);
+  qBittorrent's category of an arr that left; Seerr's server of an arr that left; an
+  arr's download client, and its connection to a media server that left.
+- **What stays, and why, in `plan` and `drift`:** a resource renamed in its app, or
+  found under its name with another id, may be yours now; a qBittorrent category with a
+  torrent in it, since removing it would move the torrent's files (Automatic Torrent
+  Management, probed); and Seerr's media server, a setting Seerr can't drop (switching
+  media servers sets Seerr up afresh). `mediaplane keep <app>.<resource>` keeps one as
+  yours, and stops the report.
+- **The left app's own resources** (its admin, its root folder) stay recorded, as its
+  appdata stays: added back, it is found as it was.
 
 ## `vpn-check`
 
@@ -975,6 +1038,6 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 The [roadmap](plans/m1-roadmap.md) has the order:
 
-- automation (Slice 10b): removing what Mediaplane made when its app leaves the stack,
-  a new Plex token for the arrs and Seerr, the `--json` contract, and the docs that
+- the automation contract (Slice 10c): the `--json` shapes pinned and in the generated
+  docs, exit codes, the automation guide with a short Ansible example, and the docs that
   complete M1.

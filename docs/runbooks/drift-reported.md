@@ -76,10 +76,17 @@ Each line says what kind of drift it is:
   the app that key again, and that app's resources are listed under `Not checked:`.
   Until a drift has found the refusal, each `plan` still tries the key. Each key that
   fails counts towards qBittorrent's ban of an address after five failed sign-ins.
-- `?` **still in the app, though the stack no longer wants it:** Mediaplane made it, such
-  as Prowlarr's link to Sonarr, and Sonarr has since left the stack. `apply` leaves it:
-  remove it in the app, or keep it as yours with `mediaplane keep <app>.<resource>`.
-  Removing it for you comes in Slice 10b.
+- `-` **still in the app, though the stack no longer wants it; apply removes it:**
+  Mediaplane made it, such as Prowlarr's link to Sonarr, and Sonarr has since left the
+  stack. The next `apply` removes it, and forgets its record. To keep it as yours
+  instead, run `mediaplane keep <app>.<resource>` before that `apply`.
+- `?` **still in the app, though the stack no longer wants it; apply leaves it:** the
+  line says why: it was renamed in its app, or is held there under another id, so it may
+  be yours now; it holds what is yours (a qBittorrent category with a torrent in it,
+  which removing it would move); or Mediaplane doesn't remove that kind of resource
+  (Seerr's media server). Remove it in the app if you don't want it, or keep it with
+  `mediaplane keep <app>.<resource>`, which stops the report. For the category, move its
+  torrents to another category in qBittorrent first, and the next `apply` removes it.
 
 ## Checks
 
@@ -202,10 +209,15 @@ Choose, for each change, which side wins.
   it in the app to what you want, then keep it, or run `apply`;
 - **a `stack.yaml` it won't or can't write:** a link, not a regular file, a file with
   other names (hard links), one that belongs to another user, or to a group Mediaplane's
-  user isn't in, one written as a single `{ … }` block, one it can't parse, one managed
-  by automation (`managed_by: external`, checked again in the file it is about to
-  write), or one whose folder it can't write in. The error gives the line to add under
-  `overrides:` yourself.
+  user isn't in, one written as a single `{ … }` block, one it can't parse, or one whose
+  folder it can't write in. The error gives the line to add under `overrides:` yourself.
+
+With `managed_by: external` in `stack.yaml` (checked again in the file it is about to
+write), automation owns the file, and `keep` never writes it: it succeeds, and gives the
+line to add where your automation keeps `stack.yaml` (`line`, with `written: false`, in
+`--json`). Until `stack.yaml` holds it, `apply` puts back what it applied, and drift still
+reports the field. A resource kept as `unmanaged` is forgotten at once instead, so
+`apply` never removes it meanwhile.
 
 ## Warnings and errors of drift's and keep's own
 

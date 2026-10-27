@@ -354,21 +354,20 @@ What remains:
   answers only the address the name `mediaplane` has there.
 - A compromised app can answer Mediaplane's calls with anything it likes, such as a
   setting that looks right but isn't.
-- A compromised Jellyfin can still hang `plan`, `drift` or `keep` while they read its
-  database's key, with a named pipe:
-  - one put at the database's own name in the instant between SQLite looking up the
-    file Mediaplane holds open and opening it by that name;
-  - or one put in place of its write-ahead log or index (`-wal`, `-shm`) after
-    Mediaplane checked them, before SQLite opens them at its first read. That window is
-    wider: a pipe at `-wal` hangs the read (probed).
-
-  It is a hang, never a read or a write through the pipe. Another file put at the
-  database's name in that instant can be read instead, unless Mediaplane's check after
-  SQLite's open sees it; and a folder on the way swapped for a link and back as quickly
-  can do the same. Such a read is bounded by the fixed `ApiKeys` query, and a key that
-  is another app's is refused. Nothing is written either way. A file swapped in at the
-  database's path at any other time is never what SQLite opens. Reading the database in
-  a process of its own, with a deadline, is S10b's.
+- A compromised Jellyfin can still make `plan`, `drift` or `keep` wait while they read
+  its database's key, with a named pipe put at the database's own name in the instant
+  between SQLite looking up the file Mediaplane holds open and opening it by that name:
+  SQLite's open waits on a pipe (probed). The read runs in a process of its own, Node
+  with an empty environment, the database handed to it open, which Mediaplane stops
+  after 10 seconds: the read is then a key file that couldn't be read, never a key (Slice
+  10b). A pipe put in place of its write-ahead log (`-wal`) after Mediaplane checked it
+  makes SQLite refuse the read (`disk I/O error`, probed). It is never a read or a write
+  through the pipe. Another file put at the database's name in that instant can be read
+  instead, unless Mediaplane's check once the read has answered sees it, and then what
+  was read is dropped; and a folder on the way swapped for a link and back as quickly can
+  do the same. Such a read is bounded by the fixed `ApiKeys` query, and a key that is
+  another app's is refused. Nothing is written either way. A file swapped in at the
+  database's path at any other time is never what SQLite opens.
 
 - Sonarr and Radarr hold qBittorrent's key, as their download client needs, so a
   compromised one can drive qBittorrent: add a torrent, or change its settings.
@@ -387,9 +386,11 @@ What remains:
   reach every Plex your account reaches, those outside this stack too, and change your
   account. Use a plex.tv account of its own for the stack if that matters to you, and
   share your other servers with it as you need.
-- A link stays in Prowlarr when its arr leaves the stack, and keeps that arr's key,
-  until it is removed by hand (in Prowlarr's web UI). `mediaplane drift` reports it, as
-  still in the app though the stack no longer wants it; removing it for you is Slice 10b.
+- A link Mediaplane made in Prowlarr, which holds an arr's key, is removed by the next
+  `apply` once its arr leaves the stack, as is each server of Seerr's and each download
+  client or connection an arr holds for an app that left (Slice 10b): only one its
+  record says it made, held as it made it. One renamed in its app stays, as it may be
+  yours, and keeps the key until you remove it; `mediaplane drift` reports it.
 - The apps' calls to each other, and Mediaplane's to them, are plain HTTP on Docker's own
   networks, with keys in them. An app with Docker's default capabilities could try to
   intercept another's traffic on a network they share.
@@ -436,11 +437,15 @@ Controls today:
   Radarr's keys go to Seerr in its servers' settings, request bodies again. Seerr shows
   them in clear afterwards: Mediaplane reads them back only to hand them to Seerr's own
   test of the server it holds, at the stack's address for the arr, and never compares,
-  keeps or shows them. The key Seerr made itself in Jellyfin, which it also shows in
-  clear, Mediaplane reads in Seerr's answer and leaves there: it is never kept, nor sent
-  anywhere, and it is replaced with `***` in every message, as the stack's own secrets
-  are, once read. When Jellyfin refuses it, or Jellyfin moves, Mediaplane gives Seerr the
-  Jellyfin key it holds itself, in a request body, as it gives the arrs.
+  keeps or shows them. The key Seerr made itself in Jellyfin as it first signed in, which
+  it also shows in clear, is replaced the first time Mediaplane records Seerr's link to
+  Jellyfin: Mediaplane gives Seerr the Jellyfin key it holds itself, in a request body,
+  as it gives the arrs, then removes from Jellyfin the key Seerr held, only one Jellyfin
+  lists under the name Seerr gives its own (Slice 10b). So no second admin key of
+  Jellyfin's lingers. The one Seerr held is never kept, nor sent anywhere but in that
+  removal to Jellyfin, and it is replaced with `***` in every message once read. When
+  Jellyfin refuses the key Seerr holds, or Jellyfin moves, Mediaplane gives it its own
+  again.
 - The admin password goes to Seerr only once, in its first sign-in's request body,
   which Seerr passes to Jellyfin to check. The session cookie it answers with stays in
   Mediaplane's memory, kept out of every message, for the one call that signs out at
@@ -482,6 +487,13 @@ Controls today:
   nightly end-to-end test checks. It is fetched before the start step changes anything:
   without one, the step fails, and stops every app that runs and isn't yet shown to be
   yours, Plex, and Seerr.
+- A Plex signed out of your account while it ran is unclaimed, and stays published until
+  the next `apply`: anyone who reaches it can claim it. `plan` and `drift` warn
+  (`bootstrap.open-published`). Its image never claims it again with a claim token (its
+  Preferences.xml keeps an empty `PlexOnlineToken`, probed), so the setup does, while
+  Plex is unpublished: a second claim token, fetched by the setup with your token, sent
+  to Plex in the query of `POST /myplex/claim` over the wiring network, replaced with
+  `***` in every message, and never kept (Slice 10b).
 - Plex's own token, which its claim makes, is in Plex's `Preferences.xml`, which Plex
   writes 0600. Mediaplane reads it there only to ask plex.tv whose account it is, once
   Plex is claimed, through the plex.tv helper's standard input (from source, in the
@@ -665,6 +677,11 @@ What remains:
   what to do.
 - `mediaplane apply --rotate admin.password` gives every app a new generated password,
   through each app's key. A password of your own is rotated in its file.
+- A new Plex token, from `plex-login --force`, reaches the apps that hold the old one
+  with `mediaplane apply --rotate plex.token`: the arrs' connections to Plex, and Seerr,
+  which signs in again with it, once it is shown to be your account's Seerr (Slice 10b).
+  Only then can you sign the old one out at plex.tv without breaking them. A token of
+  another account, which Plex refuses, is given to no app.
 
 ### T11. Something on the stack's network uses Gluetun's control server
 

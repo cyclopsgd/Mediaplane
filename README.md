@@ -45,7 +45,12 @@ Compose and wires the apps together for you.**
 >   key the apps hold, finds what it made in them by name, and sets a new admin password
 >   through their keys if the generated one is lost. A key changed in an app is put back,
 >   or kept with `mediaplane keep`.
-> - **Next:** driving Mediaplane from automation.
+> - **Taking an app out:** remove it from `stack.yaml`, and `apply` removes its
+>   container, and what Mediaplane made for it in the other apps (Prowlarr's link,
+>   qBittorrent's category, Seerr's server), keeping its appdata and anything of yours.
+>   A new Plex token reaches the arrs and Seerr with `apply --rotate plex.token`.
+> - **Next:** the contract for driving Mediaplane from automation, and the docs that
+>   complete M1.
 > - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
 >   your LAN (`network.bind: lan`) or keep them on this machine (`localhost`).
 >
@@ -97,6 +102,8 @@ Mediaplane does that part for you:
 | Detect manual changes and offer Re-apply or "Keep mine" (`drift`, `keep`)         | Done    |
 | Releases, and updating Mediaplane without touching the stack (none cut yet)       | Done    |
 | Rebuild a host from `stack.yaml` and its appdata                                  | Done    |
+| Take an app out, and what it had in the other apps goes with it                   | Done    |
+| A new Plex token for the arrs and Seerr (`apply --rotate plex.token`)             | Done    |
 | Deploy with automation such as Ansible                                            | Planned |
 
 ## The stack
@@ -595,10 +602,10 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
   (packaging), S3a (the shared admin and pre-start files), S3d (the VPN's kill-switch
   test and `vpn-check`), S3b (the wiring framework), S3c (the download path), S4
   (indexers), S5 (Jellyfin), S6 (requests), S7 (Plex), S8 (drift), S9 (releases and
-  safe updates) and S10a (recovery). Between S7 and
+  safe updates), S10a (recovery) and S10b (removal and rotation). Between S7 and
   S8, smaller changes added a guided install (`deploy/install.sh`, and `init` asking for
   your own admin password and signing you in to Plex) and hardware transcoding.
-- **Next:** S10b (automation), which completes M1.
+- **Next:** S10c (the automation contract and the docs), which completes M1.
 
 ## Documentation
 

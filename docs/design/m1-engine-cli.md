@@ -349,7 +349,8 @@ Rules:
 - **Validation errors are actionable**, for example
   `unknown app 'sonar' — did you mean 'sonarr'?`.
 - **Externally managed mode.** With `managed_by: external`, Mediaplane never
-  writes `stack.yaml`. `migrate` and Keep mine print the snippet to add instead.
+  writes `stack.yaml`. `migrate` and Keep mine print the snippet to add instead
+  (§11, Slices 9 and 10b).
 - **`vpn.addresses`** is optional and sets the WireGuard address for providers
   that need one, such as Mullvad. It is one or more IPv4 or IPv6 addresses with a
   prefix length (CIDRs), separated by commas without spaces, and never an IPv6 zone
@@ -549,10 +550,10 @@ in `compose.override.yaml` is therefore wired automatically.
 |---|---|
 | `init` | Write a starter `stack.yaml` and a `secrets/` layout. On a TTY it asks interactive prompts (media server, data path, VPN provider and its WireGuard address, LAN or localhost, the LAN subnet and whether the LAN must sign in (both only with LAN), the admin user name, and whether to generate its password); otherwise it takes flags. It checks every flag it can before the first prompt, including the format of `--vpn-addresses` (on a terminal, only the refusal of `--vpn-addresses` without `--vpn-provider`, and whether `--lan-subnet` fits this host, wait for the provider and bind answers), and asks again after a bad answer. It never overwrites an existing file. It also checks the home first, creates the data folder, adds a note before each question, and takes the WireGuard key on a hidden prompt (§11, Slice 3b) |
 | `plan` | Show what `apply` would change, including drift. Makes no changes to the stack (a key or password check can leave a mark in an app: §11, Slices 3c, 4, 5, 6, 7 and 8; it never calls plex.tv); in the image it joins the wiring network, its only lasting change to Docker (§11, Slice 3b) |
-| `apply` | Converge on `stack.yaml` (§5). `--rotate admin.password`, which `plan` takes too, generates a new admin password, and sets it in every app (§11, Slice 10a) |
+| `apply` | Converge on `stack.yaml` (§5), removing what Mediaplane made for an app the stack no longer wants (§11, Slice 10b). `--rotate admin.password`, which `plan` takes too, generates a new admin password, and sets it in every app (§11, Slice 10a); `--rotate plex.token` gives your new Plex token to every app that holds the old one (§11, Slice 10b) |
 | `status [app]` | Container health, VPN state, and the last apply's outcome |
 | `drift` | Report drift only (§6.3): it changes nothing in the apps but for its checks' marks, fewer than `plan`'s, and keeps what it found of each secret, and of each app's own key, in `state/resources.json`; like `plan`, it joins the wiring network in the image, and like `apply` it holds `state/lock` while it runs (§11, Slice 8) |
-| `keep <path>` | Keep mine: record a drifted value, or a resource deleted or left in an app, as an override, adding one line to `stack.yaml`, and record it as applied in `state/resources.json`; or, for an app's own key changed at its source (`<app>.<key>`), keep the key its own file holds in `state/secrets.json`, which the next `apply` gives to each resource that holds the old one (§11, Slice 10a); like `plan`, it joins the wiring network in the image, and it holds `state/lock` while it runs (§11, Slice 8) |
+| `keep <path>` | Keep mine: record a drifted value, or a resource deleted or left in an app, as an override, adding one line to `stack.yaml`, and record it as applied in `state/resources.json` (with `managed_by: external`, it writes no `stack.yaml`, and gives the line to add: §11, Slice 10b); or, for an app's own key changed at its source (`<app>.<key>`), keep the key its own file holds in `state/secrets.json`, which the next `apply` gives to each resource that holds the old one (§11, Slice 10a); like `plan`, it joins the wiring network in the image, and it holds `state/lock` while it runs (§11, Slice 8) |
 | `history [id]` | List change records, or show one in full |
 | `credentials [app]` | Show the shared admin login and per-app URLs (never printed in `--json` unless `--reveal` is given) |
 | `plex-login` | Run the plex.tv PIN flow and save the token where `plex.token` names a file (`secrets/plex-token`), through a short-lived helper in the image (§11, Slice 7) |
@@ -2274,3 +2275,93 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
   plex.tv account.
 - **No new Docker API call:** recovery reads files in the home, a key put back is a file
   written there between `compose stop` and `up`, which apply already makes (§7.2(2)).
+
+### Slice 10b: removal and rotation (2026-10-26)
+
+- **What was S10b ships in two parts** (§2.3; the roadmap gives each part's items): S10b,
+  removal and rotation (what an app leaving the stack had in the others, a new Plex
+  token, a Plex signed out of its account, Seerr's own Jellyfin key, Seerr asked when its
+  file can't be read, Keep mine with `managed_by: external`, and a deadline on Jellyfin's
+  database read); and S10c, the automation contract and the docs that complete M1 (the
+  `--json` shapes pinned and in the generated docs, exit codes, commands that ask nothing
+  when a script runs them, the automation guide with a short Ansible example, the full
+  README, the add-an-app guide, the test gaps, and S9's review items).
+- **What an app leaving the stack had in the others goes** (§4.2, §8.1(3) step 4). A
+  resource may say how it is removed (`remove`), and why one may not be (`cannotRemove`,
+  read from the app). `plan` lists each resource Mediaplane recorded that the stack no
+  longer wants, and that the app holds as Mediaplane made it (the id and the name its
+  record keeps), as `remove` (a new wiring action, within `mediaplane.plan/v1` and
+  `mediaplane.change/v1`; an older release lists such a change record as one it can't
+  read); one of an app that isn't settled yet, as checked after the start. Apply's wire
+  step, after an app's wanted resources, looks each up again, removes it, and forgets its
+  record (`removed`). Drift still reports each as `left`, and says why `apply` leaves
+  one (`stays`): Mediaplane doesn't remove that kind; it is renamed in its app, or held
+  there under another id, so it may be yours; or it holds what is yours.
+  - **What is removed** (probed on the pinned images): Prowlarr's link to an arr that left
+    and its indexer proxy once the stack has no solver (`DELETE`, 200 whether or not
+    Prowlarr held it; the `cloudflare` tag stays), an arr's download client and its
+    connections (the same), qBittorrent's category of an arr that left
+    (`removeCategories`, 200 either way), and Seerr's server of an arr that left
+    (`DELETE /api/v1/settings/<arr>/<id>`, which answers 500 for one Seerr doesn't hold,
+    so it is removed only as just observed).
+  - **What stays:** a qBittorrent category with a torrent in it, since removing it takes
+    the category from the torrent and Automatic Torrent Management moves its files to
+    `/data/torrents` (probed); Seerr's media server, a setting of Seerr's, which a switch of
+    media server sets up afresh (§10); and the left app's own records, as its appdata
+    stays.
+  - **Keep mine first** keeps one as yours (`<app>.<resource>: unmanaged`), and `apply`
+    never removes a resource it has no record of.
+- **Keep mine with `managed_by: external`** (§4.2, §5.2). Keep writes no `stack.yaml` and
+  succeeds: `mediaplane.keep/v1` gives the line to add (`line`, and `written: false`),
+  with a warning (`keep.external`); a write it refuses gives the line too. It records
+  nothing as applied, since `stack.yaml` doesn't hold the line yet, but forgets the record
+  of a resource kept `unmanaged`, so that `apply` never removes it meanwhile. Once
+  `stack.yaml` holds the line, `plan` adopts what the app holds.
+- **Jellyfin's database is read in a process of its own** (§6.1, threat model T4): Node
+  itself (`process.execPath`), with a fixed program on `--eval`, no shell, an empty
+  environment, the database handed to it open as its fd 3 (SQLite opens
+  `/proc/self/fd/3`), its request on its standard input and its answer, which holds the
+  key, on its standard output. It is killed after 10 seconds (`DATABASE_DEADLINE_MS`):
+  SQLite's open waits on a named pipe at the database's name (probed), which a compromised
+  Jellyfin could put there in an instant. The checks that the path is still the file read
+  run once it has answered, and drop what it read otherwise. A pipe at the `-wal` makes
+  SQLite refuse the read (`disk I/O error`, probed). Anything it doesn't answer as
+  expected is a key file that couldn't be read.
+- **Seerr's own Jellyfin key is replaced** (§6.1, §6.2). Seerr makes a key named `Seerr`
+  in Jellyfin as it first signs in (probed). A resource may name secrets the app made
+  itself (`adoptSets`): until its record says Mediaplane gave them (`given`, names only,
+  an optional field within `mediaplane.resources/v1`), they are a change, never checked.
+  So the first `apply` that records `seerr.media_server` gives Seerr Mediaplane's own
+  Jellyfin key, then has Jellyfin remove the key Seerr held, when Jellyfin lists it under
+  the name Seerr gives its own (probed: 204, Seerr keeps working); a Seerr set up before
+  gets it at its next `apply`. One key, Mediaplane's, is then the one to rotate. A
+  resource's `update` gets apply's VerifyContext, for Jellyfin's client.
+- **Seerr is asked when its `settings.json` can't be read** (§6.4). A Seerr whose setup
+  Mediaplane recorded (`setUp`) is asked itself, as plan reaches it (`Bootstrap.open`,
+  without its key): one that says its setup is done stays as it is, published; one that
+  says it is open, or can't be asked, is set up again, unpublished (fail closed). So such
+  an `apply` no longer fails at verify each time.
+- **A new Plex token** (§6.1, §10). The arrs keep a token Plex takes, and Seerr the one
+  its admin signed in with, which its API never shows (probed). `plan --rotate
+  plex.token` and `apply --rotate plex.token` take your new token as a change, unchecked,
+  for each resource that holds it (the arrs' connections to Plex), but for one whose
+  key's own app refuses it (Plex, for a token of another account); and list Seerr's
+  setup again, published (`again`, within the plan's and the change record's
+  `bootstrap`), since a setup may say which secrets you give it signs in with
+  (`signsInWith`). Seerr's setup then checks, as for a Seerr set up already, that its
+  admin is the new token's account, and signs in again with it (probed: Seerr keeps the
+  new token as its admin's, id 1), and out; its record stays whatever the sign-in does.
+  `plex-login` says to run it when it saves a token in place of another. Only on a Plex
+  stack (`rotate.no-plex`).
+- **A Plex signed out of its account while it ran is claimed again** (§6.4). Its web
+  UI's sign-out (`DELETE /myplex/account`) unclaims it at once, published, and its
+  `Preferences.xml` keeps `PlexOnlineToken=""`, so its image never uses `PLEX_CLAIM`: its
+  claim step looks only for that attribute's name (probed: "Server already claimed").
+  `plan` lists its setup, and warns that it runs published (`bootstrap.open-published`,
+  for any app whose setup is to be done and which publishes ports now). Apply starts it
+  unpublished, and Plex's setup claims it itself, while it is unclaimed: a claim token
+  from plex.tv, with your token, posted to Plex over the wiring network, to its address
+  (`POST /myplex/claim`; Plex's DNS-rebinding check refuses one sent to a name, probed);
+  then the checks of a first start. The same server, its new token your account's.
+- **No new Docker API call:** the removals, the claim and Seerr's sign-in are the apps'
+  APIs over the wiring network; the database read is a local process (§7.2(2)).

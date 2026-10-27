@@ -174,3 +174,8 @@ LinuxServer.io image, unmodified.
   generated, as the [rebuilding a host runbook](../../docs/runbooks/rebuilding-a-host.md)
   says. One Mediaplane can't read stops `plan` (`keys.unrecoverable`): a new key would
   lock it out of Sonarr.
+- **Taken out of the stack,** Sonarr's container goes at the next `apply`, and so does
+  what Mediaplane made for it in the other apps: Prowlarr's link to it, qBittorrent's
+  `tv` category (unless a torrent is in it), and Seerr's Sonarr server. Its `appdata/`
+  stays: deleting it is yours to do. Its connection to Jellyfin, or to Plex, goes when the
+  stack moves to the other media server.

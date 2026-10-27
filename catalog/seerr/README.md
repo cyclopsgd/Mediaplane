@@ -66,11 +66,15 @@ With Jellyfin as the media server (with Plex, see below):
 - **Its media server** (`seerr.media_server`): Jellyfin, at its service and port, with
   no URL base and no TLS (either, set in Seerr, counts as Jellyfin moved, and `apply`
   puts it back), and the Movies and Shows libraries enabled. A library you enable in
-  Seerr stays yours. Seerr uses the key it made itself in Jellyfin as it signed in
-  (named `Seerr` in Jellyfin's dashboard): Mediaplane checks that it works, and gives
-  Seerr its own Jellyfin key only when Jellyfin refuses Seerr's, or Jellyfin moves,
-  when Seerr's libraries are synced again too. Seerr shows that key in clear: Mediaplane
-  keeps it out of all it prints and records. Seerr sets Jellyfin's id (`serverId`) at
+  Seerr stays yours. Seerr makes itself a key in Jellyfin as it first signs in (named
+  `Seerr` in Jellyfin's dashboard); the first time Mediaplane records the link, it gives
+  Seerr Mediaplane's own Jellyfin key in its place, and removes Seerr's from Jellyfin, so
+  one key is the one to rotate. A Seerr set up before then gets Mediaplane's key at its
+  next `apply` too, and the key it held goes from Jellyfin if Jellyfin lists it as
+  Seerr's. From then on Mediaplane checks that the key works, and gives it again when
+  Jellyfin refuses it, or Jellyfin moves, when Seerr's libraries are synced again too.
+  Seerr shows its key in clear: Mediaplane keeps it out of all it prints and records.
+  Seerr sets Jellyfin's id (`serverId`) at
   its first sign-in and on each link it saves: a link with an empty id reads as not
   linked, and `apply` links it again.
 - **Its Sonarr and Radarr servers** (`seerr.server_sonarr`, `seerr.server_radarr`), each
@@ -143,9 +147,18 @@ With Jellyfin as the media server (with Plex, see below):
   leaves no new line in Seerr's log, nor in the arr's. Its setup
   (`seerr.setup.initialized`) is fixed: Seerr can't be taken back to its setup wizard.
 
-## Not built yet
+## Known issues
 
-- **Slice 10b:** a way to give Seerr a new Plex token: it keeps the one it signed in with.
+- **On a Plex stack, Seerr keeps the token it signed in with,** and reaches Plex with it.
+  A new token from `plex-login --force` reaches it with
+  `mediaplane apply --rotate plex.token`, which signs Seerr in again with it, once plex.tv
+  says Seerr's admin is the new token's account.
+- **A server goes when its arr leaves the stack:** the next `apply` removes
+  `Radarr (Mediaplane)` from Seerr once Radarr is out of `stack.yaml`. One renamed in
+  Seerr stays, as it may be yours now.
+- **Its `settings.json` unreadable** (say, its mode changed by hand): a Seerr Mediaplane
+  set up is asked itself whether its setup is done, and stays as it is when it says so,
+  with a warning (`bootstrap.unreadable`).
 
 See the [roadmap](../../docs/plans/m1-roadmap.md).
 
