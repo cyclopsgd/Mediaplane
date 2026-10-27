@@ -534,6 +534,59 @@ describe("Plex's first-run setup", () => {
     expect(silent).toMatchObject({ kind: 'auth', unsure: true });
   });
 
+  it('keeps a Plex signed out of your account unpublished when it refuses the claim, saying so without the claim token', async () => {
+    const { api, state, plexTv, ctx, stack } = await plexOf(60_000);
+    claimFakePlex(state.plex, await plexTv.client.claimToken(TOKEN), plexTv.state);
+    Object.assign(state.plex, { owner: null, serverToken: '', signedOut: true });
+    expect(await plexBootstrap.open(api)).toBe(true);
+    // A claim token used already: Plex refuses the claim (400).
+    let claim = '';
+    const used: BootstrapContext = {
+      ...ctx,
+      plexTv: {
+        ...plexTv.client,
+        claimToken: async (token) => {
+          claim = await plexTv.client.claimToken(token);
+          const known = plexTv.state.claims.find((c) => c.token === claim);
+          if (known !== undefined) known.used = true;
+          return claim;
+        },
+      },
+    };
+    const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, used));
+    expect(failed).toMatchObject({ kind: 'rejected', status: 400 });
+    const said = (failed as Error).message;
+    expect(said).toContain(
+      'Plex at http://plex:32400 (127.0.0.1) was signed out of its plex.tv account, and refused the claim Mediaplane sent to claim it again, so it stays unpublished: ',
+    );
+    expect(said).toContain('(HTTP 400)');
+    expect(said).toMatch(
+      /Its claim token may have run out, or been used already: run apply again, which gets a new one$/,
+    );
+    expect(claim).not.toBe('');
+    expect(said).not.toContain(claim);
+    expect(state.plex.owner).toBeNull();
+    // Plex not answering the claim (a 5xx) is unsure, never a refusal.
+    const silent = await thrown(
+      plexBootstrap.run(
+        {
+          ...api,
+          submit: () =>
+            Promise.reject(
+              new AppApiError('fake failure (HTTP 500)', { kind: 'server', status: 500 }),
+            ),
+        },
+        ADMIN,
+        stack,
+        ctx,
+      ),
+    );
+    expect(silent).toMatchObject({ kind: 'auth', unsure: true });
+    expect((silent as Error).message).toMatch(
+      /refused the claim .*: fake failure \(HTTP 500\)\. Check that Plex is running, then run apply again$/,
+    );
+  });
+
   it("keeps a Plex that didn't claim itself unpublished, saying why", async () => {
     const { api, ctx, stack } = await plexOf(60_000);
     const failed = await thrown(plexBootstrap.run(api, ADMIN, stack, ctx));

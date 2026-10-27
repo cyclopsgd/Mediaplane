@@ -1826,7 +1826,10 @@ apps:
     expect(applied.stdout() + applied.stderr()).toContain(
       "has an admin of another plex.tv account than your new Plex token's",
     );
-    expect(applied.stdout() + applied.stderr()).not.toContain('afresh');
+    // Putting back a token of its admin's account first; starting afresh only last.
+    expect(applied.stdout() + applied.stderr()).toMatch(
+      /Put back a token of its admin's account: .*\. Last, if you did not set it up, start it afresh, as the runbook says/,
+    );
     // Sonarr's connection and Seerr keep the token that works; Seerr stays recorded.
     expect(apis.apps.get('sonarr')?.connections[0]?.fields).toContainEqual({
       name: 'authToken',

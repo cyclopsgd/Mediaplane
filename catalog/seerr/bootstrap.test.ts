@@ -763,6 +763,43 @@ describe("Seerr's first-run setup, with Plex", () => {
     expect(calls().slice(before)).not.toContain('POST /api/v1/auth/plex');
   });
 
+  it('signs in again with your new token a reopened Seerr found set up as yours once its first sign-in fails', async () => {
+    const renewed = 'fake-plex-token-0002';
+    const { api, state, calls, ctx, stack, plexTv } = await plexSeerrOf();
+    plexTv.state.accounts.push({ id: FAKE_PLEX_ACCOUNT.id, token: renewed });
+    // Between the look and the sign-in, your account's old token set Seerr up, and the
+    // first sign-in's answer was lost.
+    let first = true;
+    const racing: AppApi = {
+      ...api,
+      session: (...args: Parameters<AppApi['session']>) => {
+        if (!first) return api.session(...args);
+        first = false;
+        Object.assign(state.seerr, structuredClone(SIGNED_IN));
+        return Promise.reject(
+          new AppApiError('fake timeout (POST /api/v1/auth/plex)', { kind: 'timeout' }),
+        );
+      },
+    };
+    expect(
+      await seerrBootstrap.run(racing, ADMIN, stack, {
+        ...ctx,
+        given: { plex: { token: renewed } },
+        again: true,
+      }),
+    ).toBeUndefined();
+    expect(state.seerr.plexTokens[FAKE_PLEX_ACCOUNT.id]).toBe(renewed);
+    expect(state.seerr.sessions).toEqual([]);
+    // Shown to be yours with its key first; then signed in again, as its admin, and out.
+    expect(calls().slice(-5)).toEqual([
+      'GET /api/v1/auth/me',
+      'GET /api/v1/settings/plex',
+      'POST /api/v1/auth/plex',
+      'GET /api/v1/auth/me',
+      'POST /api/v1/auth/logout',
+    ]);
+  });
+
   it("says Seerr keeps the old token when it can't check the new one at plex.tv", async () => {
     const renewed = 'fake-plex-token-0002';
     const { api, state, ctx, stack, plexTv } = await plexSeerrOf(SIGNED_IN);
@@ -801,7 +838,9 @@ describe("Seerr's first-run setup, with Plex", () => {
       'has an admin of another plex.tv account than your new Plex token',
     );
     expect(said).toContain('Put back a token of its admin');
-    expect(said).not.toContain('afresh');
+    expect(said).toContain(
+      'if you did not set it up, start it afresh, as the runbook says',
+    );
     expect(said).not.toContain(other);
     // Your new token never went to that Seerr, which keeps its old one.
     expect(calls()).not.toContain('POST /api/v1/auth/plex');

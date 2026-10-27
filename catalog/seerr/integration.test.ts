@@ -10,6 +10,8 @@ import {
 import {
   claimFakePlex,
   FAKE_PLEX_ACCOUNT,
+  fakeHttpApp,
+  fakeJellyfin,
   fakeJellyfinSetUp,
   fakePlexTv,
   fakeStackApis,
@@ -405,6 +407,45 @@ describe("Seerr's media server", () => {
       'Mediaplane',
       'Seerr',
       'Another app',
+    ]);
+  });
+
+  it("fails, once, when Jellyfin can't list its keys, with Seerr holding Mediaplane's and its own still in Jellyfin", async () => {
+    const { api, state, jellyfin } = await seerr();
+    const own = state.seerr.madeKey;
+    const desired = wanted(spec);
+    const observed = await spec.observe(api, undefined, desired);
+    if (observed === undefined) throw new Error('observed');
+    // Jellyfin as apply's wire step reached it, failing as a proxy does (502) on its keys.
+    const failing = await fakeHttpApp((request) =>
+      request.method === 'GET' && request.path === '/Auth/Keys'
+        ? { status: 502, body: 'Bad Gateway' }
+        : fakeJellyfin(request, jellyfin),
+    );
+    const toJellyfin = createAppApi({
+      name: 'Jellyfin',
+      service: 'jellyfin',
+      port: 8096,
+      endpoint: { host: '127.0.0.1', port: failing.port },
+      key: { scheme: 'mediabrowser', value: JELLYFIN_KEY },
+      secrets: [JELLYFIN_KEY],
+      retry: { deadlineMs: 0 },
+    });
+    const ctx = {
+      readOnly: false,
+      peer: (app: string) => (app === 'jellyfin' ? toJellyfin : undefined),
+    };
+    const failed = await thrown(spec.update(api, desired, observed, ['apiKey'], ctx));
+    expect(failed).toBeInstanceOf(AppApiError);
+    expect(failed).toMatchObject({ kind: 'server' });
+    expect((failed as Error).message).not.toContain(own ?? 'no own key');
+    // Seerr was given Mediaplane's key first; Seerr's own is left for you to remove.
+    expect(state.seerr.jellyfin.apiKey).toBe(JELLYFIN_KEY);
+    expect(jellyfin.apiKeys.map((k) => k.AppName)).toEqual(['Mediaplane', 'Seerr']);
+    expect(jellyfin.apiKeys.map((k) => k.AccessToken)).toContain(own);
+    // Asked once, never again by the update itself.
+    expect(failing.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      'GET /Auth/Keys',
     ]);
   });
 

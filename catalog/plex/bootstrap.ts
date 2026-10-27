@@ -5,6 +5,7 @@ import {
   BootstrapFailed,
   PlexTvError,
   type AppApi,
+  type AppApiErrorKind,
   type Bootstrap,
   type BootstrapContext,
 } from '@mediaplane/engine';
@@ -195,6 +196,13 @@ async function signedOut(home: string): Promise<boolean> {
   }
 }
 
+/** Failures of a request Plex didn't answer: Mediaplane couldn't tell. */
+const UNANSWERED: ReadonlySet<AppApiErrorKind> = new Set([
+  'timeout',
+  'server',
+  'unreachable',
+]);
+
 /**
  * Claim an unclaimed Plex for your account through its own API, as the image's claim step
  * would: a claim token from plex.tv, with your token, posted to Plex over the wiring
@@ -220,15 +228,25 @@ async function claimAgain(
     );
   }
   api.addSecret(claim);
-  // By its address: Plex's DNS-rebinding check refuses a claim sent to a name (probed).
-  await api.submit(
-    'POST',
-    `/myplex/claim?token=${encodeURIComponent(claim)}`,
-    undefined,
-    {
-      byAddress: true,
-    },
-  );
+  try {
+    // By its address: Plex's DNS-rebinding check refuses a claim sent to a name (probed).
+    await api.submit(
+      'POST',
+      `/myplex/claim?token=${encodeURIComponent(claim)}`,
+      undefined,
+      { byAddress: true },
+    );
+  } catch (cause) {
+    if (!(cause instanceof AppApiError)) throw cause;
+    // Unanswered (a timeout, a 5xx, no connection) is unsure; any other answer refused it.
+    const unanswered = UNANSWERED.has(cause.kind);
+    throw new AppApiError(
+      `${api.name} at ${api.where} was signed out of its plex.tv account, and refused the claim Mediaplane sent to claim it again, so it stays unpublished: ${cause.message}. ${unanswered ? 'Check that Plex is running, then run apply again' : 'Its claim token may have run out, or been used already: run apply again, which gets a new one'}`,
+      unanswered
+        ? { kind: 'auth', unsure: true, status: cause.status }
+        : { kind: 'rejected', status: cause.status },
+    );
+  }
 }
 
 /** What to do when plex.tv gives no claim token, failing with `cause`. */
