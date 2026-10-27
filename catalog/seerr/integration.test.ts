@@ -368,6 +368,46 @@ describe("Seerr's media server", () => {
     expect(jellyfin.apiKeys.map((k) => k.AppName)).toEqual(['Mediaplane', 'Seerr']);
   });
 
+  it("leaves in Jellyfin a key Seerr held that Jellyfin lists under another name than Seerr's, though Jellyfin can be asked", async () => {
+    const { api, apis, state, jellyfin, calls } = await seerr();
+    // Seerr holds a key someone made in Jellyfin for another app, not Mediaplane's.
+    const theirs = '8'.repeat(32);
+    jellyfin.apiKeys.push({
+      AccessToken: theirs,
+      AppName: 'Another app',
+      DateCreated: new Date(Date.UTC(2026, 9, 16, 12, 0, 0)).toISOString(),
+    });
+    state.seerr.jellyfin.apiKey = theirs;
+    const desired = wanted(spec);
+    const observed = await spec.observe(api, undefined, desired);
+    if (observed === undefined) throw new Error('observed');
+    const toJellyfin = createAppApi({
+      name: 'Jellyfin',
+      service: 'jellyfin',
+      port: 8096,
+      endpoint: { host: '127.0.0.1', port: apis.app.port },
+      key: { scheme: 'mediabrowser', value: JELLYFIN_KEY },
+      secrets: [JELLYFIN_KEY],
+      retry: { deadlineMs: 0 },
+    });
+    const ctx = {
+      readOnly: false,
+      peer: (app: string) => (app === 'jellyfin' ? toJellyfin : undefined),
+    };
+    const before = calls().length;
+    await spec.update(api, desired, observed, ['apiKey'], ctx);
+    // Jellyfin was asked, and nothing was removed from it.
+    expect(calls(before)).toContain('GET /Auth/Keys');
+    expect(calls(before).some((call) => call.startsWith('DELETE'))).toBe(false);
+    expect(state.seerr.jellyfin.apiKey).toBe(JELLYFIN_KEY);
+    expect(jellyfin.apiKeys.map((k) => k.AccessToken)).toContain(theirs);
+    expect(jellyfin.apiKeys.map((k) => k.AppName)).toEqual([
+      'Mediaplane',
+      'Seerr',
+      'Another app',
+    ]);
+  });
+
   it('enables only the libraries an override names, and leaves the others to you', async () => {
     const { api, state } = await seerr();
     const kept = {
