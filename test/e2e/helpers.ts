@@ -635,7 +635,8 @@ export async function deployMediaplane(options: {
           'mediaplane',
           ...args,
         ],
-        { cwd: '/', timeoutMs: 300_000 },
+        // As long as a script would wait: a first apply waits for every app to be healthy.
+        { cwd: '/', timeoutMs: 1_200_000 },
       ),
     remove: async () => {
       expect(await teardown()).toEqual([]);
