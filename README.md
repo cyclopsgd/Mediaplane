@@ -542,7 +542,8 @@ finding the apps and keys you already have, is on the list.
 
 ### Is it safe to run?
 
-It is pre-alpha, so treat it as something to try rather than to rely on.
+It is pre-1.0, with no release yet, so treat it as something to try rather than to
+rely on.
 
 Mediaplane controls Docker, and that is root-equivalent on the host. It keeps its
 secrets private:

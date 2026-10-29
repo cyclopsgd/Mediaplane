@@ -245,13 +245,16 @@ describe('a playbook, reading only the documented contract (the roadmap: S10c)',
       expectField('the apply after it', settled.doc, 'changed', false);
       expectField('the apply after it', settled.doc, 'outcome', 'no-changes');
       // Confirmed from the contract: no container of Radarr's is left in the stack.
+      // Not because it lists none: the apps kept are there.
       const left = await run(deployed, 'status', 'status');
-      expect(
-        (left.doc.containers as { service: string }[]).some(
-          (c) => c.service === 'radarr',
-        ),
-        'status lists a container of the removed app',
-      ).toBe(false);
+      const services = (left.doc.containers as { service: string }[]).map(
+        (c) => c.service,
+      );
+      expect(services, "status lists the stack's containers").not.toEqual([]);
+      expect(services, 'status lists the apps kept').toContain('sonarr');
+      expect(services, 'status lists a container of the removed app').not.toContain(
+        'radarr',
+      );
 
       // The host is lost: the stack's containers, Mediaplane's deployment, its state/ and
       // generated/. What is left is what a rebuild starts from: stack.yaml, appdata/ and

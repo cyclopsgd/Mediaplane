@@ -98,8 +98,8 @@ FlareSolverr), for eleven releases of Compose:
   and qBittorrent.
 
 So what to check is whether the image's Compose moved to another of those lines, or to a
-version not probed yet. Renovate's pull request for a bump of the `docker` image in the
-`Dockerfile` says the same.
+version not probed yet. Once the Renovate app is installed (an owner's step), Renovate's
+pull request for a bump of the `docker` image in the `Dockerfile` says the same.
 
 Nothing writes this into a release's notes. The Compose is the one inside the `docker`
 image that the `Dockerfile` copies it from, so a change shows in the changelog as a bump

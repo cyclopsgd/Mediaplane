@@ -299,8 +299,27 @@ lighter route, or as a slice when it is big or touches security.
   - Reads that can still wait: `stack.yaml` is guarded against a named pipe in its place,
     but other files a command reads (secret files, `state/*`, generated files) can still
     block on one. Guard them as `stack.yaml` is now.
+  - Coded diagnostics for the error documents that have none, so a script tells them
+    apart without reading the message (S10c's final review): a usage error,
+    `apply.needs-yes`, `status <app>` with no container, `history.unreadable` apart from
+    no such record, `credentials <app>` of an unknown app, `plex-login`'s timeout and its
+    expired link, and `config.unreadable` for a `stack.yaml` that can't be read; and
+    `fileKind` keeps its "check that the user can read it" hint.
+  - A structured field on `apply`'s `actions[]` for what it did to each resource
+    (`created`, `adopted`, …), which `change/v1` records gain too. Until then, a done
+    wire action's `detail` is that word, stable within v1.
+  - From S10c's reviews, by the lighter route: the docs link check's
+    `decodeURIComponent` on a literal `%` in a link; the Renovate rule test catching a
+    rule for an image no longer pinned; tests of the end-to-end harness's leftovers
+    parsing; the migrate guide's regex test missing "it is 0 too".
+  - `PINNED` (`scripts/ci/pull-images.ts`) learns a registry with a port, with the
+    first pinned image that has one.
+  - At the first release: stamp the published JSON Schemas' `$id` with the release's
+    tag, so a release's files don't share `main`'s `$id`.
 - **M3: more apps.** SABnzbd, Audiobookshelf, Bookshelf (experimental), Bazarr,
   Recyclarr, Portainer and Homepage.
+  - With a third app whose setup can be held: `heldThrough` takes the level and message
+    from the first app it finds, so they could depend on the catalog's order.
 - **Not scheduled:** the web panel (wizard, dashboard, drift view). Its items are kept
   below.
 
