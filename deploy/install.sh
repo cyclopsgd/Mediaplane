@@ -104,13 +104,35 @@ fi
 
 command -v docker >/dev/null 2>&1 ||
   fail "Docker isn't installed: install Docker Engine 24 or newer, with its Compose plugin, then run this again"
-# docker and Compose talk to the Docker that DOCKER_HOST or DOCKER_CONTEXT names, which may
-# be another host's; the installer checks this host's socket, which the deployment mounts.
-if [ -n "${DOCKER_HOST:-}" ] && [ "$DOCKER_HOST" != "unix://$socket" ]; then
-  fail "DOCKER_HOST is set, so docker would use another Docker than this host's, at $socket, which Mediaplane's container uses: unset DOCKER_HOST, then run this again"
-fi
+# docker and Compose talk to the Docker that DOCKER_HOST, DOCKER_CONTEXT or the context
+# chosen with `docker context use` names, which may be another host's; the installer checks
+# this host's socket, which the deployment mounts. The two paths the socket is known by
+# (/var/run is /run on most hosts) are this host's.
+case ${DOCKER_HOST:-} in
+  '' | "unix://$socket" | unix:///var/run/docker.sock | unix:///run/docker.sock) ;;
+  *)
+    fail "DOCKER_HOST is set, so docker would use another Docker than this host's, at $socket, which Mediaplane's container uses: unset DOCKER_HOST, then run this again"
+    ;;
+esac
 if [ -n "${DOCKER_CONTEXT:-}" ] && [ "$DOCKER_CONTEXT" != default ]; then
   fail "DOCKER_CONTEXT is set, so docker would use another Docker than this host's, at $socket, which Mediaplane's container uses: unset DOCKER_CONTEXT, then run this again"
+fi
+# Without either, docker uses the context `docker context use` chose; DOCKER_HOST, if set
+# (and it is this host's, above), overrides it.
+if [ -z "${DOCKER_HOST:-}" ] && [ -z "${DOCKER_CONTEXT:-}" ]; then
+  context=$(docker context show 2>/dev/null) || context=
+  case $context in
+    '' | default) ;;
+    *)
+      endpoint=$(docker context inspect --format '{{.Endpoints.docker.Host}}' "$context" 2>/dev/null) || endpoint=
+      case $endpoint in
+        "unix://$socket" | unix:///var/run/docker.sock | unix:///run/docker.sock) ;;
+        *)
+          fail "the Docker context \"$context\" is in use, and its endpoint (${endpoint:-unreadable}) isn't this host's socket, $socket, which Mediaplane's container uses: run docker context use default, then run this again"
+          ;;
+      esac
+      ;;
+  esac
 fi
 docker info >/dev/null 2>&1 ||
   fail "Docker isn't answering: start it, and check that your user may use it (docker info says why), then run this again"

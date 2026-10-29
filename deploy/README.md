@@ -119,11 +119,14 @@ you only a home it has just created, never a folder that was already there. With
   clears the shell's `COMPOSE_*` settings that choose the project, file, profiles or
   `.env`, and names the project and the file itself, so neither the shell's nor
   `deploy/.env`'s can move it to another project or file, and none can change the image.
-- **Only this host's Docker:** it refuses a `DOCKER_HOST` or `DOCKER_CONTEXT` that would
-  point `docker` at another Docker than the socket it checks, `/var/run/docker.sock`, which
-  Mediaplane's container uses. Unset them, then run it again.
   It pulls the image and the socket proxy's before it recreates anything; Docker checks
   everything it pulls against the digest.
+- **Only this host's Docker:** it refuses a `DOCKER_HOST` or `DOCKER_CONTEXT` that would
+  point `docker` at another Docker than the socket it checks, `/var/run/docker.sock`, which
+  Mediaplane's container uses. `DOCKER_HOST` may name that socket as `unix:///var/run/docker.sock`
+  or `unix:///run/docker.sock`. It also refuses a context chosen with `docker context use`
+  (other than `default`) whose endpoint isn't one of those two sockets. Unset the
+  variable, or run `docker context use default`, then run it again.
 - **If `mediaplane` then runs something else** in your shell, `type -a mediaplane` shows
   what, such as an old alias.
 

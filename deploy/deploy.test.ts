@@ -345,6 +345,9 @@ describe('the installer', () => {
     uid?: string;
     buildFails?: boolean;
     pullFails?: boolean;
+    /** The context `docker context use` chose (default when none), and its endpoint. */
+    context?: string;
+    contextHost?: string;
     /** A release's own deploy files (pinned to RELEASE), with no checkout around them. */
     release?: boolean;
     /** deploy/.env's text, when one is already there. */
@@ -415,6 +418,8 @@ esac
 case "$*" in
   'version --format {{.Server.Version}}') echo '${options.engine ?? '29.8.0'}' ;;
   'compose version --short') echo '${options.compose ?? '2.38.2'}' ;;
+  'context show') echo '${options.context ?? 'default'}' ;;
+  'context inspect '*) echo '${options.contextHost ?? ''}' ;;
   'info --format {{.SecurityOptions}}') echo '${security}' ;;
   build*) exit ${options.buildFails === true ? '1' : '0'} ;;
   *' pull'*) exit ${options.pullFails === true ? '1' : '0'} ;;
@@ -667,6 +672,71 @@ exit 0
   );
 
   it.runIf(asYou)(
+    "takes DOCKER_HOST when it names one of this host's two local sockets",
+    () =>
+      inSandbox({}, (box) => {
+        for (const host of ['unix:///var/run/docker.sock', 'unix:///run/docker.sock']) {
+          const result = box.run({ DOCKER_HOST: host });
+          expect(result.code, `${host}: ${result.err}`).toBe(0);
+        }
+        // A socket of another path, even a unix one, is another Docker.
+        const other = box.run({ DOCKER_HOST: 'unix:///home/someone/docker.sock' });
+        expect(other.code).toBe(1);
+        expect(other.err).toContain('DOCKER_HOST is set');
+      }),
+  );
+
+  it.runIf(asYou)(
+    "refuses the context that `docker context use` chose when its endpoint isn't a local socket, before it changes anything",
+    async () => {
+      for (const contextHost of [
+        'tcp://192.0.2.10:2376',
+        'ssh://deploy@192.0.2.10',
+        'unix:///home/someone/docker.sock',
+        '',
+      ]) {
+        await inSandbox({ context: 'elsewhere', contextHost }, (box) => {
+          const result = box.run();
+          expect(result.code, contextHost).toBe(1);
+          expect(result.err).toContain('the Docker context "elsewhere"');
+          expect(result.err).toContain('docker context use default');
+          changedNothing(box, result.calls);
+          expect(result.calls.some((call) => call.startsWith('docker compose'))).toBe(
+            false,
+          );
+        });
+      }
+    },
+  );
+
+  it.runIf(asYou)(
+    "takes a context other than default when its endpoint is one of this host's local sockets",
+    async () => {
+      for (const contextHost of [
+        'unix:///var/run/docker.sock',
+        'unix:///run/docker.sock',
+      ]) {
+        await inSandbox({ context: 'local', contextHost }, (box) => {
+          const result = box.run();
+          expect(result.code, `${contextHost}: ${result.err}`).toBe(0);
+        });
+      }
+    },
+  );
+
+  it.runIf(asYou)(
+    'does not look at the context when DOCKER_HOST decides which Docker docker uses',
+    () =>
+      inSandbox({ context: 'elsewhere', contextHost: 'tcp://192.0.2.10:2376' }, (box) => {
+        const result = box.run({ DOCKER_HOST: 'unix:///run/docker.sock' });
+        expect(result.code, result.err).toBe(0);
+        expect(result.calls.some((call) => call.startsWith('docker context'))).toBe(
+          false,
+        );
+      }),
+  );
+
+  it.runIf(asYou)(
     'stops at a build that fails, before deploy/.env or the container',
     () =>
       inSandbox({ buildFails: true }, (box) => {
@@ -739,7 +809,7 @@ exit 0
         for (const call of result.calls.filter((c) => c.startsWith('docker '))) {
           expect(call).toMatch(
             new RegExp(
-              `^docker (version --format \\S+|info( --format \\S+)?|compose version --short|compose -f ${file} -p mediaplane-system (pull|up -d))$`,
+              `^docker (version --format \\S+|info( --format \\S+)?|compose version --short|context show|compose -f ${file} -p mediaplane-system (pull|up -d))$`,
             ),
           );
         }
