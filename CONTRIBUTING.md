@@ -167,7 +167,7 @@ run `pnpm docs:generate` on its branch.
 
 ## Never commit real secrets
 
-This repository is public, or will be. Anything in git history is permanent.
+This repository is public. Anything in git history is permanent.
 
 - Never commit real API keys, tokens, VPN keys or passwords, or your own `stack.yaml`.
 - Test fixtures use obviously fake values: zeros (`000…`), `qbt_000…`, or strings

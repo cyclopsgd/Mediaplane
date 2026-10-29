@@ -30,7 +30,7 @@ was built then (the code on `main` is the truth):
 - Slice 10b: [`m1-s10b-automation.md`](m1/m1-s10b-automation.md) (done).
 - Slice 10c: [`m1-s10c-contract.md`](m1/m1-s10c-contract.md) (done).
 
-Where M1 stands (the README shows the same):
+Where M1 stands:
 
 - **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4, S5, S6, S7, S8, S9, S10a, S10b
   and S10c.
@@ -315,7 +315,7 @@ lighter route, or as a slice when it is big or touches security.
   - `PINNED` (`scripts/ci/pull-images.ts`) learns a registry with a port, with the
     first pinned image that has one.
   - At each release: stamp the published JSON Schemas' `$id` with the release's tag, so
-    a release's files don't share `main`'s `$id`, as 0.1.0's do.
+    a release's files don't share `main`'s `$id`.
 - **M3: more apps.** SABnzbd, Audiobookshelf, Bookshelf (experimental), Bazarr,
   Recyclarr, Portainer and Homepage.
   - With a third app whose setup can be held: `heldThrough` takes the level and message

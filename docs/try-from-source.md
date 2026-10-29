@@ -1,9 +1,9 @@
 # Try Mediaplane from source
 
-This runs the CLI straight from a checkout, with Node and pnpm, against the Docker on this
-machine: a way to try `main`, or to work on Mediaplane. To install Mediaplane, install a
-release, as the [README](../README.md#install) shows. To run `main` in its container
-instead, install it [from a checkout](../deploy/README.md#from-a-checkout).
+This page shows how to run the CLI straight from a checkout, with Node and pnpm, against
+the Docker on this machine: a way to try `main`, or to work on Mediaplane. For everyday
+use, install a release, as the [README](../README.md#install) shows. To run `main` in its
+container instead, install it [from a checkout](../deploy/README.md#from-a-checkout).
 
 Start from a clone of the repository:
 
