@@ -98,8 +98,8 @@ From a checkout, `pnpm --silent mediaplane <command> --json` does the same, with
   (`secrets.recover`), and a new admin password to generate when the old one went with
   `state/` (the warning `secrets.admin-password-lost`); `apply` finds each resource it
   made by name, and adopts it: its wire action in `actions` says `adopted` in its
-  `detail`, not `created`. A wire action that is `done` says one of a few words there,
-  stable within v1, which the [`--json` reference](reference/json.md) lists. The
+  `detail`, not `created`. A wire action that is `done` and names a resource says one
+  of a few words there, stable within v1, which the [`--json` reference](reference/json.md) lists. The
   [rebuilding a host](runbooks/rebuilding-a-host.md) runbook has the details.
 - **Watch for drift** with `drift --json` on a schedule: exit 2 means look.
 

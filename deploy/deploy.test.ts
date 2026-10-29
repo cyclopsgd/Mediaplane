@@ -718,7 +718,10 @@ exit 0
     "refuses a context it can't read, as a broken setup, before it changes anything (fail closed)",
     async () => {
       for (const [contextFails, said] of [
-        ['show', "couldn't read the Docker context in use (docker context show failed)"],
+        [
+          'show',
+          "couldn't read the Docker context in use (docker context show failed or said nothing)",
+        ],
         [
           'inspect',
           'the Docker context "elsewhere" is in use, and its endpoint (unreadable)',
