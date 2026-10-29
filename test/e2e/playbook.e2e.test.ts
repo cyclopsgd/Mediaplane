@@ -47,6 +47,16 @@ function documentedExit(command: string, doc: Document): number {
 /** Every secret the stack's state holds once apply has run: no document may hold one. */
 let secrets: string[] = [];
 
+/** What commands printed before the secrets were known: checked once they are. */
+let early: { what: string; stdout: string }[] = [];
+
+/** That none of `secrets` is in `text`: a yes or no, which never prints either. */
+function expectNoSecret(what: string, text: string): void {
+  for (const secret of secrets.filter((s) => s !== '')) {
+    expect(text.includes(secret), `${what} printed a secret`).toBe(false);
+  }
+}
+
 /**
  * `mediaplane <command> … --json`, as a playbook runs it: `docker exec` with no terminal,
  * reading only its exit code and the one document it prints, which must be its documented
@@ -77,11 +87,9 @@ async function run(
   expect(result.code, `mediaplane ${command}'s exit code, as documented`).toBe(
     documentedExit(command, doc),
   );
-  for (const secret of secrets.filter((s) => s !== '')) {
-    expect(result.stdout.includes(secret), `mediaplane ${command} printed a secret`).toBe(
-      false,
-    );
-  }
+  if (secrets.length === 0)
+    early.push({ what: `mediaplane ${command}`, stdout: result.stdout });
+  expectNoSecret(`mediaplane ${command}`, result.stdout);
   return { code: result.code, doc };
 }
 
@@ -111,6 +119,7 @@ describe('a playbook, reading only the documented contract (the roadmap: S10c)',
       ]);
     try {
       secrets = [];
+      early = [];
       // Deployed as the playbook deploys it: mediaplane.compose.yaml, its image built here.
       deployed = await deployMediaplane({ home, stack: PROJECT });
       const planned = await run(deployed, 'plan');
@@ -122,6 +131,8 @@ describe('a playbook, reading only the documented contract (the roadmap: S10c)',
         ...Object.values(store.apps).flatMap((keys) => Object.values(keys)),
         store.shared?.adminPassword ?? '',
       ];
+      // The first plan and apply came before the secrets were known.
+      for (const output of early) expectNoSecret(output.what, output.stdout);
       // A second apply changes nothing (spec §2.3, criterion 3).
       const again = await run(deployed, 'apply', '--yes');
       expect(again.doc).toMatchObject({
