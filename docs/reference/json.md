@@ -135,7 +135,7 @@ JSON Schema: [`json/apply.schema.json`](json/apply.schema.json)
   - `step` (one of `keys`, `files`, `pull`, `ownership`, `start`, `bootstrap`, `wire` or `verify`)
   - `resource` (string, optional): the wire step names the resource, such as `sonarr.admin`
   - `result` (one of `done`, `failed` or `skipped`)
-  - `detail` (string, optional): what it did, for people: a wire action says `created`, `updated`, `adopted`, `unchanged` or `removed`, and a skipped one why, such as why a planned removal stays; the first-run setup step says what it set up and published, and `signed in again to <app>`
+  - `detail` (string, optional): what it did. A `wire` action that names a `resource` and is `done` says exactly one of these, stable within v1: `created`, `adopted`, `unchanged`, `removed`, or `updated` and then the names of what changed, comma-separated, as the plan's `changes` names them (`updated user, password`). Otherwise it is for people: a skipped wire action says why, such as why a planned removal stays; the wire step's action with no `resource` sums up the others; the first-run setup step says what it set up and published, and `signed in again to <app>`
   - `error` (string, optional): why it failed
 - `recordId` (string or null): the change record written (`mediaplane history <id>`), or null
 - `diagnostics` (list of objects): every error and warning, in the order found
@@ -310,7 +310,7 @@ JSON Schema: [`json/change.schema.json`](json/change.schema.json)
   - `step` (one of `keys`, `files`, `pull`, `ownership`, `start`, `bootstrap`, `wire` or `verify`)
   - `resource` (string, optional): the wire step names the resource, such as `sonarr.admin`
   - `result` (one of `done`, `failed` or `skipped`)
-  - `detail` (string, optional): what it did, for people: a wire action says `created`, `updated`, `adopted`, `unchanged` or `removed`, and a skipped one why, such as why a planned removal stays; the first-run setup step says what it set up and published, and `signed in again to <app>`
+  - `detail` (string, optional): what it did. A `wire` action that names a `resource` and is `done` says exactly one of these, stable within v1: `created`, `adopted`, `unchanged`, `removed`, or `updated` and then the names of what changed, comma-separated, as the plan's `changes` names them (`updated user, password`). Otherwise it is for people: a skipped wire action says why, such as why a planned removal stays; the wire step's action with no `resource` sums up the others; the first-run setup step says what it set up and published, and `signed in again to <app>`
   - `error` (string, optional): why it failed
 - `ok` (`true`): true: the record was read
 
@@ -390,7 +390,7 @@ JSON Schema: [`json/init.schema.json`](json/init.schema.json)
 
 ## `mediaplane.error/v1`
 
-A command that stopped before it could print its own document: a usage error, a missing `stack.yaml` for credentials or vpn-check, Docker out of reach.
+A command that stopped before it could print its own document, such as for a usage error, a missing `stack.yaml` for credentials or vpn-check, or Docker out of reach.
 
 JSON Schema: [`json/error.schema.json`](json/error.schema.json)
 
@@ -398,7 +398,7 @@ JSON Schema: [`json/error.schema.json`](json/error.schema.json)
 - `ok` (`false`)
 - `error` (object)
   - `message` (string): what went wrong, for people
-  - `diagnostics` (list of objects, optional): the diagnostics that stopped the command, when it has them
+  - `diagnostics` (list of objects, optional): the diagnostics found, the error that stopped the command among them, when it has them
     - `severity` (one of `error` or `warning`): an error stopped the command; a warning did not
     - `code` (string): what it is, such as `config.unknown-key`: stable, for scripts to act on; the message is for people and may change
     - `message` (string): what is wrong, for people

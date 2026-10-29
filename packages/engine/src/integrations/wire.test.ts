@@ -140,6 +140,54 @@ describe('wire', () => {
     expect(await readResources(adopted.home)).toEqual(RECORDED);
   });
 
+  it('says what it did to each resource in a word a script may read, stable within v1 (the --json contract)', async () => {
+    // A done wire action's detail, as the CLI's contract (actions[].detail) documents it:
+    // created, adopted, unchanged, removed, or "updated" and what changed, by name.
+    const VOCABULARY =
+      /^(?:created|adopted|unchanged|removed|updated [\w.]+(?:, [\w.]+)*)$/;
+    const said = async ({ run, actions }: Awaited<ReturnType<typeof wireWith>>) => {
+      await run;
+      return actions
+        .filter((a) => a.result === 'done' && a.resource !== undefined)
+        .map((a) => a.detail);
+    };
+    const left = leftOver({ 7: 'gone' });
+    const details = [
+      ...(await said(await wireWith(await fakeSonarr({ key: KEY })))),
+      ...(await said(
+        await wireWith(await fakeSonarr({ key: KEY, user: 'someone', password: 'x' }), {
+          known: RECORDED,
+        }),
+      )),
+      ...(await said(
+        await wireWith(await fakeSonarr({ key: KEY, user: 'admin', password: 'other' }), {
+          known: RECORDED,
+        }),
+      )),
+      ...(await said(
+        await wireWith(await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD })),
+      )),
+      ...(await said(
+        await wireWith(
+          await fakeSonarr({ key: KEY, user: 'admin', password: PASSWORD }),
+          {
+            stack: left.stack,
+            known: { ...RECORDED, 'sonarr.gone': made(7, 'gone') },
+          },
+        ),
+      )),
+    ];
+    expect(details).toEqual([
+      'created',
+      'updated user',
+      'updated password',
+      'adopted',
+      'unchanged',
+      'removed',
+    ]);
+    for (const detail of details) expect(detail).toMatch(VOCABULARY);
+  });
+
   it('sets a secret its own plan found refused, without checking it again', async () => {
     // Each failed check of qBittorrent's password counts towards its ban: apply's plan
     // made one, so the wire step makes none.

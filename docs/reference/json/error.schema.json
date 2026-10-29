@@ -51,7 +51,7 @@
             "additionalProperties": false,
             "description": "a problem found"
           },
-          "description": "the diagnostics that stopped the command, when it has them"
+          "description": "the diagnostics found, the error that stopped the command among them, when it has them"
         }
       },
       "required": ["message"],
@@ -60,5 +60,5 @@
   },
   "required": ["schema", "ok", "error"],
   "additionalProperties": false,
-  "description": "a command that stopped before it could print its own document: a usage error, a missing `stack.yaml` for credentials or vpn-check, Docker out of reach"
+  "description": "a command that stopped before it could print its own document, such as for a usage error, a missing `stack.yaml` for credentials or vpn-check, or Docker out of reach"
 }

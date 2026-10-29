@@ -135,7 +135,10 @@ const named = (items: unknown, action: string, key = 'action'): string[] =>
     .map((item) => String(item.resource ?? item.service))
     .sort();
 
-/** What an apply did to the managed resources: its wire steps, by their detail. */
+/**
+ * What an apply did to the managed resources: its wire actions, by their detail, which
+ * for a done one is a word the contract documents as stable (`actions[].detail`).
+ */
 const wired = (apply: Document, detail: string): string[] =>
   named(
     (apply.actions as { step: string }[]).filter((a) => a.step === 'wire'),

@@ -206,7 +206,7 @@
           },
           "detail": {
             "type": "string",
-            "description": "what it did, for people: a wire action says `created`, `updated`, `adopted`, `unchanged` or `removed`, and a skipped one why, such as why a planned removal stays; the first-run setup step says what it set up and published, and `signed in again to <app>`"
+            "description": "what it did. A `wire` action that names a `resource` and is `done` says exactly one of these, stable within v1: `created`, `adopted`, `unchanged`, `removed`, or `updated` and then the names of what changed, comma-separated, as the plan's `changes` names them (`updated user, password`). Otherwise it is for people: a skipped wire action says why, such as why a planned removal stays; the wire step's action with no `resource` sums up the others; the first-run setup step says what it set up and published, and `signed in again to <app>`"
           },
           "error": {
             "type": "string",

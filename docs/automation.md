@@ -88,7 +88,8 @@ From a checkout, `pnpm --silent mediaplane <command> --json` does the same, with
   `recordId` names the change record.
 - **Take an app out** by taking its line out of `stack.yaml`. `plan` lists its container
   as `remove`, and each resource Mediaplane made for it in the other apps as a wiring
-  `remove`; `apply` removes them, and keeps the app's `appdata/`. What it leaves, such
+  `remove`; `apply` removes them (each one's wire action says `removed` in its `detail`),
+  and keeps the app's `appdata/`. What it leaves, such
   as a qBittorrent category that holds a torrent, `drift` reports as `left`, with `stays`
   saying why.
 - **Rebuild a host** from `stack.yaml`, `secrets/`, `appdata/` and the data folder:
@@ -96,8 +97,10 @@ From a checkout, `pnpm --silent mediaplane <command> --json` does the same, with
   above. `plan` lists the keys it recovers from the apps' appdata
   (`secrets.recover`), and a new admin password to generate when the old one went with
   `state/` (the warning `secrets.admin-password-lost`); `apply` finds each resource it
-  made by name. The [rebuilding a host](runbooks/rebuilding-a-host.md) runbook has the
-  details.
+  made by name, and adopts it: its wire action in `actions` says `adopted` in its
+  `detail`, not `created`. A wire action that is `done` says one of a few words there,
+  stable within v1, which the [`--json` reference](reference/json.md) lists. The
+  [rebuilding a host](runbooks/rebuilding-a-host.md) runbook has the details.
 - **Watch for drift** with `drift --json` on a schedule: exit 2 means look.
 
 ## When automation owns `stack.yaml`

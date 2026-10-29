@@ -167,7 +167,7 @@ const actionJson = z.strictObject({
   resource: text('the wire step names the resource, such as `sonarr.admin`').optional(),
   result: z.enum(['done', 'failed', 'skipped']),
   detail: text(
-    'what it did, for people: a wire action says `created`, `updated`, `adopted`, `unchanged` or `removed`, and a skipped one why, such as why a planned removal stays; the first-run setup step says what it set up and published, and `signed in again to <app>`',
+    "what it did. A `wire` action that names a `resource` and is `done` says exactly one of these, stable within v1: `created`, `adopted`, `unchanged`, `removed`, or `updated` and then the names of what changed, comma-separated, as the plan's `changes` names them (`updated user, password`). Otherwise it is for people: a skipped wire action says why, such as why a planned removal stays; the wire step's action with no `resource` sums up the others; the first-run setup step says what it set up and published, and `signed in again to <app>`",
   ).optional(),
   error: text('why it failed').optional(),
 });
@@ -462,12 +462,14 @@ export const errorDocumentJson = z
       message: text('what went wrong, for people'),
       diagnostics: z
         .array(diagnosticJson)
-        .describe('the diagnostics that stopped the command, when it has them')
+        .describe(
+          'the diagnostics found, the error that stopped the command among them, when it has them',
+        )
         .optional(),
     }),
   })
   .describe(
-    'a command that stopped before it could print its own document: a usage error, a missing `stack.yaml` for credentials or vpn-check, Docker out of reach',
+    'a command that stopped before it could print its own document, such as for a usage error, a missing `stack.yaml` for credentials or vpn-check, or Docker out of reach',
   );
 
 /**
