@@ -86,6 +86,21 @@ made, from a file that had not changed. So the first `apply` after an update tha
 changed the Compose in the image may recreate every app container: a restart, which
 keeps their data and settings.
 
+Which versions differ was probed on 2026-10-29, with `docker compose config --hash` on
+every service of two stacks Mediaplane renders (Jellyfin with the VPN, and Plex with
+FlareSolverr), for eleven releases of Compose:
+
+- 2.29.7, 2.33.1, 2.36.2, 2.38.2, 2.39.4 and 2.40.3 work out the same hash for every
+  service;
+- so do 5.0.2, 5.3.1, 5.5.1 and 5.6.1;
+- but a 2.x and a 5.x differ for every service but Byparr;
+- and 2.24.0, the oldest Compose Mediaplane takes, differs from the later 2.x for Gluetun
+  and qBittorrent.
+
+So what to check is whether the image's Compose moved to another of those lines, or to a
+version not probed yet. Renovate's pull request for a bump of the `docker` image in the
+`Dockerfile` says the same.
+
 Nothing writes this into a release's notes. The Compose is the one inside the `docker`
 image that the `Dockerfile` copies it from, so a change shows in the changelog as a bump
 of that image, and the `Dockerfile` names no Compose version but in a comment. Whoever

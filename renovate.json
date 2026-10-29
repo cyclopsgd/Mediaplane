@@ -98,6 +98,14 @@
       "semanticCommitScope": "image"
     },
     {
+      "description": "The image's Docker CLI brings the Compose apply runs, and Compose versions can work out a service's configuration hash differently (docs/releasing.md)",
+      "matchFileNames": ["Dockerfile"],
+      "matchDepNames": ["docker"],
+      "prBodyNotes": [
+        "This bumps the Docker CLI in Mediaplane's image, and the Compose it brings. Check that Compose: `docker run --rm --entrypoint docker <the new docker image> compose version`. Compose 2.29 to 2.40 work out the stack's services alike, and so do 5.0 to 5.6, but 2.x and 5.x differ (probed 2026-10-29). If this bump moves Compose to another of those lines, or to one not probed yet, the first `apply` after the update may recreate every app container, and the release's notes must say so: see docs/releasing.md, \"When a release changes Compose\"."
+      ]
+    },
+    {
       "description": "Node's types follow the Node line the project runs",
       "matchPackageNames": ["@types/node"],
       "allowedVersions": "<25"

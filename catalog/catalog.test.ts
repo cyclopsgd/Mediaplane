@@ -520,8 +520,11 @@ apps:
   });
 
   describe.each(catalog.map((app) => [app.id, app] as const))('%s', (_id, app) => {
+    // A tag that names a version (2.6.5.5623-ls163, v3.41.3, 12.2ubu2604-ls53), never one
+    // that moves (latest, stable, develop, nightly) or a major alone (v3).
     it('is pinned by exact tag and multi-arch digest', () => {
-      expect(app.image.tag).not.toBe('latest');
+      expect(app.image.tag).toMatch(/^v?\d+\.\d+/);
+      expect(app.image.tag).not.toMatch(/latest|stable|develop|nightly|edge/i);
       expect(app.image.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
     });
 

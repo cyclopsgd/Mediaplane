@@ -104,6 +104,14 @@ fi
 
 command -v docker >/dev/null 2>&1 ||
   fail "Docker isn't installed: install Docker Engine 24 or newer, with its Compose plugin, then run this again"
+# docker and Compose talk to the Docker that DOCKER_HOST or DOCKER_CONTEXT names, which may
+# be another host's; the installer checks this host's socket, which the deployment mounts.
+if [ -n "${DOCKER_HOST:-}" ] && [ "$DOCKER_HOST" != "unix://$socket" ]; then
+  fail "DOCKER_HOST is set, so docker would use another Docker than this host's, at $socket, which Mediaplane's container uses: unset DOCKER_HOST, then run this again"
+fi
+if [ -n "${DOCKER_CONTEXT:-}" ] && [ "$DOCKER_CONTEXT" != default ]; then
+  fail "DOCKER_CONTEXT is set, so docker would use another Docker than this host's, at $socket, which Mediaplane's container uses: unset DOCKER_CONTEXT, then run this again"
+fi
 docker info >/dev/null 2>&1 ||
   fail "Docker isn't answering: start it, and check that your user may use it (docker info says why), then run this again"
 engine=$(docker version --format '{{.Server.Version}}' 2>/dev/null) || engine=

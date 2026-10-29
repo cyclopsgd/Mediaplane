@@ -444,7 +444,7 @@ exit 0
         ([name]) =>
           !name.startsWith('MEDIAPLANE_') &&
           !name.startsWith('COMPOSE_') &&
-          name !== 'DOCKER_GID',
+          !['DOCKER_GID', 'DOCKER_HOST', 'DOCKER_CONTEXT'].includes(name),
       ),
     );
     const homeVar = options.homeVar === undefined ? home : options.homeVar;
@@ -481,7 +481,7 @@ exit 0
       if (existsSync(home)) chmodSync(home, 0o755);
       rmSync(top, { recursive: true, force: true });
     };
-    return { top, deploy, parent, home, commands, run, cleanup };
+    return { top, deploy, parent, home, commands, socket: socketPath, run, cleanup };
   }
   type Sandbox = Awaited<ReturnType<typeof sandbox>>;
 
@@ -642,6 +642,29 @@ exit 0
       expect(existsSync(box.home)).toBe(false);
     });
   });
+
+  it.runIf(asYou)(
+    "refuses a DOCKER_HOST or DOCKER_CONTEXT that points docker away from this host's socket, before it changes anything",
+    () =>
+      inSandbox({}, (box) => {
+        for (const [extra, said] of [
+          [{ DOCKER_HOST: 'tcp://192.0.2.10:2376' }, 'DOCKER_HOST is set'],
+          [{ DOCKER_CONTEXT: 'elsewhere' }, 'DOCKER_CONTEXT is set'],
+        ] as const) {
+          const result = box.run(extra);
+          expect(result.code).toBe(1);
+          expect(result.err).toContain(said);
+          changedNothing(box, result.calls);
+          expect(result.calls).toEqual([]);
+        }
+        // This host's socket, named as such, and the default context, are this host's.
+        const same = box.run({
+          DOCKER_HOST: `unix://${box.socket}`,
+          DOCKER_CONTEXT: 'default',
+        });
+        expect(same.code, same.err).toBe(0);
+      }),
+  );
 
   it.runIf(asYou)(
     'stops at a build that fails, before deploy/.env or the container',

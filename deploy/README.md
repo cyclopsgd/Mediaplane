@@ -119,6 +119,9 @@ you only a home it has just created, never a folder that was already there. With
   clears the shell's `COMPOSE_*` settings that choose the project, file, profiles or
   `.env`, and names the project and the file itself, so neither the shell's nor
   `deploy/.env`'s can move it to another project or file, and none can change the image.
+- **Only this host's Docker:** it refuses a `DOCKER_HOST` or `DOCKER_CONTEXT` that would
+  point `docker` at another Docker than the socket it checks, `/var/run/docker.sock`, which
+  Mediaplane's container uses. Unset them, then run it again.
   It pulls the image and the socket proxy's before it recreates anything; Docker checks
   everything it pulls against the digest.
 - **If `mediaplane` then runs something else** in your shell, `type -a mediaplane` shows
@@ -427,9 +430,11 @@ compute a container's configuration hash differently
 ([ADR 0010](../docs/adr/0010-predict-container-changes-with-compose-hashes.md)). If that
 happens, the next `mediaplane plan` shows most apps as `recreate`, and the next `apply`
 recreates them once. Their data stays where it is. This has happened: Compose 5.5.1
-recreated containers that Compose 2.38.2 had made, from a file that had not changed. So
-the first `apply` after an update that changed the Compose in the image may recreate every
-app container, a restart that keeps their data and settings. The release's notes may
+recreated containers that Compose 2.38.2 had made, from a file that had not changed. What
+matters is Compose's line: 2.29 to 2.40 work out the stack's services alike, and so do 5.0
+to 5.6, but 2.x and 5.x differ ([Releasing](../docs/releasing.md) has the details). So the
+first `apply` after an update that moved the image's Compose to another line may recreate
+every app container, a restart that keeps their data and settings. The release's notes may
 say so, if whoever cut it added that ([Releasing](../docs/releasing.md) says how). To see
 for yourself, `docker run --rm <image> docker compose version` on the old and the new
 image shows each one's Compose.

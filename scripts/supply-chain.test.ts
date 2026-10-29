@@ -114,6 +114,16 @@ function repoFiles(): string[] {
     .filter((path) => path !== '' && existsSync(join(ROOT, path)));
 }
 
+/**
+ * Files that show a pin rather than pin it: the app READMEs and the golden files show the
+ * catalog's, which docs:generate and the tests rewrite; a plan is the record of what was
+ * built, its pins as they were then.
+ */
+const showsPins = (path: string) =>
+  path.startsWith('docs/plans/') ||
+  /^catalog\/[^/]+\/README\.md$/.test(path) ||
+  path.includes('/__golden__/');
+
 describe('the workflows (spec §7.2(7))', () => {
   it.each(WORKFLOWS)('%s pins every Action by commit SHA, with its version', (path) => {
     const uses = usesLines(path);
@@ -209,15 +219,9 @@ describe('every image is pinned by digest (spec §7.2(7))', () => {
       ...(renovate['docker-compose']?.managerFilePatterns ?? []).map(pattern),
       /^Dockerfile$/,
     ];
-    // The catalog's pins are the catalog manager's; the app READMEs and the golden files
-    // show them, and docs:generate and the tests rewrite those. A plan is the record of
-    // what was built, its pins as they were then.
-    const shown = (path: string) =>
-      path.startsWith('docs/plans/') ||
-      /^catalog\/[^/]+\/README\.md$/.test(path) ||
-      path.includes('/__golden__/');
+    // The catalog's pins are the catalog manager's.
     const pinned = repoFiles().filter(
-      (path) => !shown(path) && [...read(path).matchAll(PINNED)].length > 0,
+      (path) => !showsPins(path) && [...read(path).matchAll(PINNED)].length > 0,
     );
     expect(pinned.length).toBeGreaterThan(0);
     for (const path of pinned) {
@@ -280,27 +284,46 @@ describe('Renovate (spec §8.2)', () => {
     expect(found('test/e2e/wireguard.ts')).toEqual(['lscr.io/linuxserver/wireguard']);
   });
 
-  it('can read every pinned tag, so that it can find a newer one', () => {
-    const tags = new Map<string, string>(
-      catalog.map((def) => [def.image.repo, def.image.tag]),
-    );
-    const wireguard = /'lscr\.io\/linuxserver\/wireguard:([^@']+)@/.exec(
-      read('test/e2e/wireguard.ts'),
-    );
-    tags.set('lscr.io/linuxserver/wireguard', wireguard?.[1] ?? '');
-    const versioned = new Set<string>();
+  it("can read every pinned tag, the catalog's and every other, so that it can find a newer one", () => {
+    // Each image, as [name, tag]: the catalog's, and every image pinned outside it
+    // (busybox, Trivy, gitleaks, actionlint, Node, Docker, the socket proxy, BuildKit and
+    // its SBOM scanner, the registry, the WireGuard test server), wherever it is written.
+    const tags: [string, string][] = catalog.map((def) => [
+      def.image.repo,
+      def.image.tag,
+    ]);
+    for (const path of repoFiles().filter((p) => !showsPins(p))) {
+      for (const [image] of read(path).matchAll(PINNED)) {
+        const named = image.slice(0, image.indexOf('@'));
+        const colon = named.lastIndexOf(':');
+        tags.push([named.slice(0, colon), named.slice(colon + 1)]);
+      }
+    }
+    expect(tags.some(([name]) => name === 'wollomatic/socket-proxy')).toBe(true);
+    expect(tags.some(([name]) => name === 'moby/buildkit')).toBe(true);
+    const rules = new Map<string, RegExp>();
     for (const rule of renovate.packageRules) {
       if (rule.versioning?.startsWith('regex:') !== true) continue;
       const re = new RegExp(rule.versioning.slice('regex:'.length));
-      for (const name of rule.matchDepNames ?? []) {
-        expect(tags.get(name), name).toMatch(re);
-        versioned.add(name);
-      }
+      for (const name of rule.matchDepNames ?? []) rules.set(name, re);
     }
-    // The rest are plain versions, which Renovate's Docker versioning reads.
     for (const [name, tag] of tags) {
-      if (!versioned.has(name)) expect(tag, name).toMatch(/^v?\d+\.\d+\.\d+$/);
+      // Its own rule's, or Renovate's Docker versioning: a version of two to four
+      // numbers, and a suffix it keeps (-alpine3.24, -cli, -dind).
+      const readable = rules.get(name) ?? /^v?\d+(?:\.\d+){1,3}(?:-[a-z][a-z0-9.]*)?$/;
+      expect(tag, `${name}:${tag}`).toMatch(readable);
     }
+  });
+
+  it("says, on a bump of the image's Docker CLI, what a change of its Compose does", () => {
+    const rule = renovate.packageRules.find(
+      (r) =>
+        r.matchFileNames?.join() === 'Dockerfile' && r.matchDepNames?.join() === 'docker',
+    );
+    const notes = rule?.prBodyNotes?.join(' ') ?? '';
+    expect(notes).toContain('compose version');
+    expect(notes).toContain('recreate every app container');
+    expect(notes).toContain('docs/releasing.md');
   });
 
   it('never merges an app pin by itself, and says to regenerate the docs', () => {
