@@ -519,8 +519,13 @@ export interface DeployedMediaplane {
   /**
    * `mediaplane <args>` in its container, with `env` added to the command's. Never a
    * secret in `env`: its values go on `docker exec`'s command line, which `ps` shows.
+   * The command is stopped after `timeoutMs`, 5 minutes unless given.
    */
-  mediaplane(args: readonly string[], env?: Record<string, string>): Promise<ExecResult>;
+  mediaplane(
+    args: readonly string[],
+    env?: Record<string, string>,
+    timeoutMs?: number,
+  ): Promise<ExecResult>;
   /** Bring the deployment down, and remove its image; fails if either fails. */
   remove(): Promise<void>;
 }
@@ -625,7 +630,7 @@ export async function deployMediaplane(options: {
     throw new Error(`${messageOf(error)}${also}`, { cause: error });
   }
   return {
-    mediaplane: (args, extra = {}) =>
+    mediaplane: (args, extra = {}, timeoutMs = 300_000) =>
       nodeExec(
         'docker',
         [
@@ -635,8 +640,7 @@ export async function deployMediaplane(options: {
           'mediaplane',
           ...args,
         ],
-        // As long as a script would wait: a first apply waits for every app to be healthy.
-        { cwd: '/', timeoutMs: 1_200_000 },
+        { cwd: '/', timeoutMs },
       ),
     remove: async () => {
       expect(await teardown()).toEqual([]);
