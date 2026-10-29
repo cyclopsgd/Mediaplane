@@ -10,6 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import type * as FsPromises from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
@@ -558,6 +559,17 @@ describe('apply', () => {
     expect(result.outcome).toBe('invalid');
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({ code: 'config.missing' }),
+    );
+    await expect(stat(join(home, 'state'))).rejects.toThrow();
+  });
+
+  it("doesn't create state/, or wait, where stack.yaml is a named pipe", async () => {
+    const home = await tempDir('mediaplane-apply-');
+    execFileSync('mkfifo', [join(home, 'stack.yaml')]);
+    const result = await apply(options(home, fakeDocker(home)));
+    expect(result.outcome).toBe('invalid');
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'config.not-a-file' }),
     );
     await expect(stat(join(home, 'state'))).rejects.toThrow();
   });

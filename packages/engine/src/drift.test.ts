@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -302,6 +303,17 @@ describe('drift', () => {
       diagnostics: [expect.objectContaining({ code: 'config.missing' })],
     });
     expect(await readdir(dir)).toEqual([]);
+  });
+
+  it('makes no state/ where stack.yaml is a named pipe, and never waits on it', async () => {
+    const dir = await tempDir('mediaplane-drift-');
+    execFileSync('mkfifo', [join(dir, 'stack.yaml')]);
+    const result = await driftOf(dir, await fakeSonarr({ key: KEY }));
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: 'config.not-a-file' })],
+    });
+    expect(await readdir(dir)).toEqual(['stack.yaml']);
   });
 
   it('fails as plan fails, and warns when it cannot keep its checks', async () => {

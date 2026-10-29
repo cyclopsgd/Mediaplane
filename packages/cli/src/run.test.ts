@@ -671,11 +671,12 @@ describe('mediaplane plan', () => {
 
   it('reports unexpected I/O errors as a one-line error naming the file', async () => {
     const home = await tempDir('mediaplane-cli-');
-    await mkdir(join(home, 'stack.yaml'));
+    await writeFile(join(home, 'stack.yaml'), STACK);
+    await chmod(join(home, 'stack.yaml'), 0o000);
     const term = capture();
     expect(await run(['plan', '--home', home], term.io, deps())).toBe(1);
     expect(term.stderr()).toBe(
-      `error: cannot read ${join(home, 'stack.yaml')} (EISDIR)\n`,
+      `error: cannot read ${join(home, 'stack.yaml')} (EACCES): check that the user running Mediaplane can read it\n`,
     );
     expect(term.stdout()).toBe('');
   });
@@ -806,15 +807,31 @@ describe('mediaplane plan', () => {
 
   it('reports unexpected errors as a JSON envelope with --json', async () => {
     const home = await tempDir('mediaplane-cli-');
-    await mkdir(join(home, 'stack.yaml'));
+    await writeFile(join(home, 'stack.yaml'), STACK);
+    // Unreadable, to the user running Mediaplane.
+    await chmod(join(home, 'stack.yaml'), 0o000);
     const term = capture();
     expect(await run(['plan', '--home', home, '--json'], term.io, deps())).toBe(1);
     expect(JSON.parse(term.stdout())).toEqual({
       schema: 'mediaplane.error/v1',
       ok: false,
-      error: { message: `cannot read ${join(home, 'stack.yaml')} (EISDIR)` },
+      error: {
+        message: `cannot read ${join(home, 'stack.yaml')} (EACCES): check that the user running Mediaplane can read it`,
+      },
     });
     expect(term.stderr()).toBe('');
+  });
+
+  it('refuses a folder in place of stack.yaml as a plan error', async () => {
+    const home = await tempDir('mediaplane-cli-');
+    await mkdir(join(home, 'stack.yaml'));
+    const term = capture();
+    expect(await run(['plan', '--home', home, '--json'], term.io, deps())).toBe(1);
+    expect(JSON.parse(term.stdout())).toMatchObject({
+      schema: 'mediaplane.plan/v1',
+      ok: false,
+      diagnostics: [{ code: 'config.not-a-file' }],
+    });
   });
 });
 

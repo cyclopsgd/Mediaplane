@@ -3,7 +3,7 @@ import type { ZodError } from 'zod';
 import { error, warning, withHint, type Diagnostic } from '../diagnostics';
 import { docsUrl } from '../runbooks';
 import { didYouMean } from '../util/did-you-mean';
-import { readIfExists } from '../util/fs';
+import { fileKind, readIfExists } from '../util/fs';
 import { MIGRATIONS, migrateData, STACK_VERSION, type Migration } from './migrations';
 import { STACK_KEYS, stackConfigSchema, type StackConfig } from './schema';
 
@@ -24,11 +24,31 @@ const VERSION_HINTS = {
 
 type Issue = ZodError['issues'][number];
 
+/**
+ * stack.yaml, read and validated. It is looked at before it is opened, and opened without
+ * waiting: a named pipe in its place would make a read wait for a writer, and a script
+ * running Mediaplane hang (spec §5.2). Anything but a regular file is refused, as
+ * `migrate` and `keep` refuse it.
+ */
 export async function loadConfigFile(
   path: string,
   migrations: readonly Migration[] = MIGRATIONS,
 ): Promise<LoadResult> {
-  const source = await readIfExists(path);
+  const kind = await fileKind(path);
+  if (kind === 'other') {
+    return {
+      ok: false,
+      diagnostics: [
+        error(
+          'config.not-a-file',
+          `${path} is not a regular file, such as a folder or a named pipe, so Mediaplane won't read it`,
+          { hint: 'put your stack.yaml file there in its place' },
+        ),
+      ],
+    };
+  }
+  const source =
+    kind === 'missing' ? undefined : await readIfExists(path, { noWait: true });
   if (source === undefined) {
     return {
       ok: false,

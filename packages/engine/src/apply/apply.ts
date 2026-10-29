@@ -35,7 +35,7 @@ import { givenKeys, secretValues, userSecrets } from '../secrets/values';
 import { acquireLock, LockedError, type Lock } from '../state/lock';
 import { writeFileAtomic } from '../util/atomic';
 import { codeOf } from '../util/error-code';
-import { readIfExists } from '../util/fs';
+import { fileKind, readIfExists } from '../util/fs';
 import { foundSecrets, redact } from '../util/redact';
 import { compare } from '../util/sort';
 import { vpnCheck, VPN_RUNBOOK } from '../vpn/check';
@@ -114,7 +114,7 @@ const STEP_HINTS: Record<ApplyStep, string> = {
 export async function apply(options: ApplyOptions): Promise<ApplyResult> {
   const home = resolve(options.home);
   // Never create state/ in a folder that isn't a Mediaplane home; plan explains why.
-  if ((await readIfExists(join(home, STACK_PATH))) === undefined) {
+  if ((await fileKind(join(home, STACK_PATH))) !== 'file') {
     return stopped('invalid', await plan(options));
   }
   let lock: Lock;
@@ -138,7 +138,8 @@ export async function apply(options: ApplyOptions): Promise<ApplyResult> {
 async function applyLocked(options: ApplyOptions): Promise<ApplyResult> {
   const now = options.now ?? (() => new Date());
   const startedAt = now();
-  const stackSource = (await readIfExists(join(options.home, STACK_PATH))) ?? '';
+  const stackSource =
+    (await readIfExists(join(options.home, STACK_PATH), { noWait: true })) ?? '';
   const { result: shown, context } = await planStack(options);
   if (!shown.ok || context === undefined) return stopped('invalid', shown);
   if (!shown.changed) {

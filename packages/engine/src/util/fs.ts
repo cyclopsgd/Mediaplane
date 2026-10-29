@@ -4,11 +4,16 @@ import { codeOf } from './error-code';
 
 /**
  * The file's contents, or undefined if it does not exist. Any other failure is thrown
- * as an error that names the file, and for permission errors, what to check.
+ * as an error that names the file, and for permission errors, what to check. With
+ * `noWait`, it is opened without waiting, so a named pipe swapped in at `path` reads as
+ * empty rather than hang the read.
  */
-export async function readIfExists(path: string): Promise<string | undefined> {
+export async function readIfExists(
+  path: string,
+  { noWait = false }: { noWait?: boolean } = {},
+): Promise<string | undefined> {
   try {
-    return await readFile(path, 'utf8');
+    return noWait ? await readFileNoWait(path) : await readFile(path, 'utf8');
   } catch (cause) {
     const code = codeOf(cause);
     if (code === 'ENOENT') return undefined;

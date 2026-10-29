@@ -1,4 +1,5 @@
-import { writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Diagnostic } from '../diagnostics';
@@ -435,6 +436,28 @@ describe('loadConfigFile', () => {
         },
       ],
     });
+  });
+
+  // A named pipe would make a read wait for a writer: a script running Mediaplane hangs.
+  it('refuses a named pipe or a folder in place of stack.yaml, without waiting', async () => {
+    const fifo = await tempDir('mediaplane-config-');
+    execFileSync('mkfifo', [join(fifo, 'stack.yaml')]);
+    const folder = await tempDir('mediaplane-config-');
+    await mkdir(join(folder, 'stack.yaml'));
+    for (const dir of [fifo, folder]) {
+      const path = join(dir, 'stack.yaml');
+      expect(await loadConfigFile(path)).toEqual({
+        ok: false,
+        diagnostics: [
+          {
+            severity: 'error',
+            code: 'config.not-a-file',
+            message: `${path} is not a regular file, such as a folder or a named pipe, so Mediaplane won't read it`,
+            hint: 'put your stack.yaml file there in its place',
+          },
+        ],
+      });
+    }
   });
 
   it('reads and parses a file', async () => {

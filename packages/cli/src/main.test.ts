@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
@@ -70,6 +70,19 @@ function spawnMain(...args: string[]) {
   });
 }
 
+/**
+ * The CLI as a script runs it: no terminal, its standard input a pipe with nothing in
+ * it, and a time limit, so that a command that waits for an answer fails the test.
+ */
+function spawnScripted(...args: string[]) {
+  return spawnSync(process.execPath, ['--import', 'tsx', MAIN, ...args], {
+    encoding: 'utf8',
+    env: ENV,
+    input: '',
+    timeout: 45_000,
+  });
+}
+
 async function freshHome(): Promise<string> {
   const home = tempDirSync('mediaplane-main-');
   mkdirSync(join(home, 'data'));
@@ -100,6 +113,39 @@ describe('main', { timeout: 60_000 }, () => {
     expect(result.status, result.stderr).toBe(2);
     expect(result.stdout).toContain('+ generated/compose.yaml');
     expect(result.stdout).toContain('  + create    sonarr\n');
+  });
+
+  // spec §5.2: without a terminal, nothing is asked; what needs an answer says so, at once.
+  it('asks nothing when a script runs it: what needs an answer fails, saying which flag', () => {
+    const home = tempDirSync('mediaplane-main-');
+    const cases: [string[], string][] = [
+      [
+        ['apply', '--home', home],
+        'error: apply needs --yes when it cannot ask for confirmation (with --json, or when not run in a terminal)\n',
+      ],
+      [
+        ['init', '--home', join(home, 'new')],
+        'error: init needs --media-server and --data when it cannot ask (with --json, or when not run in a terminal)\n',
+      ],
+    ];
+    for (const [args, said] of cases) {
+      const result = spawnScripted(...args);
+      expect(result.error, `${args[0] ?? ''} waited`).toBeUndefined();
+      expect([result.status, result.stderr]).toEqual([1, said]);
+      expect(result.stdout).toBe('');
+    }
+  });
+
+  it('never waits on a named pipe in place of stack.yaml', () => {
+    const home = tempDirSync('mediaplane-main-');
+    execFileSync('mkfifo', [join(home, 'stack.yaml')]);
+    for (const command of ['plan', 'apply', 'drift', 'credentials']) {
+      const args = command === 'apply' ? [command, '--yes'] : [command];
+      const result = spawnScripted(...args, '--home', home, '--json');
+      expect(result.error, `${command} waited`).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('config.not-a-file');
+    }
   });
 
   it('keeps the plan exit code when stdout is closed early', async () => {

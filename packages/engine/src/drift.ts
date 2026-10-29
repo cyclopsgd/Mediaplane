@@ -10,7 +10,7 @@ import {
 import { STACK_PATH } from './paths';
 import { planStack, type PlanOptions } from './plan/plan';
 import { acquireLock, LockedError, type Lock } from './state/lock';
-import { readIfExists } from './util/fs';
+import { fileKind } from './util/fs';
 
 export interface DriftOptions extends PlanOptions {
   now?: () => Date;
@@ -51,7 +51,7 @@ export async function drift(options: DriftOptions): Promise<DriftResult> {
   const home = resolve(options.home);
   const now = options.now ?? (() => new Date());
   // Never create state/ in a folder that isn't a Mediaplane home; plan explains why.
-  if ((await readIfExists(join(home, STACK_PATH))) === undefined) {
+  if ((await fileKind(join(home, STACK_PATH))) !== 'file') {
     return failedDrift((await planStack({ ...options, home })).result.diagnostics);
   }
   let lock: Lock;
