@@ -2050,6 +2050,18 @@ apps:
     expect(term.stderr()).toContain(
       "error: plex.token is rotated only in a stack with Plex, which this one doesn't run\n",
     );
+    const json = capture();
+    expect(
+      await run(
+        ['plan', '--home', home, '--rotate', 'plex.token', '--json'],
+        json.io,
+        deps(fakeDocker(home)),
+      ),
+    ).toBe(1);
+    expect(JSON.parse(json.stdout())).toMatchObject({
+      ok: false,
+      diagnostics: [{ severity: 'error', code: 'rotate.no-plex' }],
+    });
   });
 
   it('starts nothing when plex.tv refuses your token, and says to sign in again', async () => {
@@ -2712,9 +2724,22 @@ describe('--help', () => {
     // --help wraps long descriptions at 80 columns, so compare without the line breaks.
     const said = term.stdout().replaceAll(/\s+/g, ' ');
     expect(said).toContain(
-      "Show what apply would change; it changes nothing in the stack, but from the image it joins the stack's private wiring network, and checking a key or a password can leave a small mark in an app (see docs/security/threat-model.md)",
+      "Show what apply would change; it changes nothing in the stack, but from the image it joins the stack's private wiring network, and checking a key or a password can leave a small mark in an app (see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/security/threat-model.md)",
     );
     expect(said).not.toContain('without changing anything');
+  });
+
+  // Someone running the image has no copy of the repo, so no path in it.
+  it('points plan and drift at the published threat model', async () => {
+    for (const command of ['plan', 'drift']) {
+      const term = capture();
+      expect(await run([command, '--help'], term.io)).toBe(0);
+      const said = term.stdout().replaceAll(/\s+/g, ' ');
+      expect(said).toContain(
+        '(see https://github.com/cyclopsgd/Mediaplane/blob/main/docs/security/threat-model.md)',
+      );
+      expect(said).not.toContain('see docs/');
+    }
   });
 
   it("lists each command's exit codes", async () => {

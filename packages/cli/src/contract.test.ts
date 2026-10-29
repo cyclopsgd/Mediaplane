@@ -1,3 +1,6 @@
+import { readdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { changeRecordSchema } from '@mediaplane/engine';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
@@ -5,6 +8,7 @@ import {
   applyDocumentJson,
   changeDocumentJson,
   checkDocument,
+  CODES,
   credentialsDocumentJson,
   documentsIn,
   DOCUMENTS,
@@ -116,6 +120,24 @@ describe('the --json contract', () => {
     expect(() => checkDocument({ schema: 'mediaplane.unknown/v1' })).toThrow(
       'no documented --json schema "mediaplane.unknown/v1"',
     );
+  });
+
+  it('lists only diagnostic codes that a test pins in the code that gives them', async () => {
+    const root = fileURLToPath(new URL('../../..', import.meta.url));
+    const tests: string[] = [];
+    for (const dir of ['packages', 'catalog']) {
+      for (const entry of await readdir(join(root, dir), { recursive: true })) {
+        if (entry.endsWith('.test.ts') && !entry.includes('node_modules')) {
+          tests.push(await readFile(join(root, dir, entry), 'utf8'));
+        }
+      }
+    }
+    for (const { code } of CODES) {
+      expect(
+        tests.some((test) => test.includes(`'${code}'`)),
+        `no test pins ${code}`,
+      ).toBe(true);
+    }
   });
 
   it('finds each document a capture printed, one after the other', () => {

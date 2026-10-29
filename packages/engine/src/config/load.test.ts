@@ -423,10 +423,17 @@ describe('parseConfig: versions (spec §5 step 2)', () => {
 });
 
 describe('loadConfigFile', () => {
-  it('explains a missing file', async () => {
-    expect(await loadConfigFile('/nonexistent/mediaplane/stack.yaml')).toMatchObject({
+  it('explains a missing file, pointing at the published reference', async () => {
+    expect(await loadConfigFile('/nonexistent/mediaplane/stack.yaml')).toEqual({
       ok: false,
-      diagnostics: [{ code: 'config.missing' }],
+      diagnostics: [
+        {
+          severity: 'error',
+          code: 'config.missing',
+          message: 'no stack.yaml at /nonexistent/mediaplane/stack.yaml',
+          hint: 'run "mediaplane init" to write one, or pass --home with the Mediaplane home; its format: https://github.com/cyclopsgd/Mediaplane/blob/main/docs/reference/stack-yaml.md',
+        },
+      ],
     });
   });
 

@@ -1,6 +1,7 @@
 import { parseDocument } from 'yaml';
 import type { ZodError } from 'zod';
 import { error, warning, withHint, type Diagnostic } from '../diagnostics';
+import { docsUrl } from '../runbooks';
 import { didYouMean } from '../util/did-you-mean';
 import { readIfExists } from '../util/fs';
 import { MIGRATIONS, migrateData, STACK_VERSION, type Migration } from './migrations';
@@ -33,7 +34,7 @@ export async function loadConfigFile(
       ok: false,
       diagnostics: [
         error('config.missing', `no stack.yaml at ${path}`, {
-          hint: 'create one; the format is described in docs/design/m1-engine-cli.md §4.2',
+          hint: `run "mediaplane init" to write one, or pass --home with the Mediaplane home; its format: ${docsUrl('reference/stack-yaml.md')}`,
         }),
       ],
     };

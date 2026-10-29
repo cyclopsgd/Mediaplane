@@ -471,6 +471,66 @@ export const errorDocumentJson = z
   );
 
 /**
+ * The diagnostic codes a script is most likely to act on, as the reference lists them.
+ * Each is pinned by a test of the code that gives it (contract.test.ts checks).
+ */
+export const CODES: readonly { code: string; meaning: string }[] = [
+  { code: 'config.missing', meaning: 'the home has no `stack.yaml`' },
+  {
+    code: 'config.old-version',
+    meaning:
+      '`stack.yaml` is an older version, read in memory (a warning): `mediaplane migrate` rewrites it',
+  },
+  {
+    code: 'apply.locked',
+    meaning:
+      'another Mediaplane command holds `state/lock`; `drift.locked`, `keep.locked` and `migrate.locked` say the same of theirs. Run it again once the other is done',
+  },
+  {
+    code: 'apply.pull-failed',
+    meaning:
+      'an image could not be pulled, even after the retries, before anything was stopped: run apply again',
+  },
+  {
+    code: 'secrets.admin-password-lost',
+    meaning:
+      'the admin password Mediaplane generated went with `state/secrets.json` (a warning): apply generates another and sets it in each app',
+  },
+  {
+    code: 'bootstrap.needs-password',
+    meaning:
+      "an app's first-run setup is held, since the app has never had the admin password Mediaplane holds: the rebuilding a host runbook says what to do",
+  },
+  {
+    code: 'bootstrap.open-published',
+    meaning:
+      "an app runs published though its first-run setup isn't shown to be done (a warning): apply starts it again without its ports first",
+  },
+  {
+    code: 'rotate.no-plex',
+    meaning: '`--rotate plex.token` on a stack without Plex',
+  },
+  {
+    code: 'keep.external',
+    meaning:
+      'with `managed_by: external`, keep wrote nothing in `stack.yaml` (a warning): add its `line` there',
+  },
+  {
+    code: 'keep.record',
+    meaning:
+      "keep couldn't forget the record of a resource it keeps as unmanaged: run keep again before the next apply",
+  },
+  {
+    code: 'credentials.not-yet',
+    meaning: 'there is no admin password yet: run apply first',
+  },
+  {
+    code: 'vpn-check.not-applied',
+    meaning: "the stack hasn't been applied, so there is nothing to check yet",
+  },
+];
+
+/**
  * What the hidden commands print: the answers of Mediaplane's own helper containers to
  * Mediaplane (host-report, plex-tv), not for scripts, so not in the contract.
  */

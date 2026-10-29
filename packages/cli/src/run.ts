@@ -8,6 +8,7 @@ import {
   credentials,
   DEFAULT_VPN_CHECK_URL,
   detectHostFacts,
+  docsUrl,
   drift,
   EGRESS_TIMEOUT_MS,
   fetchEgress,
@@ -281,7 +282,7 @@ export function createProgram(
   program
     .command('plan')
     .description(
-      "Show what apply would change; it changes nothing in the stack, but from the image it joins the stack's private wiring network, and checking a key or a password can leave a small mark in an app (see docs/security/threat-model.md)",
+      `Show what apply would change; it changes nothing in the stack, but from the image it joins the stack's private wiring network, and checking a key or a password can leave a small mark in an app (see ${docsUrl('security/threat-model.md')})`,
     )
     .option('--home <dir>', 'Mediaplane home directory', defaultHome)
     .option('--rotate <secret>', ROTATE_HELP)
@@ -366,7 +367,7 @@ export function createProgram(
   program
     .command('drift')
     .description(
-      'Report what changed in the apps outside Mediaplane since it applied them, without putting it back; it changes nothing in the apps but for the marks its checks leave (see docs/security/threat-model.md), and keeps what its checks found in state/resources.json, so it checks a secret it found refused no more until apply sets it',
+      `Report what changed in the apps outside Mediaplane since it applied them, without putting it back; it changes nothing in the apps but for the marks its checks leave (see ${docsUrl('security/threat-model.md')}), and keeps what its checks found in state/resources.json, so it checks a secret it found refused no more until apply sets it`,
     )
     .option('--home <dir>', 'Mediaplane home directory', defaultHome)
     .option('--json', 'print machine-readable JSON')

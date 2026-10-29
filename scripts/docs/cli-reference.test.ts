@@ -24,6 +24,15 @@ describe('renderCliReference', () => {
     expect(section).not.toContain('|');
   });
 
+  // Someone running the image has no copy of the repo: help names the published docs.
+  it('names a doc by its published address, never by its path in the repo', () => {
+    expect(text).toContain(
+      'https://github.com/cyclopsgd/Mediaplane/blob/main/docs/security/threat-model.md',
+    );
+    expect(text).not.toMatch(/(?<!blob\/main\/)docs\//);
+    expect(text).toContain('[`--json` reference](json.md)');
+  });
+
   it("leaves out the host helper's command, and nothing in it depends on this machine", () => {
     expect(text).not.toContain('host-report');
     expect(text).toContain("(default: this machine's timezone)");

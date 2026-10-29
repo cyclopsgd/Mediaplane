@@ -4,7 +4,10 @@ import { catalog } from '@mediaplane/catalog';
 import { stackJsonSchema } from '@mediaplane/engine';
 import { format, resolveConfig } from 'prettier';
 import { FACTS_END, FACTS_START, withFacts } from './docs/catalog-facts';
+import { DOCUMENTS } from '../packages/cli/src/contract';
 import { renderCliReference } from './docs/cli-reference';
+import { documentJsonSchema, renderJsonReference } from './docs/json-reference';
+import { brokenLinks } from './docs/links';
 import { renderStackReference } from './docs/stack-reference';
 import { ranAsScript, ROOT } from './root';
 
@@ -55,6 +58,11 @@ export async function generatedFiles(): Promise<{ path: string; content: string 
       content: renderStackReference(schema, catalog),
     },
     { path: 'docs/reference/cli.md', content: renderCliReference() },
+    { path: 'docs/reference/json.md', content: renderJsonReference() },
+    ...DOCUMENTS.map((document) => ({
+      path: `docs/reference/json/${document.file}`,
+      content: `${JSON.stringify(documentJsonSchema(document), null, 2)}\n`,
+    })),
   ];
   for (const def of catalog) {
     const path = `catalog/${def.id}/README.md`;
@@ -88,11 +96,19 @@ async function main(check: boolean): Promise<number> {
     await writeFile(target, content);
     console.log(`wrote ${path}`);
   }
-  if (stale.length === 0) return 0;
-  console.error(
-    `These generated files are out of date:\n${stale.map((p) => `  ${p}\n`).join('')}Run "pnpm docs:generate" and commit the result.`,
-  );
-  return 1;
+  // Every link in the docs leads somewhere, a generated file's included.
+  const broken = await brokenLinks(ROOT);
+  if (broken.length > 0) {
+    console.error(
+      `These links lead nowhere:\n${broken.map((b) => `  ${b}\n`).join('')}Fix each, or the file it names.`,
+    );
+  }
+  if (stale.length > 0) {
+    console.error(
+      `These generated files are out of date:\n${stale.map((p) => `  ${p}\n`).join('')}Run "pnpm docs:generate" and commit the result.`,
+    );
+  }
+  return stale.length === 0 && broken.length === 0 ? 0 : 1;
 }
 
 if (ranAsScript(import.meta.url, process.argv[1])) {

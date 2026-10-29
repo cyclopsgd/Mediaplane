@@ -25,7 +25,7 @@ export function renderCliReference(cli: Program = program()): string {
     '',
     GENERATED,
     '',
-    'Every command takes `--json` for machine-readable output, and `--help` for this help. `mediaplane --version` prints the version.',
+    'Every command takes `--json` for machine-readable output, whose documents the [`--json` reference](json.md) describes, and `--help` for this help. `mediaplane --version` prints the version.',
     '',
   ];
   for (const command of help.visibleCommands(cli)) {
