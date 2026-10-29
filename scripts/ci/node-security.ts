@@ -64,25 +64,32 @@ export function missedSecurityReleases(
 
 const SHAPE = `Node's release index is not a list of { version: string, security: boolean }: ${NODE_INDEX} changed`;
 
+/** A release, v<n>.<n>.<n>. */
+const RELEASE = /^v\d+\.\d+\.\d+$/;
+/** A pre-release, such as v27.0.0-alpha.0.0.0: a release, then dot-separated parts. */
+const PRE_RELEASE = /^v\d+\.\d+\.\d+-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$/;
+
 /**
  * Node's index as the check reads it: a list of releases that each have a version and a
  * `security` flag. Any other shape is refused, since an index that stopped carrying the
- * flag would read as "no security release" and pass forever. Other fields are ignored.
+ * flag would read as "no security release" and pass forever. Other fields are ignored,
+ * and so is a pre-release, which no image is built on: only the releases are returned.
  */
 export function parseIndex(json: unknown): NodeRelease[] {
   if (!Array.isArray(json)) throw new Error(SHAPE);
-  return json.map((item: unknown) => {
+  return json.flatMap((item: unknown) => {
     const release = item as Partial<Record<keyof NodeRelease, unknown>> | null;
     if (
       typeof release !== 'object' ||
       release === null ||
       typeof release.version !== 'string' ||
-      !/^v\d+\.\d+\.\d+$/.test(release.version) ||
+      !(RELEASE.test(release.version) || PRE_RELEASE.test(release.version)) ||
       typeof release.security !== 'boolean'
     ) {
       throw new Error(SHAPE);
     }
-    return { version: release.version, security: release.security };
+    if (!RELEASE.test(release.version)) return [];
+    return [{ version: release.version, security: release.security }];
   });
 }
 

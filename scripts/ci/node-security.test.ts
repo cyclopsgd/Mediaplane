@@ -70,6 +70,17 @@ describe('parseIndex', () => {
     ).toEqual([{ version: 'v24.22.1', security: true }]);
   });
 
+  it('skips a pre-release, which no image is built on, and keeps the releases', () => {
+    // nodejs.org listed v27.0.0-alpha.0.0.0 on 2026-10-29.
+    expect(
+      parseIndex([
+        { version: 'v27.0.0-alpha.0.0.0', security: false },
+        { version: 'v24.23.0-rc.1', security: true },
+        { version: 'v24.22.1', security: true },
+      ]),
+    ).toEqual([{ version: 'v24.22.1', security: true }]);
+  });
+
   it.each([
     ['an object', { version: 'v24.22.1', security: true }],
     ['null', null],
@@ -79,6 +90,13 @@ describe('parseIndex', () => {
     ['a flag that is not a boolean', [{ version: 'v24.22.1', security: 'true' }]],
     ['a release without a version', [{ security: true }]],
     ['a version that is not v<n>.<n>.<n>', [{ version: '24.22.1', security: true }]],
+    ['a version with two numbers', [{ version: 'v24.22', security: true }]],
+    ['an empty pre-release', [{ version: 'v24.22.1-', security: true }]],
+    ['a version with a space', [{ version: 'v24.22.1 beta', security: true }]],
+    [
+      'a pre-release with an empty part',
+      [{ version: 'v27.0.0-alpha..1', security: true }],
+    ],
   ])('refuses %s: a check that read nothing passes nothing', (_, json) => {
     expect(() => parseIndex(json)).toThrow("Node's release index is not a list of");
   });
