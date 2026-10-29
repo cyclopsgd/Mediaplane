@@ -283,6 +283,8 @@ export interface FakeSetUpState {
   staysOpen: boolean;
   /** Once it has a key, fail GET /setup with a 500 whose message holds the key. */
   echoKey: boolean;
+  /** Answer /ready with 503, as an app that is slow to start does. */
+  notReady: boolean;
 }
 
 /**
@@ -320,13 +322,14 @@ export async function fakeSetUpApp(home: string): Promise<{
     openFails: false,
     staysOpen: false,
     echoKey: false,
+    notReady: false,
   };
   const app = await fakeHttpApp((request) => {
     const { method, path, headers } = request;
     if ((headers.host ?? '').startsWith('sonarr:')) {
       return fakeSignInApp(request, signIn, home);
     }
-    if (path === '/ready') return { status: 200 };
+    if (path === '/ready') return { status: state.notReady ? 503 : 200 };
     if (path === '/setup' && method === 'GET') {
       if (state.echoKey && state.key !== '') {
         return { status: 500, body: { message: `fake failure with ${state.key}` } };

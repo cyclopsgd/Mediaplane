@@ -414,8 +414,11 @@ async function setUp(
   try {
     await client.api.ready(api.ready);
   } catch (cause) {
-    // Not ready by the deadline: asking it whether its setup is open would only wait as
-    // long again. Unasked is open (fail closed), so it stays unpublished.
+    // Not ready by the deadline, or refused at once (a 401, 403 or 404, or an answer that
+    // isn't HTTP): asking it whether its setup is open would only wait as long again, or
+    // fail as it did. Unasked is open (fail closed), so it stays unpublished, whether its
+    // setup makes a key or not; nor is a refusal here taken as claimed (auth), as a
+    // refused setup's is below.
     if (!(cause instanceof AppApiError)) throw cause;
     return { failure: cause.message, open: true };
   }

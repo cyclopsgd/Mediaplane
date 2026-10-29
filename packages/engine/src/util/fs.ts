@@ -5,8 +5,9 @@ import { codeOf } from './error-code';
 /**
  * The file's contents, or undefined if it does not exist. Any other failure is thrown
  * as an error that names the file, and for permission errors, what to check. With
- * `noWait`, it is opened without waiting, so a named pipe swapped in at `path` reads as
- * empty rather than hang the read.
+ * `noWait`, it is opened without waiting, so a named pipe swapped in at `path` never
+ * hangs the read: it reads as empty, or, when a writer holds it open with nothing
+ * written, fails at once (EAGAIN), as an error that names the file.
  */
 export async function readIfExists(
   path: string,

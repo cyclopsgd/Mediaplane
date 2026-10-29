@@ -3442,6 +3442,28 @@ describe('apply: a first-run setup that makes no key, after another', () => {
     expect((await readSecretStore(home)).setUp).toBeUndefined();
   });
 
+  it('keeps unpublished an app whose setup makes a key when its API is not ready in time, never asking it (decision 11)', async () => {
+    const { home, setup, ups, run } = await signInStack();
+    // Jellyfin, whose setup makes its key, slow to start: the setup can't even ask it.
+    setup.state.notReady = true;
+    const failed = await run();
+    expect(failed.outcome).toBe('failed');
+    expect(failed.diagnostics.at(-1)?.message).toContain(
+      'jellyfin at http://jellyfin:8096',
+    );
+    // Never asked whether its setup is open, nor set up: unasked is open.
+    expect(
+      setup.app.requests.filter((r) => r.path === '/setup').map((r) => r.method),
+    ).toEqual([]);
+    // Stricter than before for a setup that makes a key: never published, nor is Sonarr,
+    // which comes after it.
+    expect(ups).toEqual([
+      'jellyfin sonarr unpublished; jellyfin open, sonarr open',
+      'jellyfin sonarr unpublished; jellyfin open, sonarr open',
+    ]);
+    expect((await readSecretStore(home)).apps.jellyfin).toBeUndefined();
+  });
+
   it('keeps unpublished an app set up by someone else between the setup failing and the look after it', async () => {
     let claim = (): void => undefined;
     const catalog = SIGN_IN_CATALOG.map((def) => {
@@ -3693,6 +3715,33 @@ describe('apply: a first-run setup that makes no key, after another', () => {
       { app: 'jellyfin', unpublished: true },
       { app: 'sonarr', unpublished: true, again: true },
     ]);
+  });
+
+  it('stops the plan at a setup it holds as an error, as the other holds do', async () => {
+    // Not in the shipped catalog: Jellyfin's own setup, which finds its key by signing in
+    // as the admin, signing in again when admin.password is rotated. Rotating it now would
+    // leave Jellyfin with a password Mediaplane no longer holds.
+    const catalog = SIGN_IN_CATALOG.map((def) =>
+      def.id === 'jellyfin' && def.bootstrap !== undefined
+        ? { ...def, bootstrap: { ...def.bootstrap, signsInWith: ['admin.password'] } }
+        : def,
+    );
+    const { home, setup, run } = await signInStack(catalog);
+    expect((await run()).outcome).toBe('success');
+    const rotated = await plan(
+      options(home, fakeDocker(home, { addresses: setup.addresses }), {
+        catalog,
+        wiring: setup.seams,
+        rotate: ['admin.password'],
+      }),
+    );
+    expect(rotated.ok).toBe(false);
+    expect(
+      rotated.diagnostics.filter((d) => d.severity === 'error').map((d) => d.message),
+    ).toEqual([
+      'jellyfin takes no key Mediaplane holds, and only its first-run setup can find one, by signing in as the shared admin with the admin password it has: rotating that password now would leave jellyfin with one Mediaplane no longer holds',
+    ]);
+    expect(rotated.bootstrap).toEqual([]);
   });
 
   it('keeps unpublished, and fails, an app with a setup but no API to finish it through', async () => {
