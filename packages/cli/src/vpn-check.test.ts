@@ -20,6 +20,7 @@ import {
 } from '@mediaplane/engine/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defaultDeps, run, type CliDeps, type Io } from './run';
+import { checkWhenFinished } from './testing';
 import { printVpnCheck } from './vpn-check';
 
 const STACK = `version: 1
@@ -61,6 +62,7 @@ const HEALTHY: ProbeAnswers = {
 
 function capture(env: NodeJS.ProcessEnv = {}) {
   const out: string[] = [];
+  checkWhenFinished(() => out.join(''));
   const err: string[] = [];
   const io: Io = {
     stdout: (text) => {

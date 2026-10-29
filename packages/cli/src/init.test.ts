@@ -16,6 +16,7 @@ import type { DataFolder } from './folders';
 import { NOTES } from './init';
 import { PromptCancelled } from './prompt';
 import { run, type CliDeps, type Io } from './run';
+import { checkWhenFinished } from './testing';
 
 // writeFile() and open() pass straight through, except where a test fills the disk
 // halfway through writing stack.yaml (which can't be provoked reliably otherwise).
@@ -60,6 +61,7 @@ function fillDiskOnNextWrite(): void {
  */
 function capture(answers?: string[], env: NodeJS.ProcessEnv = {}, pasted: string[] = []) {
   const out: string[] = [];
+  checkWhenFinished(() => out.join(''));
   const err: string[] = [];
   const shown: string[] = [];
   const questions: string[] = [];

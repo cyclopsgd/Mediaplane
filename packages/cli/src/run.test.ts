@@ -46,9 +46,9 @@ import {
   thrown,
 } from '@mediaplane/engine/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { checkDocument, documentsIn, INTERNAL_SCHEMAS } from './contract';
 import { PromptCancelled } from './prompt';
 import { EXIT_CODES, run, type CliDeps, type Io } from './run';
+import { checkPrinted } from './testing';
 import { VERSION } from './version';
 
 const STACK = `version: 1
@@ -343,14 +343,8 @@ let printed: (() => string)[] = [];
 afterEach(() => {
   const outputs = printed;
   printed = [];
-  // Every --json document any test here printed is one the contract documents, exactly;
-  // but for the helpers' answers to Mediaplane itself.
-  for (const output of outputs) {
-    for (const doc of documentsIn(output())) {
-      const { schema } = doc as { schema?: string };
-      if (!INTERNAL_SCHEMAS.includes(schema ?? '')) checkDocument(doc);
-    }
-  }
+  // Every --json document any test here printed is one the contract documents, exactly.
+  for (const output of outputs) checkPrinted(output());
 });
 
 function capture(env: NodeJS.ProcessEnv = {}, answers?: string[]) {

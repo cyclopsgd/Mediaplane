@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempDirSync } from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
+import { checkWhenFinished } from './testing';
 import { VERSION } from './version';
 
 const MAIN = fileURLToPath(new URL('./main.ts', import.meta.url));
@@ -63,11 +64,14 @@ apps:
 `;
 }
 
+/** The CLI, spawned; what it prints under --json is checked against the contract. */
 function spawnMain(...args: string[]) {
-  return spawnSync(process.execPath, ['--import', 'tsx', MAIN, ...args], {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', MAIN, ...args], {
     encoding: 'utf8',
     env: ENV,
   });
+  checkWhenFinished(() => result.stdout);
+  return result;
 }
 
 /**
@@ -75,12 +79,14 @@ function spawnMain(...args: string[]) {
  * it, and a time limit, so that a command that waits for an answer fails the test.
  */
 function spawnScripted(...args: string[]) {
-  return spawnSync(process.execPath, ['--import', 'tsx', MAIN, ...args], {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', MAIN, ...args], {
     encoding: 'utf8',
     env: ENV,
     input: '',
     timeout: 45_000,
   });
+  checkWhenFinished(() => result.stdout);
+  return result;
 }
 
 async function freshHome(): Promise<string> {

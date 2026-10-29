@@ -9,6 +9,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import { printCredentials } from './credentials';
 import { run, type CliDeps, type Io } from './run';
+import { checkWhenFinished } from './testing';
 
 const STACK = `version: 1
 paths: { data: /srv/data }
@@ -53,6 +54,7 @@ async function ownHome(password = OWN): Promise<string> {
 
 function capture(env: NodeJS.ProcessEnv = {}) {
   const out: string[] = [];
+  checkWhenFinished(() => out.join(''));
   const err: string[] = [];
   const io: Io = {
     stdout: (text) => {

@@ -17,6 +17,7 @@ import {
 } from '@mediaplane/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { run, type Io } from './run';
+import { checkWhenFinished } from './testing';
 
 const PLEX_STACK = `version: 1
 paths: { data: /srv/data }
@@ -33,6 +34,7 @@ const OLD = 'old-plex-token-00001';
 
 function capture(env: NodeJS.ProcessEnv = {}) {
   const out: string[] = [];
+  checkWhenFinished(() => out.join(''));
   const err: string[] = [];
   const io: Io = {
     stdout: (text) => {

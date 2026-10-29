@@ -18,9 +18,11 @@ import {
   printStep,
 } from './output';
 import type { Io } from './run';
+import { checkWhenFinished } from './testing';
 
 function capture() {
   const out: string[] = [];
+  checkWhenFinished(() => out.join(''));
   const io: Io = {
     stdout: (text) => {
       out.push(text);
