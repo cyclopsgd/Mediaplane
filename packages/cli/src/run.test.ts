@@ -669,17 +669,20 @@ describe('mediaplane plan', () => {
     expect(term.stdout().trim()).toBe(VERSION);
   });
 
-  it('reports unexpected I/O errors as a one-line error naming the file', async () => {
-    const home = await tempDir('mediaplane-cli-');
-    await writeFile(join(home, 'stack.yaml'), STACK);
-    await chmod(join(home, 'stack.yaml'), 0o000);
-    const term = capture();
-    expect(await run(['plan', '--home', home], term.io, deps())).toBe(1);
-    expect(term.stderr()).toBe(
-      `error: cannot read ${join(home, 'stack.yaml')} (EACCES): check that the user running Mediaplane can read it\n`,
-    );
-    expect(term.stdout()).toBe('');
-  });
+  it.skipIf(process.getuid?.() === 0)(
+    'reports unexpected I/O errors as a one-line error naming the file',
+    async () => {
+      const home = await tempDir('mediaplane-cli-');
+      await writeFile(join(home, 'stack.yaml'), STACK);
+      await chmod(join(home, 'stack.yaml'), 0o000);
+      const term = capture();
+      expect(await run(['plan', '--home', home], term.io, deps())).toBe(1);
+      expect(term.stderr()).toBe(
+        `error: cannot read ${join(home, 'stack.yaml')} (EACCES): check that the user running Mediaplane can read it\n`,
+      );
+      expect(term.stdout()).toBe('');
+    },
+  );
 
   it('looks at the host through the host helper when it runs from its image', async () => {
     const home = await makeHome();
@@ -805,22 +808,25 @@ describe('mediaplane plan', () => {
     expect(help.stdout()).toContain('Usage: mediaplane plan');
   });
 
-  it('reports unexpected errors as a JSON envelope with --json', async () => {
-    const home = await tempDir('mediaplane-cli-');
-    await writeFile(join(home, 'stack.yaml'), STACK);
-    // Unreadable, to the user running Mediaplane.
-    await chmod(join(home, 'stack.yaml'), 0o000);
-    const term = capture();
-    expect(await run(['plan', '--home', home, '--json'], term.io, deps())).toBe(1);
-    expect(JSON.parse(term.stdout())).toEqual({
-      schema: 'mediaplane.error/v1',
-      ok: false,
-      error: {
-        message: `cannot read ${join(home, 'stack.yaml')} (EACCES): check that the user running Mediaplane can read it`,
-      },
-    });
-    expect(term.stderr()).toBe('');
-  });
+  it.skipIf(process.getuid?.() === 0)(
+    'reports unexpected errors as a JSON envelope with --json',
+    async () => {
+      const home = await tempDir('mediaplane-cli-');
+      await writeFile(join(home, 'stack.yaml'), STACK);
+      // Unreadable, to the user running Mediaplane.
+      await chmod(join(home, 'stack.yaml'), 0o000);
+      const term = capture();
+      expect(await run(['plan', '--home', home, '--json'], term.io, deps())).toBe(1);
+      expect(JSON.parse(term.stdout())).toEqual({
+        schema: 'mediaplane.error/v1',
+        ok: false,
+        error: {
+          message: `cannot read ${join(home, 'stack.yaml')} (EACCES): check that the user running Mediaplane can read it`,
+        },
+      });
+      expect(term.stderr()).toBe('');
+    },
+  );
 
   it('refuses a folder in place of stack.yaml as a plan error', async () => {
     const home = await tempDir('mediaplane-cli-');
@@ -832,6 +838,36 @@ describe('mediaplane plan', () => {
       ok: false,
       diagnostics: [{ code: 'config.not-a-file' }],
     });
+  });
+
+  // A folder is refused with a diagnostic, so each command prints the document it prints
+  // for any other stack.yaml its config diagnostics refuse (here, one with bad YAML).
+  it('prints for a folder at stack.yaml the document each command prints for bad YAML', async () => {
+    const folder = await tempDir('mediaplane-cli-');
+    await mkdir(join(folder, 'stack.yaml'));
+    const bad = await tempDir('mediaplane-cli-');
+    await writeFile(join(bad, 'stack.yaml'), 'version: [\n');
+    for (const command of ['plan', 'drift', 'credentials', 'migrate']) {
+      const printed = async (home: string) => {
+        const term = capture();
+        expect(await run([command, '--home', home, '--json'], term.io, deps())).toBe(1);
+        return JSON.parse(term.stdout()) as {
+          schema: string;
+          ok: boolean;
+          diagnostics?: { code: string }[];
+          error?: { diagnostics?: { code: string }[] };
+        };
+      };
+      const folderDoc = await printed(folder);
+      const badDoc = await printed(bad);
+      expect(folderDoc.schema, command).toBe(badDoc.schema);
+      expect(folderDoc.ok).toBe(false);
+      // Both carry their diagnostics, where this command's document keeps them.
+      expect(
+        (folderDoc.diagnostics ?? folderDoc.error?.diagnostics ?? []).length,
+        command,
+      ).toBeGreaterThan(0);
+    }
   });
 });
 
