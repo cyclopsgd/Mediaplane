@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { DOCUMENTS } from '../../packages/cli/src/contract';
 import { errorDocument } from '../../packages/cli/src/output';
+import { EXIT_CODES } from '../../packages/cli/src/run';
 import { documentJsonSchema, renderJsonReference } from './json-reference';
 
 describe('renderJsonReference', () => {
@@ -19,6 +20,23 @@ describe('renderJsonReference', () => {
     expect(text).toContain('- `startedAt` (string (an ISO 8601 date and time))');
     expect(text).toContain('- With `login` `"own"`:');
     expect(text).toContain('- `again` (boolean, optional)');
+  });
+
+  it("doesn't say that ok and the exit code always agree, and names each command where the exit code says more", () => {
+    const intro = text.split('## Documents')[0] ?? '';
+    expect(intro).not.toContain('exit code says the same');
+    // A command whose exit code can be 2 says more than ok does.
+    const exits2 = Object.entries(EXIT_CODES).filter(([, lines]) =>
+      lines.some((line) => line.startsWith('2:')),
+    );
+    expect(exits2.map(([command]) => command)).toEqual(['plan', 'drift']);
+    for (const [command] of exits2) {
+      expect(intro).toContain(`\`${command}\` prints \`ok: true\` and exits 2 when`);
+    }
+    expect(intro).toContain('`vpn-check` prints `ok: true` and exits 1 when');
+    expect(intro).toContain(
+      'Every other command exits 0 when `ok` is true, and 1 when not',
+    );
   });
 
   it('says how v1 grows, and which codes a script acts on', () => {

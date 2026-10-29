@@ -122,19 +122,43 @@ describe('the --json contract', () => {
     );
   });
 
-  it('lists only diagnostic codes that a test pins in the code that gives them', async () => {
+  it('lists only diagnostic codes that some code gives and a test of that code pins', async () => {
     const root = fileURLToPath(new URL('../../..', import.meta.url));
+    const own = [
+      fileURLToPath(import.meta.url),
+      fileURLToPath(new URL('./contract.ts', import.meta.url)),
+    ];
+    const sources: string[] = [];
     const tests: string[] = [];
     for (const dir of ['packages', 'catalog']) {
       for (const entry of await readdir(join(root, dir), { recursive: true })) {
-        if (entry.endsWith('.test.ts') && !entry.includes('node_modules')) {
-          tests.push(await readFile(join(root, dir, entry), 'utf8'));
-        }
+        if (!entry.endsWith('.ts') || entry.includes('node_modules')) continue;
+        // This file and the list itself would each name every code.
+        const path = join(root, dir, entry);
+        if (own.includes(path)) continue;
+        const text = await readFile(path, 'utf8');
+        (entry.endsWith('.test.ts') ? tests : sources).push(text);
       }
     }
+    const names = (text: string, code: string) => text.includes(`'${code}'`);
+    // apply makes the code of a failed step from the step's name: `apply.${step}-failed`.
+    const gives = (text: string, code: string) => {
+      const step = /^apply\.([a-z]+)-failed$/.exec(code)?.[1];
+      return (
+        names(text, code) ||
+        (step !== undefined &&
+          text.includes('`apply.${step}-failed`') &&
+          new RegExp(`^\\s+${step}: `, 'm').test(text))
+      );
+    };
+    expect(CODES.length).toBeGreaterThan(0);
     for (const { code } of CODES) {
       expect(
-        tests.some((test) => test.includes(`'${code}'`)),
+        sources.some((source) => gives(source, code)),
+        `no code gives ${code}`,
+      ).toBe(true);
+      expect(
+        tests.some((test) => names(test, code)),
         `no test pins ${code}`,
       ).toBe(true);
     }
