@@ -38,8 +38,9 @@ Where M1 stands (the README shows the same):
   changes (test-first, one review, CI): `hardware_transcoding` for Plex and Jellyfin,
   `init` offering the Plex sign-in and asking for your own admin password, and
   `deploy/install.sh`.
-- **M1 is done.** Every item below is settled: done, or moved to M2 with its reason.
-  [After M1](#after-m1) has what comes next.
+- **M1 is done.** Every item below is settled: done, or moved to M2 with its reason. One
+  stays open, and isn't M1 work: "Before the first real migration" applies when a
+  migration is first planned, and none is. [After M1](#after-m1) has what comes next.
 
 ## Slices
 
@@ -292,6 +293,9 @@ lighter route, or as a slice when it is big or touches security.
   - Quality presets for Sonarr and Radarr in `init` (see "Later ideas").
   - A media server you already run, used as it is (`external`).
   - Drift checked on a schedule, with alerts (optional).
+  - Reads that can still wait: `stack.yaml` is guarded against a named pipe in its place,
+    but other files a command reads (secret files, `state/*`, generated files) can still
+    block on one. Guard them as `stack.yaml` is now.
 - **M3: more apps.** SABnzbd, Audiobookshelf, Bookshelf (experimental), Bazarr,
   Recyclarr, Portainer and Homepage.
 - **Not scheduled:** the web panel (wizard, dashboard, drift view). Its items are kept
@@ -1164,7 +1168,8 @@ password, which are S3c's (and listed again below).
     too; `install.sh` refuses a `DOCKER_HOST` or `DOCKER_CONTEXT` that would point
     `docker` away from the socket it checks (refused, not unset: whoever set one meant
     it); every command that reads `stack.yaml` refuses a named pipe or a folder in its
-    place, without waiting (`config.not-a-file`); the indexers test checks that
+    place, without waiting (`config.not-a-file`; `keep.stack-file` and
+    `migrate.stack-file` for `keep` and `migrate`); the indexers test checks that
     `appdata/flaresolverr` is owned by 1000:1000, replayed on both Composes.
 - **From S10a's reviews:**
   - read Jellyfin's database in a process of its own, with a deadline, so that a pipe
@@ -1194,7 +1199,8 @@ password, which are S3c's (and listed again below).
   (`credentials`, `vpn-check`, `plex-login`) give the old-version warning, which they
   drop today; and make `keep` refuse an older-version file, saying to run `migrate`
   first, rather than write overrides in the old version's shape.
-  - **Still open,** for whoever plans the first migration (none is planned yet).
+  - **Not M1 work, and still open.** It applies when the first migration is planned (none
+    is planned yet): that slice's plan takes it up.
 
 **The panel (not scheduled since 2026-10-25):**
 
@@ -1212,7 +1218,9 @@ password, which are S3c's (and listed again below).
     Jellyfin itself, then take its ports away;
   - `doctor`: Docker's default bridge network, which the plex.tv helper needs;
   - plex.tv's `Retry-After`, and its 429s, if they bite;
-  - the owner's choice of a weekly sweep of the Plex test account's servers.
+  - the owner's choice of a weekly sweep of the Plex test account's servers;
+  - the other files a command reads (secret files, `state/*`, generated files), which can
+    still block on a named pipe: guard them as `stack.yaml` is now.
 
 - **From S8, for `doctor`:** appdata ownership, checked only when something else changes,
   and an override that moves an appdata mount, which leaves the pre-start files where the

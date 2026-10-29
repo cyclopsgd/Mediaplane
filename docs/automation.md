@@ -25,7 +25,17 @@ there is, and nothing in Mediaplane needs Ansible.
   - `apply`: 0 when it applied, or had nothing to do; 1 when a step failed.
   - `drift`: 0 when nothing drifted and every resource and secret was checked, 2 when
     something drifted or couldn't be checked, 1 on an error.
-  - `status`, `history`, `credentials`, `keep` and `migrate`: 0, or 1 on an error.
+  - `keep`: 0 when it kept the change or, with `managed_by: external`, gave the line to
+    add; 1 when nothing was kept (the value hasn't drifted, or can't be kept) or on an
+    error.
+  - `migrate`: 0 when `stack.yaml` is now the version this release writes, or already
+    was, or, with `managed_by: external`, when it gave the file; 1 when it wasn't
+    rewritten (a newer or unknown version, an unwritable file) or on an error.
+  - `status`, `history` and `credentials`: 0, or 1 on an error, which includes no such
+    record or app.
+- **A folder or a named pipe where `stack.yaml` should be fails at once,** with exit 1,
+  and never waits for it. The diagnostic's code is `config.not-a-file`, or
+  `keep.stack-file` for `keep` and `migrate.stack-file` for `migrate`.
 - **A second `apply` changes nothing.** With nothing to do, `apply --yes --json` exits 0
   with `"changed": false` and `"outcome": "no-changes"`, and writes no change record.
   That is a playbook's `changed_when`.

@@ -2189,7 +2189,10 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     `secrets.admin-password-lost` is said, as without it. A setup that signs in through a
     held app (Seerr, through Jellyfin) is held too, with the same level; so, with a
     warning, is one that signs in through an app that won't have the password when it
-    runs (a listed Jellyfin, or one whose key is found while the password is generated).
+    runs (a listed Jellyfin, or one whose key is found while the password is generated),
+    unless that app's own setup is open in the same plan: Jellyfin's wizard then makes the
+    admin with the password first, and Seerr, which comes after it, is set up after the
+    wizard, not held. The sign-in never uses a password apply is still to give.
     A setup whose own appdata says it is done signs in through nothing (Seerr's asks
     Seerr, with its key), so it runs, and is published.
   - **`shared.adminPasswordNotIn`,** in `state/secrets.json`, lists the apps that lack the
@@ -2453,7 +2456,9 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 - **A script is asked nothing** (§5.2): spawned tests with no terminal pin that `apply`
   without `--yes`, and `init` without its flags, fail at once, naming the flag. Every
   command that reads `stack.yaml` refuses a named pipe or a folder in its place, never
-  waiting on it (`config.not-a-file`; S9's review).
+  waiting on it, with `config.not-a-file`, and with `keep.stack-file` and
+  `migrate.stack-file` for `keep` and `migrate`, which refused one already (S9's
+  review).
 - **First-run setups are held in one pass** (§6.4; §11, Slice 10a): a setup that signs in
   again with what is rotated, and one set up again once asked, are held, through an app
   that lacks the admin password, together with the plan's other setups, so the order of

@@ -121,12 +121,18 @@ you only a home it has just created, never a folder that was already there. With
   `deploy/.env`'s can move it to another project or file, and none can change the image.
   It pulls the image and the socket proxy's before it recreates anything; Docker checks
   everything it pulls against the digest.
-- **Only this host's Docker:** it refuses a `DOCKER_HOST` or `DOCKER_CONTEXT` that would
-  point `docker` at another Docker than the socket it checks, `/var/run/docker.sock`, which
-  Mediaplane's container uses. `DOCKER_HOST` may name that socket as `unix:///var/run/docker.sock`
-  or `unix:///run/docker.sock`. It also refuses a context chosen with `docker context use`
-  (other than `default`) whose endpoint isn't one of those two sockets. Unset the
-  variable, or run `docker context use default`, then run it again.
+- **Only this host's Docker:** `docker` and Compose talk to the Docker that `DOCKER_HOST`,
+  `DOCKER_CONTEXT` or the context chosen with `docker context use` names, which may be
+  another host's, while Mediaplane's container uses this host's socket,
+  `/var/run/docker.sock`. So the installer refuses:
+  - a `DOCKER_HOST` other than that socket (`unix:///var/run/docker.sock` and
+    `unix:///run/docker.sock` pass);
+  - any `DOCKER_CONTEXT` but `default`, even one whose endpoint is the local socket;
+  - with neither set, a context chosen with `docker context use` that isn't `default`
+    and whose endpoint isn't one of those two sockets, or can't be read.
+
+  Unset the variable, or run `docker context use default`, then run it again.
+
 - **If `mediaplane` then runs something else** in your shell, `type -a mediaplane` shows
   what, such as an old alias.
 
