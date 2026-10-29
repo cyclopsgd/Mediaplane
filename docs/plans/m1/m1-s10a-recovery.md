@@ -41,7 +41,7 @@ The generated admin password can be rotated (`--rotate admin.password`).
 Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2), and `node:sqlite`, which Node 24
 bundles. No new dependency and no new image.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §2.3 (the success criteria: M1 is done when all hold; criterion 3, a second `apply`
   changes nothing);
@@ -55,7 +55,7 @@ bundles. No new dependency and no new image.
 - §7 (security: §7.2(2), no new proxy permission; §7.2(4), secrets), §9 (the docs set),
   §10 ("Lost `state/`"), §11 (every slice's refinements, Slice 9's included).
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md): the S10 row and its list, every
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md): the S10 row and its list, every
 S8 item marked "Moved to S10", "S9 and S10 (before going public)", and "After M1".
 
 ### S10 in two parts (decision 1)

@@ -37,9 +37,9 @@ Compose will actually do. This slice also lands the Slice 1 review items marked 
 jsdiff 9, Commander 15, Vitest 4), plus Node's `child_process`, `net`, `dgram` and
 `fs.statfs`. No new npm dependencies.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular
 §4.1, §4.2, §5 (stages 3–5) and §7.2. Slice context:
-[`docs/plans/m1-roadmap.md`](m1-roadmap.md), especially "Inputs for later slices", S2.
+[`docs/plans/m1-roadmap.md`](../m1-roadmap.md), especially "Inputs for later slices", S2.
 
 ## Global Constraints
 

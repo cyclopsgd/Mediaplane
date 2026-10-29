@@ -68,7 +68,7 @@ the engine uses), and these images, each pinned by digest:
 Each version was at least two weeks old on 2026-10-09: the newer `docker 29.8.2`,
 `trivy 0.75.0` and `compose 5.6.0` were not.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §2.1 (the image), §2.3 criterion 6;
 - §3.3 (Compose bundled in the image);
@@ -78,7 +78,7 @@ Each version was at least two weeks old on 2026-10-09: the newer `docker 29.8.2`
 - §8.2 (a multi-arch image build on every PR);
 - §9 (the documentation set).
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md), especially:
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md), especially:
 
 - the S2c row of the S2 split;
 - "CI architecture coverage";

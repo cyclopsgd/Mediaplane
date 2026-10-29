@@ -43,7 +43,7 @@ resource deleted outside it. Drift writes to no app, and its checks leave fewer 
 **Tech Stack:** as Slice 7 (Node 24, pnpm 10.15.0, TypeScript 6.0, Zod 4, `yaml` 2,
 Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no new image.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §2.3, success criterion 4 ("Drift is detected, never reverted"), and criterion 3 (a
   second `apply` changes nothing);
@@ -54,7 +54,7 @@ Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no ne
 - §7 (security), §8.1(3) (the end-to-end suite's drift step), §9 (the documentation set),
   §11 (every slice's refinements).
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md): the S8 row ("The three-way
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md): the S8 row ("The three-way
 drift model, `drift`, `keep` (Keep mine), a comment-preserving override writer,
 `unmanaged`, the "drift reported" runbook, and the S8 items below, with the owner's
 decisions of 2026-10-17"; it proves success criterion 4), the S9 and S10 rows, "After

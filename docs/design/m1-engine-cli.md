@@ -2416,3 +2416,71 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
     vulnerability with a fix: those are ours to fix.
   - A test pins that `ci.yml` sets `report` on that job and that no other job has the
     switch.
+
+### Slice 10c: the automation contract and the docs (2026-10-29)
+
+- **The `--json` contract is pinned** (§5.2: "The JSON shapes are versioned and
+  documented, because external automation depends on them"; §9). Each document the CLI
+  prints is a Zod schema in `packages/cli/src/contract.ts`. `docs/reference/json.md` and
+  one JSON Schema per document, in `docs/reference/json/`, are generated from them, and
+  `docs:check` fails while either is stale. A type-level test checks that each printer
+  prints exactly the documented fields, of the documented types, so a field added to the
+  engine's results fails the build until its document says what it is; every document
+  the CLI's tests print is checked against its schema, strictly; and an end-to-end test
+  checks real ones against the published files.
+  - **Every document carries `schema` and `ok`:** `credentials`, `status`, `history` and
+    `history <id>` gain `ok: true`, additive within v1. `history <id> --json` prints the
+    record as this release reads it (a later release's fields stay in its file), with
+    `ok`; one that is there but can't be read is said to be so, never "no change record".
+  - **`mediaplane.error/v1`'s `error` gains `diagnostics`** when the failure came from
+    them, each with its code (additive).
+  - **A usage error under `--json`** (an unknown option or command, a missing argument)
+    prints `mediaplane.error/v1` too, beside Commander's words on stderr, so a `--json`
+    run prints exactly one document. Only `--help` and `--version` print text.
+  - **Within v1 a document only grows:** a field, or a value of a field, may be added;
+    one never changes meaning (§11, Slice 3a's rule for change records, for every
+    document). A script ignores a field it doesn't know, and stops at a value it doesn't
+    know. The schema files describe this release exactly (`additionalProperties: false`).
+  - **The codes a script is most likely to act on** are listed in the reference, S10b's
+    `bootstrap.open-published`, `rotate.no-plex` and `keep.record` among them; a test
+    checks that a test pins each.
+  - The internal answers of Mediaplane's own helpers (`host-report`, `plex-tv`) are not
+    part of it.
+- **Help and hints name the published docs** (§9): `plan --help`, `drift --help` and the
+  hint of a missing `stack.yaml` give the docs' address on GitHub (`docsUrl`), never a
+  path in the repo, which the image doesn't hold. `docs:check` also fails on a link in the
+  docs, or a docs path named in code, that leads nowhere.
+- **A script is asked nothing** (§5.2): spawned tests with no terminal pin that `apply`
+  without `--yes`, and `init` without its flags, fail at once, naming the flag. Every
+  command that reads `stack.yaml` refuses a named pipe or a folder in its place, never
+  waiting on it (`config.not-a-file`; S9's review).
+- **First-run setups are held in one pass** (§6.4; §11, Slice 10a): a setup that signs in
+  again with what is rotated, and one set up again once asked, are held, through an app
+  that lacks the admin password, together with the plan's other setups, so the order of
+  the catalog never matters, and each is held, and warned of, once. A setup whose app
+  isn't ready in time isn't asked again whether it is open: it stays unpublished, and the
+  failure comes after one deadline, not two.
+- **The end-to-end suite** (§8.1): CI pulls every image the suite runs before it starts,
+  retrying a temporary registry error for longer than `apply` does, whose own pulls,
+  retries and reports are unchanged; after each file, whatever its tests left in Docker
+  is removed, and named, so a test that times out leaves no stack up. The playbook test
+  (`test/e2e/playbook.e2e.test.ts`) drives Mediaplane's container as a playbook does:
+  it deploys a stack, takes an app out, and rebuilds the host, reading only exit codes and
+  documents, each checked against its published JSON Schema.
+- **Compose versions** (§11, Slice 9): probed with eleven releases of Compose, the config
+  hash of every service of two stacks is the same within 2.29 to 2.40, and within 5.0 to
+  5.6, but differs between 2.x and 5.x for every service but Byparr; 2.24.0 differs from
+  later 2.x for Gluetun and qBittorrent. `docs/releasing.md` says so, and Renovate's pull
+  request for a bump of the image's `docker` says what to check.
+- **The installer refuses a `DOCKER_HOST` or `DOCKER_CONTEXT`** that points `docker` away
+  from the socket it checks, which Mediaplane's container mounts (§4.4; S9's review).
+- **The docs that complete M1** (§9): the full README, with the comparison of §1.3 as a
+  list; the guide to deploying with automation, with one short Ansible example, which a
+  test checks against the CLI (§1.6: Mediaplane ships no role or collection); the
+  add-an-app guide in `CONTRIBUTING.md`; and the slices' plans moved to
+  `docs/plans/m1/`, kept as the record of what each slice was built from.
+- **Moved to M2,** with the roadmap's reasons: taking the ports away from a Jellyfin
+  `apply` started published whose wizard still looks open, which the next `apply` would
+  undo while its own file says the wizard is done; `plan` checking Docker's default
+  bridge network on a Plex stack; reading plex.tv's `Retry-After`.
+- **No new Docker API call** (§7.2(2)): the socket proxy's allow-list is unchanged.

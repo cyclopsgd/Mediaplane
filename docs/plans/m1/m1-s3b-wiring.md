@@ -32,7 +32,7 @@ socket proxy.
 **Tech Stack:** as Slice 3d (Node 24, pnpm 10.15.0, TypeScript 6.0, Zod 4, `yaml` 2,
 Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no new image.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §3.2 (the integration contract), §4.1 (`state/resources.json`), §4.3 (the catalog);
 - §5 (the apply flow: wire, verify, record), §5.1 (failure handling), §5.2 (`init`);
@@ -42,7 +42,7 @@ Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no ne
 - §7.2(2) (the socket proxy), §7.2(4) (secrets), §7.2(6) (VPN), §8.1(2) (adapter tests
   against a fake HTTP server), §9 (the documentation set).
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md): the S3 split ("S3b: the
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md): the S3 split ("S3b: the
 wiring framework"), the S3 items in "Inputs for later slices from the reviews", and the
 `SERVER__TRUSTEDNETWORKS` row of "Things S1 encodes".
 

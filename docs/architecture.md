@@ -157,7 +157,10 @@ Each part, and where its code is:
   `stack.yaml` in `packages/engine/src/config/overrides-file.ts`): what changed in the
   apps outside Mediaplane, and Keep mine (see [Drift and Keep mine](#drift-and-keep-mine)).
 - **CLI** (`packages/cli`): the commands, human and `--json` output, and exit codes
-  ([reference](reference/cli.md)).
+  ([reference](reference/cli.md)). What each command prints with `--json` is a document
+  of `packages/cli/src/contract.ts`, from which the
+  [`--json` reference](reference/json.md) and its JSON Schemas are generated; a script
+  relies on those, as [Deploying with automation](automation.md) says.
 
 ## `plan`
 
@@ -1053,8 +1056,6 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 ## What comes next
 
-The [roadmap](plans/m1-roadmap.md) has the order:
-
-- the automation contract (Slice 10c): the `--json` shapes pinned and in the generated
-  docs, exit codes, the automation guide with a short Ansible example, and the docs that
-  complete M1.
+M1 is complete. The roadmap's [After M1](plans/m1-roadmap.md#after-m1) has what comes
+next: M2, the everyday CLI (safe app updates, backup and restore, `doctor`), then M3,
+more apps.

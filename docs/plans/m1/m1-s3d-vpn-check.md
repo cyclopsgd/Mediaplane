@@ -37,7 +37,7 @@ runbook says what to do when it fails.
 Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency. One new image,
 in the end-to-end tests only: `lscr.io/linuxserver/wireguard`, pinned by tag and digest.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §2.3 success criterion 5, §5.2 (`vpn-check`), §6.1 (Gluetun's row), §6.4 (Gluetun
   dependants);
@@ -45,7 +45,7 @@ in the end-to-end tests only: `lscr.io/linuxserver/wireguard`, pinned by tag and
 - §8.1(4) (the kill-switch test), §8.2 (CI), §9 (the documentation set, runbooks);
 - §11, Slice 3a (Gluetun's control-server key).
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md), especially the S3 split
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md), especially the S3 split
 ("S3 is delivered in four parts"), the S3d list in "Inputs for later slices from the
 reviews", and "Things S1 encodes that later slices must verify against real containers".
 

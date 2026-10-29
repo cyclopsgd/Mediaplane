@@ -43,7 +43,7 @@ that complete M1.
 Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2, `node:sqlite`). No new dependency and
 no new image.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §2.3 (the success criteria; criterion 3, a second `apply` changes nothing);
 - §4.2 ("Removing an app never deletes its `appdata/`", externally managed mode);
@@ -54,7 +54,7 @@ no new image.
 - §8.1(3) (the end-to-end suite, step 4: "removes an app");
 - §9 (the docs set), §10, §11 (every slice's refinements, Slice 10a's included).
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md): the S10 row and its list,
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md): the S10 row and its list,
 every item marked "Moved to S10b", "S9 and S10 (before going public)", and "After M1".
 
 ### S10b in two parts (decision 1)

@@ -38,7 +38,7 @@ A nightly job checks it all against the real plex.tv.
 **Tech Stack:** as Slice 6 (Node 24, pnpm 10.15.0, TypeScript 6.0, Zod 4, `yaml` 2,
 Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no new image.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §2.3, success criterion 2 ("Plex has exactly one manual input"), and criterion 3 (a
   second `apply` changes nothing);
@@ -49,7 +49,7 @@ Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no ne
 - §7 (security), §8.1 ("Plex": the nightly job), §9 (the documentation set), §10 (Plex's
   risks), §11.
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md): the S7 row ("`plex-login`
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md): the S7 row ("`plex-login`
 (the plex.tv PIN flow), the Plex claim through a plex.tv helper, its libraries, the arr →
 Plex connections, Seerr's sign-in with the Plex token, and a nightly Plex CI job"; it
 proves success criterion 2), the four S7 items in "Inputs for later slices from the

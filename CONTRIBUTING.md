@@ -12,19 +12,26 @@ pnpm install        # also points git at the repo's hooks in .githooks/
 
 ## Everyday commands
 
-| Command              | What it does                                                                |
-| -------------------- | --------------------------------------------------------------------------- |
-| `pnpm test`          | Unit tests (Vitest)                                                         |
-| `pnpm test:coverage` | Unit tests with coverage thresholds                                         |
-| `pnpm test:e2e`      | End-to-end tests against real Docker                                        |
-| `pnpm lint`          | ESLint and the Prettier check                                               |
-| `pnpm format`        | Rewrite files with Prettier                                                 |
-| `pnpm typecheck`     | Type-check the whole repo                                                   |
-| `pnpm docs:generate` | Rewrite the generated docs in `docs/reference/` (CI runs `pnpm docs:check`) |
+- `pnpm test`: unit tests (Vitest).
+- `pnpm test:coverage`: unit tests with coverage thresholds.
+- `pnpm test:e2e`: end-to-end tests against real Docker.
+- `pnpm lint`: ESLint and the Prettier check.
+- `pnpm format`: rewrite files with Prettier.
+- `pnpm typecheck`: type-check the whole repo.
+- `pnpm docs:generate`: rewrite the generated docs in `docs/reference/` and the apps'
+  READMEs. CI runs `pnpm docs:check`, which also fails on a link in the docs that leads
+  nowhere.
 
 After changing `packages/engine/src/config/schema.ts`, a command or option in
-`packages/cli/src/run.ts`, or an app in `catalog/`, run `pnpm docs:generate` and commit
-what it writes. CI fails while the generated docs are stale.
+`packages/cli/src/run.ts`, a `--json` document in `packages/cli/src/contract.ts`, or an
+app in `catalog/`, run `pnpm docs:generate` and commit what it writes. CI fails while the
+generated docs are stale.
+
+A field added to what a command prints with `--json` must be added to its document in
+`packages/cli/src/contract.ts` too, with what it means: until it is, `pnpm typecheck`
+fails (`contract.test.ts`), and so do the CLI tests that print it (`run.test.ts` checks
+every document it prints). Within v1 a
+document only gains fields and values; a field that changes meaning needs a v2.
 
 The unit tests use in-memory fakes for Docker and the host. The apps' APIs are fake
 HTTP servers on 127.0.0.1 (`fakeHttpApp` in `@mediaplane/engine/testing`, §8.1(2) of the
@@ -40,7 +47,18 @@ always names the default `mediaplane` project.
 
 The apply end-to-end test pulls the full app stack the first time, about 7 GB, and
 starts it, so allow several minutes. The test files run one at a time because they
-share host ports.
+share host ports. CI pulls every image the suite runs before it starts
+(`scripts/ci/pull-images.ts`), retrying a temporary registry error for longer than
+`apply` does, so a registry's bad minute doesn't fail the job. After each file,
+`test/e2e/setup.ts` removes whatever its tests left in Docker, by this run's names
+(`mediaplane-e2e-<pid>`), and fails the file naming it: a test that times out never
+reaches its own teardown. The harness's own unit tests are `test/e2e/*.unit.test.ts`,
+which `pnpm test` runs.
+
+The playbook test (`test/e2e/playbook.e2e.test.ts`) drives Mediaplane's container as a
+playbook would ([Deploying with automation](docs/automation.md)): no terminal, only exit
+codes and `--json` documents, each checked against its published JSON Schema in
+`docs/reference/json/`.
 
 The VPN kill-switch test (`test/e2e/vpn.e2e.test.ts`) runs a WireGuard server in a
 container, which needs the host's `wireguard` kernel module: run
@@ -154,6 +172,51 @@ This repository is public, or will be. Anything in git history is permanent.
 - The pre-commit hook runs gitleaks on staged changes. It uses a local `gitleaks` if you
   have one, and Docker otherwise. CI scans the full history on every push to `main` and
   on every pull request.
+
+## Adding an app
+
+An app is one folder in `catalog/`, and nothing else in the engine changes. Step by step:
+
+1. **Check that it fits.** Mediaplane runs the app's own upstream image, unmodified
+   ([ADR 0001](docs/adr/0001-dont-fork-upstream-apps.md)), configured through its
+   environment, its files and its API. The image must run on amd64 and arm64.
+2. **Write `catalog/<id>/app.ts`** with `defineApp({ … })`. `<id>` is the name
+   `stack.yaml` lists it by. Start from an app like it: `catalog/byparr/app.ts` for one
+   Mediaplane only runs, `catalog/sonarr/app.ts` for one it wires. Each field is
+   described in `packages/engine/src/catalog/types.ts`:
+   - `image`: its repository, an exact tag and the multi-arch digest, which
+     `docker buildx imagetools inspect <repo>:<tag>` shows;
+   - `ports`: name the web UI's `web`, as `mediaplane credentials` looks for it, and give
+     a port the LAN needs no access to `publish: false`;
+   - `volumes`, `runAs` (how the image picks its user), `health` (a check that passes
+     once the app answers), `secrets` and `credentials` (its keys, and how it is given
+     them), `provides` and `requires`, and `login`.
+3. **Add it to `catalog/index.ts`,** in order of id.
+4. **Write `catalog/<id>/README.md`:** what the app is for, then the two lines
+   `<!-- BEGIN GENERATED by "pnpm docs:generate" from app.ts. Do not edit. -->` and
+   `<!-- END GENERATED -->`, where `pnpm docs:generate` writes its facts; then what
+   Mediaplane does in it, how to change that, and its known issues.
+5. **To wire it,** give it an `api` (its port, a path that answers once it is ready, its
+   key and how a request carries it) and an `integration.ts`: the apps it comes `after`,
+   and its resources, each with its managed fields and secrets, and how to read it, check
+   its secrets, create, update and remove it. `catalog/_shared/servarr*.ts` is the model
+   for Servarr apps, and `catalog/qbittorrent/` for one with a form API. A first-run
+   setup that anyone could finish goes in `bootstrap`, which runs before the app is
+   published (spec §6.4); files the app reads at its first start go in `configFiles`; and
+   where it keeps its own keys, for a rebuilt host to recover them, in `keyFiles`.
+6. **Test it.** Unit tests reach a fake of its API (`fakeHttpApp` in
+   `@mediaplane/engine/testing`), made no kinder than the app: ask the real app first,
+   and give the fake the same answers. `catalog/catalog.test.ts` checks every app's
+   definition by itself: its pin, its architectures, its ports, its resources' names.
+   Then add the app to an end-to-end test that applies it against real Docker, which CI
+   runs on both architectures.
+7. **Run `pnpm docs:generate`.** The `stack.yaml` reference, its JSON Schema and the
+   app's README facts now name it.
+8. **Its pin stays current by itself:** Renovate's catalog manager reads every
+   `catalog/*/app.ts`. A tag that isn't a plain version, such as linuxserver.io's
+   `-ls<revision>`, needs a versioning rule in `renovate.json`, which
+   `scripts/supply-chain.test.ts` checks.
+9. **Run the full check** (above), and `pnpm test:e2e`.
 
 ## Design decisions
 

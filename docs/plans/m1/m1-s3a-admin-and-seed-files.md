@@ -46,7 +46,7 @@ themselves.
 Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no new image:
 PBKDF2 comes from `node:crypto`, and the end-to-end tests use only images already pinned.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §4.3 (credential seeding steps), §5 steps 4, 6, 7 and 12, §5.1 (retries), §5.2
   (`init`, `credentials`);
@@ -55,7 +55,7 @@ PBKDF2 comes from `node:crypto`, and the end-to-end tests use only images alread
 - §7.2(4) and (5) (secrets, the apps' logins);
 - §9 (the documentation set).
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md), especially the S3 row, the S3
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md), especially the S3 row, the S3
 list in "Inputs for later slices from the reviews", and "Every slice writes its own docs as
 it goes".
 

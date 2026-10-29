@@ -29,7 +29,7 @@ that Prowlarr fetches an indexer tagged so through it.
 Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no new image:
 the made-up indexer runs on the busybox the end-to-end helpers already pin.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §2.3 (success criterion 1: "Prowlarr syncs to Sonarr and Radarr, with Byparr as its
   proxy");
@@ -43,7 +43,7 @@ the made-up indexer runs on the busybox the end-to-end helpers already pin.
   risks: "lightly tested on arm64 upstream", "FlareSolverr compatibility … End-to-end
   tests run a proxied request through it"), §11.
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md): the S4 row ("Indexers added
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md): the S4 row ("Indexers added
 in Prowlarr reach both arrs, and proxied requests work"), the S4 list in "Inputs for later
 slices from the reviews" (the fakes of the arrs are kinder than the apps), and the S3c
 final review's ruling to make those fakes stricter "when S4 extends these fakes".

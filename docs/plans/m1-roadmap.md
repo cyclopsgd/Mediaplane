@@ -9,34 +9,36 @@ slices: S1, S2 in three parts, S3 in four, S4 to S9, and S10 in three. Each slic
 - gets its **own detailed plan**, written when the previous slice has landed, so
   the plan builds on the real code rather than guesses.
 
-Detailed plans so far:
+The plan each slice was built from, kept in [`m1/`](m1/) as a record, with the code as it
+was built then (the code on `main` is the truth):
 
-- Slice 1: [`m1-s1-pure-core.md`](m1-s1-pure-core.md) (done).
-- Slice 2a: [`m1-s2a-plan-against-docker.md`](m1-s2a-plan-against-docker.md) (done).
-- Slice 2b: [`m1-s2b-apply.md`](m1-s2b-apply.md) (done).
-- Slice 2c: [`m1-s2c-packaging.md`](m1-s2c-packaging.md) (done).
-- Slice 3a: [`m1-s3a-admin-and-seed-files.md`](m1-s3a-admin-and-seed-files.md) (done).
-- Slice 3d: [`m1-s3d-vpn-check.md`](m1-s3d-vpn-check.md) (done).
-- Slice 3b: [`m1-s3b-wiring.md`](m1-s3b-wiring.md) (done).
-- Slice 3c: [`m1-s3c-download-path.md`](m1-s3c-download-path.md) (done).
-- Slice 4: [`m1-s4-indexers.md`](m1-s4-indexers.md) (done).
-- Slice 5: [`m1-s5-jellyfin.md`](m1-s5-jellyfin.md) (done).
-- Slice 6: [`m1-s6-requests.md`](m1-s6-requests.md) (done).
-- Slice 7: [`m1-s7-plex.md`](m1-s7-plex.md) (done).
-- Slice 8: [`m1-s8-drift.md`](m1-s8-drift.md) (done).
-- Slice 9: [`m1-s9-releases.md`](m1-s9-releases.md) (done).
-- Slice 10a: [`m1-s10a-recovery.md`](m1-s10a-recovery.md) (done).
-- Slice 10b: [`m1-s10b-automation.md`](m1-s10b-automation.md) (done).
+- Slice 1: [`m1-s1-pure-core.md`](m1/m1-s1-pure-core.md) (done).
+- Slice 2a: [`m1-s2a-plan-against-docker.md`](m1/m1-s2a-plan-against-docker.md) (done).
+- Slice 2b: [`m1-s2b-apply.md`](m1/m1-s2b-apply.md) (done).
+- Slice 2c: [`m1-s2c-packaging.md`](m1/m1-s2c-packaging.md) (done).
+- Slice 3a: [`m1-s3a-admin-and-seed-files.md`](m1/m1-s3a-admin-and-seed-files.md) (done).
+- Slice 3d: [`m1-s3d-vpn-check.md`](m1/m1-s3d-vpn-check.md) (done).
+- Slice 3b: [`m1-s3b-wiring.md`](m1/m1-s3b-wiring.md) (done).
+- Slice 3c: [`m1-s3c-download-path.md`](m1/m1-s3c-download-path.md) (done).
+- Slice 4: [`m1-s4-indexers.md`](m1/m1-s4-indexers.md) (done).
+- Slice 5: [`m1-s5-jellyfin.md`](m1/m1-s5-jellyfin.md) (done).
+- Slice 6: [`m1-s6-requests.md`](m1/m1-s6-requests.md) (done).
+- Slice 7: [`m1-s7-plex.md`](m1/m1-s7-plex.md) (done).
+- Slice 8: [`m1-s8-drift.md`](m1/m1-s8-drift.md) (done).
+- Slice 9: [`m1-s9-releases.md`](m1/m1-s9-releases.md) (done).
+- Slice 10a: [`m1-s10a-recovery.md`](m1/m1-s10a-recovery.md) (done).
+- Slice 10b: [`m1-s10b-automation.md`](m1/m1-s10b-automation.md) (done).
+- Slice 10c: [`m1-s10c-contract.md`](m1/m1-s10c-contract.md) (done).
 
 Where M1 stands (the README shows the same):
 
-- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4, S5, S6, S7, S8, S9, S10a and
-  S10b.
+- **Merged:** S1, S2a, S2b, S2c, S3a, S3d, S3b, S3c, S4, S5, S6, S7, S8, S9, S10a, S10b
+  and S10c.
 - **Between S7 and S8 (2026-10-17), outside the slices** by the lighter route for small
   changes (test-first, one review, CI): `hardware_transcoding` for Plex and Jellyfin,
   `init` offering the Plex sign-in and asking for your own admin password, and
   `deploy/install.sh`.
-- **Next:** S10c (the automation contract and the docs), which completes M1.
+- **M1 is done.** Every item below is settled: done, or moved to M2 with its reason.
   [After M1](#after-m1) has what comes next.
 
 ## Slices
@@ -120,7 +122,7 @@ an app leaves, the Plex token's rotation, and a Plex signed out of its account);
 what a script reads (the contract automation relies on), with the docs that complete M1.
 S10 was first planned as two parts, S10a and S10b; S10b was split again on 2026-10-26.
 
-- **S10a: recovery** ([plan](m1-s10a-recovery.md)).
+- **S10a: recovery** ([plan](m1/m1-s10a-recovery.md)).
   - Delivers: key recovery from appdata, Jellyfin's from its database; a key put back at
     its source, installs from before S3a included; keep of an app's own key, given to
     every holder by the next `apply`; Jellyfin's key made again; a failed first-run setup
@@ -150,10 +152,10 @@ S10 was first planned as two parts, S10a and S10b; S10b was split again on 2026-
     and which Compose versions work out a service differently.
   - Proves: a playbook deploys a stack, removes an app from it, and rebuilds the host,
     reading only the documented contract.
-  - **Split again on 2026-10-26** ([plan](m1-s10b-automation.md), decision 1), by what
+  - **Split again on 2026-10-26** ([plan](m1/m1-s10b-automation.md), decision 1), by what
     each part changes: S10b, what the stack does when it changes (behaviour); S10c, the
     contract a script reads, and the docs that complete M1.
-- **S10b: removal and rotation** ([plan](m1-s10b-automation.md)).
+- **S10b: removal and rotation** ([plan](m1/m1-s10b-automation.md)).
   - Delivers: what an app leaving the stack had in the others removed (spec §8.1(3)
     step 4), but what is yours, or no longer as Mediaplane made it; Keep mine with
     `managed_by: external` giving the line to add in `mediaplane.keep/v1`; Jellyfin's
@@ -168,7 +170,7 @@ S10 was first planned as two parts, S10a and S10b; S10b was split again on 2026-
     their containers and what they had in the other apps, leaves a qBittorrent category
     that holds a torrent until the torrent moves, keeps Radarr's appdata, and then changes
     nothing, on real Docker; the nightly Plex job rotates the token and claims Plex again.
-- **S10c: the automation contract and the docs.**
+- **S10c: the automation contract and the docs** ([plan](m1/m1-s10c-contract.md)).
   - Delivers: the `--json` shapes pinned and in the generated docs (`history <id>
     --json` included, and `ok` on `credentials`, `status` and `history`), exit codes,
     commands that ask nothing when a script runs them, and a second `apply` that changes
@@ -195,8 +197,24 @@ S10 was first planned as two parts, S10a and S10b; S10b was split again on 2026-
   - The nightly Plex job's items from S10b:
     - `plex.e2e` checks `writtenFiles(home)` and `.env` after the reclaim.
     - `plex.e2e` pins the claim-token count (2) after the reclaim.
+    - **Done in S10c,** both. The count after the claim again is 3, not 2 (probed with
+      the test account): the unpublished start's `PLEX_CLAIM`, which the image ignores
+      for a signed-out Plex, takes one, and the claim through Plex's API another. An
+      unused claim token expires in four minutes, and a start that gets none would need
+      the setup to know the Plex is signed out first: left as it is.
   - Proves: a playbook deploys a stack, removes an app from it, and rebuilds the host,
     reading only the documented contract.
+  - **Done in S10c:** every `--json` document pinned in `packages/cli/src/contract.ts`,
+    with `ok` on each, and generated into `docs/reference/json.md` and a JSON Schema per
+    document; each item S10b left to pin is in it. A usage error under `--json` prints
+    the error document too, and the error document gives each diagnostic's code. Help and
+    hints name the published docs, and `docs:check` fails on a link that leads nowhere.
+    Spawned tests pin that a script is asked nothing, and no command waits on a named
+    pipe in place of `stack.yaml`. First-run setups are held in one pass, whatever the
+    catalog's order (the S10b final review's item). The guide to deploying with
+    automation, with a short Ansible example a test checks against the CLI; the full
+    README; the add-an-app guide. Every item below marked for S10c is settled, as each
+    says. `test/e2e/playbook.e2e.test.ts` proves it, on real Docker.
 
 ### S2 is delivered in three parts (decided 2026-10-09)
 
@@ -266,7 +284,8 @@ Decided by the owner on 2026-10-25. The web panel is no longer the next mileston
 CLI is refined instead, and the work after M1 is smaller: a feature at a time, by the
 lighter route, or as a slice when it is big or touches security.
 
-- **M2: everyday CLI.**
+- **M2: everyday CLI.** It also takes the M1 items S10c moved there, listed under "M2
+  (everyday CLI)" in [Inputs for later slices](#inputs-for-later-slices-from-the-reviews).
   - Safe app updates: `mediaplane update`, with a backup first and a rollback.
   - Backup and restore, including a restore onto a different host.
   - `mediaplane doctor`, which checks a running stack and says what to fix.
@@ -956,6 +975,7 @@ password, which are S3c's (and listed again below).
   - **S10's are S10b's** (split on 2026-10-26): S10a settles none of the items below.
   - **S10b's are S10c's** (split again on 2026-10-26), but for Jellyfin's database read,
     done in S10b, as its item says.
+  - **Settled in S10c,** each as its item says below.
 - **Decided by the owner on 2026-10-17:**
   - the licence is GPL-3.0-or-later (**done in S9:** every `package.json`'s `license`,
     the image's label, the README and the spec);
@@ -970,35 +990,55 @@ password, which are S3c's (and listed again below).
   step; a run killed before that step leaves one on the account, which the next run
   doesn't remove. Decide whether a weekly sweep removes every server of the test
   account.
+  - **Settled in S10c: no sweep for now.** `pnpm exec tsx test/e2e/plex-cleanup.ts` with
+    the account's token removes the servers a run noted; one a killed run leaves is
+    removed by hand, in the account's settings. A sweep stays the owner's choice, listed
+    under M2.
 - **Keep `PLEX_TOKEN` in the `plex` environment, limited to `main`** (S7, owner). The
   job already names `environment: plex`, so this needs no workflow change. The job
   checks its branch, but only the environment's limit stops a branch's own copy of the
   workflow from reading the secret, for whoever can push a branch.
+  - **Still the owner's step** (S10c's completion checklist lists it).
 - **A 429 from plex.tv counts as "couldn't tell"** (S7): it is retried after 5 and 15
   seconds, and still fails closed, but its error says to run `apply` again rather than
   that plex.tv refused. Its `Retry-After` is not read: the waits are fixed. Revisit both
   if plex.tv's limits bite.
+  - **Settled in S10c: unchanged.** They haven't bitten in the nightly job; moved to M2,
+    to revisit if they do.
 - **Docker's default bridge network** (S7): the plex.tv helper needs it. A daemon set up
   with `"bridge": "none"` fails the helper. Decide whether `plan` checks for it on a Plex
   stack.
+  - **Settled in S10c: `plan` doesn't.** It is the host's set-up, not the stack's, and a
+    rare one; the helper's failure says what failed. Moved to M2, for `doctor`, which
+    checks a host.
 
 - **Repo setup (owner):** enable GitHub private vulnerability reporting, which
   `SECURITY.md` relies on. Choose GPL-3.0-only or GPL-3.0-or-later and add the
   SPDX `license` field.
   - **Done in S9:** the SPDX field (GPL-3.0-or-later). Private vulnerability reporting
-    stays an owner's step: the S9 plan gives the command.
+    stays an owner's step: the S9 plan gives the command, and S10c's completion
+    checklist lists it.
 - **Docs:** make the `--json` contract explicit (pin its fields and document
   `mediaplane.plan/v1`). Drop the internal "Slice 1" wording from the README.
+  - **Done in S10c:** the [`--json` reference](../reference/json.md) and a JSON Schema per
+    document, generated from `packages/cli/src/contract.ts`, which a test checks every
+    printer against; the README names no slice.
 - **`plan --help` names `docs/security/threat-model.md` by its repo path** (S4). Someone
   running the published image can't open that. Point it at the published docs instead.
+  - **Done in S10c:** `plan --help`, `drift --help` and the hint of a missing
+    `stack.yaml` give the published docs' address (`docsUrl`).
 - **`credentials --json` has no `ok` field.** `init`, `plan`, `apply` and the error
   envelope all carry one, and the success output of `mediaplane.credentials/v1` doesn't.
   Align it in the `--json` pass: adding `ok: true` is additive within v1.
+  - **Done in S10c:** `ok: true` on `credentials`, `status`, `history` and
+    `history <id>`, so every document has it.
 - **Tests:** tighten the catalog tag test, and add Renovate.
   - **Renovate done in S9;** `scripts/supply-chain.test.ts` also checks that Renovate can
     read each pinned tag. Tightening the catalog's own tag test stays S10's. Let
   `test/e2e/deploy.e2e.test.ts` deploy with `deployMediaplane()` from
   `test/e2e/helpers.ts` (S3d), as the VPN test does.
+  - **Done in S10c:** a catalog tag must name a version (`^v?\d+\.\d+`), never a tag
+    that moves; the deploy test deploys with `deployMediaplane()`.
 - **Small test gaps from S3c and S4.** None hides a fault, and coverage holds without
   them:
   - the folder helper's last two guards have no test: an error from the runtime that
@@ -1013,23 +1053,41 @@ password, which are S3c's (and listed again below).
     echo-server setup. Sharing it isn't a plain move;
   - `wireguard.ts` sets its "removed" flag before removing, so a failed removal isn't
     tried again. Nothing calls its `remove()` twice.
+  - **Settled in S10c:** the folder helper's two guards are tested; `servarrFailure`
+    gives one line of at most 200 characters, tested; `wireguard.ts` marks itself
+    removed only once it is. The shared teardown steps stay as they are (no third such
+    test came), and so does the echo server (sharing it isn't a plain move).
 - **A first-run setup that never gets ready waits twice its deadline** before it reports
   (S5): the `ready` wait, then the `open()` re-check. Give the re-check a short per-call
   deadline.
+  - **Done in S10c:** a setup whose app isn't ready in time isn't asked again, so it fails
+    after one deadline; it stays unpublished (an app Mediaplane couldn't ask is open).
 - **The Jellyfin end-to-end test joins its container-ID claims** in one
   `toEqual([true, true])` (S5), so a failure doesn't say which claim broke. Split them.
+  - **Done in S10c.**
 - **The deploy end-to-end test restores the secret store after `plan`,** but not in a
   `finally` (S5). Move the restore into one.
+  - **Done before S10c:** the restore is in a `finally`.
 - **A test timeout skips `composeDown`** in the end-to-end files (S6): their teardown
   runs in the test body's `finally`, which a timeout doesn't wait for, so the stack can
   be left up. Fix it in the harness, for every file at once.
+  - **Done in S10c:** `test/e2e/setup.ts`, after each file, removes whatever its tests
+    left in Docker, by the run's names, and fails the file naming it. A test that times
+    out still leaves its body running until the file ends.
 - **Two wide tables** (S5): convert the README's capability table and the threat
   model's asset table to lists.
+  - **Done in S10c:** both are lists, and so are the README's table of the stack and
+    `CONTRIBUTING.md`'s of commands.
 - **A second app with a first-run setup** (S5): S6 brought it, Seerr. So a Jellyfin
   `apply` started published, whose re-check still says its wizard is open, keeps its
   ports in the publishing `up` that Seerr's setup brings: its error says that it is
   published, and to stop it. Nothing new is exposed, since it was published already.
   Take the ports away, and say so.
+  - **Moved to M2 in S10c.** Taking the ports away in that `apply` wouldn't last: Jellyfin's
+    own `system.xml` says its wizard is done, which is what `plan` goes by, so the next
+    `apply` would publish it again. The fix is for `plan` to ask Jellyfin itself, as it
+    asks Seerr when its file can't be read (S10b): a check of the kind `doctor` makes.
+    Until then the error says it is published, and to stop it.
 - **Pins outside the catalog.** Renovate must also bump the images pinned in:
   - `Dockerfile` (`node`, `docker:*-cli`);
   - `deploy/mediaplane.compose.yaml` (`wollomatic/socket-proxy`);
@@ -1084,6 +1142,10 @@ password, which are S3c's (and listed again below).
   app container (a restart, keeping their data). S9 says so in the deploy guide and in
   the guidance for a release's notes. S10: probe which pairs of Compose versions differ,
   and say so in Renovate's pull request for a Compose bump.
+  - **Done in S10c,** probed with eleven releases of Compose: 2.29.7 to 2.40.3 agree, and
+    so do 5.0.2 to 5.6.1, but a 2.x and a 5.x differ for every service but Byparr, and
+    2.24.0 differs from later 2.x for Gluetun and qBittorrent. `docs/releasing.md` says
+    so, and Renovate's pull request for a bump of the image's `docker` says what to check.
 - **From S9's reviews, for S10c.** None hides a fault in S9's releases:
   - a test that Renovate can read the tag of each image pinned outside the catalog
     (busybox, Trivy, gitleaks, actionlint, Node, Docker, the socket proxy, BuildKit,
@@ -1098,6 +1160,12 @@ password, which are S3c's (and listed again below).
     them too;
   - the indexers end-to-end test could check that `appdata/flaresolverr` is owned by
     the stack's user and group (1000), replayed on both Composes.
+  - **Done in S10c:** a test that Renovate can read every pinned tag, outside the catalog
+    too; `install.sh` refuses a `DOCKER_HOST` or `DOCKER_CONTEXT` that would point
+    `docker` away from the socket it checks (refused, not unset: whoever set one meant
+    it); every command that reads `stack.yaml` refuses a named pipe or a folder in its
+    place, without waiting (`config.not-a-file`); the indexers test checks that
+    `appdata/flaresolverr` is owned by 1000:1000, replayed on both Composes.
 - **From S10a's reviews:**
   - read Jellyfin's database in a process of its own, with a deadline, so that a pipe
     a compromised Jellyfin puts at the database or its `-wal` can't hang `plan` (threat
@@ -1110,17 +1178,23 @@ password, which are S3c's (and listed again below).
   - the pinned `--json` contract says what `history <id> --json` prints of a later
     release's record. Until then it prints `mediaplane.change/v1`'s fields only, and
     the fields it doesn't know stay in the file. **For S10c.**
+    - **Done in S10c:** the reference says so: `history <id> --json` prints the fields
+      this release knows, with `ok`, and one it can't read is said to be there, unread.
 - **CI's end-to-end image pulls are flaky (for S10c, with the test gaps).** On
   2026-10-26, `apply.pull-failed` (four tries, a temporary registry error) failed the
   end-to-end job twice, on amd64 and arm64, and a rerun passed each time. Make the
   end-to-end tests robust against it, without weakening what `apply` itself reports:
   pull the catalog's pinned images in the job first, with retries and a backoff, or give
   the harness a longer retry budget than apply's.
+  - **Done in S10c:** the end-to-end job pulls every image the suite runs first
+    (`scripts/ci/pull-images.ts`), tried again after 15 s, 30 s, 1, 2 and 4 minutes on a
+    temporary registry error; `apply`'s own pulls, retries and reports are unchanged.
 - **Before the first real migration** of `stack.yaml` (none is planned, S10a to S10c
   included; spec §11, Slice 9): make the commands that only read `stack.yaml`
   (`credentials`, `vpn-check`, `plex-login`) give the old-version warning, which they
   drop today; and make `keep` refuse an older-version file, saying to run `migrate`
   first, rather than write overrides in the old version's shape.
+  - **Still open,** for whoever plans the first migration (none is planned yet).
 
 **The panel (not scheduled since 2026-10-25):**
 
@@ -1132,6 +1206,13 @@ password, which are S3c's (and listed again below).
   `X-Forwarded-For` header it sends (spec §11, Slice 3a).
 
 **M2 (everyday CLI):**
+
+- **From S10c**, as their items above say:
+  - a Jellyfin `apply` started published whose wizard still looks open: have `plan` ask
+    Jellyfin itself, then take its ports away;
+  - `doctor`: Docker's default bridge network, which the plex.tv helper needs;
+  - plex.tv's `Retry-After`, and its 429s, if they bite;
+  - the owner's choice of a weekly sweep of the Plex test account's servers.
 
 - **From S8, for `doctor`:** appdata ownership, checked only when something else changes,
   and an override that moves an appdata mount, which leaves the pre-start files where the

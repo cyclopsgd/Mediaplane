@@ -1,6 +1,6 @@
 # Threat model
 
-This is the threat model for Mediaplane as built today: M1, up to and including Slice 8.
+This is the threat model for Mediaplane as built in M1.
 It makes spec §7 concrete. To report a vulnerability, see [SECURITY.md](../../SECURITY.md).
 
 ## The one thing to know
@@ -11,22 +11,36 @@ that power. None of them removes it.
 
 ## What it protects
 
-| Asset                                        | Where                                                                 | Why it matters                                             |
-| -------------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
-| The host                                     | Everything                                                            | Docker access is root on the host                          |
-| Generated API keys                           | `state/secrets.json`, `generated/.env` (both 0600) and `appdata/`     | They open the apps' APIs                                   |
-| qBittorrent's key, in Sonarr and Radarr      | Their download client's settings, in `appdata/`                       | It opens qBittorrent's API                                 |
-| Sonarr's and Radarr's keys, in Prowlarr      | Its links' settings, in `appdata/`                                    | They open Sonarr's and Radarr's APIs                       |
-| Jellyfin's key, which Jellyfin made          | `state/secrets.json` (0600), and Sonarr's and Radarr's connections    | It opens Jellyfin's API, as its admin                      |
-| Keys in Seerr: the arrs', and one Jellyfin's | Seerr's `settings.json`, in `appdata/`; Seerr shows them in clear     | They open Sonarr, Radarr and Jellyfin, as their admin      |
-| Seerr's session cookie, while it signs in    | Mediaplane's memory, for the moment of its first sign-in              | It opens Seerr, as its admin, until signed out             |
-| The shared admin password                    | `state/secrets.json` (0600) or `admin.password`; a hash in `appdata/` | It opens every app with a login, Seerr through Jellyfin    |
-| Your secrets: VPN key, Plex token, passwords | `secrets/` (0700), or environment variables                           | They are your accounts                                     |
-| Your Plex token, in Sonarr, Radarr and Seerr | The arrs' Plex connections, and Seerr's database, in `appdata/`       | It opens your plex.tv account, and every Plex it reaches   |
-| Plex's own token, from its claim             | `appdata/plex`, in its `Preferences.xml` (0600)                       | It opens your plex.tv account, as this Plex                |
-| A claim token, as Plex first starts          | Memory, Compose's environment, and Plex's, while it is unpublished    | It claims a Plex for your account, once, for four minutes  |
-| App data                                     | `appdata/<app>/`                                                      | The apps' databases and settings, some holding credentials |
-| Your media                                   | The data folder                                                       | Your library                                               |
+Each asset, where it is, and why it matters:
+
+- **The host:** everything. Docker access is root on the host.
+- **Generated API keys:** `state/secrets.json`, `generated/.env` (both 0600) and
+  `appdata/`. They open the apps' APIs.
+- **qBittorrent's key, in Sonarr and Radarr:** their download client's settings, in
+  `appdata/`. It opens qBittorrent's API.
+- **Sonarr's and Radarr's keys, in Prowlarr:** its links' settings, in `appdata/`. They
+  open Sonarr's and Radarr's APIs.
+- **Jellyfin's key, which Jellyfin made:** `state/secrets.json` (0600), and Sonarr's and
+  Radarr's connections. It opens Jellyfin's API, as its admin.
+- **Keys in Seerr, the arrs' and one Jellyfin's:** Seerr's `settings.json`, in
+  `appdata/`; Seerr shows them in clear. They open Sonarr, Radarr and Jellyfin, as their
+  admin.
+- **Seerr's session cookie, while it signs in:** Mediaplane's memory, for the moment of
+  its first sign-in. It opens Seerr, as its admin, until signed out.
+- **The shared admin password:** `state/secrets.json` (0600) or `admin.password`; a hash
+  in `appdata/`. It opens every app with a login, Seerr through Jellyfin.
+- **Your secrets (VPN key, Plex token, passwords):** `secrets/` (0700), or environment
+  variables. They are your accounts.
+- **Your Plex token, in Sonarr, Radarr and Seerr:** the arrs' Plex connections, and
+  Seerr's database, in `appdata/`. It opens your plex.tv account, and every Plex it
+  reaches.
+- **Plex's own token, from its claim:** `appdata/plex`, in its `Preferences.xml` (0600).
+  It opens your plex.tv account, as this Plex.
+- **A claim token, as Plex first starts:** memory, Compose's environment, and Plex's,
+  while it is unpublished. It claims a Plex for your account, once, for four minutes.
+- **App data:** `appdata/<app>/`. The apps' databases and settings, some holding
+  credentials.
+- **Your media:** the data folder. Your library.
 
 ## What runs, and who can reach it
 

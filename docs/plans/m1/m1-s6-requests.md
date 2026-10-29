@@ -35,7 +35,7 @@ their root folder and `isDefault`; then its setup is finished with `initialize`.
 **Tech Stack:** as Slice 5 (Node 24, pnpm 10.15.0, TypeScript 6.0, Zod 4, `yaml` 2,
 Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no new image.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §2.3, success criterion 1 ("Seerr is connected to Jellyfin, Sonarr and Radarr"), and
   criterion 3 (a second `apply` changes nothing);
@@ -48,7 +48,7 @@ Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no ne
 - §7.2(2) (the socket proxy), §8.1(3), §9 (the documentation set), §10 (Seerr's risks),
   §11.
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md): the S6 row ("The Seerr first
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md): the S6 row ("The Seerr first
 sign-in through the Jellyfin admin, libraries, the Sonarr/Radarr servers, initialize, and
 the full-stack end-to-end test"; it proves success criterion 1), the S6 item in "Inputs
 for later slices from the reviews" (Seerr's sign-in `requires` `jellyfin.admin`, and Seerr

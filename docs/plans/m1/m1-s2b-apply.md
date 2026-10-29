@@ -43,7 +43,7 @@ blockers.
 Commander 15, Vitest 4), plus Node's `crypto`, `readline/promises` and `fs` (`open`
 with `wx`, `rename`, `fsync`). No new npm dependencies.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §3.2 (`keys`, `runtime`, `history`);
 - §4.1 (on-disk layout and modes);
@@ -52,7 +52,7 @@ with `wx`, `rename`, `fsync`). No new npm dependencies.
 - §6.1 (key formats) and §6.4;
 - §7.2(2) and (4).
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md), especially the S2b row of
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md), especially the S2b row of
 the S2 split, and the "S2b (blockers for `apply`)" list under "Inputs for later slices
 from the reviews".
 

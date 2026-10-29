@@ -29,7 +29,7 @@ proxy.
 **Tech Stack:** as Slice 3b (Node 24, pnpm 10.15.0, TypeScript 6.0, Zod 4, `yaml` 2,
 Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no new image.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §2.3 (success criterion 1: "qBittorrent is registered in both arrs, with per-app
   categories; root folders exist");
@@ -41,7 +41,7 @@ Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no ne
   with its key), §8.1(2) and (3) (adapter tests against a fake server, end-to-end tests
   against real containers), §9 (the documentation set).
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md): the S3 split ("S3c: the
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md): the S3 split ("S3c: the
 download path"), the S3 items "qBittorrent's settings after its first start" and "The
 shared admin password, through each app's API", and the S3c list in "Inputs for later
 slices from the reviews".

@@ -35,7 +35,7 @@ updates its library on import. Jellyfin is wired headlessly.
 **Tech Stack:** as Slice 4 (Node 24, pnpm 10.15.0, TypeScript 6.0, Zod 4, `yaml` 2,
 Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no new image.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §2 (M1 scope; success criterion 1's "Seerr is connected to Jellyfin", which needs
   Jellyfin set up, comes in Slice 6);
@@ -50,7 +50,7 @@ Commander 15, Vitest 4, Prettier 3, esbuild 0.28.2). No new dependency and no ne
   before publish); §6.5 (Jellyfin ≥ 12);
 - §7.2(2) (the socket proxy), §8.1(2) and (3), §9 (the documentation set), §11.
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md): the S5 row ("Jellyfin
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md): the S5 row ("Jellyfin
 bootstrap-before-publish, its API key and libraries, and the arr → Jellyfin connections";
 it proves "Jellyfin is wired headlessly"), and the S5 list in "Inputs for later slices
 from the reviews": Jellyfin's health check can pass early, and the five small gaps from

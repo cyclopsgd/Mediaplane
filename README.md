@@ -6,55 +6,14 @@
 **Describe your self-hosted media stack in one file. Mediaplane deploys it as plain Docker
 Compose and wires the apps together for you.**
 
-> **Status: pre-alpha, not ready for use yet.**
+> **Status: M1 is complete. Pre-1.0, and no release yet.**
 >
-> - **Works today:** `mediaplane plan` checks a real host and shows exactly what it
->   would do. `mediaplane apply` then starts the stack, confirms that every app is
->   healthy, and sets one admin login in qBittorrent, Sonarr, Radarr, Prowlarr, Jellyfin
->   and Seerr (`mediaplane credentials` shows it). It sets Jellyfin up before its web UI
->   is published, with its Movies and Shows libraries, when `apply` runs the stack (the
->   [threat model](docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)
->   says what voids that). It links Sonarr and Radarr to
->   qBittorrent: download clients, categories and root folders, and to Jellyfin, which
->   they tell of each import. It links Prowlarr to Sonarr and Radarr, so the indexers you
->   add in Prowlarr reach both, with Byparr as Prowlarr's proxy for indexers behind
->   Cloudflare. It signs Seerr in through Jellyfin, as the same admin, before Seerr's web
->   UI is published, again when `apply` runs the stack (the same
->   [threat model](docs/security/threat-model.md#t16-someone-else-finishes-an-apps-first-run-setup)
->   entry says what voids that), and links Seerr to Jellyfin, with both libraries, and to
->   Sonarr and Radarr, with a quality profile, ready for requests. With Plex instead,
->   `mediaplane init` (or `plex-login`) signs you in to plex.tv and saves your Plex token; `apply`
->   claims Plex for your account before its web UI is published, names it, gives it
->   its Movies and TV Shows libraries, connects Sonarr and Radarr to it, and signs Seerr
->   in with your Plex account before Seerr is published, linked to Plex (when `apply`
->   runs the stack; the same threat model entry says what voids that).
->   `mediaplane vpn-check` confirms that qBittorrent reaches the internet only through
->   the VPN. `mediaplane drift` reports what was changed by hand in the apps, with what
->   Mediaplane set and what the app holds now; `apply` puts it back, and
->   `mediaplane keep` keeps it as yours instead, in `stack.yaml`. Mediaplane runs in its
->   own hardened container, behind a Docker socket proxy, and reaches the apps over a
->   private network with no route out.
-> - **Releases:** from the first one, each release publishes Mediaplane's image for amd64
->   and arm64, and deploy files that pin it by digest. Updating Mediaplane, or going
->   back, recreates only its own project (its container, and the socket proxy when the
->   release changed the proxy's pin), never the stack (though the first `apply` after an
->   update that changes the image's Compose may recreate the apps once, keeping their
->   data and settings: see [Updating](deploy/README.md#updating)). There has been no
->   release yet.
-> - **Rebuilding a host:** from `stack.yaml` and the apps' appdata, `apply` recovers each
->   key the apps hold, finds what it made in them by name, and sets a new admin password
->   through their keys if the generated one is lost. A key changed in an app is put back,
->   or kept with `mediaplane keep`.
-> - **Taking an app out:** remove it from `stack.yaml`, and `apply` removes its
->   container, and what Mediaplane made for it in the other apps (Prowlarr's link,
->   qBittorrent's category, Seerr's server), keeping its appdata and anything of yours.
->   A new Plex token reaches the arrs and Seerr with `apply --rotate plex.token`.
-> - **Next:** the contract for driving Mediaplane from automation, and the docs that
->   complete M1.
-> - **Who can reach them:** `mediaplane init` asks whether to publish the web UIs on
->   your LAN (`network.bind: lan`) or keep them on this machine (`localhost`).
->
-> Watch the repo to follow along.
+> Mediaplane plans, applies and wires the core video stack on a real host, reports what
+> was changed by hand, rebuilds a host from its files, takes an app out cleanly, and can
+> be driven by a script or a playbook. Everything listed under [Features](#features) is
+> built and tested, most of it end to end against the real apps, on amd64 and arm64.
+> Expect changes before 1.0. There has been no release yet, so install it from a checkout
+> for now ([Run it in a container](#run-it-in-a-container)).
 
 ## Why
 
@@ -74,52 +33,78 @@ Mediaplane does that part for you:
 4. It connects the apps through their own APIs.
 5. Later, it tells you when something was changed by hand, without overwriting it.
 
-## What works so far
+## Features
 
-| Capability                                                                        | Status  |
-| --------------------------------------------------------------------------------- | ------- |
-| Validate `stack.yaml`, with errors that say what to change                        | Done    |
-| Render a readable Compose project with images pinned by tag and digest            | Done    |
-| Check the host first: Docker versions, disk, data folder, ports, the VPN device   | Done    |
-| Refuse to publish web UIs on a cloud VM's private address by mistake              | Done    |
-| Predict exactly which containers will change, using Compose's own config hashes   | Done    |
-| Generate keys and start the stack (`mediaplane apply`)                            | Done    |
-| See each app's health and every past apply (`status`, `history`)                  | Done    |
-| Write a starter `stack.yaml` (`init`)                                             | Done    |
-| One admin login for qBittorrent, Sonarr, Radarr, Prowlarr, Jellyfin and Seerr     | Done    |
-| Reach the apps' APIs over a private network with no route out                     | Done    |
-| A VPN kill switch, tested against a real WireGuard server, and `vpn-check`        | Done    |
-| Run in a hardened container, behind a Docker socket proxy                         | Done    |
-| Documentation generated from code: the `stack.yaml` and CLI references, app facts | Done    |
-| Link Sonarr and Radarr to qBittorrent: download clients, categories, root folders | Done    |
-| Link Prowlarr to Sonarr and Radarr, with Byparr or FlareSolverr as its proxy      | Done    |
-| Set up Jellyfin before it is published, with its libraries and links              | Done    |
-| Sign Seerr in through Jellyfin before it is published, and link it                | Done    |
-| Sign in to Plex (`plex-login`), and claim Plex before it is published             | Done    |
-| Plex's libraries and links, and Seerr signed in with your Plex account            | Done    |
-| Guided install: `install.sh`, then `init` asks for everything, Plex sign-in too   | Done    |
-| Hardware transcoding for Plex or Jellyfin (`hardware_transcoding`)                | Done    |
-| Detect manual changes and offer Re-apply or "Keep mine" (`drift`, `keep`)         | Done    |
-| Releases, and updating Mediaplane without touching the stack (none cut yet)       | Done    |
-| Rebuild a host from `stack.yaml` and its appdata                                  | Done    |
-| Take an app out, and what it had in the other apps goes with it                   | Done    |
-| A new Plex token for the arrs and Seerr (`apply --rotate plex.token`)             | Done    |
-| Deploy with automation such as Ansible                                            | Planned |
+- **One file.** `stack.yaml` describes the stack, and a mistake in it gets an error that
+  says what to change. `mediaplane init` writes a starter one, asking for everything,
+  the Plex sign-in included.
+- **Plain Compose.** A readable Compose project, every image pinned by tag and digest,
+  which runs without Mediaplane: the header of `compose.yaml` gives the command.
+- **Plan, then apply.** `plan` checks the host first (Docker, disk, the data folder,
+  ports, the VPN device, and a cloud VM's private address) and predicts exactly which
+  containers change, from Compose's own config hashes. `apply` makes it so.
+- **Keys, and one admin login.** Every API key is generated up front and kept. One admin
+  login works in qBittorrent, Sonarr, Radarr, Prowlarr, Jellyfin and Seerr
+  (`mediaplane credentials`).
+- **Wiring.** Sonarr and Radarr are linked to qBittorrent (download clients, categories
+  and root folders) and to the media server; Prowlarr to both, with Byparr or
+  FlareSolverr as its proxy; Seerr to the media server and both arrs.
+- **Jellyfin or Plex, set up before they are published.** Jellyfin's wizard is finished,
+  or Plex claimed for your plex.tv account (`plex-login`), before its web UI is
+  published, then given its libraries. Seerr is signed in the same way.
+- **A VPN that fails closed.** qBittorrent runs behind Gluetun, tested against a real
+  WireGuard server, and `mediaplane vpn-check` checks your host.
+- **Drift, reported and never reverted on its own.** `mediaplane drift` reports what was
+  changed by hand. `apply` puts it back, or `mediaplane keep` keeps yours.
+- **History.** `status` shows each app's health and the last apply, and `history` every
+  apply.
+- **Rebuilding a host** from `stack.yaml` and the apps' appdata: the keys are recovered
+  from the apps, and everything Mediaplane made is found by name.
+- **Taking an app out.** Its container goes, and what Mediaplane made for it in the other
+  apps; its appdata, and anything of yours, stay.
+- **Rotation.** A new admin password (`--rotate admin.password`) or Plex token
+  (`--rotate plex.token`) reaches every app that holds it.
+- **Hardware transcoding** for Plex or Jellyfin (`hardware_transcoding`).
+- **Built for automation.** The commands ask nothing when a script runs them, have exit
+  codes that mean something, and print versioned `--json` documents, each with a
+  published JSON Schema ([Deploying with automation](docs/automation.md)).
+- **Hardened by default.** Mediaplane runs in its own container, behind a Docker socket
+  proxy, and reaches the apps over a private network with no route out.
+- **Releases.** Each release will publish the image for amd64 and arm64, and deploy files
+  that pin it by digest; updating Mediaplane never restarts the stack
+  ([Updating](deploy/README.md#updating)). No release has been cut yet.
 
 ## The stack
 
-| Role         | App                                                 |
-| ------------ | --------------------------------------------------- |
-| Media server | Jellyfin **or** Plex                                |
-| TV and films | Sonarr, Radarr                                      |
-| Indexers     | Prowlarr, with Byparr (or FlareSolverr)             |
-| Downloads    | qBittorrent, behind a Gluetun VPN that fails closed |
-| Requests     | Seerr                                               |
+- **Media server:** Jellyfin **or** Plex.
+- **TV and films:** Sonarr and Radarr.
+- **Indexers:** Prowlarr, with Byparr (or FlareSolverr).
+- **Downloads:** qBittorrent, behind a Gluetun VPN that fails closed.
+- **Requests:** Seerr.
 
 Every app can be switched off in `stack.yaml`. Later milestones add SABnzbd,
 Audiobookshelf, Bazarr, Recyclarr, Portainer and Homepage.
 
 Mediaplane runs on an existing Linux host, amd64 or arm64.
+
+## Compared with other tools
+
+What else was there when Mediaplane was designed (October 2026):
+
+- **YAMS, Saltbox, DockSTARTer, Runtipi and CasaOS** install the apps, and leave the
+  wiring to you.
+- **arrstack (LavX)** wires everything, but runs only as a wizard in a terminal: it
+  doesn't keep watch afterwards, and has no Plex.
+- **SparkBox** has a wizard, wiring and a panel, but it is closed source, installed on the
+  host itself, Jellyfin only, and x86 first.
+- **Umbrel** wires some apps, but it is a whole operating system, under a non-commercial
+  licence, and leaves Seerr unwired.
+- **Buildarr and Flemmarr** are configuration as code for the apps, but are no longer
+  maintained.
+
+Mediaplane is all of it together: open source, one container on a host you already
+have, Plex and Jellyfin as equal choices, arm64 supported as fully as amd64, and drift
+reported, never reverted on its own.
 
 ## What a stack looks like
 
@@ -203,16 +188,17 @@ A few principles hold throughout:
   explicitly. qBittorrent has no network of its own outside the VPN. Mediaplane controls
   Docker, which means root on the host; [SECURITY.md](SECURITY.md) explains the
   boundaries.
-- **Built for automation.** `plan` has meaningful exit codes and versioned `--json`
-  output, so scripts and configuration-management tools can drive it.
+- **Built for automation.** The commands ask nothing when a script runs them, have exit
+  codes that mean something, and print versioned `--json` documents, so scripts and
+  configuration-management tools can drive them
+  ([Deploying with automation](docs/automation.md)).
 
 ## What it looks like
 
 Most of this is real output from a run on an arm64 VM, trimmed where marked. The wiring
-lines, the first-run setup's and the last apply's came later, from a run of the same
-stack with Slice 6. The stack is
-the example above without the VPN, which is why `plan` warns about qBittorrent, and with
-`network.bind: localhost`.
+lines, the first-run setup's and the last apply's came from a later run of the same
+stack, once Seerr was wired. The stack is the example above without the VPN, which is
+why `plan` warns about qBittorrent, and with `network.bind: localhost`.
 
 ```console
 $ mediaplane plan
@@ -411,8 +397,9 @@ just created. `MEDIAPLANE_COMPOSE_PROJECT` gives this trial its own Compose proj
 `plan` exits with `0` when nothing would change, `2` when it would change something
 (including when an app is still waiting for its health check), and `1` on errors. Add
 `--json` for machine-readable output: its `wiring` lists each resource with its `action`
-(`create`, `update`, `adopt`, `unchanged`, `after-start` or `unknown`), the `changes` that
-differ, and a `reason` when it is `unknown`.
+(`create`, `update`, `adopt`, `unchanged`, `after-start`, `unknown` or `remove`), the
+`changes` that differ, and a `reason` when it is `unknown`. The
+[`--json` reference](docs/reference/json.md) lists every field of every command's.
 
 To actually start the stack, use a stack without the VPN. A fake WireGuard key can't
 connect, so Gluetun would never become healthy. Change the qBittorrent line to
@@ -493,7 +480,7 @@ environment variable. What a one-shot pipeline doesn't do well is everything aft
   keys it generated and plans before it changes anything, so a second `apply` changes
   nothing.
 - **Things change after deploy.** Someone edits a setting in a web UI, and a pipeline
-  never knows. Mediaplane will compare what it set with what is there now, and tell you
+  never knows. Mediaplane compares what it set with what is there now, and tells you
   without overwriting your change.
 - **The host gets checked first.** Mediaplane checks ports, free disk, the data folder,
   the VPN device, and whether this is a cloud VM. It refuses before touching anything.
@@ -504,12 +491,13 @@ So Mediaplane isn't instead of a pipeline. It is built to run inside one:
 - secrets can come from files or environment variables;
 - `plan` and `apply` run unattended, with exit codes and `--json` output.
 
-The pipeline decides what the stack is, and Mediaplane does the stateful part. Today
-that covers generating the keys, deploying, setting Jellyfin up and taking the key it
-makes, or claiming Plex for your account, signing Seerr in, setting the shared login in
-the apps, linking Sonarr and Radarr to qBittorrent and the media server, Prowlarr to
-them, and Seerr to all three, and checking. Change detection is what is being built
-next.
+The pipeline decides what the stack is, and Mediaplane does the stateful part:
+generating the keys, deploying, setting Jellyfin up and taking the key it makes, or
+claiming Plex for your account, signing Seerr in, setting the shared login in the apps,
+linking Sonarr and Radarr to qBittorrent and the media server, Prowlarr to them, and
+Seerr to all three, checking, and later reporting what was changed by hand.
+[Deploying with automation](docs/automation.md) has the contract a pipeline relies on,
+and a short Ansible example.
 
 ### Why not just write the Compose file myself?
 
@@ -587,8 +575,9 @@ and the whole branch is reviewed again before it merges.
 
 ## Roadmap
 
-- **M1: engine and CLI.** `plan` and `apply`, key generation, wiring for the core
-  stack, drift detection, change history, releases, and rebuilding a host.
+- **M1: engine and CLI (done).** `plan` and `apply`, key generation, wiring for the core
+  stack, drift detection, change history, releases, rebuilding a host, and the contract
+  automation relies on.
 - **M2: everyday CLI.** Safe app updates with rollback, backup and restore, `doctor`,
   quality presets, using a media server you already run, and optional alerts.
 - **M3: more apps.** SABnzbd, Audiobookshelf, Bazarr, Recyclarr, Portainer, Homepage.
@@ -596,16 +585,9 @@ and the whole branch is reviewed again before it merges.
 A web panel isn't planned for now: the CLI comes first. Mediaplane works on its own,
 and automation such as Ansible can drive the same commands.
 
-M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it stands:
-
-- **Merged:** S1 (the pure core), S2a (`plan` against a real host), S2b (`apply`), S2c
-  (packaging), S3a (the shared admin and pre-start files), S3d (the VPN's kill-switch
-  test and `vpn-check`), S3b (the wiring framework), S3c (the download path), S4
-  (indexers), S5 (Jellyfin), S6 (requests), S7 (Plex), S8 (drift), S9 (releases and
-  safe updates), S10a (recovery) and S10b (removal and rotation). Between S7 and
-  S8, smaller changes added a guided install (`deploy/install.sh`, and `init` asking for
-  your own admin password and signing you in to Plex) and hardware transcoding.
-- **Next:** S10c (the automation contract and the docs), which completes M1.
+M1 was built in 17 slices, each from a plan of its own, kept as a record in
+[`docs/plans/m1/`](docs/plans/m1/). The [M1 roadmap](docs/plans/m1-roadmap.md) says what
+each slice delivered, and what moved to M2.
 
 ## Documentation
 
@@ -618,6 +600,10 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
   the schema, with its [JSON Schema](docs/reference/stack.schema.json).
 - **[CLI reference](docs/reference/cli.md):** every command, option and exit code,
   generated from the CLI.
+- **[Deploying with automation](docs/automation.md):** what a script or a playbook can
+  rely on, and a short Ansible example.
+- **[`--json` reference](docs/reference/json.md):** every document the commands print
+  with `--json`, field by field, generated from the code, with a JSON Schema for each.
 - **The apps:** one README each, with what Mediaplane sets, how to change it, and known
   issues. See [Sonarr](catalog/sonarr/README.md), [Radarr](catalog/radarr/README.md),
   [Prowlarr](catalog/prowlarr/README.md), [qBittorrent](catalog/qbittorrent/README.md),
@@ -644,11 +630,13 @@ M1 is built in slices. The [M1 roadmap](docs/plans/m1-roadmap.md) shows where it
 - **[How it's built](docs/how-its-built.md):** how each slice is planned, built,
   reviewed and tested.
 - **[M1 design](docs/design/m1-engine-cli.md) and [roadmap](docs/plans/m1-roadmap.md):**
-  the plan for all of M1, and where it stands.
+  the plan for all of M1, and what each slice delivered; each slice's own plan is in
+  [`docs/plans/m1/`](docs/plans/m1/).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). To report a security issue, see
+See [CONTRIBUTING.md](CONTRIBUTING.md), which also says how to
+[add an app](CONTRIBUTING.md#adding-an-app). To report a security issue, see
 [SECURITY.md](SECURITY.md).
 
 ## Licence

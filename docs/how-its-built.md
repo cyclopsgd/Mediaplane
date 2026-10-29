@@ -20,8 +20,9 @@ skills, with some rules of the project's own.
 - **The roadmap**, [`docs/plans/m1-roadmap.md`](plans/m1-roadmap.md), splits M1 into
   slices. Each slice ends with something that works and can be tested. Its "Inputs for
   later slices" list carries forward everything a review found but put off.
-- **One plan per slice**, in [`docs/plans/`](plans/), says exactly how the slice is
-  built, task by task.
+- **One plan per slice**, in [`docs/plans/m1/`](plans/m1/) for M1's, says exactly how
+  the slice is built, task by task. Once it is built, it is kept as a record, with the
+  code as it was then: the code on `main` is the truth.
 - **The ADRs**, in [`docs/adr/`](adr/), record the larger decisions and why they were
   made.
 
@@ -150,6 +151,6 @@ Some of what the reviews found in Slice 4 (indexers), all fixed before the merge
 
 ## Where to see it
 
-- Each slice's plan is in [`docs/plans/`](plans/), with its probes and Decisions.
+- Each slice's plan is in [`docs/plans/m1/`](plans/m1/), with its probes and Decisions.
 - Each slice's pull request lists what changed and what the reviews found.
 - The commit history shows each task's commit and its fix commits.

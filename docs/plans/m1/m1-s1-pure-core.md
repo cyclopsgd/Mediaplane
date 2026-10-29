@@ -23,7 +23,7 @@ The data flows like this:
 - **Libraries:** Zod 4, `yaml` 2, `diff` (jsdiff), Commander.
 - **Tooling:** Vitest with v8 coverage, ESLint (typescript-eslint strict-type-checked), Prettier, and tsx to run the CLI from source.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md). Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md).
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md). Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md).
 
 ## Global Constraints
 

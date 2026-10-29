@@ -46,7 +46,7 @@ pinned by commit; BuildKit 0.34.0, buildkit-syft-scanner 1.12.0, actionlint 1.7.
 Docker 24.0.9 (Docker-in-Docker) and registry 3.1.2, pinned by digest. No new npm
 dependency. The image's Node goes from 24.21.0 to 24.22.1, a security release.
 
-**Spec:** [`docs/design/m1-engine-cli.md`](../design/m1-engine-cli.md), in particular:
+**Spec:** [`docs/design/m1-engine-cli.md`](../../design/m1-engine-cli.md), in particular:
 
 - §2.3, criterion 7 ("Honest docs"), §2.1 (the multi-arch image, CI/CD);
 - §3.3 (the `yaml` Document API for `migrate`), §4.2 (schema versions, externally managed
@@ -55,7 +55,7 @@ dependency. The image's Node goes from 24.21.0 to 24.22.1, a security release.
 - §7.2(2) (the socket proxy) and §7.2(7) (the supply chain), §8.2 (CI/CD: every PR,
   Renovate, releases), §9 (the docs), §11 (every slice's refinements).
 
-Slice context: [`docs/plans/m1-roadmap.md`](m1-roadmap.md): the S9 row and its list, "After
+Slice context: [`docs/plans/m1-roadmap.md`](../m1-roadmap.md): the S9 row and its list, "After
 M1" ("Updates happen only when you run them"), "CI architecture coverage", and every item
 in "S9 and S10 (before going public)" that its 2026-10-25 split note gives S9 (the licence,
 `main`'s protection, Renovate and the pins outside the catalog, publishing the image, the
