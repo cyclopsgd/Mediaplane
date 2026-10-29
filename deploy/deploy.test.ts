@@ -348,6 +348,8 @@ describe('the installer', () => {
     /** The context `docker context use` chose (default when none), and its endpoint. */
     context?: string;
     contextHost?: string;
+    /** `docker context show` or `docker context inspect` fails, as a broken setup's does. */
+    contextFails?: 'show' | 'inspect';
     /** A release's own deploy files (pinned to RELEASE), with no checkout around them. */
     release?: boolean;
     /** deploy/.env's text, when one is already there. */
@@ -418,8 +420,8 @@ esac
 case "$*" in
   'version --format {{.Server.Version}}') echo '${options.engine ?? '29.8.0'}' ;;
   'compose version --short') echo '${options.compose ?? '2.38.2'}' ;;
-  'context show') echo '${options.context ?? 'default'}' ;;
-  'context inspect '*) echo '${options.contextHost ?? ''}' ;;
+  'context show') ${options.contextFails === 'show' ? 'exit 1' : `echo '${options.context ?? 'default'}'`} ;;
+  'context inspect '*) ${options.contextFails === 'inspect' ? 'exit 1' : `echo '${options.contextHost ?? ''}'`} ;;
   'info --format {{.SecurityOptions}}') echo '${security}' ;;
   build*) exit ${options.buildFails === true ? '1' : '0'} ;;
   *' pull'*) exit ${options.pullFails === true ? '1' : '0'} ;;
@@ -654,7 +656,10 @@ exit 0
       inSandbox({}, (box) => {
         for (const [extra, said] of [
           [{ DOCKER_HOST: 'tcp://192.0.2.10:2376' }, 'DOCKER_HOST is set'],
-          [{ DOCKER_CONTEXT: 'elsewhere' }, 'DOCKER_CONTEXT is set'],
+          [
+            { DOCKER_CONTEXT: 'elsewhere' },
+            'DOCKER_CONTEXT is set to "elsewhere", and the installer takes only the default context, which uses this host\'s socket, ',
+          ],
         ] as const) {
           const result = box.run(extra);
           expect(result.code).toBe(1);
@@ -700,6 +705,29 @@ exit 0
           expect(result.code, contextHost).toBe(1);
           expect(result.err).toContain('the Docker context "elsewhere"');
           expect(result.err).toContain('docker context use default');
+          changedNothing(box, result.calls);
+          expect(result.calls.some((call) => call.startsWith('docker compose'))).toBe(
+            false,
+          );
+        });
+      }
+    },
+  );
+
+  it.runIf(asYou)(
+    "refuses a context it can't read, as a broken setup, before it changes anything (fail closed)",
+    async () => {
+      for (const [contextFails, said] of [
+        ['show', "couldn't read the Docker context in use (docker context show failed)"],
+        [
+          'inspect',
+          'the Docker context "elsewhere" is in use, and its endpoint (unreadable)',
+        ],
+      ] as const) {
+        await inSandbox({ context: 'elsewhere', contextFails }, (box) => {
+          const result = box.run();
+          expect(result.code, contextFails).toBe(1);
+          expect(result.err).toContain(said);
           changedNothing(box, result.calls);
           expect(result.calls.some((call) => call.startsWith('docker compose'))).toBe(
             false,

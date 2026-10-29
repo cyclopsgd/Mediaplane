@@ -129,7 +129,8 @@ you only a home it has just created, never a folder that was already there. With
     `unix:///run/docker.sock` pass);
   - any `DOCKER_CONTEXT` but `default`, even one whose endpoint is the local socket;
   - with neither set, a context chosen with `docker context use` that isn't `default`
-    and whose endpoint isn't one of those two sockets, or can't be read.
+    and whose endpoint isn't one of those two sockets, or can't be read, and a
+    `docker context show` that fails.
 
   Unset the variable, or run `docker context use default`, then run it again.
 

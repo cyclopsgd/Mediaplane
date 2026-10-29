@@ -115,14 +115,18 @@ case ${DOCKER_HOST:-} in
     ;;
 esac
 if [ -n "${DOCKER_CONTEXT:-}" ] && [ "$DOCKER_CONTEXT" != default ]; then
-  fail "DOCKER_CONTEXT is set, so docker would use another Docker than this host's, at $socket, which Mediaplane's container uses: unset DOCKER_CONTEXT, then run this again"
+  fail "DOCKER_CONTEXT is set to \"$DOCKER_CONTEXT\", and the installer takes only the default context, which uses this host's socket, $socket, as Mediaplane's container does: unset DOCKER_CONTEXT, then run this again"
 fi
 # Without either, docker uses the context `docker context use` chose; DOCKER_HOST, if set
-# (and it is this host's, above), overrides it.
+# (and it is this host's, above), overrides it. Docker 24's CLI always has `context show`,
+# so one that fails, or says nothing, is a broken setup: refused, as an unreadable
+# endpoint is (fail closed).
 if [ -z "${DOCKER_HOST:-}" ] && [ -z "${DOCKER_CONTEXT:-}" ]; then
   context=$(docker context show 2>/dev/null) || context=
+  [ -n "$context" ] ||
+    fail "couldn't read the Docker context in use (docker context show failed), so the installer can't tell whether docker uses this host's socket, $socket: run docker context show to see why, then run this again"
   case $context in
-    '' | default) ;;
+    default) ;;
     *)
       endpoint=$(docker context inspect --format '{{.Endpoints.docker.Host}}' "$context" 2>/dev/null) || endpoint=
       case $endpoint in
