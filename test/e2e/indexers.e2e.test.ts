@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { catalog } from '@mediaplane/catalog';
 import {
@@ -402,6 +402,9 @@ describe('indexers, through Prowlarr', () => {
       expect(mounts.find((m) => m.Destination === '/config')?.Source).toBe(
         join(home, 'appdata', 'flaresolverr'),
       );
+      // Owned by its image's user, 1000, whatever user the stack runs as (runAs fixed).
+      const owner = await stat(join(home, 'appdata', 'flaresolverr'));
+      expect([owner.uid, owner.gid]).toEqual([1000, 1000]);
       expect(await expectLinks(prowlarr, 'flaresolverr')).toBe(cloudflare);
       const visits = await indexer.browserVisits();
       const second = await addIndexer(

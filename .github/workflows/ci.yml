@@ -135,6 +135,11 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           token: ${{ secrets.DOCKERHUB_TOKEN }}
       - run: docker version && docker compose version
+      # Every image the suite runs, pulled first with longer retries than apply's own, so
+      # that a temporary registry error doesn't fail the job. apply pulls only what is
+      # missing, so what it does and reports is unchanged.
+      - name: Pull the images the tests run
+        run: pnpm exec tsx scripts/ci/pull-images.ts "${{ matrix.arch }}"
       # The kill-switch test's WireGuard server needs the kernel module, and can't load it
       # from inside its container. The test fails, and never skips, without it.
       - name: Load the WireGuard kernel module

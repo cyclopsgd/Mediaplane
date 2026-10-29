@@ -192,9 +192,12 @@ describe('Jellyfin, set up before it is published', () => {
       // The wizard was finished in the container that started unpublished, and the
       // publishing up recreated it.
       expect(
-        [ids[0] !== '' && ids[1] === ids[0], ids[2] !== ids[1]],
-        "Jellyfin's containers: set up in the unpublished one, published in a new one",
-      ).toEqual([true, true]);
+        ids[0] !== '' && ids[1] === ids[0],
+        "Jellyfin's wizard was finished in the container that started unpublished",
+      ).toBe(true);
+      expect(ids[2] !== ids[1], 'the publishing up made Jellyfin a new container').toBe(
+        true,
+      );
       expect(first.actions.find((a) => a.step === 'bootstrap')?.detail).toBe(
         'set up jellyfin and saved jellyfin.apiKey; published jellyfin',
       );

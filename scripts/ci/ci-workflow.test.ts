@@ -6,13 +6,29 @@ import { ROOT } from '../root';
 
 interface Job {
   env?: Record<string, string>;
-  steps: { run?: string; env?: Record<string, string> }[];
+  steps: { run?: string; uses?: string; env?: Record<string, string> }[];
 }
 const text = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
 const ci = parse(text) as {
   env?: Record<string, string>;
   jobs: Record<string, Job>;
 };
+
+describe("the end-to-end job's images", () => {
+  it('pulls every image the suite runs first, with retries, once logged in to Docker Hub', () => {
+    const steps = ci.jobs.e2e?.steps ?? [];
+    const at = (find: (step: Job['steps'][number]) => boolean) => steps.findIndex(find);
+    const login = at((step) => step.uses === './.github/actions/docker-hub-login');
+    const pull = at(
+      (step) =>
+        step.run === 'pnpm exec tsx scripts/ci/pull-images.ts "${{ matrix.arch }}"',
+    );
+    const suite = at((step) => step.run === 'pnpm test:e2e');
+    expect(login).toBeGreaterThanOrEqual(0);
+    expect(pull).toBeGreaterThan(login);
+    expect(suite).toBeGreaterThan(pull);
+  });
+});
 
 describe('the catalog scan switch in ci.yml (spec §7.2(7))', () => {
   it("sets CATALOG_SCAN to report on the catalog's image job, the owner's decision of 2026-10-27", () => {

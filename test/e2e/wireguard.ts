@@ -113,7 +113,6 @@ export async function startWireGuard(id: string): Promise<WireGuardServer> {
   let removed = false;
   const remove = async () => {
     if (removed) return;
-    removed = true;
     // Every removal runs, even when one before it fails; the failures are reported after.
     const failures: unknown[] = [];
     for (const step of [
@@ -134,6 +133,8 @@ export async function startWireGuard(id: string): Promise<WireGuardServer> {
         `could not remove all of ${id}'s WireGuard server`,
       );
     }
+    // Only once it is all gone: a removal that failed is tried again by the next call.
+    removed = true;
   };
   try {
     const serverKeys = wireguardKeys();

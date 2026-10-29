@@ -126,6 +126,70 @@ export async function expectWiringRemoved(project: string): Promise<void> {
   expect(wiring.stderr).toMatch(/not found/);
 }
 
+/** The names of this worker's Docker objects: every test's start with it. */
+export const WORKER_PREFIX = `mediaplane-e2e-${String(process.pid)}`;
+
+/** Whether `name` is one of this worker's (`<prefix>`, `<prefix>-…` or `<prefix>_…`). */
+export function ownName(name: string, prefix = WORKER_PREFIX): boolean {
+  return (
+    name === prefix || name.startsWith(`${prefix}-`) || name.startsWith(`${prefix}_`)
+  );
+}
+
+/**
+ * What this worker's tests left in Docker: the Compose projects, Mediaplane's own first
+ * (its container is on the stack's wiring network, which the stack's down can't remove
+ * while it is there), the other containers, and the networks.
+ */
+export async function leftovers(prefix = WORKER_PREFIX): Promise<{
+  projects: string[];
+  containers: string[];
+  networks: string[];
+}> {
+  const lines = async (...args: string[]) =>
+    (await docker(...args))
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '');
+  const all = await lines(
+    'ps',
+    '-a',
+    '--format',
+    '{{.Names}} {{.Label "com.docker.compose.project"}}',
+  );
+  const projects = [
+    ...new Set(
+      all.map((line) => line.split(' ')[1] ?? '').filter((p) => ownName(p, prefix)),
+    ),
+  ].sort((a, b) => Number(b.endsWith('-system')) - Number(a.endsWith('-system')));
+  const containers = all
+    .filter((line) => (line.split(' ')[1] ?? '') === '')
+    .map((line) => line.split(' ')[0] ?? '')
+    .filter((name) => ownName(name, prefix));
+  const networks = (await lines('network', 'ls', '--format', '{{.Name}}')).filter(
+    (name) => ownName(name, prefix),
+  );
+  return { projects, containers, networks };
+}
+
+/**
+ * Remove what this worker's tests left in Docker, and say what that was: a test that
+ * times out leaves its body running and skips the teardown at its end, so the suite's
+ * setup (test/e2e/setup.ts) runs this once each file is done.
+ */
+export async function removeLeftovers(prefix = WORKER_PREFIX): Promise<string[]> {
+  const left = await leftovers(prefix);
+  await runTeardown([
+    ...left.projects.map((project) => async () => {
+      const down = await composeDown(project);
+      if (down.code !== 0) throw new Error(`compose down ${project}: ${down.stderr}`);
+    }),
+    ...left.containers.map((name) => () => removeOrIgnoreMissing('rm', '-f', '-v', name)),
+    ...left.networks.map((name) => () => removeOrIgnoreMissing('network', 'rm', name)),
+  ]);
+  return [...left.projects, ...left.containers, ...left.networks];
+}
+
 /**
  * Remove a test project's containers, network and anonymous volumes, whatever it
  * contains. `-v` is the short form of `--volumes` in Compose v2 and v5.
@@ -243,11 +307,15 @@ export async function jsonBody<T>(response: Response, what: string): Promise<T> 
   }
 }
 
+/** The most of an arr's own words servarrFailure gives: one short line of CI's log. */
+export const SERVARR_FAILURE_MAX = 200;
+
 /**
  * Why an arr refused a request, safe for CI's public log: the status, and each validation
- * error's `propertyName: errorMessage`, with every one of `secrets` replaced. Never the
- * raw body, nor an error's `attemptedValue`, which can be the key under test. A body that
- * isn't such a list gives only its length.
+ * error's `propertyName: errorMessage`, with every one of `secrets` replaced, on one line
+ * cut to SERVARR_FAILURE_MAX characters. Never the raw body, nor an error's
+ * `attemptedValue`, which can be the key under test. A body that isn't such a list gives
+ * only its length.
  */
 export async function servarrFailure(
   response: Response,
@@ -271,12 +339,15 @@ export async function servarrFailure(
     ) as Record<string, unknown>;
     return `${text(propertyName)}: ${text(errorMessage)}`;
   });
-  return secrets
+  // Each secret replaced before the line is cut, so that no part of one is left.
+  const line = secrets
     .filter((secret) => secret !== '')
-    .reduce(
-      (message, secret) => message.replaceAll(secret, '***'),
-      `${status}: ${said.join('; ')}`,
-    );
+    .reduce((message, secret) => message.replaceAll(secret, '***'), said.join('; '))
+    .replaceAll(/\s+/g, ' ')
+    .trim();
+  const cut =
+    line.length > SERVARR_FAILURE_MAX ? `${line.slice(0, SERVARR_FAILURE_MAX)}…` : line;
+  return `${status}: ${cut}`;
 }
 
 /**

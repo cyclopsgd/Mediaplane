@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import {
   COMPOSE_PATH,
   createDockerRuntime,
@@ -13,8 +13,8 @@ import {
 } from '@mediaplane/engine';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  buildImage,
   composeDown,
+  deployMediaplane,
   docker,
   ejectArguments,
   expectWiringRemoved,
@@ -24,17 +24,14 @@ import {
   removeHome,
   REPO,
   setServarrSetting,
-  TEARDOWN_MS,
+  type DeployedMediaplane,
 } from './helpers';
 
 const ID = `mediaplane-e2e-${String(process.pid)}`;
-const TAG = `mediaplane-e2e:${String(process.pid)}-deploy`;
-/** Mediaplane's own project, deployed from mediaplane.compose.yaml. */
-const SYSTEM = `${ID}-system`;
 /** The stack Mediaplane manages from inside its container. */
 const STACK = `${ID}-stack`;
-const CONTAINER = `${ID}-mediaplane`;
-const DEPLOY = join(REPO, 'deploy', 'mediaplane.compose.yaml');
+/** Mediaplane's own container, as deployMediaplane names it. */
+const CONTAINER = `${STACK}-mediaplane`;
 const SHIM = join(REPO, 'deploy', 'mediaplane');
 const UID = String(process.getuid?.() ?? 1000);
 const GID = String(process.getgid?.() ?? 1000);
@@ -59,28 +56,8 @@ apps:
 
 let home = '';
 let data = '';
-let override = '';
-let env: NodeJS.ProcessEnv = {};
-
-/** docker compose on Mediaplane's own project, as a user would run it. */
-function system(args: readonly string[], timeoutMs = 300_000): Promise<ExecResult> {
-  return nodeExec(
-    'docker',
-    [
-      'compose',
-      '-p',
-      SYSTEM,
-      '--env-file',
-      '/dev/null',
-      '-f',
-      DEPLOY,
-      '-f',
-      override,
-      ...args,
-    ],
-    { env, cwd: '/', timeoutMs },
-  );
-}
+/** Mediaplane, deployed as a user deploys it: undefined until it is. */
+let deployed: DeployedMediaplane | undefined;
 
 /** A mediaplane command, run in its container through the host shim. */
 function mediaplane(...args: string[]): Promise<ExecResult> {
@@ -181,35 +158,10 @@ function close(server: Server): Promise<void> {
 
 describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
   beforeAll(async () => {
-    await buildImage(TAG);
     home = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-'));
     data = await mkdtemp(join(tmpdir(), 'mediaplane-e2e-data-'));
     await writeFile(join(home, 'stack.yaml'), smallStack(data));
-    override = join(
-      await mkdtemp(join(tmpdir(), 'mediaplane-e2e-system-')),
-      'override.yaml',
-    );
-    await writeFile(
-      override,
-      [
-        'services:',
-        '  mediaplane:',
-        `    container_name: ${CONTAINER}`,
-        '    environment:',
-        `      MEDIAPLANE_COMPOSE_PROJECT: ${STACK}`,
-        '',
-      ].join('\n'),
-    );
-    env = {
-      ...process.env,
-      MEDIAPLANE_IMAGE: TAG,
-      MEDIAPLANE_HOME: home,
-      MEDIAPLANE_UID: UID,
-      MEDIAPLANE_GID: GID,
-      DOCKER_GID: String((await stat('/var/run/docker.sock')).gid),
-    };
-    const up = await system(['up', '--detach', '--wait']);
-    if (up.code !== 0) throw new Error(`mediaplane-system did not start:\n${up.stderr}`);
+    deployed = await deployMediaplane({ home, stack: STACK });
   }, 1_200_000);
 
   afterAll(async () => {
@@ -228,26 +180,16 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
       const result = await command;
       expect(result.code, result.stderr).toBe(0);
     };
-    // The deployment first: while Mediaplane's container is on the stack's wiring
-    // network, the stack's down can't remove that network, and leaves it behind.
-    if (override !== '') {
-      await attempt(() => succeeds(system(['down', '--remove-orphans'], TEARDOWN_MS)));
-    }
+    // The deployment first, and its image: while Mediaplane's container is on the
+    // stack's wiring network, the stack's down can't remove that network.
+    const removing = deployed;
+    if (removing !== undefined) await attempt(() => removing.remove());
     await attempt(() => succeeds(composeDown(STACK)));
     await attempt(() => expectWiringRemoved(STACK));
-    if (override !== '') {
-      await attempt(() => rm(dirname(override), { recursive: true, force: true }));
-    }
     if (home !== '') await attempt(() => removeHome(home));
     if (data !== '') await attempt(() => removeAsRoot(data));
-    // Last, once no container uses the image.
-    await attempt(() =>
-      succeeds(
-        nodeExec('docker', ['image', 'rm', TAG], { cwd: '/', timeoutMs: TEARDOWN_MS }),
-      ),
-    );
     if (failures.length > 0) throw new AggregateError(failures, 'teardown failed');
-    // Above the sum of the six bounded commands (6 × TEARDOWN_MS, 720 s).
+    // Above the sum of the bounded commands (6 × TEARDOWN_MS, 720 s).
   }, 900_000);
 
   it('runs hardened, as the home owner, without the Docker socket', async () => {
@@ -491,8 +433,8 @@ describe('Mediaplane deployed with mediaplane.compose.yaml', () => {
     });
     expect([signIn.status, signIn.headers.get('location')]).toEqual([302, '/']);
     expect(await networksOf(CONTAINER)).toEqual([
+      `${STACK}-system_docker-api internal=true`,
       `${STACK}_wiring internal=true`,
-      `${SYSTEM}_docker-api internal=true`,
     ]);
     const routes = await nodeExec('docker', ['exec', CONTAINER, 'ip', 'route'], {
       cwd: '/',

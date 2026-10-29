@@ -7,6 +7,8 @@ export default defineConfig({
       'catalog/**/*.test.ts',
       'scripts/**/*.test.ts',
       'deploy/**/*.test.ts',
+      // The end-to-end harness's own unit tests; the suite itself is vitest.e2e.config.ts's.
+      'test/e2e/*.unit.test.ts',
     ],
     coverage: {
       provider: 'v8',

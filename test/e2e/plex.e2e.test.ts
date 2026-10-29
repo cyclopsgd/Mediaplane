@@ -636,6 +636,23 @@ describe.skipIf(PLEX_TOKEN_FILE === undefined)(
           ...claims,
           after.serverToken,
         ]);
+        // Two claim tokens more: the unpublished start's PLEX_CLAIM, which the image
+        // ignores for a Plex signed out (its Preferences.xml keeps the attribute), and the
+        // one the claim through Plex's API posts. None of them, nor Plex's new token, is in
+        // the files it wrote, change record included, nor in .env.
+        expect(claims.length, 'two claim tokens more, for the start and the claim').toBe(
+          3,
+        );
+        const reclaimSecrets = [...plexSecrets, after.serverToken, ...claims];
+        expectNoSecret('what the claim wrote', await writtenFiles(home), [
+          ...secrets,
+          ...reclaimSecrets,
+        ]);
+        expectNoSecret(
+          '.env after the claim',
+          await writtenFiles(home, { env: true }),
+          reclaimSecrets,
+        );
         expect((await apply(options)).outcome).toBe('no-changes');
       } catch (failure) {
         await removeAll().catch((also: unknown) => {
