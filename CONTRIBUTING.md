@@ -10,6 +10,9 @@ corepack enable
 pnpm install        # also points git at the repo's hooks in .githooks/
 ```
 
+To run Mediaplane itself from the checkout, against this machine's Docker, see
+[Try Mediaplane from source](docs/try-from-source.md).
+
 ## Everyday commands
 
 - `pnpm test`: unit tests (Vitest).
