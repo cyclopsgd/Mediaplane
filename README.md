@@ -345,7 +345,7 @@ and with Plex signs you in.
 
 ## Try it (from source)
 
-`mediaplane plan` already checks a real host and shows exactly what `apply` would do:
+`mediaplane plan` checks a real host and shows exactly what `apply` would do:
 
 - the Compose file it would write;
 - the containers it would create, recreate, start, restart or remove (`restart` is for
@@ -593,7 +593,7 @@ each slice delivered, and what moved to M2.
 
 - **[Running in a container](deploy/README.md):** install, update, and run without the
   socket proxy.
-- **[Architecture](docs/architecture.md):** how the pieces fit, as built so far.
+- **[Architecture](docs/architecture.md):** how the pieces fit, as built.
 - **[Releasing](docs/releasing.md):** how a release is cut, what it publishes, and how to
   check one.
 - **[`stack.yaml` reference](docs/reference/stack-yaml.md):** every field, generated from

@@ -16,7 +16,9 @@ there is, and nothing in Mediaplane needs Ansible.
 - **`--json` prints one document, and nothing else, on standard output:** the command's
   own, or `mediaplane.error/v1` when it stops before it can print its own, a mistyped
   option included. Each names its shape (`schema`) and says whether the command did what
-  it was asked (`ok`). The [`--json` reference](reference/json.md) lists every field, and
+  it was asked (`ok`). The exit code says the same, except that `plan` and `drift` print
+  `ok: true` and exit 2 when they found something, and `vpn-check` prints `ok: true` and
+  exits 1 on a leak. The [`--json` reference](reference/json.md) lists every field, and
   each document has a JSON Schema beside it, in [`reference/json/`](reference/json/).
 - **The exit codes say what happened,** the same way every time. The
   [CLI reference](reference/cli.md) lists each command's. The ones a playbook uses:
@@ -29,8 +31,11 @@ there is, and nothing in Mediaplane needs Ansible.
     add; 1 when nothing was kept (the value hasn't drifted, or can't be kept) or on an
     error.
   - `migrate`: 0 when `stack.yaml` is now the version this release writes, or already
-    was, or, with `managed_by: external`, when it gave the file; 1 when it wasn't
-    rewritten (a newer or unknown version, an unwritable file) or on an error.
+    was; 1 when it wasn't rewritten (a newer or unknown version, an unwritable file), or
+    on an error. With `managed_by: external` and a change due, it is 1 too (code
+    `migrate.external`), and `text` holds the file as it should be.
+  - `vpn-check`: 0 when qBittorrent reaches the internet only through the VPN; 1 on a
+    leak or the VPN down (`ok` is still true; `verdict` says which), or on an error.
   - `status`, `history` and `credentials`: 0, or 1 on an error, which includes no such
     record or app.
 - **A folder or a named pipe where `stack.yaml` should be fails at once,** with exit 1,
@@ -40,7 +45,7 @@ there is, and nothing in Mediaplane needs Ansible.
   with `"changed": false` and `"outcome": "no-changes"`, and writes no change record.
   That is a playbook's `changed_when`.
 - **Within v1, a document only grows.** A later release may add a field, or a value to a
-  field's values (S10b added `remove` to `wiring[].action`), but never changes what one
+  field's values (`remove` was added to `wiring[].action`), but never changes what one
   means: that would be v2. So read the fields you know, ignore the others, and stop at a
   value you don't know rather than guess what it means.
 - **A diagnostic's `code` is stable;** its `message` is for people, and may change. The
@@ -78,9 +83,9 @@ docker exec mediaplane mediaplane drift --json
 From a checkout, `pnpm --silent mediaplane <command> --json` does the same, with
 `--home` for the home.
 
-- **`plan`, then `apply`.** `plan --json` exits 2 when there is something to do. `apply
---yes --json` then does it; its `actions` say what each step did, and its `recordId`
-  names the change record.
+- **`plan`, then `apply`.** `plan --json` exits 2 when there is something to do.
+  `apply --yes --json` then does it; its `actions` say what each step did, and its
+  `recordId` names the change record.
 - **Take an app out** by taking its line out of `stack.yaml`. `plan` lists its container
   as `remove`, and each resource Mediaplane made for it in the other apps as a wiring
   `remove`; `apply` removes them, and keeps the app's `appdata/`. What it leaves, such
@@ -104,8 +109,9 @@ Mediaplane never writes the file.
   to add instead: `line` in `mediaplane.keep/v1`, with `"written": false` and the warning
   `keep.external`. Add the line to your template. Until `stack.yaml` holds it, `apply`
   puts back what it applied.
-- `mediaplane migrate` writes nothing either, and gives the file as it should be, as
-  `text`.
+- `mediaplane migrate` writes nothing either, and exits 1 (`migrate.external`) when there
+  is a change to make, giving the file as it should be, as `text`. Put that in your
+  template.
 
 ## Secrets
 

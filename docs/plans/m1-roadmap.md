@@ -40,7 +40,10 @@ Where M1 stands (the README shows the same):
   `deploy/install.sh`.
 - **M1 is done.** Every item below is settled: done, or moved to M2 with its reason. One
   stays open, and isn't M1 work: "Before the first real migration" applies when a
-  migration is first planned, and none is. [After M1](#after-m1) has what comes next.
+  migration is first planned, and none is. The owner's steps (the Renovate app, branch
+  protection, private vulnerability reporting, the first release) are listed in the
+  completion checklist of [S10c's plan](m1/m1-s10c-contract.md). [After M1](#after-m1) has
+  what comes next.
 
 ## Slices
 
@@ -1149,7 +1152,8 @@ password, which are S3c's (and listed again below).
   - **Done in S10c,** probed with eleven releases of Compose: 2.29.7 to 2.40.3 agree, and
     so do 5.0.2 to 5.6.1, but a 2.x and a 5.x differ for every service but Byparr, and
     2.24.0 differs from later 2.x for Gluetun and qBittorrent. `docs/releasing.md` says
-    so, and Renovate's pull request for a bump of the image's `docker` says what to check.
+    so, and, once the Renovate app is installed (an owner's step), Renovate's pull request
+    for a bump of the image's `docker` says what to check.
 - **From S9's reviews, for S10c.** None hides a fault in S9's releases:
   - a test that Renovate can read the tag of each image pinned outside the catalog
     (busybox, Trivy, gitleaks, actionlint, Node, Docker, the socket proxy, BuildKit,

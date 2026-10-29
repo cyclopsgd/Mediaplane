@@ -2475,10 +2475,15 @@ These keep the spec's intent. They are grouped by the slice whose plan made them
 - **Compose versions** (§11, Slice 9): probed with eleven releases of Compose, the config
   hash of every service of two stacks is the same within 2.29 to 2.40, and within 5.0 to
   5.6, but differs between 2.x and 5.x for every service but Byparr; 2.24.0 differs from
-  later 2.x for Gluetun and qBittorrent. `docs/releasing.md` says so, and Renovate's pull
-  request for a bump of the image's `docker` says what to check.
+  later 2.x for Gluetun and qBittorrent. `docs/releasing.md` says so, and, once the Renovate
+  app is installed (an owner's step), Renovate's pull request for a bump of the image's
+  `docker` says what to check.
+- **Renovate can read every pinned tag** (§8.2; S9's review): a test finds each pinned
+  tag wherever it is written, and a catalog tag must name a version, never one that moves.
 - **The installer refuses a `DOCKER_HOST` or `DOCKER_CONTEXT`** that points `docker` away
-  from the socket it checks, which Mediaplane's container mounts (§4.4; S9's review).
+  from the socket it checks, which Mediaplane's container mounts (§4.4; S9's review): a
+  `DOCKER_HOST` other than that socket, any `DOCKER_CONTEXT` but `default`, and a
+  `docker context use` context whose endpoint isn't it.
 - **The docs that complete M1** (§9): the full README, with the comparison of §1.3 as a
   list; the guide to deploying with automation, with one short Ansible example, which a
   test checks against the CLI (§1.6: Mediaplane ships no role or collection); the

@@ -30,8 +30,8 @@ generated docs are stale.
 A field added to what a command prints with `--json` must be added to its document in
 `packages/cli/src/contract.ts` too, with what it means: until it is, `pnpm typecheck`
 fails (`contract.test.ts`), and so do the CLI tests that print it (`run.test.ts` checks
-every document it prints). Within v1 a
-document only gains fields and values; a field that changes meaning needs a v2.
+every document it prints). Within v1 a document only gains fields and values; a field
+that changes meaning needs a v2.
 
 The unit tests use in-memory fakes for Docker and the host. The apps' APIs are fake
 HTTP servers on 127.0.0.1 (`fakeHttpApp` in `@mediaplane/engine/testing`, §8.1(2) of the
@@ -212,8 +212,9 @@ An app is one folder in `catalog/`, and nothing else in the engine changes. Step
    runs on both architectures.
 7. **Run `pnpm docs:generate`.** The `stack.yaml` reference, its JSON Schema and the
    app's README facts now name it.
-8. **Its pin stays current by itself:** Renovate's catalog manager reads every
-   `catalog/*/app.ts`. A tag that isn't a plain version, such as linuxserver.io's
+8. **Keep its pin current.** `renovate.json` is set up so that Renovate's catalog manager
+   reads every `catalog/*/app.ts`; it takes effect once the Renovate app is installed (an
+   owner's step). A tag that isn't a plain version, such as linuxserver.io's
    `-ls<revision>`, needs a versioning rule in `renovate.json`, which
    `scripts/supply-chain.test.ts` checks.
 9. **Run the full check** (above), and `pnpm test:e2e`.
