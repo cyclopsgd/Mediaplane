@@ -1005,7 +1005,7 @@ pass, down or leak
   `CHANGELOG.md`, from the Conventional Commits on `main` (the first release is 0.1.0).
   Merging it tags the release.
   [Releasing](releasing.md) has the whole process.
-- **The image.** From the first release, `ghcr.io/cyclopsgd/mediaplane:<version>` is
+- **The image.** Each release's image, `ghcr.io/cyclopsgd/mediaplane:<version>`, is
   one index of two images,
   amd64 and arm64, each built natively on its own runner, with an SBOM and build
   provenance attached, and a signed attestation of its provenance beside it. Its times

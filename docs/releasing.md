@@ -3,8 +3,7 @@
 Mediaplane's releases come from
 [release-please](https://github.com/googleapis/release-please) and the release workflow,
 `.github/workflows/release.yml` (spec §8.2). This page says
-how a release is cut, what it publishes, and how to check one. There has been no
-release yet: everything below happens from the first one.
+how a release is cut, what it publishes, and how to check one.
 
 ## How a release is cut
 
@@ -63,9 +62,10 @@ digest also covers the attestations, which hold the times of the build, so runni
 image job again gives another index digest, and so other deploy files, which name the
 image. Those are the same bytes only for the same image and the same tools.
 
-For the first release only, once its image is published: make the package public (on
-GitHub, Packages, `mediaplane`, Package settings, Change visibility, Public). Until then
-nobody else can pull the image, so installing from a release and checking the image fail.
+The package was made public once the first release's image was published (on GitHub,
+Packages, `mediaplane`, Package settings, Change visibility, Public). GitHub makes a new
+package private, and while a package is private nobody else can pull its image:
+installing from a release and checking the image fail.
 
 ## What never publishes
 
@@ -201,7 +201,7 @@ gh release delete v0.1.0 --cleanup-tag --repo cyclopsgd/Mediaplane
 
 ## Checking a release
 
-From the first release, with the version you got (`0.1.0` is an example):
+With the version you got (`0.1.0` is an example):
 
 ```bash
 sha256sum --check SHA256SUMS

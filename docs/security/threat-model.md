@@ -600,7 +600,7 @@ Controls today:
     file where Trivy can't see them, and fails on a critical advisory.
   - actionlint and shellcheck check the workflows and the shell scripts.
 - gitleaks scans the full history on every push to `main` and every pull request.
-- From the first release, each image is published with an SBOM and build provenance,
+- Each release's image is published with an SBOM and build provenance,
   and a signed attestation of its provenance; the release's deploy files name it by
   digest, and they and `SHA256SUMS` are attested too. A release publishes its image and
   deploy files only for a commit CI passed.

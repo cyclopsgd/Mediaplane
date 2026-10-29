@@ -14,7 +14,7 @@ Mediaplane runs as two containers in their own Compose project, `mediaplane-syst
 The stack Mediaplane deploys is a separate Compose project, `mediaplane`, so `apply` can
 never touch Mediaplane itself.
 
-> Mediaplane is pre-alpha. Sonarr and Radarr are linked to qBittorrent and the media
+> Mediaplane is pre-1.0. Sonarr and Radarr are linked to qBittorrent and the media
 > server, Jellyfin or Plex, Prowlarr to them, and Seerr to all three. On a home network,
 > `init` suggests publishing the web UIs on your LAN. When `apply` runs the stack,
 > Jellyfin's startup wizard, an unclaimed Plex and Seerr's setup are not published while
@@ -46,11 +46,11 @@ never touch Mediaplane itself.
 
 There are two ways in, both as your normal user, not root:
 
-- **From a release,** from the first one: its deploy files name its image,
+- **From a release,** the usual way: its deploy files name its image,
   `ghcr.io/cyclopsgd/mediaplane:<version>`, pinned by its digest, and `install.sh` pulls
-  it. There has been no release yet.
-- **From a checkout,** which builds the image here. Until the first release, this is
-  the way.
+  it.
+- **From a checkout,** which builds the image here: the way to try `main`, or to work on
+  Mediaplane.
 
 ### From a release
 
@@ -377,10 +377,9 @@ that the next `apply` changes nothing: see the note on Compose below.
 Don't update while a `mediaplane` command runs: recreating the container stops it
 partway. The next `apply` finishes the job.
 
-**From a release** (from the first one): unpack the next release's deploy files over the
-old ones, in the same folder, then run its installer. It keeps your `deploy/.env`, pulls
-the new image, then recreates Mediaplane's container (and the proxy's, if its pin
-changed):
+**From a release:** unpack the next release's deploy files over the old ones, in the same
+folder, then run its installer. It keeps your `deploy/.env`, pulls the new image, then
+recreates Mediaplane's container (and the proxy's, if its pin changed):
 
 ```bash
 version=0.2.0

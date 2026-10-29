@@ -314,8 +314,8 @@ lighter route, or as a slice when it is big or touches security.
     parsing; the migrate guide's regex test missing "it is 0 too".
   - `PINNED` (`scripts/ci/pull-images.ts`) learns a registry with a port, with the
     first pinned image that has one.
-  - At the first release: stamp the published JSON Schemas' `$id` with the release's
-    tag, so a release's files don't share `main`'s `$id`.
+  - At each release: stamp the published JSON Schemas' `$id` with the release's tag, so
+    a release's files don't share `main`'s `$id`, as 0.1.0's do.
 - **M3: more apps.** SABnzbd, Audiobookshelf, Bookshelf (experimental), Bazarr,
   Recyclarr, Portainer and Homepage.
   - With a third app whose setup can be held: `heldThrough` takes the level and message
