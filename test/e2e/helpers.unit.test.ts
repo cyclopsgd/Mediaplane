@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ownName, SERVARR_FAILURE_MAX, servarrFailure } from './helpers';
+import { ownImage, ownName, SERVARR_FAILURE_MAX, servarrFailure } from './helpers';
 
 const KEY = 'f'.repeat(32);
 
@@ -53,6 +53,34 @@ describe('ownName', () => {
       'other-mediaplane-e2e-123',
     ]) {
       expect(ownName(name, prefix), name).toBe(false);
+    }
+  });
+});
+
+describe('ownImage', () => {
+  const prefix = 'mediaplane-e2e-123';
+
+  it("is the tags this worker's tests build, and no other image or tag", () => {
+    for (const image of [
+      'mediaplane-e2e:123',
+      'mediaplane-e2e:123-vpn',
+      'mediaplane-e2e:123-a',
+      '127.0.0.1:49152/mediaplane-e2e:123-b',
+    ]) {
+      expect(ownImage(image, prefix), image).toBe(true);
+    }
+    for (const image of [
+      'mediaplane-e2e:1234',
+      'mediaplane-e2e:1234-vpn',
+      'mediaplane-e2e:latest',
+      'mediaplane-e2e:<none>',
+      'mediaplane:123',
+      'other/mediaplane-e2e:123',
+      'registry.example/mediaplane-e2e:123',
+      'busybox:123',
+      'busybox:1.37.0',
+    ]) {
+      expect(ownImage(image, prefix), image).toBe(false);
     }
   });
 });

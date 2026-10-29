@@ -30,7 +30,11 @@ export function suiteFiles(root = ROOT): string[] {
   return [...tests.sort(), 'Dockerfile', 'deploy/mediaplane.compose.yaml'];
 }
 
-/** Every image the end-to-end suite runs on `arch`, once each, sorted. */
+/**
+ * Every image the end-to-end suite runs on `arch`, once each, sorted. Plex's is among
+ * them on every run: the nightly job's real claim is skipped without a plex.tv token,
+ * but plex.e2e.test.ts's first test starts Plex against a fake plex.tv in every run.
+ */
 export function suiteImages(arch: Arch, root = ROOT): string[] {
   const pinned = suiteFiles(root).flatMap((path) => [
     ...readFileSync(join(root, path), 'utf8').matchAll(PINNED),

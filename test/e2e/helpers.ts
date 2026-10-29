@@ -137,14 +137,27 @@ export function ownName(name: string, prefix = WORKER_PREFIX): boolean {
 }
 
 /**
+ * Whether `reference` (`<repository>:<tag>`) is an image tag this worker's tests build:
+ * `mediaplane-e2e:<pid>` or `mediaplane-e2e:<pid>-…`, also as pushed to a local registry
+ * (`127.0.0.1:<port>/mediaplane-e2e:<pid>-…`). No other image or tag is.
+ */
+export function ownImage(reference: string, prefix = WORKER_PREFIX): boolean {
+  const pid = prefix.replace(/^mediaplane-e2e-/, '');
+  const match = /^(?:127\.0\.0\.1:\d+\/)?mediaplane-e2e:(.+)$/.exec(reference);
+  const tag = match?.[1];
+  return tag !== undefined && (tag === pid || tag.startsWith(`${pid}-`));
+}
+
+/**
  * What this worker's tests left in Docker: the Compose projects, Mediaplane's own first
  * (its container is on the stack's wiring network, which the stack's down can't remove
- * while it is there), the other containers, and the networks.
+ * while it is there), the other containers, the networks, and the image tags they built.
  */
 export async function leftovers(prefix = WORKER_PREFIX): Promise<{
   projects: string[];
   containers: string[];
   networks: string[];
+  images: string[];
 }> {
   const lines = async (...args: string[]) =>
     (await docker(...args))
@@ -169,7 +182,10 @@ export async function leftovers(prefix = WORKER_PREFIX): Promise<{
   const networks = (await lines('network', 'ls', '--format', '{{.Name}}')).filter(
     (name) => ownName(name, prefix),
   );
-  return { projects, containers, networks };
+  const images = (
+    await lines('image', 'ls', '--format', '{{.Repository}}:{{.Tag}}')
+  ).filter((reference) => ownImage(reference, prefix));
+  return { projects, containers, networks, images };
 }
 
 /**
@@ -186,8 +202,10 @@ export async function removeLeftovers(prefix = WORKER_PREFIX): Promise<string[]>
     }),
     ...left.containers.map((name) => () => removeOrIgnoreMissing('rm', '-f', '-v', name)),
     ...left.networks.map((name) => () => removeOrIgnoreMissing('network', 'rm', name)),
+    // Last, once no container uses an image: only the tags the tests built, by name.
+    ...left.images.map((tag) => () => removeOrIgnoreMissing('image', 'rm', tag)),
   ]);
-  return [...left.projects, ...left.containers, ...left.networks];
+  return [...left.projects, ...left.containers, ...left.networks, ...left.images];
 }
 
 /**

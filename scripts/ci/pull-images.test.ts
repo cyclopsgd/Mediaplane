@@ -23,6 +23,10 @@ describe('suiteImages', () => {
         name,
       ).toBe(true);
     }
+    // On every run, token or not: plex.e2e.test.ts's fake plex.tv test starts Plex.
+    const plex = catalog.find((def) => def.id === 'plex');
+    expect(plex).toBeDefined();
+    expect(images).toContain(pinnedImage(plex as NonNullable<typeof plex>));
     expect(images).toEqual([...new Set(images)].sort());
     for (const image of images) expect(image).toMatch(/@sha256:[0-9a-f]{64}$/);
   });
