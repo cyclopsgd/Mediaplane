@@ -496,55 +496,42 @@ export async function planStack(
           (app.def.bootstrap?.signsInWith ?? []).includes(name),
         ),
     );
+  // An app whose appdata can't say whether its setup is done, asked itself: set up again,
+  // unpublished, unless it said its setup is done (fail closed: one that couldn't be asked
+  // is too). Its wiring is then checked after the start, as for any app set up first.
+  const reopened = (setups.ask ?? []).filter((app) => open[app] !== false);
+  // One set up afresh signs in with what you rotate anyway: it is listed once, as reopened.
   const signingInAgain = stack.apps.filter(
     (app) =>
       signsInAgain(app.def.id) &&
+      !reopened.includes(app.def.id) &&
       ![...bootstrap, ...held].some((b) => b.app === app.def.id),
   );
-  // Held like any other setup: one that signs in with what you rotate never signs in
-  // with a password apply is yet to generate (Seerr's Plex sign-in takes plex.token only).
-  const signing = await withoutSignInsToCome(
+  // Held like any other setup, in one pass with the rest, so that the order of the
+  // catalog never matters: one that signs in with what you rotate, or is set up afresh,
+  // never signs in with a password apply is yet to generate, nor through an app that
+  // lacks it, unless that app's own setup, in the plan too, makes the admin with it first.
+  const later = await withoutSignInsToCome(
     stack,
-    signingInAgain.map((app) => ({ app: app.def.id, unpublished: false })),
+    [
+      ...signingInAgain.map((app) => ({ app: app.def.id, unpublished: false })),
+      ...reopened.map((app) => ({ app, unpublished: true })),
+    ],
     toCome,
   );
-  const signingThrough = await heldThrough(
+  const through = await heldThrough(
     stack,
-    signing.changes,
-    [...held, ...signing.held],
+    [...bootstrap, ...later.changes],
+    [...held, ...later.held],
     toCome,
   );
-  bootstrap = [...bootstrap, ...signingThrough.changes];
-  held.push(...signing.held, ...signingThrough.held);
-  diagnostics.push(...signing.diagnostics, ...signingThrough.diagnostics);
-  // An app whose appdata can't say whether its setup is done, asked itself: set up again,
-  // unpublished, unless it said its setup is done (fail closed: one that couldn't be asked
-  // is too). Its wiring is then checked after the start, as for any app set up first. Held
-  // like any other setup, if it would sign in with a password never given, or through an
-  // app that lacks it.
-  const reopened = (setups.ask ?? []).filter((app) => open[app] !== false);
+  bootstrap = through.changes;
+  held.push(...later.held, ...through.held);
+  diagnostics.push(...later.diagnostics, ...through.diagnostics);
+  if (hasErrors(diagnostics)) return failed(diagnostics);
   if (reopened.length > 0) {
     const theirs = (resource: string) =>
       reopened.some((app) => resource === app || resource.startsWith(`${app}.`));
-    const again = await withoutSignInsToCome(
-      stack,
-      reopened.map((app) => ({ app, unpublished: true })),
-      toCome,
-    );
-    const through = await heldThrough(
-      stack,
-      again.changes,
-      [...held, ...again.held],
-      toCome,
-    );
-    // Set up afresh, unpublished: Seerr, found set up when it is, signs in again.
-    bootstrap = [
-      ...bootstrap.filter((b) => !reopened.includes(b.app)),
-      ...through.changes,
-    ];
-    held.push(...again.held, ...through.held);
-    diagnostics.push(...again.diagnostics, ...through.diagnostics);
-    if (hasErrors(diagnostics)) return failed(diagnostics);
     containers = recreating(containers, new Set(reopened));
     wiring = wiring.map((change) =>
       theirs(change.resource)

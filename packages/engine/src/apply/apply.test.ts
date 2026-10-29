@@ -3427,6 +3427,13 @@ describe('apply: a first-run setup that makes no key, after another', () => {
     const failed = await run();
     expect(failed.outcome).toBe('failed');
     expect(failed.diagnostics.at(-1)?.message).toContain('sonarr at http://sonarr:8989');
+    // Not asked again whether its setup is open, once it wasn't ready in time: that would
+    // only wait as long again before the failure is told.
+    expect(
+      setup.app.requests
+        .filter((r) => r.path.startsWith('/signed-in'))
+        .map((r) => r.path),
+    ).toEqual([]);
     // Jellyfin is published once set up; Sonarr stays without its ports in that up.
     expect(ups).toEqual([
       'jellyfin sonarr unpublished; jellyfin open, sonarr done',
@@ -3615,6 +3622,77 @@ describe('apply: a first-run setup that makes no key, after another', () => {
     expect(setup.signIn.signedIn.length).toBe(signedInBefore);
     expect(result.actions.find((a) => a.resource === 'sonarr')?.result).toBe('skipped');
     expect(ups.slice(before)).toEqual(['sonarr unpublished; jellyfin done, sonarr open']);
+  });
+
+  /**
+   * SIGN_IN_CATALOG, with Sonarr's setup signing in again when admin.password is rotated,
+   * as Seerr's does with plex.token: what a later catalog could have on a Jellyfin stack.
+   */
+  const SIGNS_IN_AGAIN: Catalog = SIGN_IN_CATALOG.map((def) =>
+    def.id === 'sonarr' && def.bootstrap !== undefined
+      ? { ...def, bootstrap: { ...def.bootstrap, signsInWith: ['admin.password'] } }
+      : def,
+  );
+
+  /** Sonarr set up by Mediaplane, and asked itself from then on: its file can't be read. */
+  async function askedStack() {
+    const stack = await signInStack(SIGNS_IN_AGAIN);
+    stack.setup.signIn.done = true;
+    stack.setup.signIn.owner = 'admin';
+    await mkdir(join(stack.home, 'appdata', 'sonarr', 'signed-in.txt'), {
+      recursive: true,
+    });
+    expect((await stack.run()).outcome).toBe('success');
+    const rotated = () =>
+      plan(
+        options(
+          stack.home,
+          fakeDocker(stack.home, { addresses: stack.setup.addresses }),
+          {
+            catalog: SIGNS_IN_AGAIN,
+            wiring: stack.setup.seams,
+            rotate: ['admin.password'],
+          },
+        ),
+      );
+    return { ...stack, rotated };
+  }
+
+  it('holds once, with one warning, a setup found open that signs in with what is rotated, through an app without the password', async () => {
+    const { home, setup, rotated } = await askedStack();
+    const store = await readSecretStore(home);
+    await writeSecretStore(home, {
+      ...store,
+      shared: { ...store.shared, adminPasswordNotIn: ['jellyfin'] },
+    });
+    setup.signIn.done = false;
+    setup.signIn.owner = undefined;
+    const held = await rotated();
+    expect(held.bootstrap).toEqual([]);
+    expect(
+      held.diagnostics
+        .filter((d) => d.code === 'bootstrap.needs-password')
+        .map((d) => d.message),
+    ).toEqual([
+      "sonarr's first-run setup signs in through jellyfin, which doesn't have the admin password Mediaplane gives the apps yet: it is held, and waits until jellyfin has it",
+    ]);
+  });
+
+  it('sets up again a setup that signs in with what is rotated, through an app whose own setup makes the admin first', async () => {
+    const { home, setup, rotated } = await askedStack();
+    // Jellyfin's appdata was reset: its wizard is open, and makes the admin, with the
+    // rotated password, before Sonarr signs in through it. Sonarr, after it, can't be
+    // asked meanwhile, so it is set up again, unpublished (fail closed).
+    setup.state.done = false;
+    await rm(join(home, 'appdata', 'jellyfin', 'setup.txt'));
+    const planned = await rotated();
+    expect(planned.diagnostics.map((d) => d.code)).not.toContain(
+      'bootstrap.needs-password',
+    );
+    expect(planned.bootstrap).toEqual([
+      { app: 'jellyfin', unpublished: true },
+      { app: 'sonarr', unpublished: true, again: true },
+    ]);
   });
 
   it('keeps unpublished, and fails, an app with a setup but no API to finish it through', async () => {

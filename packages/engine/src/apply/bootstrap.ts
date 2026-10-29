@@ -413,6 +413,13 @@ async function setUp(
   const name = app.def.name;
   try {
     await client.api.ready(api.ready);
+  } catch (cause) {
+    // Not ready by the deadline: asking it whether its setup is open would only wait as
+    // long again. Unasked is open (fail closed), so it stays unpublished.
+    if (!(cause instanceof AppApiError)) throw cause;
+    return { failure: cause.message, open: true };
+  }
+  try {
     const key = await bootstrap.run(client.api, admin, started.stack, started.ctx);
     if (bootstrap.secret !== undefined && key === undefined) {
       // A setup that makes a key and gives none is a bug in the setup: the app would be

@@ -847,6 +847,52 @@ describe('wire', () => {
     expect(sonarr.app.requests.some((r) => r.method === 'PUT')).toBe(false);
   });
 
+  it('says only how mkdir exited when it fails with nothing on stderr', async () => {
+    const sonarr = await fakeSonarr({ key: KEY });
+    const { run, actions } = await wireWith(sonarr, {
+      stack: needingFolders(['/data/media/tv']),
+      runtime: fakeRuntime({
+        containers: RUNNING,
+        addresses: sonarr.addresses,
+        run: () => ({ code: 1, stdout: '', stderr: '\n' }),
+      }),
+    });
+    await run.catch(() => undefined);
+    expect(actions).toEqual([
+      {
+        step: 'wire',
+        resource: 'sonarr.login',
+        result: 'failed',
+        error:
+          'could not make /data/media/tv for sonarr.login: mkdir in a throwaway sonarr container exited 1',
+      },
+    ]);
+  });
+
+  it("stops the step at an error that isn't Docker's, as a bug, not a failure to make the folders", async () => {
+    const sonarr = await fakeSonarr({ key: KEY });
+    const bug = new TypeError('fake bug');
+    const { run, actions } = await wireWith(sonarr, {
+      stack: needingFolders(['/data/media/tv']),
+      runtime: fakeRuntime({
+        containers: RUNNING,
+        addresses: sonarr.addresses,
+        run: () => {
+          throw bug;
+        },
+      }),
+    });
+    const failure = await run.catch((thrown: unknown) => thrown);
+    expect(failure).toBeInstanceOf(WiringFailed);
+    expect((failure as WiringFailed).message).toBe('fake bug');
+    // Not said to be Docker's: no wire.folders, which says to look at the stack's mounts.
+    expect((failure as WiringFailed).diagnostics).toEqual([]);
+    expect(actions).toEqual([
+      { step: 'wire', resource: 'sonarr.login', result: 'failed', error: 'fake bug' },
+    ]);
+    expect(sonarr.app.requests.some((r) => r.method === 'PUT')).toBe(false);
+  });
+
   it("keeps every secret out of a failure's message, whoever wrote it", async () => {
     // A resource's own AppApiError, and a mkdir whose stderr the runtime didn't redact:
     // the wire step redacts what it records, not only what the client and runtime say.
