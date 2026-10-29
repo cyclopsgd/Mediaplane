@@ -1669,6 +1669,70 @@ describe('mediaplane apply: Seerr in the stack', () => {
       apis.app.requests.filter((r) => r.path === '/api/v1/auth/jellyfin'),
     ).not.toEqual([]);
   });
+
+  it("sets up a Seerr asked and found open after Jellyfin's open wizard, which makes the admin with the password Jellyfin lacked", async () => {
+    const home = await seerrHome();
+    const docker = fakeDocker(home);
+    expect(
+      await run(['apply', '--home', home, '--yes'], capture().io, deps(docker)),
+    ).toBe(0);
+    // Jellyfin's appdata was reset since: its wizard is open again. Seerr's file can't be
+    // read, so plan asks Seerr, which says its setup is open. And the store says Jellyfin
+    // never had the admin password.
+    apis.apps.set('jellyfin', { ...freshAppState(), configDir: jellyfinConfig(home) });
+    await rm(join(jellyfinConfig(home), 'system.xml'));
+    const seerr = freshAppState();
+    apis.apps.set('seerr', seerr);
+    await rm(join(home, 'appdata', 'seerr', 'settings.json'));
+    await mkdir(join(home, 'appdata', 'seerr', 'settings.json'));
+    const store = await readSecretStore(home);
+    await writeSecretStore(home, {
+      ...store,
+      shared: { ...store.shared, adminPasswordNotIn: ['jellyfin'] },
+    });
+    // Held in one pass with Jellyfin's own setup: Seerr isn't held through Jellyfin,
+    // whose wizard, before Seerr in the same bootstrap step, makes the admin with the
+    // password first. Both start unpublished (spec §6.4).
+    const shown = capture();
+    expect(await run(['plan', '--home', home, '--json'], shown.io, deps(docker))).toBe(2);
+    const planned = JSON.parse(shown.stdout()) as {
+      bootstrap: unknown[];
+      diagnostics: { code: string }[];
+    };
+    expect(planned.bootstrap).toEqual([
+      { app: 'jellyfin', unpublished: true },
+      { app: 'seerr', unpublished: true },
+    ]);
+    // Asked: Seerr's file couldn't say, and Seerr itself said its setup is open.
+    expect(planned.diagnostics.map((d) => d.code)).toContain('bootstrap.unreadable');
+    expect(planned.diagnostics.map((d) => d.code)).not.toContain(
+      'bootstrap.needs-password',
+    );
+    const from = apis.app.requests.length;
+    const applied = capture();
+    expect(await run(['apply', '--home', home, '--yes'], applied.io, deps(docker))).toBe(
+      0,
+    );
+    // Seerr signed in through Jellyfin only once Jellyfin's wizard had made the admin
+    // with the password Mediaplane holds: never with one apply was still to give it.
+    const paths = apis.app.requests
+      .slice(from)
+      .map((r) => `${r.method} ${r.path}`)
+      .filter((p) => p === 'POST /Startup/User' || p === 'POST /api/v1/auth/jellyfin');
+    expect(paths.length).toBeGreaterThan(1);
+    expect(paths.slice(0, 1)).toEqual(['POST /Startup/User']);
+    expect(paths.slice(1).every((p) => p === 'POST /api/v1/auth/jellyfin')).toBe(true);
+    expect(seerr.seerr.users).toEqual(['admin']);
+    expect(applied.stdout()).toContain(
+      '  done    first-run setup: set up jellyfin, seerr and saved jellyfin.apiKey; published jellyfin, seerr\n',
+    );
+    const after = await readSecretStore(home);
+    expect(after.shared?.adminPasswordNotIn ?? []).toEqual([]);
+    expect(after.setUp).toEqual(['seerr']);
+    const again = capture();
+    expect(await run(['plan', '--home', home], again.io, deps(docker))).toBe(0);
+    expect(again.stdout()).toBe('No changes.\n');
+  });
 });
 
 describe('mediaplane apply: Plex as the media server', () => {
