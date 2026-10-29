@@ -1,8 +1,21 @@
 import { VPN_RUNBOOK, type VpnCheckItem, type VpnCheckResult } from '@mediaplane/engine';
-import { printDiagnostics } from './output';
+import { printDiagnostics, printJson } from './output';
 import type { Io } from './run';
 
-export const VPN_CHECK_JSON_SCHEMA = 'mediaplane.vpn-check/v1';
+export const VPN_CHECK_JSON_SCHEMA = 'mediaplane.vpn-check/v1' as const;
+
+/** `mediaplane.vpn-check/v1`: what the check found, which ran. */
+export function vpnCheckDocument(result: Extract<VpnCheckResult, { ok: true }>) {
+  return {
+    schema: VPN_CHECK_JSON_SCHEMA,
+    ok: result.ok,
+    verdict: result.verdict,
+    checks: result.checks,
+    egress: result.egress,
+    gluetunPublicIp: result.gluetunPublicIp,
+    failClosed: result.failClosed,
+  };
+}
 
 const MARKS: Record<VpnCheckItem['status'], string> = {
   ok: 'ok',
@@ -28,16 +41,7 @@ export function printVpnCheck(
   }
   const code = result.verdict === 'pass' ? 0 : 1;
   if (options.json) {
-    const shown = {
-      schema: VPN_CHECK_JSON_SCHEMA,
-      ok: result.ok,
-      verdict: result.verdict,
-      checks: result.checks,
-      egress: result.egress,
-      gluetunPublicIp: result.gluetunPublicIp,
-      failClosed: result.failClosed,
-    };
-    io.stdout(`${JSON.stringify(shown, null, 2)}\n`);
+    printJson(vpnCheckDocument(result), io);
     return code;
   }
   for (const check of result.checks) {

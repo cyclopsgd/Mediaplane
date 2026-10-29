@@ -116,6 +116,7 @@ describe('mediaplane credentials', () => {
     expect(hidden.stdout()).not.toContain(PASSWORD);
     expect(JSON.parse(hidden.stdout())).toEqual({
       schema: 'mediaplane.credentials/v1',
+      ok: true,
       username: 'admin',
       password: null,
       passwordSource: 'generated',
@@ -293,7 +294,18 @@ describe('mediaplane credentials', () => {
     expect(JSON.parse(json.stdout())).toEqual({
       schema: 'mediaplane.error/v1',
       ok: false,
-      error: { message: 'the admin password has not been generated yet' },
+      error: {
+        message: 'the admin password has not been generated yet',
+        // Each with its code, for a script to act on.
+        diagnostics: [
+          {
+            severity: 'error',
+            code: 'credentials.not-yet',
+            message: 'the admin password has not been generated yet',
+            hint: 'run "mediaplane apply": it generates the password before it starts any app',
+          },
+        ],
+      },
     });
   });
 });

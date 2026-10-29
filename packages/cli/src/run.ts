@@ -11,6 +11,7 @@ import {
   drift,
   EGRESS_TIMEOUT_MS,
   fetchEgress,
+  hasRecordFile,
   helperEgress,
   helperHostFacts,
   helperPlexTv,
@@ -471,7 +472,9 @@ export function createProgram(
       const record = await readRecord(home, id);
       if (record === undefined) {
         printError(
-          `no change record "${id}"; run "mediaplane history" to list them`,
+          (await hasRecordFile(home, id))
+            ? `change record "${id}" can't be read by this Mediaplane: a later release may have written it, or it is damaged; its file is left as it is`
+            : `no change record "${id}"; run "mediaplane history" to list them`,
           { json: asJson },
           io,
         );
@@ -685,7 +688,14 @@ export async function run(
   try {
     await program.parseAsync([...argv], { from: 'user' });
   } catch (cause) {
-    if (cause instanceof CommanderError) return cause.exitCode;
+    if (cause instanceof CommanderError) {
+      // A usage error, such as an unknown option: Commander has said so on stderr. With
+      // --json, a script gets its document on stdout too, as from every other failure.
+      if (json && cause.exitCode !== 0) {
+        printError(cause.message.replace(/^error: /, ''), { json }, io);
+      }
+      return cause.exitCode;
+    }
     // Anything else (an unreadable stack.yaml, an unsupported CPU) is described, not crashed on.
     printError(cause instanceof Error ? cause.message : String(cause), { json }, io);
     return 1;

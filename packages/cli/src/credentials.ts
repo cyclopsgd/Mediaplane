@@ -1,8 +1,27 @@
 import type { AppLogin, CredentialsResult } from '@mediaplane/engine';
-import { printDiagnostics, printError } from './output';
+import { printDiagnostics, printError, printJson } from './output';
 import type { Io } from './run';
 
-export const CREDENTIALS_JSON_SCHEMA = 'mediaplane.credentials/v1';
+export const CREDENTIALS_JSON_SCHEMA = 'mediaplane.credentials/v1' as const;
+
+/**
+ * `mediaplane.credentials/v1`: the shared login, its password only with `reveal`, and
+ * each app's login.
+ */
+export function credentialsDocument(
+  result: Extract<CredentialsResult, { ok: true }>,
+  apps: AppLogin[],
+  reveal: boolean,
+) {
+  return {
+    schema: CREDENTIALS_JSON_SCHEMA,
+    ok: true as const,
+    username: result.username,
+    password: reveal ? result.password : null,
+    passwordSource: result.source.kind,
+    apps,
+  };
+}
 
 /**
  * `mediaplane credentials [app]` (spec §5.2): the shared login and where each app is.
@@ -26,14 +45,7 @@ export function printCredentials(
     return 1;
   }
   if (options.json) {
-    const shown = {
-      schema: CREDENTIALS_JSON_SCHEMA,
-      username: result.username,
-      password: options.reveal ? result.password : null,
-      passwordSource: result.source.kind,
-      apps,
-    };
-    io.stdout(`${JSON.stringify(shown, null, 2)}\n`);
+    printJson(credentialsDocument(result, apps, options.reveal), io);
     return 0;
   }
   const password =

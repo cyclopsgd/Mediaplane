@@ -22,14 +22,20 @@ import {
 } from '@mediaplane/engine';
 import type { Io } from './run';
 
-export const PLAN_JSON_SCHEMA = 'mediaplane.plan/v1';
-export const ERROR_JSON_SCHEMA = 'mediaplane.error/v1';
-export const APPLY_JSON_SCHEMA = 'mediaplane.apply/v1';
-export const STATUS_JSON_SCHEMA = 'mediaplane.status/v1';
-export const HISTORY_JSON_SCHEMA = 'mediaplane.history/v1';
-export const DRIFT_JSON_SCHEMA = 'mediaplane.drift/v1';
-export const KEEP_JSON_SCHEMA = 'mediaplane.keep/v1';
-export const MIGRATE_JSON_SCHEMA = 'mediaplane.migrate/v1';
+// `as const`, so that a document's `schema` keeps its literal type (contract.test.ts).
+export const PLAN_JSON_SCHEMA = 'mediaplane.plan/v1' as const;
+export const ERROR_JSON_SCHEMA = 'mediaplane.error/v1' as const;
+export const APPLY_JSON_SCHEMA = 'mediaplane.apply/v1' as const;
+export const STATUS_JSON_SCHEMA = 'mediaplane.status/v1' as const;
+export const HISTORY_JSON_SCHEMA = 'mediaplane.history/v1' as const;
+export const DRIFT_JSON_SCHEMA = 'mediaplane.drift/v1' as const;
+export const KEEP_JSON_SCHEMA = 'mediaplane.keep/v1' as const;
+export const MIGRATE_JSON_SCHEMA = 'mediaplane.migrate/v1' as const;
+
+/** One --json document, as the CLI prints it: indented, on one line of its own. */
+export function printJson(document: unknown, io: Io): void {
+  io.stdout(`${JSON.stringify(document, null, 2)}\n`);
+}
 
 /** What keep takes, where drift shows a change: the field's address, or the resource's. */
 const KEEP_HINT =
@@ -132,7 +138,7 @@ export function formatDiagnostic(diagnostic: Diagnostic): string {
 
 /**
  * Diagnostics that stopped a command: each as an error line with its hint, or, with
- * --json, one error envelope that joins their messages.
+ * --json, one error envelope that joins their messages, and holds each with its code.
  */
 export function printDiagnostics(
   diagnostics: readonly Diagnostic[],
@@ -140,28 +146,46 @@ export function printDiagnostics(
   io: Io,
 ): void {
   if (options.json) {
-    printError(diagnostics.map((d) => d.message).join('; '), options, io);
+    printError(diagnostics.map((d) => d.message).join('; '), options, io, diagnostics);
     return;
   }
   for (const diagnostic of diagnostics) io.stderr(formatDiagnostic(diagnostic));
 }
 
-export function printError(message: string, options: { json: boolean }, io: Io): void {
+/** `mediaplane.error/v1`: why a command stopped, with the diagnostics that stopped it. */
+export function errorDocument(message: string, diagnostics?: readonly Diagnostic[]) {
+  return {
+    schema: ERROR_JSON_SCHEMA,
+    ok: false as const,
+    error: {
+      message,
+      ...(diagnostics === undefined ? {} : { diagnostics: [...diagnostics] }),
+    },
+  };
+}
+
+export function printError(
+  message: string,
+  options: { json: boolean },
+  io: Io,
+  diagnostics?: readonly Diagnostic[],
+): void {
   if (options.json) {
-    io.stdout(
-      `${JSON.stringify({ schema: ERROR_JSON_SCHEMA, ok: false, error: { message } }, null, 2)}\n`,
-    );
+    printJson(errorDocument(message, diagnostics), io);
     return;
   }
   io.stderr(`error: ${message}\n`);
 }
 
+/** `mediaplane.plan/v1`: the plan, without the files' contents. */
+export function planDocument(result: PlanResult) {
+  const files = result.files.map(({ content, ...file }) => file);
+  return { schema: PLAN_JSON_SCHEMA, ...result, files };
+}
+
 export function printPlan(result: PlanResult, options: { json: boolean }, io: Io): void {
   if (options.json) {
-    const files = result.files.map(({ content, ...file }) => file);
-    io.stdout(
-      `${JSON.stringify({ schema: PLAN_JSON_SCHEMA, ...result, files }, null, 2)}\n`,
-    );
+    printJson(planDocument(result), io);
     return;
   }
   for (const diagnostic of result.diagnostics) io.stderr(formatDiagnostic(diagnostic));
@@ -242,6 +266,11 @@ export function printPlan(result: PlanResult, options: { json: boolean }, io: Io
   io.stdout(parts.length === 0 ? 'No changes.\n' : `Plan: ${parts.join(', ')}.\n`);
 }
 
+/** `mediaplane.drift/v1`. */
+export function driftDocument(result: DriftResult) {
+  return { schema: DRIFT_JSON_SCHEMA, ...result };
+}
+
 /**
  * What `mediaplane drift` found: each change made outside Mediaplane, what it couldn't
  * check, and how the secrets fared, by name only.
@@ -252,7 +281,7 @@ export function printDrift(
   io: Io,
 ): void {
   if (options.json) {
-    io.stdout(`${JSON.stringify({ schema: DRIFT_JSON_SCHEMA, ...result }, null, 2)}\n`);
+    printJson(driftDocument(result), io);
     return;
   }
   for (const diagnostic of result.diagnostics) io.stderr(formatDiagnostic(diagnostic));
@@ -309,12 +338,15 @@ export function printDrift(
   }
 }
 
+/** `mediaplane.keep/v1`: `value` is null where nothing was kept, or a key was. */
+export function keepDocument(result: KeepResult) {
+  return { schema: KEEP_JSON_SCHEMA, ...result, value: result.value ?? null };
+}
+
 /** What `mediaplane keep` kept, or why it kept nothing. */
 export function printKeep(result: KeepResult, options: { json: boolean }, io: Io): void {
   if (options.json) {
-    io.stdout(
-      `${JSON.stringify({ schema: KEEP_JSON_SCHEMA, ...result, value: result.value ?? null }, null, 2)}\n`,
-    );
+    printJson(keepDocument(result), io);
     return;
   }
   for (const diagnostic of result.diagnostics) io.stderr(formatDiagnostic(diagnostic));
@@ -356,6 +388,11 @@ export function printKeep(result: KeepResult, options: { json: boolean }, io: Io
   );
 }
 
+/** `mediaplane.migrate/v1`. */
+export function migrateDocument(result: MigrateResult) {
+  return { schema: MIGRATE_JSON_SCHEMA, ...result };
+}
+
 /** What `mediaplane migrate` rewrote, or why it didn't, with the file as it should be. */
 export function printMigrate(
   result: MigrateResult,
@@ -363,7 +400,7 @@ export function printMigrate(
   io: Io,
 ): void {
   if (options.json) {
-    io.stdout(`${JSON.stringify({ schema: MIGRATE_JSON_SCHEMA, ...result }, null, 2)}\n`);
+    printJson(migrateDocument(result), io);
     return;
   }
   for (const diagnostic of result.diagnostics) io.stderr(formatDiagnostic(diagnostic));
@@ -468,36 +505,35 @@ function changedSomething(action: ActionResult): boolean {
   );
 }
 
+/** `mediaplane.apply/v1`: the outcome, the plan it followed, and each action. */
+export function applyDocument(result: ApplyResult) {
+  const { files, containers, secrets, unhealthy, wiring, bootstrap } = result.plan;
+  return {
+    schema: APPLY_JSON_SCHEMA,
+    ok: result.outcome === 'success' || result.outcome === 'no-changes',
+    changed: result.actions.some(changedSomething),
+    outcome: result.outcome,
+    plan: {
+      files: files.map(({ content, ...file }) => file),
+      containers,
+      secrets,
+      unhealthy,
+      wiring,
+      bootstrap,
+    },
+    actions: result.actions,
+    recordId: result.recordId ?? null,
+    diagnostics: result.diagnostics,
+  };
+}
+
 export function printApply(
   result: ApplyResult,
   options: { json: boolean },
   io: Io,
 ): void {
   if (options.json) {
-    const { files, containers, secrets, unhealthy, wiring, bootstrap } = result.plan;
-    io.stdout(
-      `${JSON.stringify(
-        {
-          schema: APPLY_JSON_SCHEMA,
-          ok: result.outcome === 'success' || result.outcome === 'no-changes',
-          changed: result.actions.some(changedSomething),
-          outcome: result.outcome,
-          plan: {
-            files: files.map(({ content, ...file }) => file),
-            containers,
-            secrets,
-            unhealthy,
-            wiring,
-            bootstrap,
-          },
-          actions: result.actions,
-          recordId: result.recordId ?? null,
-          diagnostics: result.diagnostics,
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    printJson(applyDocument(result), io);
     return;
   }
   // The plan was already printed (with its warnings) when the user was asked to confirm,
@@ -567,33 +603,32 @@ function summary(record: ChangeRecord) {
   };
 }
 
+/** `mediaplane.status/v1`. */
+export function statusDocument(result: StatusResult) {
+  return {
+    schema: STATUS_JSON_SCHEMA,
+    ok: true as const,
+    healthy:
+      result.containers.length > 0 && unhealthyServices(result.containers).length === 0,
+    containers: result.containers.map(({ service, state, health, published }) => ({
+      service,
+      state,
+      health,
+      published,
+    })),
+    lastApply: result.lastApply === undefined ? null : summary(result.lastApply),
+    // Only present when state/history could not be read.
+    ...(result.historyError === undefined ? {} : { historyError: result.historyError }),
+  };
+}
+
 export function printStatus(
   result: StatusResult,
   options: { json: boolean },
   io: Io,
 ): void {
   if (options.json) {
-    io.stdout(
-      `${JSON.stringify(
-        {
-          schema: STATUS_JSON_SCHEMA,
-          healthy:
-            result.containers.length > 0 &&
-            unhealthyServices(result.containers).length === 0,
-          containers: result.containers.map(({ service, state, health, published }) => ({
-            service,
-            state,
-            health,
-            published,
-          })),
-          lastApply: result.lastApply === undefined ? null : summary(result.lastApply),
-          // Only present when state/history could not be read.
-          historyError: result.historyError,
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    printJson(statusDocument(result), io);
     return;
   }
   if (result.historyError !== undefined) {
@@ -624,23 +659,23 @@ export function printStatus(
   );
 }
 
+/** `mediaplane.history/v1`: each record, in short. */
+export function historyDocument(list: { records: ChangeRecord[]; unreadable: string[] }) {
+  return {
+    schema: HISTORY_JSON_SCHEMA,
+    ok: true as const,
+    records: list.records.map(summary),
+    unreadable: list.unreadable,
+  };
+}
+
 export function printHistory(
   list: { records: ChangeRecord[]; unreadable: string[] },
   options: { json: boolean },
   io: Io,
 ): void {
   if (options.json) {
-    io.stdout(
-      `${JSON.stringify(
-        {
-          schema: HISTORY_JSON_SCHEMA,
-          records: list.records.map(summary),
-          unreadable: list.unreadable,
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    printJson(historyDocument(list), io);
     return;
   }
   for (const name of list.unreadable)
@@ -663,13 +698,21 @@ export function printHistory(
   }
 }
 
+/**
+ * `mediaplane.change/v1`: the record as this release reads it, so a later release's shows
+ * only the fields this one knows; and `ok`, as every document has.
+ */
+export function recordDocument(record: ChangeRecord) {
+  return { ...record, ok: true as const };
+}
+
 export function printRecord(
   record: ChangeRecord,
   options: { json: boolean },
   io: Io,
 ): void {
   if (options.json) {
-    io.stdout(`${JSON.stringify(record, null, 2)}\n`);
+    printJson(recordDocument(record), io);
     return;
   }
   io.stdout(`Change ${record.id}\n`);

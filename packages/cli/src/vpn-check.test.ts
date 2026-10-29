@@ -445,6 +445,15 @@ describe('mediaplane vpn-check', () => {
         error: {
           message:
             "the egress check's URL must be an http or https URL with no user name or password",
+          diagnostics: [
+            {
+              severity: 'error',
+              code: 'vpn-check.bad-url',
+              message:
+                "the egress check's URL must be an http or https URL with no user name or password",
+              hint: 'set MEDIAPLANE_VPN_CHECK_URL to an IP-echo service such as https://1.1.1.1/cdn-cgi/trace, or unset it',
+            },
+          ],
         },
       });
       expect(json.stderr()).toBe('');

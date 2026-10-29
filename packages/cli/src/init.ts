@@ -18,11 +18,16 @@ import {
   STARTER_APPS,
 } from '@mediaplane/engine';
 import { dataSteps, exists, homeProblem, type DataFolder } from './folders';
-import { printDiagnostics, printError } from './output';
+import { printDiagnostics, printError, printJson } from './output';
 import { PromptCancelled } from './prompt';
 import type { Io } from './run';
 
-export const INIT_JSON_SCHEMA = 'mediaplane.init/v1';
+export const INIT_JSON_SCHEMA = 'mediaplane.init/v1' as const;
+
+/** `mediaplane.init/v1`: the stack.yaml written, and what to do next. */
+export function initDocument(stackPath: string, next: string[]) {
+  return { schema: INIT_JSON_SCHEMA, ok: true as const, stackPath, next };
+}
 
 /** Where init suggests you keep your own admin password, inside the home. */
 export const DEFAULT_PASSWORD_FILE = 'secrets/admin-password';
@@ -132,9 +137,7 @@ export async function init(
     'Then "mediaplane credentials" shows the admin login and where each app is.',
   ];
   if (asJson) {
-    io.stdout(
-      `${JSON.stringify({ schema: INIT_JSON_SCHEMA, ok: true, stackPath, next: next('ask') }, null, 2)}\n`,
-    );
+    printJson(initDocument(stackPath, next('ask')), io);
     return 0;
   }
   io.stdout(`Wrote ${stackPath}.\n`);

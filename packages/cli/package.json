@@ -7,6 +7,7 @@
   "dependencies": {
     "@mediaplane/catalog": "workspace:*",
     "@mediaplane/engine": "workspace:*",
-    "commander": "^15.0.0"
+    "commander": "^15.0.0",
+    "zod": "^4.6.5"
   }
 }

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { HISTORY_DIR, STATE_DIR } from '../paths';
 import {
   CHANGE_SCHEMA,
+  hasRecordFile,
   listRecords,
   newRecordId,
   readRecord,
@@ -186,6 +187,22 @@ describe('history records', () => {
   it('finds nothing for an unknown id', async () => {
     const home = await tempDir('mediaplane-history-');
     expect(await readRecord(home, '20261009T094312Z-ffffffff')).toBeUndefined();
+    expect(await hasRecordFile(home, '20261009T094312Z-ffffffff')).toBe(false);
+  });
+
+  it("tells a record it can't read, which is there, from one that isn't", async () => {
+    const home = await tempDir('mediaplane-history-');
+    const id = '20261009T094312Z-00000006';
+    await mkdir(join(home, HISTORY_DIR), { recursive: true });
+    await writeFile(
+      join(home, HISTORY_DIR, `${id}.json`),
+      JSON.stringify({ ...record(id), outcome: 'partial' }),
+    );
+    expect(await readRecord(home, id)).toBeUndefined();
+    expect(await hasRecordFile(home, id)).toBe(true);
+    // Never a path out of the history folder, there or not.
+    await writeFile(join(home, STATE_DIR, 'stray.json'), '{}');
+    expect(await hasRecordFile(home, '../stray')).toBe(false);
   });
 
   it('does not follow an id out of the history folder', async () => {

@@ -45,7 +45,8 @@ import {
   tempDir,
   thrown,
 } from '@mediaplane/engine/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { checkDocument, documentsIn, INTERNAL_SCHEMAS } from './contract';
 import { PromptCancelled } from './prompt';
 import { EXIT_CODES, run, type CliDeps, type Io } from './run';
 import { VERSION } from './version';
@@ -337,8 +338,24 @@ function deps(runtime: Runtime = fakeRuntime()): Partial<CliDeps> {
   };
 }
 
+/** What each test's captures printed on stdout: checked against the contract after it. */
+let printed: (() => string)[] = [];
+afterEach(() => {
+  const outputs = printed;
+  printed = [];
+  // Every --json document any test here printed is one the contract documents, exactly;
+  // but for the helpers' answers to Mediaplane itself.
+  for (const output of outputs) {
+    for (const doc of documentsIn(output())) {
+      const { schema } = doc as { schema?: string };
+      if (!INTERNAL_SCHEMAS.includes(schema ?? '')) checkDocument(doc);
+    }
+  }
+});
+
 function capture(env: NodeJS.ProcessEnv = {}, answers?: string[]) {
   const out: string[] = [];
+  printed.push(() => out.join(''));
   const err: string[] = [];
   const questions: string[] = [];
   const io: Io = {
@@ -761,6 +778,32 @@ describe('mediaplane plan', () => {
     expect(applied.stderr()).toContain('Apply stopped before changing anything.');
   });
 
+  it('answers a usage error with a JSON envelope too, with --json', async () => {
+    for (const argv of [
+      ['plan', '--bogus', '--json'],
+      ['bogus', '--json'],
+      ['keep', '--json'],
+    ]) {
+      const term = capture();
+      expect(await run(argv, term.io, deps())).toBe(1);
+      const said = /^error: (.*)\n/.exec(term.stderr())?.[1];
+      expect(said).toBeDefined();
+      expect(JSON.parse(term.stdout())).toEqual({
+        schema: 'mediaplane.error/v1',
+        ok: false,
+        error: { message: said },
+      });
+    }
+    // Without --json, only Commander's own words, on stderr.
+    const term = capture();
+    expect(await run(['plan', '--bogus'], term.io, deps())).toBe(1);
+    expect(term.stdout()).toBe('');
+    // --help and --version are no error, and print what they print.
+    const help = capture();
+    expect(await run(['plan', '--help', '--json'], help.io, deps())).toBe(0);
+    expect(help.stdout()).toContain('Usage: mediaplane plan');
+  });
+
   it('reports unexpected errors as a JSON envelope with --json', async () => {
     const home = await tempDir('mediaplane-cli-');
     await mkdir(join(home, 'stack.yaml'));
@@ -1143,7 +1186,7 @@ describe('mediaplane apply', () => {
       ),
     ).toBe(0);
     expect(shown.stdout()).not.toContain(secretLike);
-    expect(JSON.parse(shown.stdout())).toEqual(record);
+    expect(JSON.parse(shown.stdout())).toEqual({ ...record, ok: true });
     expect(await readFile(path, 'utf8')).toContain(secretLike);
   });
 
@@ -2459,7 +2502,11 @@ describe('mediaplane status', () => {
       containers: unknown[];
       lastApply: { outcome: string } | null;
     };
-    expect(json).toMatchObject({ schema: 'mediaplane.status/v1', healthy: true });
+    expect(json).toMatchObject({
+      schema: 'mediaplane.status/v1',
+      ok: true,
+      healthy: true,
+    });
     expect(json).not.toHaveProperty('historyError');
     expect(json.containers).toHaveLength(4);
     expect(json.lastApply?.outcome).toBe('success');
@@ -2530,9 +2577,37 @@ describe('mediaplane history', () => {
     await run(['history', '--home', home, '--json'], term.io, deps(docker));
     expect(JSON.parse(term.stdout())).toMatchObject({
       schema: 'mediaplane.history/v1',
+      ok: true,
       records: [{ outcome: 'success', changes: { files: 5, containers: 4, secrets: 4 } }],
       unreadable: [],
     });
+  });
+
+  it("says a record it can't read is there, unread, rather than missing", async () => {
+    const home = await makeHome();
+    const docker = fakeDocker(home);
+    await run(['apply', '--home', home, '--yes'], capture().io, deps(docker));
+    const [name = ''] = await readdir(join(home, 'state', 'history'));
+    const path = join(home, 'state', 'history', name);
+    // As a later release writes it: a value this one doesn't know.
+    const later = (await readFile(path, 'utf8')).replace(
+      '"outcome": "success"',
+      '"outcome": "partial"',
+    );
+    await writeFile(path, later);
+    const id = name.replace(/\.json$/, '');
+    const json = capture();
+    expect(
+      await run(['history', id, '--home', home, '--json'], json.io, deps(docker)),
+    ).toBe(1);
+    expect(JSON.parse(json.stdout())).toEqual({
+      schema: 'mediaplane.error/v1',
+      ok: false,
+      error: {
+        message: `change record "${id}" can't be read by this Mediaplane: a later release may have written it, or it is damaged; its file is left as it is`,
+      },
+    });
+    expect(await readFile(path, 'utf8')).toBe(later);
   });
 
   it('fails for an unknown record, and says when there are none', async () => {

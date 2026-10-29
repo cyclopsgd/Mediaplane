@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { HISTORY_DIR } from '../paths';
 import type { RandomBytes } from '../secrets/generate';
 import { ensureDir, writeFileAtomic } from '../util/atomic';
-import { readIfExists } from '../util/fs';
+import { fileKind, readIfExists } from '../util/fs';
 import { compare } from '../util/sort';
 
 export const CHANGE_SCHEMA = 'mediaplane.change/v1';
@@ -203,6 +203,16 @@ export async function readRecord(
   if (!RECORD_ID.test(id)) return undefined;
   const text = await readIfExists(join(home, HISTORY_DIR, `${id}.json`));
   return text === undefined ? undefined : parseRecord(text);
+}
+
+/**
+ * Whether state/history holds something for record `id`, read or not: readRecord gives
+ * undefined for a record this release can't read too, such as a later release's that
+ * holds a value this one doesn't know.
+ */
+export async function hasRecordFile(home: string, id: string): Promise<boolean> {
+  if (!RECORD_ID.test(id)) return false;
+  return (await fileKind(join(home, HISTORY_DIR, `${id}.json`))) !== 'missing';
 }
 
 /** The record in this file, or undefined if it can't be read (EACCES, EISDIR, gone) or parsed. */

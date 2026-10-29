@@ -10,10 +10,10 @@ import {
   writeFileAtomic,
   type PlexTv,
 } from '@mediaplane/engine';
-import { printDiagnostics, printError } from './output';
+import { printDiagnostics, printError, printJson } from './output';
 import type { Io } from './run';
 
-export const PLEX_LOGIN_JSON_SCHEMA = 'mediaplane.plex-login/v1';
+export const PLEX_LOGIN_JSON_SCHEMA = 'mediaplane.plex-login/v1' as const;
 
 /** The longest plex-login waits: a strong PIN lasts 30 minutes (probed). */
 export const PLEX_LOGIN_MAX_SECONDS = 1800;
@@ -233,25 +233,28 @@ function duration(seconds: number): string {
   return `${String(seconds)} second${seconds === 1 ? '' : 's'}`;
 }
 
+/** `mediaplane.plex-login/v1`: where the token is saved, never the token. */
+export function plexLoginDocument(result: {
+  saved: string;
+  signedIn: boolean;
+  replaced: boolean;
+}) {
+  return {
+    schema: PLEX_LOGIN_JSON_SCHEMA,
+    ok: true as const,
+    saved: result.saved,
+    signedIn: result.signedIn,
+    replaced: result.replaced,
+  };
+}
+
 function report(
   options: PlexLoginOptions,
   io: Io,
   result: { saved: string; signedIn: boolean; replaced: boolean; said: string },
 ): void {
   if (options.json) {
-    io.stdout(
-      `${JSON.stringify(
-        {
-          schema: PLEX_LOGIN_JSON_SCHEMA,
-          ok: true,
-          saved: result.saved,
-          signedIn: result.signedIn,
-          replaced: result.replaced,
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    printJson(plexLoginDocument(result), io);
     return;
   }
   io.stdout(`${result.said}\n`);
