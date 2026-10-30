@@ -379,7 +379,8 @@ partway. The next `apply` finishes the job.
 
 **From a release:** unpack the next release's deploy files over the old ones, in the same
 folder, then run its installer. It keeps your `deploy/.env`, pulls the new image, then
-recreates Mediaplane's container (and the proxy's, if its pin changed):
+recreates Mediaplane's container (and the proxy's, if its pin changed). With the version
+you want (`0.2.0` is an example):
 
 ```bash
 version=0.2.0

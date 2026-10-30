@@ -40,10 +40,11 @@ Where M1 stands:
   `deploy/install.sh`.
 - **M1 is done, and released as 0.1.0 (2026-10-30).** Every item below is settled: done,
   or moved to M2 with its reason. One stays open, and isn't M1 work: "Before the first
-  real migration" applies when a migration is first planned, and none is. Of the owner's
-  steps, listed in the completion checklist of [S10c's plan](m1/m1-s10c-contract.md),
-  branch protection, private vulnerability reporting and the first release are done; the
-  Renovate app is left. [After M1](#after-m1) has what comes next.
+  real migration" applies when a migration is first planned, and none is. The owner's
+  steps are in the completion checklist of [S10c's plan](m1/m1-s10c-contract.md). Branch
+  protection (light), private vulnerability reporting and the first release are done.
+  Two are left: the Renovate app, and `PLEX_TOKEN` in the `plex` environment, which the
+  nightly Plex job needs. [After M1](#after-m1) has what comes next.
 
 ## Slices
 
@@ -317,15 +318,20 @@ lighter route, or as a slice when it is big or touches security.
   - At each release: stamp the published JSON Schemas' `$id` with the release's tag, so
     a release's files don't share `main`'s `$id`.
   - At each release, release-please also updates the install steps' `version=` line in
-    the README and in the deploy guide (`extra-files`, with the generic updater's
-    `x-release-please-start-version` and `x-release-please-end` markers around each), so
-    they name the latest release. The deploy guide's update example stays an example.
+    the README and in the deploy guide, so they name the latest release. Both files go in
+    `extra-files`, each with the generic updater's `x-release-please-start-version` and
+    `x-release-please-end` markers in HTML comments around the code block. To weigh
+    first: from the merge, the README on `main` names a release whose files aren't
+    published yet. The deploy guide's update example stays an example.
   - From the review of CI's Node check fix (PR #23), by the lighter route: refusal rows
     for the edges of the pre-release pattern (`v24.22-rc.1`, no `v`, a leading space,
     `+build`); tests that a pre-release still needs a boolean `security`, and that an
     index whose only entry of the image's line is a pre-release still refuses; the
-    refusal naming the entry it couldn't read; `imageNode` refusing a pre-release base;
-    and two wording fixes.
+    refusal naming the entry it couldn't read (`fetchIndex` compares the message to tell
+    it from a network error, so it needs a typed error); `imageNode` refusing a
+    pre-release base; and three wording fixes (the `PRE_RELEASE` comment leaves out the
+    hyphen, the row title "a version that is not v<n>.<n>.<n>", and `parseIndex`'s
+    comment saying a pre-release is ignored).
 - **M3: more apps.** SABnzbd, Audiobookshelf, Bookshelf (experimental), Bazarr,
   Recyclarr, Portainer and Homepage.
   - With a third app whose setup can be held: `heldThrough` takes the level and message
@@ -1008,6 +1014,7 @@ password, which are S3c's (and listed again below).
   gaps.
   - **Settled in S9,** each as the item says below. `main`'s protection is the owner's
     to set: the S9 plan gives the settings for light and strict, and recommends strict.
+    **Set on 2026-10-29:** light, the owner's call.
   - **S10's are S10b's** (split on 2026-10-26): S10a settles none of the items below.
   - **S10b's are S10c's** (split again on 2026-10-26), but for Jellyfin's database read,
     done in S10b, as its item says.
@@ -1018,7 +1025,8 @@ password, which are S3c's (and listed again below).
   - no code of conduct, and no community-support material such as issue templates or
     CODEOWNERS: Mediaplane is one person's project, published so others can use it.
     Security reports keep GitHub's private reporting;
-  - `main` is protected in S9, light or strict to be chosen then.
+  - `main` is protected in S9, light or strict to be chosen then (**done on 2026-10-29,**
+    after M1: light).
 - **The nightly Plex job** (S7) needs the secret `PLEX_TOKEN` (owner): the token of a
   plex.tv account kept for tests, never your real one. Until it is set, the job does
   nothing. It claims a server each night on each architecture, one at a time, since
@@ -1053,7 +1061,7 @@ password, which are S3c's (and listed again below).
   SPDX `license` field.
   - **Done in S9:** the SPDX field (GPL-3.0-or-later). Private vulnerability reporting
     stays an owner's step: the S9 plan gives the command, and S10c's completion
-    checklist lists it.
+    checklist lists it. **It is on** (checked on 2026-10-30).
 - **Docs:** make the `--json` contract explicit (pin its fields and document
   `mediaplane.plan/v1`). Drop the internal "Slice 1" wording from the README.
   - **Done in S10c:** the [`--json` reference](../reference/json.md) and a JSON Schema per
@@ -1159,7 +1167,7 @@ password, which are S3c's (and listed again below).
   instead of build.
   - **Done in S9,** from the first release: a release's own deploy files pin its image
     by digest; the repository's leave it out, so a checkout builds. The first release is
-    the owner's.
+    the owner's. **Released on 2026-10-30:** 0.1.0.
 - **Registry rate limits in CI** (S6). S5's first arm64 run failed on
   `toomanyrequests` during `docker compose pull`, after apply's four tries: the runners
   pull every image afresh, anonymously. Pull with a read-only registry token kept as a
