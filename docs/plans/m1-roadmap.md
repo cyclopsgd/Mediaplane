@@ -320,18 +320,18 @@ lighter route, or as a slice when it is big or touches security.
   - At each release, release-please also updates the install steps' `version=` line in
     the README and in the deploy guide, so they name the latest release. Both files go in
     `extra-files`, each with the generic updater's `x-release-please-start-version` and
-    `x-release-please-end` markers in HTML comments around the code block. To weigh
-    first: from the merge, the README on `main` names a release whose files aren't
-    published yet. The deploy guide's update example stays an example.
+    `x-release-please-end` markers in HTML comments around the code block. The deploy
+    guide's update example stays an example. To weigh first: from the merge, the README
+    on `main` names a release whose files aren't published yet.
   - From the review of CI's Node check fix (PR #23), by the lighter route: refusal rows
     for the edges of the pre-release pattern (`v24.22-rc.1`, no `v`, a leading space,
     `+build`); tests that a pre-release still needs a boolean `security`, and that an
     index whose only entry of the image's line is a pre-release still refuses; the
     refusal naming the entry it couldn't read (`fetchIndex` compares the message to tell
-    it from a network error, so it needs a typed error); `imageNode` refusing a
-    pre-release base; and three wording fixes (the `PRE_RELEASE` comment leaves out the
-    hyphen, the row title "a version that is not v<n>.<n>.<n>", and `parseIndex`'s
-    comment saying a pre-release is ignored).
+    it from a network error, so it needs a typed error or a prefix check); `imageNode`
+    refusing a pre-release base; and three wording fixes (the `PRE_RELEASE` comment
+    leaves out the hyphen, the row title `a version that is not v<n>.<n>.<n>`, and
+    `parseIndex`'s comment saying a pre-release is ignored).
 - **M3: more apps.** SABnzbd, Audiobookshelf, Bookshelf (experimental), Bazarr,
   Recyclarr, Portainer and Homepage.
   - With a third app whose setup can be held: `heldThrough` takes the level and message

@@ -634,9 +634,9 @@ Controls today:
 What remains:
 
 - Whoever can push to `main`, or merge the release pull request, can publish a release.
-  Protecting `main` narrows that. Since 2026-10-29 it is protected, light: a commit
+  Protecting `main` narrows that. Since 2026-10-29 it is protected, light. A commit
   reaches `main` only once CI's "All checks passed" has passed on it, and history stays
-  linear, but an admin can override both.
+  linear. An admin can override both. No review is required.
 - `scripts/release/ci-passed.sh` accepts any GitHub Actions run of "All checks passed"
   on the release's commit: a pull request's run on the same tree too, whose `changes`
   job chose which jobs ran from the pull request's diff. It doesn't wait for the run on
