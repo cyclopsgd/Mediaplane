@@ -38,12 +38,12 @@ Where M1 stands:
   changes (test-first, one review, CI): `hardware_transcoding` for Plex and Jellyfin,
   `init` offering the Plex sign-in and asking for your own admin password, and
   `deploy/install.sh`.
-- **M1 is done.** Every item below is settled: done, or moved to M2 with its reason. One
-  stays open, and isn't M1 work: "Before the first real migration" applies when a
-  migration is first planned, and none is. The owner's steps (the Renovate app, branch
-  protection, private vulnerability reporting, the first release) are listed in the
-  completion checklist of [S10c's plan](m1/m1-s10c-contract.md). [After M1](#after-m1) has
-  what comes next.
+- **M1 is done, and released as 0.1.0 (2026-10-30).** Every item below is settled: done,
+  or moved to M2 with its reason. One stays open, and isn't M1 work: "Before the first
+  real migration" applies when a migration is first planned, and none is. Of the owner's
+  steps, listed in the completion checklist of [S10c's plan](m1/m1-s10c-contract.md),
+  branch protection, private vulnerability reporting and the first release are done; the
+  Renovate app is left. [After M1](#after-m1) has what comes next.
 
 ## Slices
 
@@ -316,6 +316,16 @@ lighter route, or as a slice when it is big or touches security.
     first pinned image that has one.
   - At each release: stamp the published JSON Schemas' `$id` with the release's tag, so
     a release's files don't share `main`'s `$id`.
+  - At each release, release-please also updates the install steps' `version=` line in
+    the README and in the deploy guide (`extra-files`, with the generic updater's
+    `x-release-please-start-version` and `x-release-please-end` markers around each), so
+    they name the latest release. The deploy guide's update example stays an example.
+  - From the review of CI's Node check fix (PR #23), by the lighter route: refusal rows
+    for the edges of the pre-release pattern (`v24.22-rc.1`, no `v`, a leading space,
+    `+build`); tests that a pre-release still needs a boolean `security`, and that an
+    index whose only entry of the image's line is a pre-release still refuses; the
+    refusal naming the entry it couldn't read; `imageNode` refusing a pre-release base;
+    and two wording fixes.
 - **M3: more apps.** SABnzbd, Audiobookshelf, Bookshelf (experimental), Bazarr,
   Recyclarr, Portainer and Homepage.
   - With a third app whose setup can be held: `heldThrough` takes the level and message

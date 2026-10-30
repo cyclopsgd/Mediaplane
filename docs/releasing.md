@@ -62,9 +62,11 @@ digest also covers the attestations, which hold the times of the build, so runni
 image job again gives another index digest, and so other deploy files, which name the
 image. Those are the same bytes only for the same image and the same tools.
 
-For the first release only, once its image is published: make the package public (on
-GitHub, Packages, `mediaplane`, Package settings, Change visibility, Public). Until then
-nobody else can pull the image, so installing from a release and checking the image fail.
+The package is public, as the repository is: it already was when 0.1.0's image was
+checked, straight after the release workflow first published it. Anyone can pull a
+release's image without logging in. If the package ever shows as private (on GitHub,
+Packages, `mediaplane`, Package settings), installing from a release and checking the
+image fail until it is made public again (Change visibility, Public).
 
 ## What never publishes
 
