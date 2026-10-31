@@ -39,12 +39,15 @@ Where M1 stands:
   `init` offering the Plex sign-in and asking for your own admin password, and
   `deploy/install.sh`.
 - **M1 is done, and released as 0.1.0 (2026-10-30).** Every item below is settled: done,
-  or moved to M2 with its reason. One stays open, and isn't M1 work: "Before the first
-  real migration" applies when a migration is first planned, and none is. The owner's
-  steps are in the completion checklist of [S10c's plan](m1/m1-s10c-contract.md). Branch
-  protection (light), private vulnerability reporting and the first release are done.
-  Two are left: the Renovate app, and `PLEX_TOKEN` in the `plex` environment, which the
-  nightly Plex job needs. [After M1](#after-m1) has what comes next.
+  or moved on with its reason. Since 2026-10-31, an item moved to M2 is in the new M2 or
+  on the "Later" list ([After M1](#after-m1)). One stays open, and isn't M1 work: "Before
+  the first real migration" applies when a migration is first planned, and none is. The
+  owner's steps are in the completion checklist of [S10c's plan](m1/m1-s10c-contract.md).
+  Branch protection (light), private vulnerability reporting and the first release are
+  done. Three are left, all optional: the Renovate app, `PLEX_TOKEN` in the `plex`
+  environment (the nightly Plex job needs it) and a read-only Docker Hub token.
+  [After M1](#after-m1) has what comes next: M2 is now backup, restore and adoption
+  ([M2 roadmap](m2-roadmap.md)).
 
 ## Slices
 
@@ -271,7 +274,7 @@ Every slice writes its own docs as it goes:
   - 0001, 0002, 0005 and 0009 in S1;
   - 0010 in S2a, 0004 in S2b, and 0006 and 0008 in S2c;
   - 0003 in S8.
-  - 0007 (books) belongs to M3.
+  - 0007 (books) was never written: Bookshelf was dropped on 2026-10-31.
 - **Each app's `catalog/<app>/README.md`**, written in S2c, and updated when that
   app's integration lands.
 - **Runbooks**, written with the feature they cover:
@@ -285,27 +288,31 @@ Every slice writes its own docs as it goes:
 
 ## After M1
 
-Decided by the owner on 2026-10-25. The web panel is no longer the next milestone. The
-CLI is refined instead, and the work after M1 is smaller: a feature at a time, by the
-lighter route, or as a slice when it is big or touches security.
+**Replanned by the owner on 2026-10-31.** M2 is now backup, restore and adoption, in the
+[M2 roadmap](m2-roadmap.md):
 
-- **M2: everyday CLI.** It also takes the M1 items S10c moved there, listed under "M2
-  (everyday CLI)" in [Inputs for later slices](#inputs-for-later-slices-from-the-reviews).
+1. S0, the coded diagnostics;
+2. S1, backup and restore, onto another host too;
+3. S2, Audiobookshelf;
+4. S3, adopting an existing stack;
+5. S4, `doctor` and the host checks;
+6. S5, drift on a schedule, with alerts.
+
+Bookshelf is dropped. Everything else planned after M1 is kept on the list below, as
+"Later". The owner's earlier plan, of 2026-10-25, had already put the CLI before the
+web panel.
+
+- **Later: the old M2 (everyday CLI).** Backup and restore, `doctor`, drift on a schedule
+  and the coded diagnostics went to the new M2. So did the M1 items S10c moved here,
+  listed under "M2 and later" in
+  [Inputs for later slices](#inputs-for-later-slices-from-the-reviews): the ones for
+  `doctor` go to its S4, and drift on a schedule to its S5. The rest stay here:
   - Safe app updates: `mediaplane update`, with a backup first and a rollback.
-  - Backup and restore, including a restore onto a different host.
-  - `mediaplane doctor`, which checks a running stack and says what to fix.
   - Quality presets for Sonarr and Radarr in `init` (see "Later ideas").
   - A media server you already run, used as it is (`external`).
-  - Drift checked on a schedule, with alerts (optional).
   - Reads that can still wait: `stack.yaml` is guarded against a named pipe in its place,
     but other files a command reads (secret files, `state/*`, generated files) can still
     block on one. Guard them as `stack.yaml` is now.
-  - Coded diagnostics for the error documents that have none, so a script tells them
-    apart without reading the message (S10c's final review): a usage error,
-    `apply.needs-yes`, `status <app>` with no container, `history.unreadable` apart from
-    no such record, `credentials <app>` of an unknown app, `plex-login`'s timeout and its
-    expired link, and `config.unreadable` for a `stack.yaml` that can't be read; and
-    `fileKind` keeps its "check that the user can read it" hint.
   - A structured field on `apply`'s `actions[]` for what it did to each resource
     (`created`, `adopted`, …), which `change/v1` records gain too. Until then, a done
     wire action's `detail` is that word, stable within v1.
@@ -332,8 +339,8 @@ lighter route, or as a slice when it is big or touches security.
     refusing a pre-release base; and three wording fixes (the `PRE_RELEASE` comment
     leaves out the hyphen, the row title `a version that is not v<n>.<n>.<n>`, and
     `parseIndex`'s comment saying a pre-release is ignored).
-- **M3: more apps.** SABnzbd, Audiobookshelf, Bookshelf (experimental), Bazarr,
-  Recyclarr, Portainer and Homepage.
+- **Later: the old M3 (more apps).** SABnzbd, Bazarr, Recyclarr, Portainer and Homepage.
+  Audiobookshelf moved to the new M2. Bookshelf was dropped on 2026-10-31.
   - With a third app whose setup can be held: `heldThrough` takes the level and message
     from the first app it finds, so they could depend on the catalog's order.
 - **Not scheduled:** the web panel (wizard, dashboard, drift view). Its items are kept
@@ -1252,7 +1259,9 @@ password, which are S3c's (and listed again below).
   proxies requests to the apps, add its network, so Sonarr believes the
   `X-Forwarded-For` header it sends (spec §11, Slice 3a).
 
-**M2 (everyday CLI):**
+**M2 and later:** since 2026-10-31, the [M2 roadmap](m2-roadmap.md) takes the items for
+`doctor` (its S4) and drift on a schedule (its S5). The rest wait on the "Later" list in
+[After M1](#after-m1).
 
 - **From S10c**, as their items above say:
   - a Jellyfin `apply` started published whose wizard still looks open: have `plan` ask
@@ -1277,20 +1286,22 @@ password, which are S3c's (and listed again below).
   hand. Detected subnets leave Docker's own networks out. Warn in `plan` when
   `lan_subnet` overlaps the wiring network or the stack's own.
 
-**Later ideas (M2 and after):**
+**Later ideas:**
 
 - **Default quality settings for Sonarr and Radarr** (owner to discuss, 2026-10-17).
   Mediaplane leaves the arrs' quality profiles as they ship, and only picks Seerr's
   (`HD-1080p`, else `Any`). Decide the default (resolution, sources, size limits,
   language), and whether Mediaplane sets a profile of its own, offers presets in
-  `init`, or leaves it to Recyclarr (M3); and how drift treats a profile changed by hand.
+  `init`, or leaves it to Recyclarr (later); and how drift treats a profile changed by
+  hand.
 - **Use a media server you already run** (possible future feature, 2026-10-17). Two
   levels:
   - **Use it as it is:** an `external` media server, given by address and token.
     Mediaplane wires Sonarr, Radarr and Seerr to it, and never touches its container,
     data or claim. Integrations already reach the media server as an address and a
     credential, so this stays additive.
-  - **Adopt it:** Mediaplane runs your existing Plex or Jellyfin, keeping its watch
+  - **Adopt it** (Plex's, with the arrs', moved to M2's S3 on 2026-10-31; Jellyfin's
+    stays here): Mediaplane runs your existing Plex or Jellyfin, keeping its watch
     history, libraries and claim. That means starting from its appdata, mapping its
     media paths to `/data`, taking over its libraries by name rather than adding
     `Movies` and `TV Shows` beside them, an "adopted" mode for the open-settings check

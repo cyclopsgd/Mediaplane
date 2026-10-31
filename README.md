@@ -243,12 +243,13 @@ wires the apps for you.
 Buildarr, Flemmarr and Recyclarr keep the settings of apps you already run as code, and
 are good at fine-tuning, such as quality profiles. Buildarr and Flemmarr were no longer
 maintained in October 2026. Mediaplane deploys the stack and wires the apps, and leaves
-the rest of each app's settings to you, or to a tool such as Recyclarr (planned for M3).
+the rest of each app's settings to you, or to a tool such as Recyclarr (planned for later).
 
 ### Can it take over my existing setup?
 
-Not yet: Mediaplane manages a stack it created itself. Using a media server you already
-run is planned for M2, and adopting a whole existing install is an idea for later.
+Not yet: Mediaplane manages a stack it created itself. Adopting an existing Compose
+stack of the apps Mediaplane runs, with Plex as the media server and its watch history,
+libraries and claim kept, is planned for M2.
 
 ### Is it safe to run?
 
@@ -276,13 +277,15 @@ final, and every change is reviewed before it merges.
 ## Roadmap
 
 - **M1, the engine and CLI:** done, and released as 0.1.0.
-- **M2, the everyday CLI:** safe app updates with rollback, backup and restore, `doctor`,
-  quality presets, using a media server you already run, and optional alerts.
-- **M3, more apps:** SABnzbd, Audiobookshelf, Bookshelf (experimental), Bazarr,
-  Recyclarr, Portainer and Homepage.
+- **M2, backup, restore and adoption:** backup and restore, onto another host too;
+  Audiobookshelf; adopting an existing stack; `doctor`; and drift on a schedule, with
+  alerts. The [M2 roadmap](docs/plans/m2-roadmap.md) has the order and the open
+  decisions.
+- **Later:** safe app updates with rollback, quality presets, using a media server you
+  already run, and more apps (SABnzbd, Bazarr, Recyclarr, Portainer, Homepage).
 
 A web panel isn't scheduled: the CLI comes first. The
-[M1 roadmap](docs/plans/m1-roadmap.md) says what M1 delivered, and what moved to M2.
+[M1 roadmap](docs/plans/m1-roadmap.md) says what M1 delivered.
 
 ## Documentation
 

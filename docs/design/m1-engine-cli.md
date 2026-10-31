@@ -82,14 +82,21 @@ The gap Mediaplane fills is all four of the following together:
 | Milestone | Delivers |
 |---|---|
 | **M1: Engine + CLI** (this spec) | `stack.yaml` schema, catalog format, compose rendering, key pre-seeding, wiring for the core video stack, drift detection with Keep mine, `plan`/`apply`, change history, CI with real-container end-to-end tests |
-| **M2: Everyday CLI** | Safe app updates with rollback, backup and restore, `doctor`, quality presets, a media server you already run, optional alerts |
-| **M3: Catalog expansion** | SABnzbd, Audiobookshelf, Bookshelf (experimental, books and audiobooks), Bazarr, Recyclarr, Portainer, Homepage |
+| **M2: Backup, restore and adoption** | Coded diagnostics, backup and restore (onto another host too), Audiobookshelf, adopting an existing stack, `doctor` and host checks, drift on a schedule with alerts ([M2 roadmap](../plans/m2-roadmap.md)) |
+| **Later** | Safe app updates with rollback, quality presets, a media server you already run, SABnzbd, Bazarr, Recyclarr, Portainer, Homepage |
 
 **Changed by the owner on 2026-10-25.** The web panel (wizard, dashboard, drift view,
 change-history view, panel authentication) is no longer scheduled: the CLI is refined
 instead. The old M3 (operations) became M2, and the old M4 (more apps) became M3.
 Mentions elsewhere in this spec are from before the change: read the panel's "M2" as
 not scheduled, "M3" as M2, and "M4" as M3.
+
+**Changed by the owner again on 2026-10-31.** M2 is now backup, restore and adoption
+([M2 roadmap](../plans/m2-roadmap.md)). Audiobookshelf moved into it. Bookshelf was
+dropped, so ADR 0007 was never written. The rest of the old M2 and M3 is on the "Later"
+list in [the M1 roadmap](../plans/m1-roadmap.md#after-m1). So an M3 or M4 named elsewhere
+in this spec means that list, unless the M2 roadmap takes the item. The panel's M2 stays
+not scheduled.
 
 Documentation is written alongside each milestone (see §9).
 
@@ -893,7 +900,7 @@ Documentation lives in the repo and is updated with the code.
   - 0004 Converge-forward apply (no automatic rollback)
   - 0005 TypeScript on Node
   - 0006 Seerr as the requests app
-  - 0007 Bookshelf for books (experimental, behind an adapter; M4)
+  - 0007 Bookshelf for books (dropped on 2026-10-31, never written)
   - 0008 Docker socket proxy on by default
   - 0009 No secrets in `stack.yaml`
 - **`docs/runbooks/`:** a consistent format of symptoms, checks, fix and
@@ -915,7 +922,7 @@ Documentation lives in the repo and is updated with the code.
 | Plex requires a plex.tv sign-in that cannot be automated | `user-provided` token. M2 adds a "Sign in with Plex" wizard step. Nightly CI uses a stored token |
 | Seerr supports one media-server type per instance | One Seerr instance, bound to `media_server`. Switching servers is a documented re-setup |
 | Byparr is lightly tested on arm64 upstream | The arm64 end-to-end tests cover it. FlareSolverr is a drop-in alternative (same Prowlarr proxy type) |
-| The book-arr ecosystem is unsettled after Readarr's retirement | Out of M1. In M4, books sit behind an adapter, are marked experimental, and start with Bookshelf |
+| The book-arr ecosystem is unsettled after Readarr's retirement | Out of M1. Bookshelf was dropped on 2026-10-31. Audiobookshelf (M2) serves audiobooks, and fetching books isn't planned |
 | Changes in `docker compose` CLI output or behaviour | `runtime` is the only consumer. The Compose version is pinned in the image. End-to-end tests catch regressions |
 | Upstream API changes in a new app version | Tested-set pinning. Every Renovate bump runs end-to-end tests before merge |
 | Recent upstream security changes (Servarr AllowedHosts/TrustedNetworks; Jellyfin 12 legacy auth off) are fresh and may shift again | Version floor (§6.5). Adapters set these explicitly rather than relying on defaults. End-to-end tests run on every bump |

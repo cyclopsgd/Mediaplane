@@ -1056,6 +1056,6 @@ Controlling Docker is root on the host, so Mediaplane's security is the host's. 
 
 ## What comes next
 
-M1 is complete. The roadmap's [After M1](plans/m1-roadmap.md#after-m1) has what comes
-next: M2, the everyday CLI (safe app updates, backup and restore, `doctor`), then M3,
-more apps.
+M1 is complete. Next is M2: backup and restore, Audiobookshelf, adopting an existing
+stack, `doctor`, and drift on a schedule, with alerts. The
+[M2 roadmap](plans/m2-roadmap.md) has the order and the open decisions.
